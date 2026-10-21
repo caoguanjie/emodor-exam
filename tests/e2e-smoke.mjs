@@ -9,17 +9,19 @@ import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const JSZip = require('jszip');
 const mysql = require('mysql2/promise');
+const IS_MAIN = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:3000/api/v1';
 // 测试夹具口令运行期生成（安全约束：测试代码不落可用凭据字面量）
 const TEST_INIT_PW = 'Ip' + randomBytes(6).toString('hex');
 
 const ADMIN_INITIAL = process.env.ADMIN_INITIAL_PASSWORD;
-if (!ADMIN_INITIAL) {
+if (IS_MAIN && !ADMIN_INITIAL) {
   console.error('缺少 ADMIN_INITIAL_PASSWORD 环境变量（运行期注入，不落源码）');
   process.exit(1);
 }
@@ -39,10 +41,14 @@ function check(name, cond, extra = '') {
 }
 
 // ---------- 极简 Mock AI 服务（OpenAI 兼容 /chat/completions） ----------
-function parseMockAiPort(rawPort) {
+function parseMockAiPort(rawPort, mode) {
   if (rawPort === undefined || rawPort === '') return 9101;
   if (!/^[0-9]{1,5}$/.test(rawPort)) {
     throw new Error('MOCK_AI_PORT 必须是 1024-65535 的十进制端口');
+  }
+  if (rawPort === '0') {
+    if (mode !== 'ephemeral') throw new Error('MOCK_AI_PORT=0 仅允许内部 ephemeral runner 模式');
+    return 0;
   }
   const port = Number(rawPort);
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) {
@@ -52,9 +58,9 @@ function parseMockAiPort(rawPort) {
 }
 
 // Standalone invocation keeps the historical 9101 default. The ephemeral
-// runner injects a free per-runtime value, so concurrent smoke children stay
-// isolated without accepting arbitrary host/URL input.
-const MOCK_PORT = parseMockAiPort(process.env.MOCK_AI_PORT);
+// runner injects the explicit internal auto-port mode, so the server asks the
+// kernel for its actual bound port instead of relying on a racy free-port probe.
+let mockPort = parseMockAiPort(process.env.MOCK_AI_PORT, process.env.MOCK_AI_PORT_MODE);
 const MOCK_QUESTIONS = buildMockQuestions();
 
 function buildMockQuestions() {
@@ -93,7 +99,7 @@ function buildMockQuestions() {
   return [...singles, ...multiples];
 }
 
-function startMockAi() {
+export function startMockAi() {
   const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url.endsWith('/chat/completions')) {
       let body = '';
@@ -121,7 +127,20 @@ function startMockAi() {
     res.writeHead(404);
     res.end();
   });
-  return new Promise((resolve) => server.listen(MOCK_PORT, '127.0.0.1', () => resolve(server)));
+  return new Promise((resolve, reject) => {
+    const onError = (error) => reject(error);
+    server.once('error', onError);
+    server.listen(mockPort, '127.0.0.1', () => {
+      server.removeListener('error', onError);
+      const address = server.address();
+      if (!address || typeof address === 'string' || !Number.isInteger(address.port)) {
+        server.close(() => reject(new Error('Mock AI 未返回有效监听端口')));
+        return;
+      }
+      mockPort = address.port;
+      resolve(server);
+    });
+  });
 }
 
 // ---------- HTTP 帮助函数 ----------
@@ -488,7 +507,7 @@ async function main() {
     check('regulation_admin 读 AI 配置被拒（40301，super_admin 专属）', deny.status === 403);
     const save = await api('PUT', '/ai/config', {
       token: state.tokens.admin,
-      body: { base_url: `http://127.0.0.1:${MOCK_PORT}/v1`, api_key: 'sk-mock-not-a-real-key', model: 'mock-model' },
+      body: { base_url: `http://127.0.0.1:${mockPort}/v1`, api_key: 'sk-mock-not-a-real-key', model: 'mock-model' },
     });
     check('保存 AI 配置（api_key 掩码回显）', save.status === 200 && /sk-\*\*\*\*/.test(save.json?.data?.api_key_masked || ''), JSON.stringify(save.json?.data));
     const test = await api('POST', '/ai/config/test', { token: state.tokens.admin });
@@ -720,7 +739,9 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error('冒烟测试异常终止：', e);
-  process.exit(1);
-});
+if (IS_MAIN) {
+  main().catch((e) => {
+    console.error('冒烟测试异常终止：', e);
+    process.exit(1);
+  });
+}

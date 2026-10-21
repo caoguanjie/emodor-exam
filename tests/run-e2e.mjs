@@ -56,6 +56,9 @@ export function parseArgs(argv) {
     }
   }
   resolveSuitePaths(suite);
+  if (suite === 'all' && !ephemeral) {
+    throw new Error('--suite all 必须与 --ephemeral 一起使用');
+  }
   return { suite, ephemeral };
 }
 
@@ -227,10 +230,6 @@ export async function runSuiteInRuntime(suitePath, ephemeral, runState = { inter
     }
     quoteDatabase(database);
     const apiPort = ephemeral ? await getFreePort() : Number(process.env.API_PORT || process.env.PORT || 3000);
-    // The legacy smoke suite starts an in-process Mock AI server. Reserve a
-    // different owned port for every ephemeral runtime so concurrent suites
-    // never contend on the old standalone default (9101).
-    const mockAiPort = ephemeral ? await getFreePort() : undefined;
     const createdHarness = await createTrainingHarness({
       port: apiPort,
       redisPrefix: `e2e:${randomBytes(10).toString('hex')}:`,
@@ -247,7 +246,7 @@ export async function runSuiteInRuntime(suitePath, ephemeral, runState = { inter
         REDIS_PORT: String(redis.port),
         REDIS_PASSWORD: redis.password || '',
         API_PORT: String(apiPort),
-        ...(mockAiPort === undefined ? {} : { MOCK_AI_PORT: String(mockAiPort) }),
+        ...(ephemeral ? { MOCK_AI_PORT: '0', MOCK_AI_PORT_MODE: 'ephemeral' } : {}),
       },
     });
     await waitForLifecycleProbe('harness-created', { harnessRoot: createdHarness.root });
