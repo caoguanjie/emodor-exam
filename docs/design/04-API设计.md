@@ -4,6 +4,8 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
+> **状态边界（2026-10-21）**：本册现有 70 个接口是当前 legacy 制度/AI/阅读/旧固定卷 API 基线，不等于融合目标 API 已实现。新培训的类别/学员、课程视频、题库版本、发布/个人题单、持久草稿、图片答案/阅卷、监控和场次统计接口由 A1—C6 在实际 migration/entity/controller 存在后分别补入；本步骤只标出边界，不预先发明 DTO 或路由。所有新增接口继续使用 `/api/v1`、`{code,message,data}`、`DtoValidationPipe`、所有权校验和 HttpOnly refresh Cookie。
+
 ---
 
 ## 1. API 总体规范
@@ -79,11 +81,21 @@
 | 会话开始 `POST /learning/sessions/start` | 单活跃会话约束（后开者胜）：同 user + regulation 已有活跃会话时，旧会话被结束落库并返回新会话（05 册 5.4.1） |
 | 学习心跳 | 天然幂等：以服务端时钟差结算，重复/乱序心跳不虚增时长（45 秒封顶，05 册 5.4.2） |
 
+### 1.6 当前 API 与融合计划的边界
+
+| API 范围 | 文档状态 | 规则 |
+|---|---|---|
+| `/auth`、`/users`、`/departments`、`/regulations`、`/ai`、`/learning`、旧 `/exams`、旧 `/statistics` | 当前 legacy 契约 | 旧制度阅读资格、旧固定卷字段与自动客观评分保持兼容；下发不含答案/解析，refresh 走 HttpOnly Cookie，DTO/统一信封不变 |
+| 培训类别/学员来源、课程/视频、题库版本/导入、发布快照、个人题单、持久草稿、图片附件/阅卷、监控、培训统计 | 计划契约（A1—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后，才在本册写精确 DTO、错误码、分页和路由；本阶段不凭设计表格制造“已实现 API” |
+| 旧固定卷 vs 新培训考试开考 | 两条口径并存 | 旧固定卷继续检查 `learning_record.is_valid`；新培训考试默认关闭学习门槛，但仍检查发布、类别/来源、权限、次数、身份状态和服务端 deadline |
+
+目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 客观题自动判分/图片题待阅 → 受控逐题评分 → 服务端汇总 → 最终结果只读。具体字段由 C1—C4 落地后补入，不能让旧 `/exams` 响应提前承载两套不兼容语义。
+
 ---
 
 ## 2. 模块与路由总览
 
-八大路由前缀对应六大模块（README 3.4 固定映射）：
+当前 legacy 基线的八大路由前缀对应六大模块（README 3.4 固定映射）；培训增量路由由后续任务按同一 `/api/v1` 前缀追加，未在本表冒充当前接口：
 
 | 路由前缀 | 所属模块（固定名称） | 接口数 | 说明 |
 |---|---|---|---|
@@ -260,7 +272,9 @@
 
 **POST /learning/heartbeat/pause**：body 含 `session_id`、`dwell_segments`（整型数组，允许空——失焦/关页 flush 携带本地未上报的已确认段位）、`scroll_percent`；服务端结算 `min(now − last_beat_at, 45 秒)` 计入累计、合并位图后置 `state = paused`——失焦期间零累计，普通心跳到达也不计费（只更新滚动位置）。前端在 `visibilitychange → hidden` 与 `pagehide` 时以 `navigator.sendBeacon` 调用本端点，完成未上报段位的 flush（07 册 3.1.1）。**POST /learning/heartbeat/resume**：仅锚点重置（`last_beat_at = now`），不产生任何时长。pause/resume 独立端点的理由：失焦是事件驱动（不定期），与 30 秒周期心跳分离，语义与 05 册 5.4.3 锚点模型一一对应。
 
-### 3.7 考试模块 /exams（权限：员工，数据范围自动收口为本人）
+### 3.7 legacy 考试模块 /exams（权限：员工，数据范围自动收口为本人）
+
+本节是旧制度固定卷接口契约：资格链包含 `learning_record.is_valid`，题目/选项按旧 `paper_question` 读取，交卷后自动客观评分。新培训考试不复用本节字段硬塞类别、来源、难度、发布/个人快照、草稿或阅卷状态；相关新接口由 C1—C4 在实际 controller/entity 后补入，默认无学习门槛但不放宽服务端期限与防泄漏规则。
 
 | # | 方法 | 路径 | 说明 |
 |---|---|---|---|
@@ -648,7 +662,7 @@
 | 40302 | 403 | 无权访问该数据 | 数据范围越界（如读取他人学习记录） |
 | 40401 | 404 | 资源不存在 | 路径资源（制度/试卷/记录等）不存在 |
 | 40402 | 404 | 制度内容不可见 | 阅读内容接口：不在发布范围或未发布 |
-| 40901 | 409 | 未完成有效学习，暂无考试资格 | 开考校验③失败；data 附差距（时间缺口/底部段未覆盖） |
+| 40901 | 409 | 未完成有效学习，暂无考试资格 | **legacy 制度固定卷**开考校验③失败；data 附差距（时间缺口/底部段未覆盖）。新培训考试默认不使用该错误作为学习门槛 |
 | 40902 | 409 | 补考次数已用尽 | 开考校验④失败（attempt_no > max_attempts） |
 | 40903 | 409 | 已通过该考试，无需再次作答 | 开考校验④：前次终态 = passed |
 | 40904 | 409 | 已有进行中的考试 | 开考校验⑤：并发 in_progress（幂等返回现有记录的场景之外） |
@@ -697,13 +711,14 @@
 | POST /exams/records/{id}/switch | 1 秒去抖窗口 | Redis INCR + 窗口合并（前端 500ms 事件合并后上报，服务端 1 秒二次去抖，05 册 6.4.4） |
 | POST /exams/records/{id}/submit | 幂等：重复交卷返回首次结果 | 三层幂等（05 册 6.4.5） |
 | POST /regulations/{id}/versions | 并发上传同一制度串行化（版本号唯一） | 事务 + uk_regulation_version |
-| POST /ai/generate-questions | 同制度同时仅一个运行中任务 | 任务状态前置校验 |
+| POST /ai/generate-questions | 同制度同时仅一个运行中任务 | 任务状态前置校验；计划中的 category/difficulty/source_version 由 B3 落地后扩展，不改旧接口语义 |
 
 ### 6.3 传输与敏感信息
 
 - 生产环境经 nginx TLS 终止提供 HTTPS（07 册 4.1）；密码仅在登录/改密报文中出现，存储一律 bcrypt。
 - 响应体永不返回 `password_hash`、`answer`、`analysis`（成绩回看除外）、`api_key`（掩码回显，07 册 4.2）。
 - `trace_id`：50001 错误响应 `data.trace_id` 供日志排查。
+- 计划中的新培训在考 payload 同样不返回 `answer`、`analysis` 或图片评分参考；确认草稿需持久化后才可 ACK，截止时间后不接收新答案。图片题单题最多 9 张，逐题评分与最终总分只读规则由 C3/C4 的新契约承载。
 
 ---
 
@@ -711,8 +726,8 @@
 
 | 校验项 | 结果 |
 |---|---|
-| 八大路由前缀与 README 3.4 模块映射 | 一致（/auth /users /departments /regulations /ai /learning /exams /statistics） |
-| 表名/字段名（snake_case）与 03 册 | 一致（learning_record.total_seconds、exam_paper.partial_credit_ratio 等） |
+| 当前八大路由前缀与 README 3.4 模块映射 | 一致（/auth /users /departments /regulations /ai /learning /exams /statistics）；培训增量路由待后续 controller 落地 |
+| 当前表名/字段名（snake_case）与 03 册 | 一致（learning_record.total_seconds、exam_paper.partial_credit_ratio 等）；新增字段以迁移/entity/API 同步为准 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
 | 心跳/失焦/乱序/超时/切屏行为与 05 册 | 一致（5.4.2/5.4.3/6.4.1~6.4.5 逐条对应） |
 | 统计口径与 05 册 7.4.1 | 一致（七项指标逐字对齐） |
