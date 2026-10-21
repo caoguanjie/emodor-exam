@@ -179,7 +179,7 @@ export class ExamMonitorService {
     const query = this.projection().where('record.paper_id = :paperId', { paperId: String(paperId) });
     const total = await query.getCount();
     const rows = await query.orderBy('record.started_at', 'DESC').addOrderBy('record.id', 'DESC')
-      .skip((normalizedPage - 1) * normalizedPageSize).take(normalizedPageSize).getRawMany<MonitorProjectionRow>();
+      .offset((normalizedPage - 1) * normalizedPageSize).limit(normalizedPageSize).getRawMany<MonitorProjectionRow>();
     const now = this.now();
     return {
       items: rows.map((row) => monitorRowView(row, now)),
@@ -210,7 +210,7 @@ export class ExamMonitorService {
     if (filters.grading_state) query.andWhere('record.grading_state = :gradingState', { gradingState: filters.grading_state });
     const total = await query.getCount();
     const rows = await query.orderBy('record.started_at', 'DESC').addOrderBy('record.id', 'DESC')
-      .skip((page - 1) * pageSize).take(pageSize).getRawMany<RecordProjectionRow>();
+      .offset((page - 1) * pageSize).limit(pageSize).getRawMany<RecordProjectionRow>();
     return { items: rows.map(recordSummaryView), total, page, page_size: pageSize };
   }
 

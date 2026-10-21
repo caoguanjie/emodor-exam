@@ -112,6 +112,23 @@ async function createPaper(ctx, { categoryId, actorId, pool, title }) {
   return { paperId, releaseId };
 }
 
+async function createPaperOptionFillers(ctx, paperId, count) {
+  for (let index = 1; index <= count; index += 1) {
+    const inserted = await ctx.queryTestDb(
+      `INSERT INTO exam_paper
+        (regulation_id, business_scope, mode, category_id, requires_learning, regulation_ids, course_ids,
+         rule_config, title, total_score, pass_score, duration_minutes, max_attempts, partial_credit_ratio,
+         status, created_by)
+       SELECT regulation_id, business_scope, mode, category_id, requires_learning, regulation_ids, course_ids,
+         rule_config, CONCAT('C5 选项填充 ', ?, ' ', id), total_score, pass_score, duration_minutes, max_attempts,
+         partial_credit_ratio, status, created_by
+       FROM exam_paper WHERE id = ?`,
+      [index, paperId],
+    );
+    assert.equal(inserted.affectedRows, 1, `paper option filler ${index}`);
+  }
+}
+
 async function uploadAnswerImage(ctx, actor, recordId, itemId) {
   const boundary = `----ruleexam-c5-${randomBytes(12).toString('hex')}`;
   const body = Buffer.concat([
@@ -176,6 +193,7 @@ async function runMonitor(ctx) {
       categoryId, actorId: adminId, type: 'image', stem: '<p>C5 图片作答</p>', options: [], answer: [], rubric: '<p>评分参考</p>',
     });
     const paper = await createPaper(ctx, { categoryId, actorId: adminId, pool: [single, image], title: `C5 监控卷 ${runSuffix}` });
+    await createPaperOptionFillers(ctx, paper.paperId, 100);
 
     const readPassword = password('read');
     const readUserId = await createUser(ctx, {
@@ -254,9 +272,19 @@ async function runMonitor(ctx) {
     assert.equal(readMonitorDenied.status, 403, JSON.stringify(readMonitorDenied));
     const monitorRecordsDenied = await ctx.request(monitorActor, 'GET', '/admin/exam-records');
     assert.equal(monitorRecordsDenied.status, 403, JSON.stringify(monitorRecordsDenied));
-    const options = await ctx.request(monitorActor, 'GET', '/admin/exams/monitor-options?page=1&page_size=100');
+    const firstOptions = await ctx.request(monitorActor, 'GET', '/admin/exams/monitor-options?page=1&page_size=100');
+    assert.equal(firstOptions.status, 200, JSON.stringify(firstOptions));
+    assert.equal(firstOptions.data.items.length, 100);
+    assert(firstOptions.data.total >= 101);
+    assert.equal(firstOptions.data.items.some((item) => String(item.id) === paper.paperId), false);
+    const options = await ctx.request(monitorActor, 'GET', '/admin/exams/monitor-options?page=2&page_size=100');
     assert.equal(options.status, 200, JSON.stringify(options));
-    assert(options.data.items.some((item) => String(item.id) === paper.paperId));
+    assert(options.data.items.some((item) => String(item.id) === paper.paperId), 'the 101st paper option must be reachable');
+    const searchedOptions = await ctx.request(
+      monitorActor, 'GET', `/admin/exams/monitor-options?page=1&page_size=100&keyword=${encodeURIComponent(runSuffix)}`,
+    );
+    assert.equal(searchedOptions.status, 200, JSON.stringify(searchedOptions));
+    assert.deepEqual(searchedOptions.data.items.map((item) => String(item.id)), [paper.paperId]);
 
     const readNavigation = await ctx.request(readActor, 'GET', '/admin/menus/navigation');
     assert.equal(readNavigation.status, 200, JSON.stringify(readNavigation));

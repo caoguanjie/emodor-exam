@@ -6,13 +6,16 @@
     </div>
     <el-form inline class="filters">
       <el-form-item label="考试试卷">
-        <el-select v-model="paperId" filterable placeholder="请选择试卷" style="width: 320px" @change="changePaper">
+        <el-select v-model="paperId" filterable remote reserve-keyword :remote-method="searchPapers"
+          :loading="optionsLoading" placeholder="输入关键字搜索试卷" style="width: 320px" @change="changePaper">
           <el-option v-for="paper in paperOptions" :key="paper.id" :label="`${paper.title}（${paper.id}）`" :value="paper.id" />
         </el-select>
+        <el-button v-if="hasMoreOptions" class="load-more" :loading="optionsLoading" @click="loadMoreOptions">加载更多试卷</el-button>
       </el-form-item>
       <el-form-item><span class="poll-note">轮询间隔 5 秒 · 最近服务端时间 {{ lastServerTime }}</span></el-form-item>
     </el-form>
-    <el-alert v-if="errorMessage" :title="errorMessage" type="error" show-icon :closable="false"><el-button link @click="load(true)">重试</el-button></el-alert>
+    <el-alert v-if="optionErrorMessage" :title="optionErrorMessage" type="error" show-icon :closable="false"><el-button link @click="retryOptions">重新加载试卷</el-button></el-alert>
+    <el-alert v-if="monitorErrorMessage" :title="monitorErrorMessage" type="error" show-icon :closable="false"><el-button link @click="load(true)">重试监控</el-button></el-alert>
     <el-table v-loading="loading" :data="items" empty-text="请选择试卷或暂无考试记录">
       <el-table-column label="学员" min-width="130"><template #default="{ row }"><b>{{ row.name }}</b><div class="muted">ID {{ row.user_id }}</div></template></el-table-column>
       <el-table-column label="来源 / 难度" width="145"><template #default="{ row }">{{ sourceLabel(row.source) }} / {{ difficultyLabel(row.difficulty) }}</template></el-table-column>
@@ -38,6 +41,7 @@ import http from '../../api/http';
 import type { ExamMonitorRow, MonitorConnectionState, MonitorPaperOption, Page, SubmissionMethod } from '../../api/training-types';
 import { useAuthStore } from '../../stores/auth';
 import { createLatestRequestScope } from '../../utils/latest-request-scope';
+import { mergePagedOptions } from '../../utils/paged-options';
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -46,11 +50,18 @@ const paperOptions = ref<MonitorPaperOption[]>([]);
 const paperId = ref('');
 const total = ref(0);
 const loading = ref(false);
-const errorMessage = ref('');
+const optionsLoading = ref(false);
+const optionErrorMessage = ref('');
+const monitorErrorMessage = ref('');
 const query = reactive({ page: 1, page_size: 20 });
+const optionPageSize = 100;
+const optionPage = ref(0);
+const optionTotal = ref(0);
+const optionKeyword = ref('');
 const monitorScope = createLatestRequestScope();
 const optionsScope = createLatestRequestScope();
 const canReadRecords = computed(() => auth.can('exam_records:read'));
+const hasMoreOptions = computed(() => !optionErrorMessage.value && optionPage.value * optionPageSize < optionTotal.value);
 let pollTimer: number | null = null;
 let destroyed = false;
 const sourceLabels: Record<string, string> = { institution: '本机构', external: '外来' };
@@ -70,22 +81,45 @@ function formatTime(value: string | null) { return value ? new Date(value).toLoc
 function formatRemaining(seconds: number) { const value = Math.max(0, seconds); return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`; }
 function openDetail(recordId: string) { void router.push(`/admin/exam-records/${recordId}`); }
 function changePaper() { query.page = 1; void load(true); }
-async function loadOptions() {
+function searchPapers(keyword: string) { optionKeyword.value = String(keyword || '').trim(); void loadOptions(true); }
+function loadMoreOptions() { void loadOptions(false); }
+async function retryOptions() {
+  const loaded = await loadOptions(true);
+  if (loaded && paperId.value) await load(true);
+}
+async function loadOptions(replace: boolean): Promise<boolean> {
+  const targetPage = replace ? 1 : optionPage.value + 1;
   const ticket = optionsScope.begin();
+  optionsLoading.value = true;
+  optionErrorMessage.value = '';
   try {
-    const data = await http.get('/admin/exams/monitor-options', { params: { page: 1, page_size: 100 }, signal: ticket.signal }) as Page<MonitorPaperOption>;
-    if (!ticket.isCurrent()) return;
-    paperOptions.value = data.items;
+    const data = await http.get('/admin/exams/monitor-options', {
+      params: { page: targetPage, page_size: optionPageSize, keyword: optionKeyword.value || undefined },
+      signal: ticket.signal,
+    }) as Page<MonitorPaperOption>;
+    if (!ticket.isCurrent()) return false;
+    paperOptions.value = mergePagedOptions(paperOptions.value, data.items, {
+      replace, selectedId: paperId.value,
+    });
+    optionPage.value = targetPage;
+    optionTotal.value = data.total;
     if (!paperId.value && data.items.length) paperId.value = data.items[0].id;
+    return true;
   } catch (error) {
-    if (ticket.isCurrent()) errorMessage.value = error instanceof Error ? error.message : '试卷选项加载失败';
+    if (ticket.isCurrent()) optionErrorMessage.value = error instanceof Error ? error.message : '试卷选项加载失败';
+    return false;
+  } finally {
+    const current = ticket.isCurrent();
+    ticket.finish();
+    if (current) optionsLoading.value = false;
   }
 }
-async function load(showLoading = false) {
+async function load(showLoading = false, mode: 'replace' | 'if-idle' = 'replace') {
   if (!paperId.value) { items.value = []; total.value = 0; return; }
-  const ticket = monitorScope.begin();
+  const ticket = mode === 'if-idle' ? monitorScope.beginIfIdle() : monitorScope.begin();
+  if (!ticket) return;
   if (showLoading || !items.value.length) loading.value = true;
-  errorMessage.value = '';
+  monitorErrorMessage.value = '';
   try {
     const data = await http.get(`/admin/exams/${encodeURIComponent(paperId.value)}/monitor`, {
       params: query, signal: ticket.signal,
@@ -94,18 +128,20 @@ async function load(showLoading = false) {
     items.value = data.items;
     total.value = data.total;
   } catch (error) {
-    if (ticket.isCurrent()) errorMessage.value = error instanceof Error ? error.message : '考试监控加载失败';
+    if (ticket.isCurrent()) monitorErrorMessage.value = error instanceof Error ? error.message : '考试监控加载失败';
   } finally {
-    if (ticket.isCurrent()) loading.value = false;
+    const current = ticket.isCurrent();
+    ticket.finish();
+    if (current) loading.value = false;
   }
 }
 
 onMounted(async () => {
-  await loadOptions();
+  const loaded = await loadOptions(true);
   if (destroyed) return;
-  await load(true);
+  if (loaded) await load(true);
   if (destroyed) return;
-  pollTimer = window.setInterval(() => { void load(false); }, 5_000);
+  pollTimer = window.setInterval(() => { void load(false, 'if-idle'); }, 5_000);
 });
 onBeforeUnmount(() => {
   destroyed = true;
@@ -118,6 +154,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .pager { margin-top: 16px; justify-content: flex-end; }
+.load-more { margin-left: 8px; }
 .muted, .poll-note { color: var(--el-text-color-secondary); font-size: 12px; }
 .muted { margin-top: 3px; }
 </style>

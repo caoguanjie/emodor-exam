@@ -1,6 +1,7 @@
 export interface LatestRequestTicket {
   signal: AbortSignal;
   isCurrent: () => boolean;
+  finish: () => void;
 }
 
 /**
@@ -13,16 +14,25 @@ export function createLatestRequestScope() {
   let active = true;
   let controller: AbortController | null = null;
 
+  function begin(): LatestRequestTicket {
+    controller?.abort();
+    const requestController = new AbortController();
+    controller = requestController;
+    const requestGeneration = ++generation;
+    if (!active) controller.abort();
+    return {
+      signal: requestController.signal,
+      isCurrent: () => active && requestGeneration === generation,
+      finish: () => {
+        if (requestGeneration === generation && controller === requestController) controller = null;
+      },
+    };
+  }
+
   return {
-    begin(): LatestRequestTicket {
-      controller?.abort();
-      controller = new AbortController();
-      const requestGeneration = ++generation;
-      if (!active) controller.abort();
-      return {
-        signal: controller.signal,
-        isCurrent: () => active && requestGeneration === generation,
-      };
+    begin,
+    beginIfIdle(): LatestRequestTicket | null {
+      return controller ? null : begin();
     },
     stop(): void {
       active = false;

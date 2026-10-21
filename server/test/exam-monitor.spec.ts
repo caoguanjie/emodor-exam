@@ -1,5 +1,6 @@
 import { Reflector } from '@nestjs/core';
 import { MODULE_METADATA } from '@nestjs/common/constants';
+import { DataSource } from 'typeorm';
 import { describe, expect, it } from 'vitest';
 import { Errors } from '../src/common/errors';
 import { PermissionsGuard } from '../src/common/guards/permissions.guard';
@@ -32,12 +33,14 @@ describe('ExamMonitorService safe monitor projection', () => {
       switch_count: '3', device_summary: 'Chrome', status: 'in_progress',
       grading_state: 'not_submitted', submission_method: 'unrecognized-history-value',
     };
-    const page = { skip: -1, take: -1 };
+    const page = { offset: -1, limit: -1 };
     const builder: any = {
       innerJoin: () => builder, select: () => builder, addSelect: () => builder,
       where: () => builder, andWhere: () => builder, orderBy: () => builder, addOrderBy: () => builder,
-      skip: (value: number) => { page.skip = value; return builder; },
-      take: (value: number) => { page.take = value; return builder; },
+      skip: () => { throw new Error('joined raw projection must not use skip/take'); },
+      take: () => { throw new Error('joined raw projection must not use skip/take'); },
+      offset: (value: number) => { page.offset = value; return builder; },
+      limit: (value: number) => { page.limit = value; return builder; },
       getCount: async () => 25,
       getRawMany: async () => [raw],
     };
@@ -46,7 +49,7 @@ describe('ExamMonitorService safe monitor projection', () => {
 
     const result = await service.list('7', '11', 2, 10);
 
-    expect(page).toEqual({ skip: 10, take: 10 });
+    expect(page).toEqual({ offset: 10, limit: 10 });
     expect(result).toMatchObject({ total: 25, page: 2, page_size: 10 });
     expect(result.items[0]).toMatchObject({
       source: 'external', difficulty: 'hard', answered_count: 2, total_count: 4,
@@ -68,10 +71,15 @@ describe('ExamMonitorService safe monitor projection', () => {
       last_heartbeat_at: null, switch_count: '2', device_summary: null, status: 'passed',
       grading_state: 'finalized', submission_method: null, score: '88.50',
     };
+    const page = { offset: -1, limit: -1 };
     const builder: any = {
       innerJoin: () => builder, select: () => builder, addSelect: () => builder,
       where: () => builder, andWhere: () => builder, orderBy: () => builder, addOrderBy: () => builder,
-      skip: () => builder, take: () => builder, getCount: async () => 1,
+      skip: () => { throw new Error('joined raw projection must not use skip/take'); },
+      take: () => { throw new Error('joined raw projection must not use skip/take'); },
+      offset: (value: number) => { page.offset = value; return builder; },
+      limit: (value: number) => { page.limit = value; return builder; },
+      getCount: async () => 1,
       getRawMany: async () => [raw], getRawOne: async () => raw,
     };
     const service = new ExamMonitorService({ createQueryBuilder: () => builder } as any, {} as any);
@@ -80,6 +88,7 @@ describe('ExamMonitorService safe monitor projection', () => {
     const records = await service.listRecords('7', { page: 1, page_size: 20, keyword: '学员乙' });
     const detail = await service.detail('7', '52');
 
+    expect(page).toEqual({ offset: 0, limit: 20 });
     expect(records.items[0]).toMatchObject({
       record_id: '52', paper_title: '安全考试', name: '学员乙', attempt_no: 2,
       source: null, difficulty: null, score: 88.5, submission_method: null,
@@ -91,6 +100,27 @@ describe('ExamMonitorService safe monitor projection', () => {
     for (const forbidden of ['answer', 'correct_answer', 'analysis', 'rubric', 'asset_ids']) {
       expect(JSON.stringify(detail)).not.toContain(`\"${forbidden}\"`);
     }
+  });
+
+  it('documents the TypeORM joined raw-query pagination boundary in generated SQL', async () => {
+    const [{ ExamRecord }, { ExamPaper }, { SysUser }] = await Promise.all([
+      import('../src/entities/exam-record.entity'),
+      import('../src/entities/exam-paper.entity'),
+      import('../src/entities/sys-user.entity'),
+    ]);
+    const dataSource = new DataSource({
+      type: 'mysql', host: '127.0.0.1', username: 'unused', database: 'unused',
+      entities: [ExamRecord, ExamPaper, SysUser],
+    });
+    await (dataSource as any).buildMetadatas();
+    const joinedRawQuery = () => dataSource.getRepository(ExamRecord).createQueryBuilder('record')
+      .innerJoin(SysUser, 'learner', 'learner.id = record.user_id')
+      .innerJoin(ExamPaper, 'paper', 'paper.id = record.paper_id')
+      .select('record.id', 'record_id')
+      .orderBy('record.id', 'DESC');
+
+    expect(joinedRawQuery().skip(10).take(10).getSql()).not.toMatch(/\bLIMIT\b/);
+    expect(joinedRawQuery().offset(10).limit(10).getSql()).toMatch(/\bLIMIT 10 OFFSET 10$/);
   });
 
   it('enforces record-read and monitor permissions independently through the real guard', async () => {
@@ -167,9 +197,36 @@ describe('ExamMonitorService safe monitor projection', () => {
     expect(first.isCurrent()).toBe(false);
     expect(second.signal.aborted).toBe(false);
     expect(second.isCurrent()).toBe(true);
+    expect(scope.beginIfIdle()).toBeNull();
+
+    second.finish();
+    const automatic = scope.beginIfIdle();
+    expect(automatic).not.toBeNull();
+    expect(automatic?.isCurrent()).toBe(true);
+
+    const manual = scope.begin();
+    expect(automatic?.signal.aborted).toBe(true);
+    expect(manual.isCurrent()).toBe(true);
 
     scope.stop();
-    expect(second.signal.aborted).toBe(true);
-    expect(second.isCurrent()).toBe(false);
+    expect(manual.signal.aborted).toBe(true);
+    expect(manual.isCurrent()).toBe(false);
+  });
+
+  it('can append the 101st remote paper option and preserve the current selection on search', async () => {
+    const { mergePagedOptions } = await import('../../web/src/utils/paged-options');
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      id: String(index + 1), title: `试卷 ${index + 1}`,
+    }));
+    const withNextPage = mergePagedOptions([], firstPage, { replace: true, selectedId: '' });
+    const withItem101 = mergePagedOptions(withNextPage, [{ id: '101', title: '试卷 101' }], {
+      replace: false, selectedId: '1',
+    });
+
+    expect(withItem101).toHaveLength(101);
+    expect(withItem101.at(-1)?.id).toBe('101');
+    expect(mergePagedOptions(withItem101, [{ id: '88', title: '命中搜索的试卷' }], {
+      replace: true, selectedId: '101',
+    }).map((item) => item.id)).toEqual(['101', '88']);
   });
 });
