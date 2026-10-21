@@ -88,7 +88,7 @@ import { TasksService } from './tasks.service';
 import { MediaController } from './modules/media/media.controller';
 import { MediaService } from './modules/media/media.service';
 import { MediaProbeService } from './modules/media/media-probe.service';
-import { CourseAdminController, MyCoursesController } from './modules/courses/course.controller';
+import { CourseAdminController, LearnerHomeController, MyCoursesController } from './modules/courses/course.controller';
 import { CourseService } from './modules/courses/course.service';
 import { LessonVersionService } from './modules/courses/lesson-version.service';
 import { QuestionConceptService } from './modules/questions/question-concept.service';
@@ -124,7 +124,7 @@ const config = loadConfig();
     RegulationsController, AiController, LearningController, ExamsController,
     StatisticsController, HealthController,
     MediaController,
-    CourseAdminController, MyCoursesController,
+    CourseAdminController, LearnerHomeController, MyCoursesController,
     SystemController, SiteConfigController,
   ],
   providers: [

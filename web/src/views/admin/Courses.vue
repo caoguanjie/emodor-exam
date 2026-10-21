@@ -52,7 +52,7 @@
     <el-pagination v-if="canRead" v-model:current-page="query.page" style="margin-top:16px; justify-content:flex-end" layout="total, prev, pager, next"
       :total="total" :page-size="query.page_size" @current-change="load" />
 
-    <el-dialog v-model="createVisible" title="新建课程" width="620px" destroy-on-close>
+    <el-dialog v-model="createVisible" title="新建课程" width="620px" destroy-on-close :before-close="beforeCreateClose">
       <el-form label-width="96px">
         <el-form-item label="课程标题"><el-input v-model="form.title" maxlength="255" /></el-form-item>
         <el-form-item label="培训类别">
@@ -66,7 +66,7 @@
         <el-form-item label="排序"><el-input-number v-model="form.sort_order" :min="0" /></el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
+        <el-button @click="closeCreate">取消</el-button>
         <el-button type="primary" :loading="saving" @click="create">创建草稿</el-button>
       </template>
     </el-dialog>
@@ -74,18 +74,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useRouter } from 'vue-router';
 import http from '../../api/http';
 import type { CourseStatus, Id, Page } from '../../api/training-types';
 import MediaUpload from '../../components/MediaUpload.vue';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 
 interface CategoryOption { id: Id; name: string }
 interface CourseRow {
   id: Id; title: string; category_id: Id; required_lesson_count: number;
   is_recommended: boolean; sort_order: number; status: CourseStatus;
+}
+interface CourseDraft {
+  title: string; category_id: Id | ''; description: string; cover_asset_id: Id | null;
+  is_recommended: boolean; sort_order: number;
 }
 
 const router = useRouter();
@@ -99,8 +104,30 @@ const items = ref<CourseRow[]>([]);
 const total = ref(0);
 const categories = ref<CategoryOption[]>([]);
 const createVisible = ref(false);
+const createDirty = ref(false);
 const query = reactive({ page: 1, page_size: 20, keyword: '', category_id: '', status: '' });
-const form = reactive({ title: '', category_id: '', description: '', cover_asset_id: null as Id | null, is_recommended: false, sort_order: 0 });
+const form = reactive<CourseDraft>({ title: '', category_id: '', description: '', cover_asset_id: null, is_recommended: false, sort_order: 0 });
+let createBaseline: CourseDraft = { ...form };
+const createUnsaved = useUnsavedChanges(createDirty, { onDiscard: discardCreate });
+
+function snapshotCreate(): CourseDraft { return { ...form }; }
+function discardCreate() {
+  Object.assign(form, createBaseline);
+  createDirty.value = false;
+  createVisible.value = false;
+}
+async function closeCreate() {
+  if (!createDirty.value) { createVisible.value = false; return; }
+  await createUnsaved.confirmDiscard();
+}
+async function beforeCreateClose(done: () => void) {
+  if (!createDirty.value) { done(); return; }
+  if (await createUnsaved.confirmDiscard()) done();
+}
+
+watch(form, () => {
+  if (createVisible.value) createDirty.value = JSON.stringify(form) !== JSON.stringify(createBaseline);
+}, { deep: true });
 
 function categoryName(categoryId: Id) {
   return categories.value.find((item) => item.id === categoryId)?.name || `类别 ${categoryId}`;
@@ -132,6 +159,8 @@ async function load() {
 function search() { query.page = 1; void load(); }
 function openCreate() {
   Object.assign(form, { title: '', category_id: categories.value[0]?.id || '', description: '', cover_asset_id: null, is_recommended: false, sort_order: 0 });
+  createBaseline = snapshotCreate();
+  createUnsaved.markClean();
   createVisible.value = true;
 }
 async function create() {
@@ -139,6 +168,8 @@ async function create() {
   saving.value = true;
   try {
     const created = await http.post('/admin/courses', { ...form }) as { id: Id };
+    createBaseline = snapshotCreate();
+    createUnsaved.markClean();
     ElMessage.success('课程草稿已创建');
     createVisible.value = false;
     if (canRead.value) await router.push(`/admin/courses/${created.id}`);

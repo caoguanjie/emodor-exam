@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { getMetadataArgsStorage } from 'typeorm';
 import { CourseService } from '../src/modules/courses/course.service';
+import { LearnerHomeController } from '../src/modules/courses/course.controller';
 import { LessonVersionService } from '../src/modules/courses/lesson-version.service';
 import { TrainingCourse } from '../src/entities/training-course.entity';
 import { CourseChapter } from '../src/entities/course-chapter.entity';
@@ -93,6 +94,36 @@ function categoryDeleteFixture(referencedEntity?: unknown) {
 }
 
 describe('course lifecycle', () => {
+  it('composes the learner home from the public site config and the exact visible course page', async () => {
+    const visiblePage = {
+      items: [{ id: '101', title: '推荐课程' }], total: 21, page: 2, page_size: 5,
+    };
+    const publicConfig = {
+      logo_asset_id: '31', banners: [{ asset_id: '32', sort: 10 }],
+    };
+    const courses = { visibleCourses: vi.fn().mockResolvedValue(visiblePage) };
+    const system = { publicConfig: vi.fn().mockResolvedValue(publicConfig) };
+    const controller = new LearnerHomeController(courses as any, system as any);
+
+    await expect(controller.home(
+      { page: 2, page_size: 5 },
+      { id: 77 } as any,
+      { query: { page: '2', page_size: '5' } } as any,
+    )).resolves.toEqual({ site_config: publicConfig, courses: visiblePage });
+    expect(courses.visibleCourses).toHaveBeenCalledWith('77', 2, 5);
+    expect(system.publicConfig).toHaveBeenCalledOnce();
+  });
+
+  it('uses page 1 and page size 20 for the learner home defaults', async () => {
+    const courses = { visibleCourses: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 }) };
+    const system = { publicConfig: vi.fn().mockResolvedValue({ logo_asset_id: null, banners: [] }) };
+    const controller = new LearnerHomeController(courses as any, system as any);
+
+    await controller.home({}, { id: '77' } as any, { query: {} } as any);
+
+    expect(courses.visibleCourses).toHaveBeenCalledWith('77', 1, 20);
+  });
+
   it('creates a draft without reading the outer transaction result before initialization', async () => {
     const repository = {
       create: vi.fn((value) => ({ ...value })),

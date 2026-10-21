@@ -13,7 +13,7 @@ import {
 import { MediaService } from '../src/modules/media/media.service';
 import { SiteSetting } from '../src/entities/site-setting.entity';
 import { SysMenu } from '../src/entities/sys-menu.entity';
-import { QUESTION_ROUTE_PERMISSIONS, routeAccessAllowed } from '../../web/src/router/access';
+import { COURSE_ROUTE_PERMISSIONS, QUESTION_ROUTE_PERMISSIONS, routeAccessAllowed } from '../../web/src/router/access';
 import { invalidateTabCache, tabCacheKey } from '../../web/src/stores/tab-cache';
 
 function config(logDir: string) {
@@ -243,6 +243,16 @@ describe('A5 system configuration safety contracts', () => {
     expect(routeAccessAllowed(meta, (code) => code === 'papers:read', false)).toBe(false);
   });
 
+  it('allows the Courses entrance for read-only or write-only grants, while its detail stays read-only', () => {
+    const entrance = { permissionAny: [...COURSE_ROUTE_PERMISSIONS] };
+    const detail = { permission: 'courses:read' };
+    expect(routeAccessAllowed(entrance, (code) => code === 'courses:read', false)).toBe(true);
+    expect(routeAccessAllowed(entrance, (code) => code === 'courses:write', false)).toBe(true);
+    expect(routeAccessAllowed(entrance, (code) => code === 'papers:read', false)).toBe(false);
+    expect(routeAccessAllowed(detail, (code) => code === 'courses:write', false)).toBe(false);
+    expect(routeAccessAllowed(detail, (code) => code === 'courses:read', false)).toBe(true);
+  });
+
   it('opens only ready branding assets currently bound to site config', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ruleexam-public-branding-'));
     try {
@@ -289,6 +299,13 @@ describe('A5 system configuration safety contracts', () => {
       name: '错误按钮', type: 'button', route_path: '/admin/system/menus',
       permission_code: 'system_settings:write', sort: 1, status: 1,
     })).toThrowError(expect.objectContaining({ code: 40001 }));
+  });
+
+  it('accepts the registered Courses menu with a null permission for frontend read-or-write filtering', () => {
+    expect(() => assertMenuDefinition({
+      name: '课程管理', type: 'menu', route_path: '/admin/courses',
+      permission_code: null, icon: 'Notebook', sort: 85, status: 1,
+    })).not.toThrow();
   });
 
   it('normalizes a public site config to the exact two-key whitelist and at most three sorted banners', () => {

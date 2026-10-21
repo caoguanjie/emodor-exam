@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
-import { QUESTION_ROUTE_PERMISSIONS, routeAccessAllowed } from './access';
+import { COURSE_ROUTE_PERMISSIONS, QUESTION_ROUTE_PERMISSIONS, routeAccessAllowed } from './access';
 
 /**
  * 路由守卫承载前端侧访问控制（02 册 3.1 选型理由 3 双层防线）：
@@ -29,6 +29,8 @@ const routes: RouteRecordRaw[] = [
       { path: 'admin/users', component: () => import('../views/admin/Users.vue'), meta: { title: '员工管理', admin: true, superAdminOnly: true, cache: true } },
       { path: 'admin/students', component: () => import('../views/admin/Users.vue'), meta: { title: '学员管理', admin: true, permission: 'students:read', cache: true } },
       { path: 'admin/training-categories', component: () => import('../views/admin/TrainingCategories.vue'), meta: { title: '培训类别', admin: true, permission: 'training_categories:read', cache: true } },
+      { path: 'admin/courses', component: () => import('../views/admin/Courses.vue'), meta: { title: '课程管理', admin: true, permissionAny: [...COURSE_ROUTE_PERMISSIONS], cache: true } },
+      { path: 'admin/courses/:id', component: () => import('../views/admin/CourseDetail.vue'), meta: { title: '课程详情', admin: true, permission: 'courses:read', cache: true } },
       { path: 'admin/regulations', component: () => import('../views/admin/Regulations.vue'), meta: { title: '制度管理', admin: true, permission: 'regulations:read', cache: true } },
       { path: 'admin/regulations/:id', component: () => import('../views/admin/RegulationDetail.vue'), meta: { title: '制度详情', admin: true, permission: 'regulations:read' } },
       { path: 'admin/questions', component: () => import('../views/admin/Questions.vue'), meta: { title: '题库与出题', admin: true, permissionAny: [...QUESTION_ROUTE_PERMISSIONS] } },
