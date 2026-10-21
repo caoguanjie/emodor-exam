@@ -25,7 +25,7 @@ export class CreateTrainingPaperDto {
   @IsOptional() @IsInt() @Min(1) @Max(1440) duration_minutes?: number;
   @IsOptional() @IsInt() @Min(1) @Max(100) max_attempts?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(1) partial_credit_ratio?: number;
-  @IsOptional() @IsArray() @ArrayMaxSize(4) @ValidateNested({ each: true }) @Type(() => PaperRuleDto) rules?: PaperRuleDto[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => PaperRuleDto) rules?: PaperRuleDto[];
 }
 
 export class UpdateTrainingPaperDto {
@@ -39,7 +39,7 @@ export class UpdateTrainingPaperDto {
   @IsOptional() @IsInt() @Min(1) @Max(1440) duration_minutes?: number;
   @IsOptional() @IsInt() @Min(1) @Max(100) max_attempts?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(1) partial_credit_ratio?: number;
-  @IsOptional() @IsArray() @ArrayMaxSize(4) @ValidateNested({ each: true }) @Type(() => PaperRuleDto) rules?: PaperRuleDto[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => PaperRuleDto) rules?: PaperRuleDto[];
 }
 
 export class FixedQuestionDto {

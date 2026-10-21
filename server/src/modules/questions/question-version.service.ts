@@ -310,6 +310,48 @@ export class QuestionVersionService implements OnModuleInit {
     });
   }
 
+  /**
+   * Resolve the exact current approved revision while the caller owns the
+   * publication transaction. Legacy questions are captured as current facts;
+   * no category, difficulty, or historic approval metadata is synthesized.
+   */
+  async currentOrCaptureForRelease(
+    manager: EntityManager,
+    questionId: string,
+    expectedVersionId?: string | null,
+  ): Promise<QuestionVersion> {
+    const questionRepo = manager.getRepository(Question);
+    const versionRepo = manager.getRepository(QuestionVersion);
+    const question = await questionRepo.findOne({
+      where: { id: String(questionId) },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!question) throw Errors.notFound('题目不存在');
+    if (question.status !== 'approved') {
+      throw Errors.paperReleaseConflict(`题目 ${questionId} 已不是当前审核通过版本，请重新选题`);
+    }
+    if (expectedVersionId && String(question.currentVersionId || '') !== String(expectedVersionId)) {
+      throw Errors.paperReleaseConflict(`题目 ${questionId} 的已选版本已过期，请重新选题`);
+    }
+
+    let version: QuestionVersion;
+    if (question.currentVersionId) {
+      const found = await versionRepo.findOne({ where: { id: String(question.currentVersionId) } });
+      if (!found || String(found.questionId) !== String(question.id) || found.status !== 'approved') {
+        throw Errors.paperReleaseConflict(`题目 ${questionId} 已不是当前审核通过版本，请重新选题`);
+      }
+      version = found;
+    } else {
+      if (expectedVersionId) {
+        throw Errors.paperReleaseConflict(`题目 ${questionId} 的已选版本已过期，请重新选题`);
+      }
+      version = await this.captureLegacy(manager, question);
+      question.currentVersionId = version.id;
+      await questionRepo.save(question);
+    }
+    return version;
+  }
+
   async approve(versionId: string, actorId: string): Promise<void> {
     await this.dataSource.transaction(async (manager) => {
       const versionRepo = manager.getRepository(QuestionVersion);
@@ -415,9 +457,11 @@ export class QuestionVersionService implements OnModuleInit {
     });
   }
 
-  async approvedCandidates(filter: CandidateFilter): Promise<QuestionVersionSnapshot[]> {
-    await this.categories.assertActive(String(filter.categoryId));
-    const qb = this.versionRepo.createQueryBuilder('version')
+  async approvedCandidates(filter: CandidateFilter, manager?: EntityManager): Promise<QuestionVersionSnapshot[]> {
+    if (manager) await this.categories.lockActive(manager, String(filter.categoryId));
+    else await this.categories.assertActive(String(filter.categoryId));
+    const repo = manager ? manager.getRepository(QuestionVersion) : this.versionRepo;
+    const qb = repo.createQueryBuilder('version')
       .innerJoin(Question, 'question', 'question.current_version_id = version.id')
       .where('version.status = :status', { status: 'approved' })
       .andWhere('version.category_id = :categoryId', { categoryId: String(filter.categoryId) })

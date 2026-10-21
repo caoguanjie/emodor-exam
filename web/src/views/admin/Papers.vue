@@ -3,12 +3,12 @@
     <div class="page-head">
       <div class="eyebrow">管理台</div>
       <h2>试卷管理</h2>
-      <p class="desc">培训卷按发布版本冻结规则与题目内容；制度专项旧卷继续使用原接口与学习门槛。</p>
+      <p class="desc">培训卷按发布版本冻结规则与题目内容；制度专项卷保留原接口与学习门槛，新发布同样生成不可变快照。</p>
     </div>
 
     <el-tabs v-model="activeScope" @tab-change="load">
       <el-tab-pane label="培训考试" name="training" />
-      <el-tab-pane label="制度专项旧卷" name="regulation" />
+      <el-tab-pane label="制度专项卷" name="regulation" />
     </el-tabs>
 
     <template v-if="activeScope === 'training'">
@@ -40,7 +40,7 @@
     </template>
 
     <template v-else>
-      <el-alert type="info" :closable="false" title="此处保留原制度固定卷：数字 ID、原列表结构、单/多选限制及制度学习门槛均不变。" style="margin-bottom:14px" />
+      <el-alert type="info" :closable="false" title="制度专项卷保留数字 ID、原列表结构、单/多选限制及学习门槛；升级后新发布会冻结内容，仅已发布且无 release 的记录属于升级前旧卷。" style="margin-bottom:14px" />
       <div class="toolbar">
         <el-select v-model="legacyQuery.regulation_id" placeholder="按制度筛选" clearable filterable style="width:260px" @change="loadLegacy">
           <el-option v-for="item in regulations" :key="item.id" :label="item.title" :value="item.id" />
@@ -55,8 +55,9 @@
         <el-table-column prop="title" label="试卷" min-width="220" />
         <el-table-column label="所属制度" min-width="180"><template #default="{ row }">{{ regulationName(row.regulation_id) }}</template></el-table-column>
         <el-table-column label="及格线 / 限时 / 次数" min-width="220"><template #default="{ row }">{{ row.pass_score }} 分 · {{ row.duration_minutes }} 分钟 · {{ row.max_attempts }} 次</template></el-table-column>
+        <el-table-column label="发布快照" width="130"><template #default="{ row }"><el-tag :type="row.rules_locked ? 'success' : row.status === 'published' ? 'warning' : 'info'">{{ legacyReleaseLabel(row) }}</el-tag></template></el-table-column>
         <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="openDetail(row.id, 'regulation')">组卷</el-button></template></el-table-column>
+        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="openDetail(row.id, 'regulation')">{{ row.rules_locked ? '查看' : '组卷' }}</el-button></template></el-table-column>
       </el-table>
       <el-pagination class="pager" layout="total, prev, pager, next" :total="legacyTotal" :page-size="legacyQuery.page_size"
         v-model:current-page="legacyQuery.page" @current-change="loadLegacy" />
@@ -82,7 +83,7 @@
       <template #footer><el-button @click="closeTrainingCreate">取消</el-button><el-button type="primary" :loading="creating" @click="createTraining">创建草稿</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="legacyCreateVisible" title="创建制度专项旧卷" width="520px">
+    <el-dialog v-model="legacyCreateVisible" title="创建制度专项卷" width="520px">
       <el-form label-width="120px">
         <el-form-item label="所属制度"><el-select v-model="legacyCreate.regulation_id" filterable style="width:100%"><el-option v-for="item in regulations" :key="item.id" :label="item.title" :value="item.id" /></el-select></el-form-item>
         <el-form-item label="试卷标题"><el-input v-model="legacyCreate.title" /></el-form-item>
@@ -94,7 +95,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
 import http from '../../api/http';
@@ -130,6 +131,13 @@ const legacyCreate = reactive({ regulation_id: '', title: '', pass_score: 60, du
 const trainingCreateDirty = ref(false);
 let createBaseline = emptyTrainingCreate();
 let relationToken = 0;
+let viewContext = 0;
+let loadOperation = 0;
+let createContext = 0;
+let createOperation = 0;
+let viewActive = true;
+let viewDestroyed = false;
+const completedCreateScopes = new Set<'training' | 'regulation'>();
 const createUnsaved = useUnsavedChanges(trainingCreateDirty, { onDiscard: discardTrainingCreate });
 const trainingStatuses = [
   { value: 'draft', label: '草稿' }, { value: 'published', label: '已发布' },
@@ -138,7 +146,8 @@ const trainingStatuses = [
 
 function emptyTrainingCreate(): TrainingCreateDraft { return { title: '', mode: 'fixed', category_id: '', regulation_ids: [], course_ids: [], requires_learning: false, pass_score: 60, duration_minutes: 30, max_attempts: 3, partial_credit_ratio: 0.5, rules: [{ type: 'single', count: 1, score_cents: 10000 }] }; }
 function snapshotCreate(): TrainingCreateDraft { return JSON.parse(JSON.stringify(trainingCreate)); }
-function discardTrainingCreate() { Object.assign(trainingCreate, JSON.parse(JSON.stringify(createBaseline))); trainingCreateDirty.value = false; trainingCreateVisible.value = false; }
+function createPayload(submitted: TrainingCreateDraft): Omit<TrainingCreateDraft, 'rules'> & { rules?: PaperRuleInput[] } { const payload: Omit<TrainingCreateDraft, 'rules'> & { rules?: PaperRuleInput[] } = JSON.parse(JSON.stringify(submitted)); if (submitted.mode === 'fixed') delete payload.rules; return payload; }
+function discardTrainingCreate() { createContext += 1; creating.value = false; Object.assign(trainingCreate, JSON.parse(JSON.stringify(createBaseline))); trainingCreateDirty.value = false; trainingCreateVisible.value = false; }
 watch(trainingCreate, () => { if (trainingCreateVisible.value) trainingCreateDirty.value = JSON.stringify(snapshotCreate()) !== JSON.stringify(createBaseline); }, { deep: true });
 const createRuleTotal = computed(() => trainingCreate.rules.reduce((sum, item) => sum + item.count * item.score_cents, 0));
 
@@ -148,14 +157,17 @@ function statusType(status: TrainingPaperStatus | string) { return status === 'p
 function categoryName(categoryId: Id) { return categories.value.find((item) => item.id === categoryId)?.name || `类别 ${categoryId}`; }
 function regulationName(regulationId: string | number) { return regulations.value.find((item) => String(item.id) === String(regulationId))?.title || `制度 ${regulationId}`; }
 function ruleSummary(row: TrainingPaperSummary) { return row.mode === 'fixed' ? '手选题单 · 发布时冻结' : row.rules.map((item) => `${typeLabel(item.type)} ${item.count}×${item.score_cents / 100}分`).join('；'); }
+function legacyReleaseLabel(row: { status?: string; release_id?: string | null; rules_locked?: boolean }) { if (row.rules_locked && row.release_id) return '内容已冻结'; if (row.status === 'published') return '升级前旧卷'; return '待发布冻结'; }
 function openDetail(id: Id | number, scope: 'training' | 'regulation') { void router.push({ path: `/admin/papers/${id}`, query: { scope } }); }
 function searchTraining() { trainingQuery.page = 1; void loadTraining(); }
 async function load() { if (activeScope.value === 'training') await loadTraining(); else await loadLegacy(); }
-async function loadTraining() { loading.value = true; try { const data = await http.get('/admin/papers', { params: trainingQuery }) as Page<TrainingPaperSummary>; trainingItems.value = data.items; trainingTotal.value = data.total; } finally { loading.value = false; } }
-async function loadLegacy() { loading.value = true; try { const data = await http.get('/ai/papers', { params: legacyQuery }) as any; legacyItems.value = data.list; legacyTotal.value = data.total; } finally { loading.value = false; } }
+function nonBlankParams(source: Record<string, unknown>) { return Object.fromEntries(Object.entries(source).filter(([, value]) => value !== '')); }
+async function loadTraining() { const context = viewContext; const operation = ++loadOperation; loading.value = true; try { const data = await http.get('/admin/papers', { params: nonBlankParams(trainingQuery) }) as Page<TrainingPaperSummary>; if (context !== viewContext || operation !== loadOperation) return; trainingItems.value = data.items; trainingTotal.value = data.total; } finally { if (context === viewContext && operation === loadOperation) loading.value = false; } }
+async function loadLegacy() { const context = viewContext; const operation = ++loadOperation; loading.value = true; try { const data = await http.get('/ai/papers', { params: nonBlankParams(legacyQuery) }) as any; if (context !== viewContext || operation !== loadOperation) return; legacyItems.value = data.list; legacyTotal.value = data.total; } finally { if (context === viewContext && operation === loadOperation) loading.value = false; } }
 async function loadOptions() {
-  if (auth.can('papers:read')) { const data = await http.get('/admin/papers/category-options', { params: { page: 1, page_size: 100 } }) as Page<{ id: Id; name: string }>; categories.value = data.items; }
-  if (auth.can('regulations:read')) { const data = await http.get('/regulations', { params: { page: 1, page_size: 100 } }) as any; regulations.value = data.list; }
+  const context = viewContext;
+  if (auth.can('papers:read')) { const data = await http.get('/admin/papers/category-options', { params: { page: 1, page_size: 100 } }) as Page<{ id: Id; name: string }>; if (context !== viewContext) return; categories.value = data.items; }
+  if (auth.can('regulations:read')) { const data = await http.get('/regulations', { params: { page: 1, page_size: 100 } }) as any; if (context !== viewContext) return; regulations.value = data.list; }
 }
 async function loadCreateRelations() {
   const token = ++relationToken; const categoryId = trainingCreate.category_id;
@@ -168,20 +180,44 @@ async function loadCreateRelations() {
   if (token !== relationToken || trainingCreate.category_id !== categoryId) return;
   createRegulations.value = regulationsPage.items; createCourses.value = coursesPage.items;
 }
-function openTrainingCreate() { Object.assign(trainingCreate, emptyTrainingCreate(), { category_id: categories.value[0]?.id || '' }); createBaseline = snapshotCreate(); createUnsaved.markClean(); trainingCreateVisible.value = true; void loadCreateRelations(); }
-async function closeTrainingCreate() { if (await createUnsaved.confirmDiscard()) trainingCreateVisible.value = false; }
-async function beforeTrainingCreateClose(done: () => void) { if (await createUnsaved.confirmDiscard()) done(); }
+function openTrainingCreate() { createContext += 1; creating.value = false; Object.assign(trainingCreate, emptyTrainingCreate(), { category_id: categories.value[0]?.id || '' }); createBaseline = snapshotCreate(); createUnsaved.markClean(); trainingCreateVisible.value = true; void loadCreateRelations(); }
+function closeTrainingCreateContext() { createContext += 1; creating.value = false; trainingCreateVisible.value = false; }
+async function closeTrainingCreate() { if (await createUnsaved.confirmDiscard()) closeTrainingCreateContext(); }
+async function beforeTrainingCreateClose(done: () => void) { if (await createUnsaved.confirmDiscard()) { closeTrainingCreateContext(); done(); } }
 function addRule() { const used = new Set(trainingCreate.rules.map((item) => item.type)); const next = (['single', 'multiple', 'judgment', 'image'] as QuestionType[]).find((item) => !used.has(item)); if (next) trainingCreate.rules.push({ type: next, count: 1, score_cents: 1000 }); }
+function flushCompletedCreates() {
+  if (viewDestroyed || !viewActive || completedCreateScopes.size === 0) return;
+  const scopes = [...completedCreateScopes];
+  completedCreateScopes.clear();
+  ElMessage.info('先前的创建请求已完成，可在试卷列表中查看');
+  if (scopes.includes('training')) void loadTraining();
+  if (scopes.includes('regulation')) void loadLegacy();
+}
+function reconcileCompletedCreate(scope: 'training' | 'regulation') { if (viewDestroyed) return; completedCreateScopes.add(scope); flushCompletedCreates(); }
 async function createTraining() {
+  if (creating.value) return;
   if (!trainingCreate.title.trim() || !trainingCreate.category_id) { ElMessage.warning('请填写标题并选择培训类别'); return; }
   if (trainingCreate.mode === 'random' && createRuleTotal.value !== 10000) { ElMessage.warning('随机规则总分必须等于 100 分'); return; }
+  const context = viewContext; const dialogContext = createContext; const operation = ++createOperation; const submitted = snapshotCreate();
+  const payload = createPayload(submitted);
   creating.value = true;
-  try { const created = await http.post('/admin/papers', snapshotCreate()) as TrainingPaperSummary; createUnsaved.markClean(); trainingCreateVisible.value = false; ElMessage.success('培训试卷草稿已创建'); openDetail(created.id, 'training'); }
-  finally { creating.value = false; }
+  try {
+    const created = await http.post('/admin/papers', payload) as TrainingPaperSummary;
+    if (context !== viewContext) { reconcileCompletedCreate('training'); return; }
+    if (dialogContext !== createContext || operation !== createOperation || !trainingCreateVisible.value) {
+      reconcileCompletedCreate('training');
+      return;
+    }
+    createUnsaved.markClean(); trainingCreateVisible.value = false; ElMessage.success('培训试卷草稿已创建'); openDetail(created.id, 'training');
+  } finally { if (context === viewContext && dialogContext === createContext && operation === createOperation) creating.value = false; }
 }
-async function createLegacy() { const created = await http.post('/ai/papers', { ...legacyCreate, regulation_id: String(legacyCreate.regulation_id) }) as any; legacyCreateVisible.value = false; ElMessage.success('制度专项卷草稿已创建'); openDetail(created.id, 'regulation'); }
+async function createLegacy() { const context = viewContext; const operation = ++createOperation; const created = await http.post('/ai/papers', { ...legacyCreate, regulation_id: String(legacyCreate.regulation_id) }) as any; if (context !== viewContext || operation !== createOperation) { reconcileCompletedCreate('regulation'); return; } legacyCreateVisible.value = false; ElMessage.success('制度专项卷草稿已创建'); openDetail(created.id, 'regulation'); }
 
 onMounted(async () => { await loadOptions(); await loadTraining(); });
+function invalidateView() { viewContext += 1; loadOperation += 1; createContext += 1; relationToken += 1; creating.value = false; trainingCreateVisible.value = false; legacyCreateVisible.value = false; }
+onActivated(() => { viewActive = true; flushCompletedCreates(); });
+onDeactivated(() => { viewActive = false; invalidateView(); });
+onBeforeUnmount(() => { viewDestroyed = true; viewActive = false; invalidateView(); });
 </script>
 
 <style scoped>

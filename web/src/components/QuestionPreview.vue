@@ -43,6 +43,7 @@ const props = withDefaults(defineProps<{
   };
   revealAnswer?: boolean;
 }>(), { revealAnswer: true });
+const emit = defineEmits<{ ready: [result: { ok: boolean }] }>();
 
 const rendered = reactive<{ stem: string; options: QuestionOption[]; analysis: string; rubric: string }>({
   stem: '', options: [], analysis: '', rubric: '',
@@ -58,16 +59,38 @@ function clearObjectUrls() {
   objectUrls.clear();
 }
 
-async function hydrate(html: string | null | undefined, serial: number): Promise<string> {
+function releaseObjectUrl(url: string) {
+  if (!objectUrls.delete(url)) return;
+  URL.revokeObjectURL(url);
+}
+
+async function decodeObjectUrl(url: string): Promise<void> {
+  if (typeof Image === 'undefined') return;
+  const image = new Image();
+  if (typeof image.decode === 'function') {
+    image.src = url;
+    await image.decode();
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error('image decode failed'));
+    image.src = url;
+  });
+}
+
+async function hydrate(html: string | null | undefined, serial: number): Promise<{ html: string; ok: boolean }> {
   const safeHtml = sanitizeQuestionHtmlForPreview(html);
-  if (!safeHtml || typeof document === 'undefined') return safeHtml;
+  if (!safeHtml || typeof document === 'undefined') return { html: safeHtml, ok: true };
   const template = document.createElement('template');
   template.innerHTML = safeHtml;
   const images = [...template.content.querySelectorAll<HTMLImageElement>('img[data-media-id]')];
+  let ok = true;
   await Promise.all(images.map(async (node) => {
     const assetId = node.dataset.mediaId || '';
     if (!/^[1-9]\d*$/.test(assetId)) {
       node.remove();
+      ok = false;
       return;
     }
     try {
@@ -75,17 +98,32 @@ async function hydrate(html: string | null | undefined, serial: number): Promise
       if (serial !== renderSerial) return;
       const url = URL.createObjectURL(blob);
       objectUrls.add(url);
+      try {
+        await decodeObjectUrl(url);
+      } catch {
+        if (serial !== renderSerial) return;
+        releaseObjectUrl(url);
+        ok = false;
+        const fallback = document.createElement('span');
+        fallback.className = 'question-preview__missing-media';
+        fallback.textContent = `图片 ${assetId} 暂不可预览`;
+        node.replaceWith(fallback);
+        return;
+      }
+      if (serial !== renderSerial) return;
       node.src = url;
       node.removeAttribute('data-media-id');
       node.loading = 'lazy';
     } catch {
+      if (serial !== renderSerial) return;
+      ok = false;
       const fallback = document.createElement('span');
       fallback.className = 'question-preview__missing-media';
       fallback.textContent = `图片 ${assetId} 暂不可预览`;
       node.replaceWith(fallback);
     }
   }));
-  return template.innerHTML;
+  return { html: template.innerHTML, ok };
 }
 
 async function renderQuestion() {
@@ -100,10 +138,11 @@ async function renderQuestion() {
     hydrate(props.question.rubric, serial),
   ]);
   if (serial !== renderSerial) return;
-  rendered.stem = stem;
-  rendered.options = options;
-  rendered.analysis = analysis;
-  rendered.rubric = rubric;
+  rendered.stem = stem.html;
+  rendered.options = options.map((option) => ({ key: option.key, text: option.text.html }));
+  rendered.analysis = analysis.html;
+  rendered.rubric = rubric.html;
+  emit('ready', { ok: stem.ok && options.every((option) => option.text.ok) && analysis.ok && rubric.ok });
 }
 
 watch(() => props.question, () => { void renderQuestion(); }, { deep: true, immediate: true });

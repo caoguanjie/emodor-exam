@@ -8,6 +8,8 @@ import { QuestionConceptService } from '../src/modules/questions/question-concep
 import { Question } from '../src/entities/question.entity';
 import { QuestionVersion } from '../src/entities/question-version.entity';
 import { QuestionConcept } from '../src/entities/question-concept.entity';
+import { ExamPaper } from '../src/entities/exam-paper.entity';
+import { PaperQuestion } from '../src/entities/paper-question.entity';
 import { QuestionReviewService } from '../src/modules/ai/question-review.service';
 import { QuestionGenerationService } from '../src/modules/ai/question-generation.service';
 import { PaperService } from '../src/modules/ai/paper.service';
@@ -746,7 +748,18 @@ describe('versioned question bank', () => {
         return builder;
       }),
     };
-    paperService.dataSource = { transaction: vi.fn(async () => undefined) };
+    paperService.dataSource = { transaction: vi.fn(async (work: (manager: any) => Promise<unknown>) => work({
+      getRepository(entity: unknown) {
+        if (entity === ExamPaper) return paperService.paperRepo;
+        if (entity === Question) return paperService.questionRepo;
+        if (entity === PaperQuestion) return {
+          ...paperService.pqRepo,
+          delete: vi.fn(),
+          save: vi.fn(),
+        };
+        throw new Error(`unexpected repository ${(entity as any)?.name}`);
+      },
+    })) };
     paperService.audit = { log: vi.fn() };
     paperService.detail = vi.fn(async () => ({}));
 

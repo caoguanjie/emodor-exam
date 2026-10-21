@@ -141,7 +141,10 @@ describe('immutable paper releases', () => {
 
     expect(withoutRegulationFilter).toContain('101');
     expect(withRegulationFilter).not.toContain('101');
-    expect(withFilter.approvedCandidates).toHaveBeenCalledWith(expect.objectContaining({ regulationIds: ['9'] }));
+    expect(withFilter.approvedCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ regulationIds: ['9'] }),
+      expect.anything(),
+    );
   });
 
   it('stores the exact release rule and marks the training paper published without enabling a learning gate', async () => {

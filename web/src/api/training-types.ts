@@ -380,6 +380,28 @@ export interface PaperPreview {
   questions: PaperPreviewQuestion[];
 }
 
+export interface LegacyPaperDetailView {
+  id: number;
+  regulation_id: string | number;
+  title: string;
+  status: 'draft' | 'published' | 'archived';
+  pass_score: number;
+  duration_minutes: number;
+  max_attempts: number;
+  partial_credit_ratio: number;
+  release_id: string | null;
+  rules_locked: boolean;
+  questions: Array<{
+    question_id: string | number;
+    type: string;
+    stem: string;
+    score: number;
+    sort: number;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+}
+
 export interface AttemptQuestion {
   item_id: Id;
   type: QuestionType;

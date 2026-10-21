@@ -1,5 +1,5 @@
 import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
-import type { QuestionVersionSnapshot } from '../modules/questions/question-version.service';
+import type { PublishedQuestionSnapshot } from '../modules/exams/paper-release.service';
 
 @Entity('paper_release_question')
 @Index('uk_release_question_version', ['releaseId', 'questionVersionId'], { unique: true })
@@ -33,5 +33,5 @@ export class PaperReleaseQuestion {
   position: number;
 
   @Column({ name: 'snapshot_json', type: 'json' })
-  snapshotJson: QuestionVersionSnapshot;
+  snapshotJson: PublishedQuestionSnapshot;
 }

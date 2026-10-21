@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-21）**：本册 legacy 接口与 A2—A5、B1/B3 增量继续以实际 controller/entity/migration 为准。C1 已新增独立 `/admin/papers` 培训固定/随机配置、预览、发布快照、复制、撤回/归档接口；旧 `/ai/papers` 的数字 ID、`list` 形状、制度门槛和单/多选限制不变。C2 个人题单及培训开考未实现，当前旧开考入口对 training 卷明确返回 40402。PC 交互验收仍由 root 收口，源码登记不代表开发库/生产库已升级。
+> **状态边界（2026-10-21）**：本册 legacy 接口与 A2—A5、B1/B3 增量继续以实际 controller/entity/migration 为准。C1 已新增独立 `/admin/papers` 培训固定/随机配置、预览、发布快照、复制、撤回/归档接口；升级后新发布的制度固定卷也写不可变 release，并在旧 `/ai/papers` 数字 ID/`list` 形状上只增 flags 与复制入口，制度门槛和单/多选限制不变。C2 个人题单及培训开考未实现，当前旧开考入口对 training 卷明确返回 40402。PC 交互验收仍由 root 收口，源码登记不代表开发库/生产库已升级。
 
 ---
 
@@ -115,7 +115,7 @@
 | /admin/courses | 4. 学习行为管控模块（B1 内容侧） | 14 | 课程、章节、视频课时、不可变内容版本、上架/下架与类别选项 |
 | /admin/papers | 3. AI 出题/试卷发布模块（C1） | 15 | 培训固定/随机卷配置、候选、预览、发布快照、复制、撤回与归档 |
 | /me/courses | 4. 学习行为管控模块（B1 内容侧） | 2 | 本人同类别已上架课程分页与目录；external 默认空 |
-| /ai | 3. AI 出题模块 | 26 | AI 配置/任务、B3 类别与考点窄选项、四题型版本审核、人工录入、试卷管理与组卷 |
+| /ai | 3. AI 出题模块 | 27 | AI 配置/任务、B3 类别与考点窄选项、四题型版本审核、人工录入、试卷管理与组卷/复制 |
 | /learning | 4. 学习行为管控模块 | 7 | 学习列表、会话生命周期、心跳、进度 |
 | /exams | 5. 考试评分模块 | 8 | 可考列表、开考、心跳、切屏、交卷、成绩 |
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
@@ -383,7 +383,8 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 23 | PUT | /ai/papers/{id} | 修改策略字段 |
 | 24 | PUT | /ai/papers/{id}/questions | 组卷；发布后锁定 |
 | 25 | POST | /ai/papers/{id}/publish | 发布试卷，校验 SUM(score)=100 |
-| 26 | POST | /ai/papers/{id}/archive | 归档试卷 |
+| 26 | POST | /ai/papers/{id}/copy | `papers:write`；按冻结事实复制为新 draft，body 只接受空对象 |
+| 27 | POST | /ai/papers/{id}/archive | 归档试卷 |
 
 **试卷路由归属说明**：试卷的创建/组卷/发布属于「题目审核 → 组卷 → 发布」的出题工作流（05 册 4.4.7 组卷服务隶属 AI 出题模块），故管理侧归 `/ai/papers`；面向员工的考试执行（可考列表、开考、交卷）归 `/exams`（考试评分模块）——同一资源的管理面与执行面分离，与模块边界一致。
 
@@ -415,7 +416,9 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 **PUT /ai/papers/{id}/questions**：入卷校验——题目 `status = approved`、`question.regulation_id` 与试卷一致、同卷不重复（uk_paper_question 兜底，05 册 4.4.7）。legacy 固定卷的乱序与自动评分当前只支持 single/multiple，因此选题、发布、开考三个边界都拒绝 judgment/image；题目一旦被任一 `paper_question` 引用，类型变更返回 40908。C1 四题型培训卷只经 `/admin/papers` 新链路，不通过放宽 legacy guard 实现。
 
-**发布后策略可调边界**（05 册 4.4.7 生效边界表）：`paper_question`（题目组成与分值）发布后锁定；`pass_score` / `partial_credit_ratio` 判分时实时读取；`duration_minutes` / `max_attempts` 对后续发起生效。
+**制度卷升级发布边界**：升级后从 draft 执行 `POST /ai/papers/{id}/publish` 时，在同一事务内捕获题目的真实当前 approved revision，并把实际 `paper_question.score`、题目内容与策略写入 `paper_release*`。旧题未知 `category/difficulty/approved_by/approved_at` 分别保持 `null/unknown/null/null`，不得伪造 easy 或历史审核事实。此后 list/detail/publish 在原数字 `id` 和原字段之外仅兼容新增 `release_id:string|null`、`rules_locked:boolean`；有 release 时详情读取冻结题目、实际分值和 RuleSnapshot，策略/题单修改返回 40970。真正升级前已 published 且没有 release 的卷继续返回 `release_id=null/rules_locked=false`，保留旧动态策略语义，不补造历史快照。
+
+**复制契约**：`POST /ai/papers/{id}/copy` 使用 `papers:write`，返回原数字 ID 形状的新 draft，且 `release_id=null/rules_locked=false`。有 release 的源卷复制冻结的题目版本、实际分值、规则及学习门槛；无 release 的旧卷复制当前事实。源 release 不变；若复制后题库 current revision 已推进，重新发布返回 40970 并提示重新选题，不静默替换版本。
 
 #### 3.5.1 培训试卷与不可变发布 /admin/papers（C1）
 
@@ -439,7 +442,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 14 | POST | /admin/papers/{id}/withdraw | `papers:publish`；published → withdrawn，保留快照 |
 | 15 | POST | /admin/papers/{id}/archive | `papers:publish`；published/withdrawn → archived，保留快照 |
 
-**创建/修改 DTO**：`title/mode/category_id` 为核心字段；`regulation_ids/course_ids` 是去重字符串 ID 数组；`requires_learning` 可选且默认 false；`pass_score/duration_minutes/max_attempts/partial_credit_ratio` 默认 60/30/3/0.5。随机卷 `rules=[{type,count,score_cents}]` 必须题型唯一且 `Σ(count×score_cents)=10000`；固定题单 `items=[{question_version_id,score_cents}]` 同样合计 10000。未知 body/query 字段一律 40001。
+**创建/修改 DTO**：`title/mode/category_id` 为核心字段；`regulation_ids/course_ids` 是去重字符串 ID 数组；`requires_learning` 可选且默认 false；`pass_score/duration_minutes/max_attempts/partial_credit_ratio` 默认 60/30/3/0.5。随机卷 `rules=[{type,count,score_cents}]` 最多四项且题型唯一，并满足 `Σ(count×score_cents)=10000`；固定题单 `items=[{question_version_id,score_cents}]` 同样合计 10000，但按“题型 + 实际分值”派生的规则允许超过四项（如同题型五档分值）。未知 body/query 字段一律 40001。
 
 **发布硬校验**：候选只取同培训类别、当前 approved revision、题型/难度精确匹配，制度集合可选；未选制度时无制度来源的人工/导入题可入池。课程 ID 不参与题池过滤。随机卷初级与高级两池都按 `concept_id ?? question_id` 计数，任一题型容量不足返回 40971 与 deficits；固定卷可用中级、同类别跨制度题，但禁止重复考点。
 
@@ -964,7 +967,7 @@ PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可�
 | /regulations | — | content | 类别选项需 regulations:write；其余管理路由按 regulations:read/write/publish | 同左 |
 | /admin/courses | — | — | 由业务角色显式授予 courses:read/write/publish | super_admin 天然拥有；类别 options 只需 courses:write |
 | /admin/papers | — | — | `papers:read/write/publish/export`；答案版需额外导出或题库读权限 | super_admin 天然拥有；学员来源不参与管理权限判定 |
-| /ai | — | — | 按细权限开放 | 26 个端点逐项使用 `ai:*`、`ai_config:*`、`questions:*`、`papers:*`；人工录题 writer 可通过 `question-category-options` / `question-concept-options` 取类别/考点，不要求 questions:read；不把全局权限守卫改成 OR |
+| /ai | — | — | 按细权限开放 | 27 个端点逐项使用 `ai:*`、`ai_config:*`、`questions:*`、`papers:*`；人工录题 writer 可通过 `question-category-options` / `question-concept-options` 取类别/考点，不要求 questions:read；不把全局权限守卫改成 OR |
 | /learning | — | 全部 7 个 | — | — |
 | /exams | — | 全部 8 个 | — | — |
 | /statistics | — | — | 全部 6 个 | 同左 |
