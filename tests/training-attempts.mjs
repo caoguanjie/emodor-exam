@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { assertTimeoutStartRace } from './training-attempts-race.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const bcrypt = require('bcryptjs');
@@ -290,32 +291,72 @@ async function runAttempts(ctx) {
     );
     const third = await ctx.request(legacyCountActor, 'POST', `/me/exams/${paper.paperId}/start`);
     assert.equal(third.status, 200, JSON.stringify(third));
-    const thirdRow = await ctx.queryTestDb('SELECT attempt_no FROM exam_record WHERE id = ?', [third.data.record_id]);
+    const thirdRow = await ctx.queryTestDb(
+      'SELECT attempt_no, assignment_id, active_assignment_id FROM exam_record WHERE id = ?',
+      [third.data.record_id],
+    );
     assert.equal(Number(thirdRow[0].attempt_no), 3);
+    assert.equal(String(thirdRow[0].assignment_id), String(thirdRow[0].active_assignment_id));
     const recoveredThird = await ctx.request(legacyCountActor, 'POST', `/me/exams/${paper.paperId}/start`);
     assert.equal(recoveredThird.status, 200, JSON.stringify(recoveredThird));
     assert.equal(recoveredThird.data.record_id, third.data.record_id);
     await ctx.queryTestDb('UPDATE exam_record SET deadline_at = DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 SECOND) WHERE id = ?', [third.data.record_id]);
-    const expiredFixture = await ctx.queryTestDb(
-      'SELECT attempt_no, status, assignment_id, active_assignment_id, deadline_at <= UTC_TIMESTAMP(3) AS is_expired FROM exam_record WHERE id = ?',
-      [third.data.record_id],
-    );
-    assert.equal(Number(expiredFixture[0].attempt_no), 3);
-    assert.equal(expiredFixture[0].status, 'in_progress');
-    assert.equal(String(expiredFixture[0].assignment_id), String(expiredFixture[0].active_assignment_id));
-    assert.equal(Number(expiredFixture[0].is_expired), 1);
+    const raceExpected = {
+      recordId: third.data.record_id,
+      userId: legacyCountId,
+      paperId: paper.paperId,
+      assignmentId: thirdRow[0].assignment_id,
+    };
+    const readRaceSnapshot = async () => {
+      const rows = await ctx.queryTestDb(
+        `SELECT record_row.id AS record_id, record_row.user_id, record_row.paper_id,
+                record_row.assignment_id, record_row.active_assignment_id,
+                record_row.attempt_no, record_row.status, record_row.score,
+                record_row.submitted_at,
+                record_row.deadline_at <= UTC_TIMESTAMP(3) AS is_expired,
+                (SELECT COUNT(*) FROM exam_record counted
+                   WHERE counted.user_id = record_row.user_id
+                     AND counted.paper_id = record_row.paper_id) AS record_count,
+                (SELECT COALESCE(MAX(counted.attempt_no), 0) FROM exam_record counted
+                   WHERE counted.user_id = record_row.user_id
+                     AND counted.paper_id = record_row.paper_id) AS max_attempt_no,
+                (SELECT COUNT(*) FROM exam_record counted
+                   WHERE counted.user_id = record_row.user_id
+                     AND counted.paper_id = record_row.paper_id
+                     AND counted.attempt_no > 3) AS fourth_count,
+                (SELECT COUNT(*) FROM exam_assignment counted
+                   WHERE counted.user_id = record_row.user_id
+                     AND counted.paper_id = record_row.paper_id) AS assignment_count
+           FROM exam_record record_row
+          WHERE record_row.id = ?`,
+        [third.data.record_id],
+      );
+      assert.equal(rows.length, 1);
+      return rows[0];
+    };
+    const expiredPre = await readRaceSnapshot();
     const expiredStart = await ctx.request(legacyCountActor, 'POST', `/me/exams/${paper.paperId}/start`);
-    assert.equal(expiredStart.status, 409);
-    assert.equal(expiredStart.code, 40904);
+    const expiredPost = await readRaceSnapshot();
+    assertTimeoutStartRace({
+      pre: expiredPre,
+      response: expiredStart,
+      post: expiredPost,
+      expected: raceExpected,
+    });
     const swept = await waitFor(ctx, async () => {
-      const rows = await ctx.queryTestDb('SELECT status, active_assignment_id FROM exam_record WHERE id = ?', [third.data.record_id]);
-      return rows[0]?.status !== 'in_progress' ? rows[0] : null;
+      const snapshot = await readRaceSnapshot();
+      return snapshot.status !== 'in_progress' ? snapshot : null;
     });
     assert.equal(swept.status, 'failed');
     assert.equal(swept.active_assignment_id, null);
     const fourth = await ctx.request(legacyCountActor, 'POST', `/me/exams/${paper.paperId}/start`);
-    assert.equal(fourth.status, 409);
-    assert.equal(fourth.code, 40902);
+    const fourthPost = await readRaceSnapshot();
+    assert.equal(assertTimeoutStartRace({
+      pre: swept,
+      response: fourth,
+      post: fourthPost,
+      expected: raceExpected,
+    }), 'finalized-before-pre');
 
     stage = 'failed draw rolls back assignment record items and media references';
     const failingPassword = password('failing');
