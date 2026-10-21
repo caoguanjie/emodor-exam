@@ -282,6 +282,91 @@ test('005 courses check/apply/recheck upgrades the accepted A4 schema without lo
   await conn.end();
 });
 
+test('005 course table probes reject same-count index drift without destroying rows', async () => {
+  const base = await migration();
+  const courses = await migration('005_courses');
+  const variants = [
+    {
+      name: 'course_wrong_index_order',
+      stepId: 'create_training_course',
+      table: 'training_course',
+      indexRows: 5,
+      driftSql: 'ALTER TABLE training_course DROP INDEX idx_training_course_category_status, ADD KEY idx_training_course_category_status (status, category_id)',
+      insertSql: "INSERT INTO training_course (id, title, category_id, created_by) VALUES (1, '保留课程', 7, 9)",
+    },
+    {
+      name: 'course_prefix_index',
+      stepId: 'create_training_course',
+      table: 'training_course',
+      indexRows: 5,
+      driftSql: 'ALTER TABLE training_course DROP INDEX idx_training_course_category_status, ADD KEY idx_training_course_category_status (category_id, status(1))',
+      insertSql: "INSERT INTO training_course (id, title, category_id, created_by) VALUES (1, '保留课程', 7, 9)",
+    },
+    {
+      name: 'chapter_wrong_index_order',
+      stepId: 'create_course_chapter',
+      table: 'course_chapter',
+      indexRows: 3,
+      driftSql: 'ALTER TABLE course_chapter DROP INDEX idx_course_chapter_course_sort, ADD KEY idx_course_chapter_course_sort (sort_order, course_id)',
+      insertSql: "INSERT INTO course_chapter (id, course_id, title) VALUES (1, 1, '保留章节')",
+    },
+    {
+      name: 'lesson_wrong_index_field',
+      stepId: 'create_course_lesson',
+      table: 'course_lesson',
+      indexRows: 4,
+      driftSql: 'ALTER TABLE course_lesson DROP INDEX idx_course_lesson_course, ADD KEY idx_course_lesson_course (chapter_id)',
+      insertSql: "INSERT INTO course_lesson (id, course_id, chapter_id, title) VALUES (1, 1, 1, '保留课时')",
+    },
+    {
+      name: 'version_loses_unique_constraint',
+      stepId: 'create_lesson_version',
+      table: 'lesson_version',
+      indexRows: 4,
+      driftSql: 'ALTER TABLE lesson_version DROP INDEX uk_lesson_version_number, ADD KEY uk_lesson_version_number (lesson_id, version_no)',
+      insertSql: 'INSERT INTO lesson_version (id, lesson_id, version_no, asset_id, duration_ms, created_by) VALUES (1, 1, 1, 8, 60000, 9)',
+    },
+  ];
+
+  for (const variant of variants) {
+    const database = await createDatabase(`${variant.name}_${randomBytes(3).toString('hex')}`);
+    const conn = await connectionFor(database);
+    try {
+      await applyMigrations({ connection: conn, database, migrations: [base] });
+      await conn.query(`CREATE TABLE regulation (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        category VARCHAR(32) NOT NULL,
+        PRIMARY KEY (id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`);
+      for (const step of courses.steps.filter((item) => item.id !== 'register_course_permissions')) {
+        await conn.query(step.sql);
+      }
+      await conn.query(variant.driftSql);
+      await conn.query(variant.insertSql);
+
+      const [[sameCount]] = await conn.query('SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', [variant.table]);
+      assert.equal(Number(sameCount.count), variant.indexRows, `${variant.name} fixture must preserve the old index-row count`);
+      const step = courses.steps.find((item) => item.id === variant.stepId);
+      assert.ok(step, `missing course migration step ${variant.stepId}`);
+      const [[completion]] = await conn.execute(step.checkSql);
+      assert.equal(Number(completion.complete), 0, `${variant.name} must fail its completion check`);
+
+      await assert.rejects(
+        () => applyMigrations({ connection: conn, database, migrations: [courses] }),
+        /005_courses|create_(?:training_course|course_chapter|course_lesson|lesson_version)|probe|invariant|incomplete/i,
+        `${variant.name} must reject apply instead of recording completion`,
+      );
+      const [[registry]] = await conn.query(`SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = ?`, [courses.id]);
+      assert.equal(registry.status, 'failed');
+      assert.equal(Array.isArray(registry.progress) && registry.progress.includes(variant.stepId), false);
+      const [[preserved]] = await conn.query(`SELECT COUNT(*) AS count FROM \`${variant.table}\` WHERE id = 1`);
+      assert.equal(Number(preserved.count), 1, `${variant.name} must preserve pre-existing rows`);
+    } finally {
+      await conn.end();
+    }
+  }
+});
+
 test('media migration completion checks reject same-count schema drift without destroying rows', async () => {
   const base = await migration();
   const media = await migration('003_media');

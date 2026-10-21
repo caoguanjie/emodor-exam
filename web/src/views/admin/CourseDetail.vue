@@ -138,13 +138,15 @@ function statusLabel(status: CourseStatus) { return ({ draft: '草稿', publishe
 function statusType(status: CourseStatus) { return status === 'published' ? 'success' : status === 'offline' ? 'warning' : 'info'; }
 function duration(ms: number) { const seconds = Math.round(ms / 1000); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`; }
 
-async function load() {
+async function load(resetForm = true) {
   const data = await http.get(`/admin/courses/${courseId}`) as CourseDetail;
   course.value = data;
-  Object.assign(form, {
-    title: data.title, category_id: data.category_id, description: data.description || '', cover_asset_id: data.cover_asset_id,
-    regulation_ids: [...(data.regulation_ids || [])], is_recommended: Boolean(data.is_recommended), sort_order: data.sort_order || 0,
-  });
+  if (resetForm) {
+    Object.assign(form, {
+      title: data.title, category_id: data.category_id, description: data.description || '', cover_asset_id: data.cover_asset_id,
+      regulation_ids: [...(data.regulation_ids || [])], is_recommended: Boolean(data.is_recommended), sort_order: data.sort_order || 0,
+    });
+  }
   expanded.value = data.chapters.map((item) => item.id);
 }
 async function loadOptions() {
@@ -153,8 +155,8 @@ async function loadOptions() {
     categories.value = data.items;
   }
   if (auth.can('regulations:read')) {
-    const data = await http.get('/regulations', { params: { page: 1, page_size: 100 } }) as { list: RegulationOption[] };
-    regulations.value = data.list;
+    const data = await http.get('/regulations', { params: { page: 1, page_size: 100 } }) as { list: { id: string | number; title: string }[] };
+    regulations.value = data.list.map((item) => ({ id: String(item.id), title: item.title }));
   }
 }
 async function saveCourse() {
@@ -176,7 +178,7 @@ async function saveChapter() {
   if (editingChapterId.value) await http.put(`/admin/courses/${courseId}/chapters/${editingChapterId.value}`, chapterForm);
   else await http.post(`/admin/courses/${courseId}/chapters`, chapterForm);
   chapterVisible.value = false;
-  await load();
+  await load(false);
 }
 function openLesson(chapterId: Id, lesson?: CourseLessonView) {
   editingLessonId.value = lesson?.id || null;
@@ -195,21 +197,21 @@ async function saveLesson() {
   if (editingLessonId.value) await http.put(`/admin/courses/${courseId}/lessons/${editingLessonId.value}`, payload);
   else await http.post(`/admin/courses/${courseId}/lessons`, { ...payload, chapter_id: lessonForm.chapter_id, asset_id: lessonForm.asset_id });
   lessonVisible.value = false;
-  await load();
+  await load(false);
 }
 function openVideo(lesson: CourseLessonView) { replacementLessonId.value = lesson.id; replacementAssetId.value = null; videoVisible.value = true; }
 async function replaceVideo() {
   if (!replacementLessonId.value || !replacementAssetId.value) return;
   await http.post(`/admin/courses/${courseId}/lessons/${replacementLessonId.value}/versions`, { asset_id: replacementAssetId.value });
-  ElMessage.success('视频新版本已保存'); videoVisible.value = false; await load();
+  ElMessage.success('视频新版本已保存'); videoVisible.value = false; await load(false);
 }
 async function publish() {
   await ElMessageBox.confirm('系统将重新校验必学视频资源，确认上架？', '上架课程', { type: 'warning' });
-  await http.post(`/admin/courses/${courseId}/publish`); ElMessage.success('课程已上架'); await load();
+  await http.post(`/admin/courses/${courseId}/publish`); ElMessage.success('课程已上架'); await load(false);
 }
 async function offline() {
   await ElMessageBox.confirm('下架会阻止学员新进入课程，历史记录保留。确认下架？', '下架课程', { type: 'warning' });
-  await http.post(`/admin/courses/${courseId}/offline`); ElMessage.success('课程已下架'); await load();
+  await http.post(`/admin/courses/${courseId}/offline`); ElMessage.success('课程已下架'); await load(false);
 }
 
 onMounted(async () => { await Promise.all([loadOptions(), load()]); });
