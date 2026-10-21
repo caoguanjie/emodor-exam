@@ -56,7 +56,7 @@
 
 **Interfaces:** Consumes A1 `Id/LearnerSource/ImportPreview/ImportResult`。Produces `CategoryService.assertActive(id:Id):Promise<void>`、`UsersService.trainingProfile(userId:Id):Promise<{categoryId:Id|null;source:LearnerSource|null;active:boolean}>`；`ImportBatchService.preview(ownerId:Id,kind:'students'|'questions',rows:unknown[]):Promise<ImportPreview>`、`commit(ownerId:Id,batchId:Id,rowNumbers:number[]):Promise<ImportResult>`，解析/行校验由所属业务注入，不让通用服务依赖 AI。
 
-- [ ] **Step 1: 写类别/来源/导入测试。** suite 注册名 `training-identity`。夹具在本文件创建旧用户、两类新用户、有效/非法/重名行，调用 API 收集下列结果。
+- [x] **Step 1: 写类别/来源/导入测试。** suite 注册名 `training-identity`。夹具在本文件创建旧用户、两类新用户、有效/非法/重名行，调用 API 收集下列结果。
   ```js
   assert.equal(legacy.data.source, null);
   assert.equal(missingSource.status, 400);
@@ -65,11 +65,11 @@
   assert.deepEqual(retry.data.created_ids, first.data.created_ids);
   assert.equal(deleteReferencedCategory.status, 409);
   ```
-- [ ] **Step 2: 红灯。** `cd server && npm test -- test/training-identity.spec.ts`；预期 trainingProfile/批次契约不存在或来源校验失败。
-- [ ] **Step 3: 实现身份 CRUD 和批次事务。** `/admin/training-categories` 与 `/admin/students` 查询/新增/更新/停用/重置密码；原 `/admin/users` 保留。新增学员 category/source 必填；模板列与预检查一致；表单支持来源、类别筛选及整批默认值。批次以 owner+id 校验，确认时固定所选合法行，重试同批返回原结果，换行集合冲突返回 409；题库导入 B4 复用此事实。保留密码校验/停用吊销，不回显口令；类别被引用不能硬删除。
-- [ ] **Step 4: 接通 PC 和本人资料契约。** Users 页面支持学员 CRUD、模板下载、预览确认/失败行重导；增加 `/me/profile` GET/PATCH，只允许姓名、联系方式、A4 之后的头像 ID；提交 source/category/role 返回 400，不静默接受。头像待 A4 接入，不阻断本任务非媒体 CRUD。分页空态、失败恢复与表单校验均落地。
-- [ ] **Step 5: 绿灯。** 同单测命令及 `DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite training-identity`；`cd web && npx vue-tsc --noEmit && npm run build`。PC 验收：新建两类学员、来源筛选、错误行预览、重复确认、禁用后旧 token 被拒。记录结果。
-- [ ] **Step 6: 本地提交。** `git commit -m "feat: manage training categories and learner provenance"`，仅暂存 A2 明确文件/共享集成块。
+- [x] **Step 2: 红灯。** `cd server && npm test -- test/training-identity.spec.ts`；预期 trainingProfile/批次契约不存在或来源校验失败。
+- [x] **Step 3: 实现身份 CRUD 和批次事务。** `/admin/training-categories` 与 `/admin/students` 查询/新增/更新/停用/重置密码；原 `/users` 保留。新增学员 category/source 必填；模板列与预检查一致；表单支持来源、类别筛选及整批默认值。批次以 owner+id 校验，确认时固定所选合法行，重试同批返回原结果，换行集合冲突返回 409；题库导入 B4 复用此事实。保留密码校验/停用吊销，不回显口令；类别被引用不能硬删除。
+- [x] **Step 4: 接通 PC 和本人资料契约。** Users 页面支持学员 CRUD、模板下载、预览确认/失败行重导；增加 `/me/profile` GET/PATCH，只允许姓名、联系方式、A4 之后的头像 ID；提交 source/category/role 返回 400，不静默接受。头像待 A4 接入，不阻断本任务非媒体 CRUD。分页空态、失败恢复与表单校验均落地。
+- [x] **Step 5: 绿灯。** 同单测命令及 `DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite training-identity`；`cd web && npx vue-tsc --noEmit && npm run build`。PC 验收：新建两类学员、来源筛选、错误行预览、重复确认、禁用后旧 token 被拒。记录结果。
+- [x] **Step 6: 本地提交。** `git commit -m "feat: manage training categories and learner provenance"`，仅暂存 A2 明确文件/共享集成块。
 
 ### Task A3: 验证码、会话与可配置管理权限
 
@@ -77,7 +77,7 @@
 
 **Interfaces:** Consumes A1、现有 AuthUser/Redis 吊销。Produces `AccessService.assertAllowed(userId:Id,code:string):Promise<void>`、`permissions(userId:Id):Promise<string[]>`、`SessionService.revoke(sessionId:Id,actorId:Id):Promise<void>`；新增 `/auth/captcha`，沿用 `/auth/login|refresh|profile|password|logout`；`/admin/roles`、`/admin/administrators`、`/admin/sessions`。权限目录是服务端注册的 `<resource>:read|write|publish|review|export` 白名单，不允许配置任意代码授予新能力。
 
-- [ ] **Step 1: 写越权/吊销测试。** suite `training-access`；用临时管理员、学员和受限管理员，测试正常与伪造入口、同秒吊销、refresh 轮换与重复使用。
+- [x] **Step 1: 写越权/吊销测试。** suite `training-access`；用临时管理员、学员和受限管理员，测试正常与伪造入口、同秒吊销、refresh 轮换与重复使用。
   ```js
   assert.equal(adminWithoutCaptcha.status, 400);
   assert.equal(employeeLegacyLogin.status, 200);
@@ -86,11 +86,11 @@
   assert.equal(employeeWithInstitutionSource.status, 403);
   assert.equal(removeLastSuperAdmin.status, 409);
   ```
-- [ ] **Step 2: 红灯。** `cd server && npm test -- test/access.spec.ts`，预期权限服务缺失/撤权未被检查。
-- [ ] **Step 3: 实现权限与登录兼容。** 登录由服务端识别管理员账号，所有入口均校验其验证码，不信客户端 platform；员工旧登录不额外强制验证码。验证码一次消费、120 秒过期、刷新废弃前个，登录与发码限流；测试可从隔离 Redis 读取夹具答案，生产绝不提供绕过端点。业务角色多选、系统角色身份保留；权限 guard 与旧 RolesGuard 协调，不因旧枚举拦住已授权新管理员，也不放宽员工访问。权限变更立即失效缓存；最高管理员不可删除/停用/清空其保护权限。
-- [ ] **Step 4: 实现会话与 PC 权限页。** JWT 增加 sid，access/refresh 绑定同会话；强制下线与停用对该会话/用户立即生效，同秒令牌也不能漏过。旧无 sid 令牌继续原到期/封禁规则，用户级吊销必须覆盖它。PC 登录密码遮蔽、验证码刷新，管理员/角色权限树/在线会话页面联动真实 API；登录次数/IP、最后登录成功时间写入，不记失败为成功。公开资料不返 hash、验证码或密钥。
-- [ ] **Step 5: 绿灯。** 同单测；`DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite training-access`；前端类型/构建。PC 用两个独立登录会话验证受限菜单/按钮、直调 API 拒绝、撤权立即生效、强制下线、取消操作不写入。
-- [ ] **Step 6: 本地提交。** `git commit -m "feat: add configurable admin permissions and session controls"`。
+- [x] **Step 2: 红灯。** `cd server && npm test -- test/access.spec.ts`，预期权限服务缺失/撤权未被检查。
+- [x] **Step 3: 实现权限与登录兼容。** 登录由服务端识别管理员账号，所有入口均校验其验证码，不信客户端 platform；员工旧登录不额外强制验证码。验证码一次消费、120 秒过期、刷新废弃前个，登录与发码限流；测试可从隔离 Redis 读取夹具答案，生产绝不提供绕过端点。业务角色多选、系统角色身份保留；权限 guard 与旧 RolesGuard 协调，不因旧枚举拦住已授权新管理员，也不放宽员工访问。权限变更立即失效缓存；最高管理员不可删除/停用/清空其保护权限。
+- [x] **Step 4: 实现会话与 PC 权限页。** JWT 增加 sid，access/refresh 绑定同会话；强制下线与停用对该会话/用户立即生效，同秒令牌也不能漏过。旧无 sid 令牌继续原到期/封禁规则，用户级吊销必须覆盖它。PC 登录密码遮蔽、验证码刷新，管理员/角色权限树/在线会话页面联动真实 API；登录次数/IP、最后登录成功时间写入，不记失败为成功。公开资料不返 hash、验证码或密钥。
+- [x] **Step 5: 绿灯。** 同单测；`DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite training-access`；前端类型/构建。PC 用两个独立登录会话验证受限菜单/按钮、直调 API 拒绝、撤权立即生效、强制下线、取消操作不写入。
+- [x] **Step 6: 本地提交。** `git commit -m "feat: add configurable admin permissions and session controls"`。
 
 ### Task A4: 统一受控媒体与上传组件
 
