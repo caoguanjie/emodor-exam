@@ -53,6 +53,7 @@ describe('first business-role assignment contracts', () => {
     expect(Object.keys(result.items[0])).toEqual(['id', 'username', 'real_name', 'status', 'system_role']);
     expect(qb.select).toHaveBeenCalledWith(['u.id', 'u.username', 'u.realName', 'u.status', 'u.role']);
     expect(qb.where).toHaveBeenCalledWith('u.role <> :superAdmin', { superAdmin: RoleEnum.SUPER_ADMIN });
+    expect(qb.andWhere).toHaveBeenCalledWith('NOT EXISTS (SELECT 1 FROM sys_user_role ur WHERE ur.user_id = u.id)');
   });
 
   it('returns only enabled non-system role options without permission matrix', async () => {

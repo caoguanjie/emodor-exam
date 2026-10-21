@@ -146,9 +146,10 @@ export class AccessService {
   }
 
   /**
-   * Bounded account search for first business-role assignment. The candidate
-   * set excludes all super administrators; the actual transaction repeats
-   * that authority check so a forged id cannot bypass the UI boundary.
+     * Bounded account search for first business-role assignment. The candidate
+     * set excludes super administrators and accounts with any existing role
+     * link; the actual transaction repeats the authority check so a forged id
+     * cannot bypass the UI boundary.
    */
   async listAssignableUsers(query: { page?: number; page_size?: number; keyword?: string }) {
     const page = Math.max(1, Number(query.page || 1));
@@ -156,6 +157,7 @@ export class AccessService {
     const qb = this.userRepo.createQueryBuilder('u')
       .select(['u.id', 'u.username', 'u.realName', 'u.status', 'u.role'])
       .where('u.role <> :superAdmin', { superAdmin: RoleEnum.SUPER_ADMIN });
+      qb.andWhere('NOT EXISTS (SELECT 1 FROM sys_user_role ur WHERE ur.user_id = u.id)');
     const keyword = String(query.keyword || '').trim();
     if (keyword) {
       qb.andWhere('(u.username LIKE :keyword OR u.real_name LIKE :keyword OR u.employee_no LIKE :keyword)', {

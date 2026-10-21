@@ -385,6 +385,14 @@ async function runBody(ctx, mockPort) {
   const assignedAdministrators = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators');
   const assignedOrdinary = assignedAdministrators.data?.find((item) => item.id === String(ordinary.data.id));
   assert(assignedAdministrators.status === 200 && assignedOrdinary?.role_ids?.includes(String(firstAssignmentRole.data.id)), 'first assignment was not reflected in administrator listing');
+  const assignedCandidatePage = await ctx.request(
+    writeLogin.actor, 'GET', `/admin/administrators/candidates?page=1&page_size=100&keyword=${encodeURIComponent(ordinaryUsername)}`,
+  );
+  assert(
+    assignedCandidatePage.status === 200
+      && !assignedCandidatePage.data?.items?.some((candidate) => candidate.id === String(ordinary.data.id)),
+    `already-authorized account remained in candidate set: ${assignedCandidatePage.status}`,
+  );
 
   const roleCode = `limited_${randomBytes(4).toString('hex')}`;
   const role = await ctx.request(admin.actor, 'POST', '/admin/roles', {
