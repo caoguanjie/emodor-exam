@@ -89,6 +89,76 @@ export interface DraftAck {
 export type GradeState = 'not_submitted' | 'pending_manual' | 'finalized';
 export type SubmissionMethod = 'manual' | 'timeout';
 
+export interface ScoreDistributionBucket {
+  lower: number;
+  upper: number;
+  count: number;
+}
+
+export interface ScoreGroup {
+  difficulty: ExamDifficulty;
+  finalized_users: number;
+  average_score: number | null;
+  pass_rate: number | null;
+  distribution: ScoreDistributionBucket[];
+}
+
+export interface TrainingCourseCompletion {
+  eligible_users: number;
+  required_lessons: number;
+  completed_users: number;
+  completion_rate: number | null;
+}
+
+export type TrainingUncompletedReason = 'learning_incomplete' | 'not_started' | 'pending_manual' | 'not_passed';
+
+export interface TrainingExamSummary {
+  release_id: Id | null;
+  eligible_count: number;
+  eligible_started_count: number;
+  historical_started_count: number;
+  historical_only_started_count: number;
+  submitted_attempts: number;
+  submitted_users: number;
+  pending_attempts: number;
+  pending_users: number;
+  finalized_users: number;
+  participation_rate: number | null;
+  score_groups: ScoreGroup[];
+  difficulty_composition: Array<{ difficulty: ExamDifficulty; users: number }>;
+  course_completion: TrainingCourseCompletion;
+  uncompleted_reasons: Array<{ reason: TrainingUncompletedReason; users: number }>;
+  as_of: string;
+}
+
+export interface RankRow {
+  rank: number;
+  user_id: Id;
+  name: string;
+  source: LearnerSource | null;
+  difficulty: ExamDifficulty;
+  score: number;
+  duration_seconds: number;
+  record_id: Id;
+}
+
+export interface TrainingStatisticsOptions {
+  papers: Array<{ id: Id; title: string; category_id: Id | null; status: string }>;
+  categories: Array<{ id: Id; name: string }>;
+}
+
+export interface AdminDashboard {
+  as_of: string;
+  timezone: 'Asia/Shanghai';
+  metrics: {
+    learner_count?: number;
+    question_count?: number;
+    paper_count?: number;
+    pending_grading_count?: number;
+  };
+  exam_trend?: Array<{ date: string; count: number }>;
+}
+
 export interface TrainingCategory {
   id: Id;
   name: string;

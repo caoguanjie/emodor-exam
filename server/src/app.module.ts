@@ -103,6 +103,8 @@ import { PaperReleaseService } from './modules/exams/paper-release.service';
 import { SamplingService } from './modules/exams/sampling.service';
 import { StatisticsController } from './modules/statistics/statistics.controller';
 import { StatisticsService } from './modules/statistics/statistics.service';
+import { AdminDashboardController, TrainingStatisticsController } from './modules/statistics/training-statistics.controller';
+import { TrainingStatisticsService } from './modules/statistics/training-statistics.service';
 import { HealthController } from './modules/health/health.controller';
 import { TasksService } from './tasks.service';
 import { MediaController } from './modules/media/media.controller';
@@ -145,7 +147,7 @@ const config = loadConfig();
   controllers: [
     AuthController, AccessController, DepartmentsController, UsersController, StudentsController, MeProfileController, CategoryController,
     RegulationsController, AiController, LearningController, ExamsController, TrainingExamsController, AnswerMediaController, PaperAdminController, GradingAdminController,
-    StatisticsController, HealthController,
+    StatisticsController, TrainingStatisticsController, AdminDashboardController, HealthController,
     MediaController,
     CourseAdminController, LearnerHomeController, MyCoursesController,
     VideoLearningController, QuestionImportController,
@@ -159,7 +161,7 @@ const config = loadConfig();
     AiConfigService, AiGatewayService, PdfVisionService, QuestionGenerationService, QuestionReviewService, PaperService,
     LearningSessionService, ExamService, AttemptService, AttemptReaderService, LegacyExamAdapter, AnswerDraftService, SubmissionService,
     ExamHistoryService, ManualGradingService,
-    ShuffleService, GradingService, PaperReleaseService, SamplingService, StatisticsService,
+    ShuffleService, GradingService, PaperReleaseService, SamplingService, StatisticsService, TrainingStatisticsService,
     RedisService, AuditService, TasksService,
     MediaService, MediaProbeService,
     CourseService, LessonVersionService,

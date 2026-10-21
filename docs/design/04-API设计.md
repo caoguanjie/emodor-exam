@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-22）**：本册 legacy 接口及 A2—A5、B1—B4、C1—C4 均以实际 controller/entity/migration/service 为准。C3 在 C2 个人快照上新增持久草稿、图片上传、统一交卷与结果读取；C4 新增阅卷队列、受控逐图片题评分、本人历史/错题和管理员结果，并把新旧调用收敛到单一结果投影。旧 `/exams` 固定客户端继续保持原形状，training 卷仍不进入旧可考列表。源码登记不代表开发库/生产库已升级，后端证据也不替代独立 H5/PC 业务验收。
+> **状态边界（2026-10-22）**：本册 legacy 接口及 A2—A5、B1—B4、C1—C4、C6 均以实际 controller/entity/migration/service 为准。C3 在 C2 个人快照上新增持久草稿、图片上传、统一交卷与结果读取；C4 新增阅卷队列、受控逐图片题评分、本人历史/错题和管理员结果，并把新旧调用收敛到单一结果投影；C6 保留全部旧 `/statistics` 形状，新增培训场次统计/分榜/同查询导出和权限裁剪首页。旧 `/exams` 固定客户端继续保持原形状，training 卷仍不进入旧可考列表。源码登记不代表开发库/生产库已升级，后端证据也不替代独立 H5/PC 业务验收。
 
 ---
 
@@ -96,7 +96,8 @@
 | `/admin/training-categories`、`/admin/students`、`/admin/questions`、`/me`、`/admin`、`/media`、`/site-config`、B1 课程/视频内容版本、B2 视频会话/进度、B3 四题型题库版本与 C1 `/admin/papers` | 当前增量契约（A2—A5/B1—B4/C1） | 新接口使用字符串 ID 与 `Page.items`；B2 课程完成与制度阅读分开；B4 复用 A2 批次归属/幂等语义与 B3 同事务版本写入；C1 只冻结发布规则/候选版本，不冒充 C2 个人题单 |
 | 个人题单、持久答案、统一终结与结果 | 当前增量契约（C2—C4） | `/me/exams*` 使用字符串 ID、本人所有权与不可变快照；在考不下发 answer/analysis/rubric；草稿、图片答案、finalizer、历史/错题与结果合同见 3.7.1 |
 | 人工阅卷 | 当前增量契约（C4） | `exam_records:review` 的专用队列与逐图片题评分；管理员结果允许 `exam_records:read OR review`，见 3.7.2 |
-| 监控、培训统计 | 计划契约（C5—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后才补精确契约 |
+| 监控 | 当前增量契约（C5） | 管理端监控列表、记录详情与 5 秒轮询已落地；连接超时只提示“待确认”，精确路由以本册 C5 监控小节为准 |
+| 培训统计与权限首页 | 当前增量契约（C6） | `/statistics/training/*` 与 `/admin/dashboard`；实时读取冻结考试事实和 B2 当前版本，不改变旧 `/statistics` |
 | 旧固定卷 vs 新培训考试开考 | 两条口径并存 | 旧固定卷继续检查 `learning_record.is_valid`；新培训考试默认关闭学习门槛，但仍检查发布、类别/来源、权限、次数、身份状态和服务端 deadline |
 
 目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 客观题自动判分/图片题待阅 → 受控逐题评分 → 服务端汇总 → 最终结果只读。C1—C4 已落完整链路；旧 `/exams` 只为制度固定客户端保留兼容形状，training 记录不能借该入口提交。
@@ -116,7 +117,7 @@
 | /admin/questions | 3. AI 出题模块（B4） | 4 | Excel/TXT 同版模板、预检、批次状态与 owner 幂等确认 |
 | /me | 1. 组织权限模块、4. 学习行为管控及 5. 考试评分模块 | 14 | 本人资料/首页，以及 C2—C4 考试列表、开考、恢复、草稿、答案图片、心跳、切屏、交卷、结果、历史与错题；课程/视频另列子前缀 |
 | /media | 1. 组织权限模块（A4） | 5 | 受控上传、限制查询、状态/Range 读取、引用保护删除 |
-| /admin | 1. 组织权限模块（A3/A5）及 5. 考试评分模块（C4） | 27 | A3 权限/角色/管理员/会话 10 个；A5 菜单/字典/站点配置/审计 14 个；C4 阅卷队列、评分、管理员结果 3 个 |
+| /admin | 1. 组织权限模块（A3/A5）、5. 考试评分模块（C4）及 6. 统计模块（C6） | 28 | A3 权限/角色/管理员/会话 10 个；A5 菜单/字典/站点配置/审计 14 个；C4 阅卷队列、评分、管理员结果 3 个；C6 权限裁剪首页 1 个 |
 | /site-config | 1. 组织权限模块（A5） | 2 | 严格公开 Logo/轮播白名单；仅当前配置的品牌图片内容流 |
 | /departments | 1. 组织权限模块 | 6 | 部门树、CRUD、层级调整与启停 |
 | /regulations | 2. 制度文件管理模块 | 18 | 制度 CRUD、版本/文件读取、管理端预览、范围与学习要求配置、发布、阅读内容及写权限类别选项 |
@@ -128,10 +129,10 @@
 | /ai | 3. AI 出题模块 | 27 | AI 配置/任务、B3 类别与考点窄选项、四题型版本审核、人工录入、试卷管理与组卷/复制 |
 | /learning | 4. 学习行为管控模块 | 7 | 学习列表、会话生命周期、心跳、进度 |
 | /exams | 5. 考试评分模块 | 8 | 可考列表、开考、心跳、切屏、交卷、成绩 |
-| /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
+| /statistics | 6. 统计报表模块 | 10 | 原制度/部门/个人维度统计与导出 6 个；培训 options/summary/ranking/export 4 个 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**沿用上表既有盘点口径，C4 新增 5 个业务接口，合计 183 个接口（182 个业务接口 + 1 个健康检查）。模板、私有媒体与公开品牌内容流不包统一信封。**
+**沿用上表既有盘点口径，C6 在 C4 基线上新增 5 个业务接口，合计 188 个接口（187 个业务接口 + 1 个健康检查）。模板、私有媒体、公开品牌内容流及 Excel 下载不包统一信封。**
 
 ---
 
@@ -596,6 +597,29 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 未完成人员清单 | 应学但 `is_valid = 0`，含学习进度（total_seconds / max_scroll_percent） |
 
 **GET /statistics/export**：查询参数 `type`（regulation_overview / uncompleted / user_detail）+ `regulation_id`；返回 Excel 二进制流（07 册 4.2 下载鉴权）。
+
+#### 3.8.1 C6 培训场次统计、分榜与权限首页
+
+旧 3.8 六个接口及 Excel 形状保持不变；新增接口如下：
+
+| 方法 | 路径 | 权限 | 请求与成功 data |
+|---|---|---|---|
+| GET | `/statistics/training/options` | `statistics:read` | 统计专用窄选项 `{papers:[{id,title,category_id,status}],categories:[{id,name}]}`，不要求额外题库/试卷/类别读取权限 |
+| GET | `/statistics/training/summary` | `statistics:read` | `paper_id` 必填；`category_id/source/difficulty/page/page_size` 可选；返回 `TrainingExamSummary` |
+| GET | `/statistics/training/ranking` | `statistics:read` | 同查询，但 `difficulty` 必须明确；返回 `Page<RankRow>`，缺失难度返回 40001 |
+| GET | `/statistics/training/export` | `statistics:export` | 与 ranking 完全相同的筛选和分页；下载当前页 xlsx，并附独立“口径说明”Sheet |
+| GET | `/admin/dashboard` | 登录 | 返回 `{as_of,timezone:'Asia/Shanghai',metrics,exam_trend?}`；无权模块的指标键直接省略 |
+
+`TrainingExamSummary` 固定包含：`release_id:string|null`、`eligible_count/eligible_started_count/historical_started_count/historical_only_started_count/submitted_attempts/submitted_users/pending_attempts/pending_users/finalized_users`、`participation_rate:number|null`、`score_groups`、`difficulty_composition`、`course_completion`、`uncompleted_reasons`、`as_of`。`score_groups` 每项为 `{difficulty,finalized_users,average_score,pass_rate,distribution:[{lower,upper,count}]}`；空成绩的平均分/通过率为 null。`RankRow={rank,user_id,name,source,difficulty,score,duration_seconds,record_id}`，全部 ID 为字符串。
+
+人数与成绩采用两个显式口径，页面和导出不得混称：
+
+- 当前应考按查询时点的启用账号、当前类别/来源及当前发布模式的难度映射计算；业务管理权限不改变学习身份。`eligible_started_count` 只取当前应考 ID 与历史成功开考 ID 的交集；`historical_started_count` 保留该 paper 全历史，当前范围外人数由 `historical_only_started_count` 单列，零分母参与率为 null。
+- 历史筛选只读 `exam_record` 冻结的 `category_id/source/difficulty`，未知难度保持 `unknown`。成绩组和排名只使用 `release_id` 指向的最新 release、与其 `rule_snapshot` 完全一致、同 difficulty 且 `grading_state=finalized` 的记录，再取个人最高分；不跨 release/规则合榜，pending 不作为 0 分或未通过。
+- 同分使用标准竞争排名（1/1/3）。个人同分答卷在两个 `graded_at` 都已知时选较早者；任一历史时间未知时保留 null 事实并按最小 `record_id` 稳定兜底。用时取 `started_at → submitted_at`，timeout 取 `started_at → deadline_at`，绝不把人工阅卷等待算入。
+- 课程完成率只统计当前应学的 institution 学员，按 published 课程必学课时的当前 `lesson_version` 与 B2 `video_learning_record.is_completed` 核算；external 不进入分母，零必学课时返回 null。未完成原因分别返回 `learning_incomplete/not_started/pending_manual/not_passed`。
+
+首页指标逐项授权：`students:read` 才返回正常学员数，`questions:read` 才返回题目数，`papers:read` 才返回试卷数，`exam_records:review` 才返回待阅卷数，`statistics:read` 才返回近 7 日考试记录趋势。趋势以服务端 `started_at` 转换到 Asia/Shanghai 自然日；无权限不返回 0 占位，避免用数值泄露业务规模。
 
 ### 3.9 B1 课程内容 /admin/courses、/me/courses、/me/home
 

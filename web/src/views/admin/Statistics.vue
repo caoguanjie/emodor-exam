@@ -3,7 +3,7 @@
     <div class="page-head">
       <div class="eyebrow">管理台</div>
       <h2>统计报表</h2>
-      <p class="desc">按制度维度跟进学习完成与考试通过情况，支持导出 Excel 台账</p>
+      <p class="desc">保留旧制度跨试卷口径；培训场次、难度分榜请进入培训统计</p>
     </div>
     <div class="toolbar">
       <el-select v-model="regId" placeholder="选择制度" filterable style="width:300px" @change="loadAll">
@@ -11,6 +11,7 @@
         <el-option v-for="r in regulations" :key="r.id" :label="r.title" :value="String(r.id)" />
       </el-select>
       <div style="flex:1" />
+      <el-button v-if="auth.can('statistics:read')" type="primary" plain @click="router.push('/admin/training-statistics')">培训统计</el-button>
       <el-button v-if="auth.can('statistics:export')" @click="exportExcel('regulation_overview', '制度维度统计表')">导出制度维度统计表</el-button>
       <el-button v-if="regId && auth.can('statistics:export')" @click="exportExcel('uncompleted', '未完成人员清单')">导出未完成人员清单</el-button>
       <el-button v-if="regId && auth.can('statistics:export')" @click="exportExcel('user_detail', '个人维度明细表')">导出个人维度明细表</el-button>
@@ -145,11 +146,13 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { User, Reading, EditPen, Medal } from '@element-plus/icons-vue';
 import http, { download } from '../../api/http';
 import { useAuthStore } from '../../stores/auth';
 
 const auth = useAuthStore();
+const router = useRouter();
 const regulations = ref<any[]>([]);
 const regId = ref<string>('');
 const overview = ref<any>(null);

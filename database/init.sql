@@ -762,6 +762,16 @@ SELECT 1, '人工阅卷', 'menu', '/admin/grading', 'exam_records:review', 'Edit
 WHERE EXISTS (SELECT 1 FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory')
   AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/grading');
 
+INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
+SELECT 1, '业务首页', 'menu', '/admin/dashboard', NULL, 'Grid', 5, 1
+WHERE EXISTS (SELECT 1 FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory')
+  AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/dashboard');
+
+INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
+SELECT 1, '培训统计', 'menu', '/admin/training-statistics', 'statistics:read', 'DataAnalysis', 41, 1
+WHERE EXISTS (SELECT 1 FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory')
+  AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/training-statistics');
+
 -- ---------------------------------------------------------------------
 -- 8. 迁移元数据（由 database/migrate.mjs 管理；不属于业务表数量）
 -- ---------------------------------------------------------------------
