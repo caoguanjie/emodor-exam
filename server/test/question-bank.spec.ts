@@ -176,6 +176,7 @@ function questionMediaPolicyFixture(input: {
   version: Record<string, unknown> | null;
   draftReferenced?: boolean;
   releaseSnapshots?: Array<Record<string, unknown>>;
+  randomCandidate?: Record<string, unknown> | null;
 }) {
   let policy: any;
   const query = vi.fn(async (sql: string) => {
@@ -193,7 +194,9 @@ function questionMediaPolicyFixture(input: {
     dataSource: { query },
   });
   service.onModuleInit();
-  return { policy, query };
+  const randomResolver = vi.fn(async () => input.randomCandidate || null);
+  if ('randomCandidate' in input) service.registerRandomDraftMediaResolver(randomResolver);
+  return { service, policy, query, randomResolver };
 }
 
 describe('versioned question bank', () => {
@@ -339,10 +342,12 @@ describe('versioned question bank', () => {
     await expect(policy.authorizeRead('8', '701', '99')).resolves.toBe(false);
   });
 
-  it('uses an immutable release snapshot for historical field authorization and requires paper export for answer-only assets', async () => {
+  it('uses an immutable release snapshot for historical field authorization and accepts either export permission for answer-only assets', async () => {
     const { policy } = questionMediaPolicyFixture({
       permissions: (actorId) => actorId === 'exporter'
         ? ['papers:export', 'papers:read']
+        : actorId === 'question-exporter' ? ['questions:export', 'papers:read']
+          : actorId === 'question-export-only' ? ['questions:export']
         : actorId === 'reader' ? ['papers:read'] : [],
       version: {
         id: '701', stem: '<p><img data-media-id="91"></p>', options: [], analysis: null, rubric: null,
@@ -359,8 +364,59 @@ describe('versioned question bank', () => {
     await expect(policy.authorizeRead('reader', '701', '23')).resolves.toBe(false);
     await expect(policy.authorizeRead('exporter', '701', '23')).resolves.toBe(true);
     await expect(policy.authorizeRead('exporter', '701', '24')).resolves.toBe(true);
+    await expect(policy.authorizeRead('question-exporter', '701', '23')).resolves.toBe(true);
+    await expect(policy.authorizeRead('question-exporter', '701', '24')).resolves.toBe(true);
+    await expect(policy.authorizeRead('question-export-only', '701', '23')).resolves.toBe(false);
     await expect(policy.authorizeRead('exporter', '701', '91')).resolves.toBe(false);
     await expect(policy.authorizeRead('none', '701', '21')).resolves.toBe(false);
+  });
+
+  it('authorizes exact fields from a validated random-draft candidate without a stored paper reference', async () => {
+    const { policy, query, randomResolver } = questionMediaPolicyFixture({
+      permissions: (actorId) => actorId === 'question-exporter'
+        ? ['papers:read', 'questions:export']
+        : ['papers:read'],
+      version: {
+        id: '801', categoryId: '7', stem: '<p>current</p>', options: [], analysis: null, rubric: null,
+      },
+      randomCandidate: {
+        versionId: '801', categoryId: '7', stem: '<p><img data-media-id="31"></p>',
+        options: [{ key: 'A', text: '<img data-media-id="32">' }],
+        analysis: '<p><img data-media-id="33"></p>', rubric: '<p><img data-media-id="34"></p>',
+      },
+    });
+
+    await expect(policy.authorizeRead('reader', '801', '31')).resolves.toBe(true);
+    await expect(policy.authorizeRead('reader', '801', '32')).resolves.toBe(true);
+    await expect(policy.authorizeRead('reader', '801', '33')).resolves.toBe(false);
+    await expect(policy.authorizeRead('question-exporter', '801', '33')).resolves.toBe(true);
+    await expect(policy.authorizeRead('question-exporter', '801', '34')).resolves.toBe(true);
+    await expect(policy.authorizeRead('question-exporter', '801', '99')).resolves.toBe(false);
+
+    expect(randomResolver).toHaveBeenCalledWith('801', '7');
+    expect(query).toHaveBeenCalledTimes(6);
+    expect(query.mock.calls.every(([sql]) => String(sql).includes('paper_release_question'))).toBe(true);
+  });
+
+  it('refuses duplicate random-draft media resolver registration', () => {
+    const { service } = questionMediaPolicyFixture({
+      permissions: () => [],
+      version: null,
+      randomCandidate: null,
+    });
+
+    expect(() => service.registerRandomDraftMediaResolver(async () => null)).toThrow(/重复注册/);
+  });
+
+  it('denies an unreferenced random-version asset when no resolver was registered', async () => {
+    const { policy } = questionMediaPolicyFixture({
+      permissions: () => ['papers:read'],
+      version: {
+        id: '802', categoryId: '7', stem: '<p><img data-media-id="41"></p>', options: [], analysis: null, rubric: null,
+      },
+    });
+
+    await expect(policy.authorizeRead('reader', '802', '41')).resolves.toBe(false);
   });
 
   it('preserves the existing question-reader owner policy without requiring an asset argument', async () => {

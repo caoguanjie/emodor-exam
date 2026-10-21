@@ -510,6 +510,268 @@ async function runPublishing(ctx) {
   );
   const regulationId = String(regulationInsert.insertId);
 
+  stage = 'random-draft candidate media authorization';
+  const randomMediaCategoryId = await createCategory(ctx, admin.actor, `C1 随机题图类别 ${suffix}`);
+  const randomMediaOtherCategoryId = await createCategory(ctx, admin.actor, `C1 随机题图错类别 ${suffix}`);
+  const randomMediaRegulationInsert = await ctx.queryTestDb(
+    'INSERT INTO regulation (title, category, category_id, description, status, current_version_id, required_minutes, scroll_segments, created_by) VALUES (?, ?, ?, NULL, ?, NULL, 10, 10, ?)',
+    [`C1 随机题图制度 ${suffix}`, 'C1随机题图', randomMediaCategoryId, 'draft', admin.id],
+  );
+  const randomMediaRegulationId = String(randomMediaRegulationInsert.insertId);
+  const randomMediaOtherRegulationInsert = await ctx.queryTestDb(
+    'INSERT INTO regulation (title, category, category_id, description, status, current_version_id, required_minutes, scroll_segments, created_by) VALUES (?, ?, ?, NULL, ?, NULL, 10, 10, ?)',
+    [`C1 随机题图错制度 ${suffix}`, 'C1随机题图', randomMediaCategoryId, 'draft', admin.id],
+  );
+  const randomMediaOtherRegulationId = String(randomMediaOtherRegulationInsert.insertId);
+  const randomMediaIds = {};
+  for (const field of [
+    'valid_prompt', 'valid_answer', 'valid_hard_prompt', 'wrong_category', 'wrong_regulation', 'wrong_difficulty',
+    'wrong_status', 'stale_version', 'wrong_type', 'unrelated',
+  ]) {
+    randomMediaIds[field] = await uploadQuestionImage(ctx, admin.actor, `c1-random-${field}-${suffix}.png`);
+  }
+  const randomValidEasy = await createQuestion(ctx, admin.actor, questionDraft(
+    randomMediaCategoryId,
+    'single',
+    'easy',
+    `随机合法初级 ${suffix}`,
+    {
+      regulation_id: randomMediaRegulationId,
+      stem: `<p>随机合法题干<img data-media-id="${randomMediaIds.valid_prompt}" alt="随机题干图"></p>`,
+      analysis: `<p>随机合法解析<img data-media-id="${randomMediaIds.valid_answer}" alt="随机解析图"></p>`,
+    },
+  ));
+  const randomValidHard = await createQuestion(ctx, admin.actor, questionDraft(
+    randomMediaCategoryId,
+    'single',
+    'hard',
+    `随机合法高级 ${suffix}`,
+    {
+      regulation_id: randomMediaRegulationId,
+      stem: `<p>随机合法高级题干<img data-media-id="${randomMediaIds.valid_hard_prompt}" alt="随机高级题干图"></p>`,
+    },
+  ));
+  const randomWrongCategory = await createQuestion(ctx, admin.actor, questionDraft(
+    randomMediaOtherCategoryId,
+    'single',
+    'easy',
+    `随机错类别 ${suffix}`,
+    {
+      regulation_id: randomMediaRegulationId,
+      stem: `<p>错类别<img data-media-id="${randomMediaIds.wrong_category}"></p>`,
+    },
+  ));
+  const randomWrongRegulation = await createQuestion(ctx, admin.actor, questionDraft(
+    randomMediaCategoryId,
+    'single',
+    'easy',
+    `随机错制度 ${suffix}`,
+    {
+      regulation_id: randomMediaOtherRegulationId,
+      stem: `<p>错制度<img data-media-id="${randomMediaIds.wrong_regulation}"></p>`,
+    },
+  ));
+  const randomWrongDifficulty = await createQuestion(ctx, admin.actor, questionDraft(
+    randomMediaCategoryId,
+    'single',
+    'medium',
+    `随机错难度 ${suffix}`,
+    {
+      regulation_id: randomMediaRegulationId,
+      stem: `<p>错难度<img data-media-id="${randomMediaIds.wrong_difficulty}"></p>`,
+    },
+  ));
+  const randomWrongType = await createQuestion(ctx, admin.actor, questionDraft(
+    randomMediaCategoryId,
+    'multiple',
+    'easy',
+    `随机错题型 ${suffix}`,
+    {
+      regulation_id: randomMediaRegulationId,
+      stem: `<p>错题型<img data-media-id="${randomMediaIds.wrong_type}"></p>`,
+    },
+  ));
+  const randomWrongStatus = await createQuestion(ctx, admin.actor, questionDraft(
+    randomMediaCategoryId,
+    'single',
+    'easy',
+    `随机错状态 ${suffix}`,
+    {
+      regulation_id: randomMediaRegulationId,
+      stem: `<p>错状态<img data-media-id="${randomMediaIds.wrong_status}"></p>`,
+    },
+  ));
+  const rejectedRandomQuestion = await ctx.request(
+    admin.actor,
+    'PUT',
+    `/ai/questions/${randomWrongStatus.questionId}/review`,
+    { expected_version_id: randomWrongStatus.versionId, status: 'rejected', reason: 'C1 random media status boundary' },
+  );
+  assert.equal(rejectedRandomQuestion.status, 200, JSON.stringify(rejectedRandomQuestion));
+  assert.equal(rejectedRandomQuestion.data.status, 'rejected');
+  const randomStaleVersion = await createQuestion(ctx, admin.actor, questionDraft(
+    randomMediaCategoryId,
+    'single',
+    'easy',
+    `随机旧版本 ${suffix}`,
+    {
+      regulation_id: randomMediaRegulationId,
+      stem: `<p>旧版本<img data-media-id="${randomMediaIds.stale_version}"></p>`,
+    },
+  ));
+  const randomStaleRevision = await ctx.request(admin.actor, 'PUT', `/ai/questions/${randomStaleVersion.questionId}`, {
+    expected_version_id: randomStaleVersion.versionId,
+    difficulty: 'medium',
+    stem: `<p>随机当前版本 ${suffix}</p>`,
+  });
+  assert.equal(randomStaleRevision.status, 200, JSON.stringify(randomStaleRevision));
+  assert.equal(randomStaleRevision.data.status, 'pending');
+  const approvedRandomRevision = await ctx.request(admin.actor, 'PUT', `/ai/questions/${randomStaleVersion.questionId}/review`, {
+    expected_version_id: String(randomStaleRevision.data.saved_version_id),
+    status: 'approved',
+  });
+  assert.equal(approvedRandomRevision.status, 200, JSON.stringify(approvedRandomRevision));
+  assert.equal(approvedRandomRevision.data.status, 'approved');
+
+  const randomMediaPaper = await ctx.request(admin.actor, 'POST', '/admin/papers', {
+    title: `C1 随机草稿题图 ${suffix}`,
+    mode: 'random',
+    category_id: randomMediaCategoryId,
+    regulation_ids: [randomMediaRegulationId],
+    rules: [{ type: 'single', count: 1, score_cents: 10000 }],
+  });
+  assert.equal(randomMediaPaper.status, 200, JSON.stringify(randomMediaPaper));
+  const randomMediaPaperId = String(randomMediaPaper.data.id);
+  const randomMediaVersions = [
+    randomValidEasy.versionId,
+    randomValidHard.versionId,
+    randomWrongCategory.versionId,
+    randomWrongRegulation.versionId,
+    randomWrongDifficulty.versionId,
+    randomWrongStatus.versionId,
+    randomStaleVersion.versionId,
+    randomWrongType.versionId,
+  ];
+  const randomMediaPlaceholders = randomMediaVersions.map(() => '?').join(', ');
+  const assertRandomMediaHasNoPaperReferences = async (label) => {
+    const [fixedReferences] = await ctx.queryTestDb(
+      `SELECT COUNT(*) AS count FROM paper_question WHERE question_version_id IN (${randomMediaPlaceholders})`,
+      randomMediaVersions,
+    );
+    const [releaseReferences] = await ctx.queryTestDb(
+      `SELECT COUNT(*) AS count FROM paper_release_question WHERE question_version_id IN (${randomMediaPlaceholders})`,
+      randomMediaVersions,
+    );
+    const [paperReleases] = await ctx.queryTestDb(
+      'SELECT COUNT(*) AS count FROM paper_release WHERE paper_id = ?',
+      [randomMediaPaperId],
+    );
+    assert.equal(Number(fixedReferences.count), 0, `${label}: random draft must not create fixed references`);
+    assert.equal(Number(releaseReferences.count), 0, `${label}: random draft must not create release-question references`);
+    assert.equal(Number(paperReleases.count), 0, `${label}: random preview must not fabricate a release`);
+  };
+  await assertRandomMediaHasNoPaperReferences('before preview');
+
+  const randomMediaReader = await createPermissionReader(ctx, admin, suffix, 'random_media_reader', ['papers:read']);
+  const randomMediaQuestionExporter = await createPermissionReader(
+    ctx,
+    admin,
+    suffix,
+    'random_media_qexport',
+    ['papers:read', 'questions:export'],
+  );
+  const randomMediaQuestionExportOnly = await createPermissionReader(
+    ctx,
+    admin,
+    suffix,
+    'random_media_qexport_only',
+    ['questions:export'],
+  );
+  const randomDraftPreview = await ctx.request(
+    randomMediaReader.actor,
+    'GET',
+    `/admin/papers/${randomMediaPaperId}/preview?difficulty=easy`,
+  );
+  assert.equal(randomDraftPreview.status, 200, JSON.stringify(randomDraftPreview));
+  assert.equal(randomDraftPreview.data.sample_kind, 'random_example');
+  assert.equal(randomDraftPreview.data.questions.length, 1);
+  assert.equal(randomDraftPreview.data.questions[0].question_version_id, randomValidEasy.versionId);
+  assert.equal(Object.hasOwn(randomDraftPreview.data.questions[0], 'analysis'), false);
+  const randomPromptContent = await ctx.request(
+    randomMediaReader.actor,
+    'GET',
+    `/media/${randomMediaIds.valid_prompt}/content`,
+  );
+  assert.equal(randomPromptContent.status, 200, `random draft prompt: ${JSON.stringify(randomPromptContent.json)}`);
+  assert.notEqual(
+    randomDraftPreview.data.questions[0].question_version_id,
+    randomValidHard.versionId,
+    'easy sample must not draw the eligible hard candidate',
+  );
+  const unselectedHardPromptContent = await ctx.request(
+    randomMediaReader.actor,
+    'GET',
+    `/media/${randomMediaIds.valid_hard_prompt}/content`,
+  );
+  assert.equal(
+    unselectedHardPromptContent.status,
+    200,
+    'a fully eligible candidate remains readable even when this easy sample did not draw it',
+  );
+  const ordinaryRandomAnswer = await ctx.request(
+    randomMediaReader.actor,
+    'GET',
+    `/media/${randomMediaIds.valid_answer}/content`,
+  );
+  assert.equal(ordinaryRandomAnswer.status, 403, 'papers:read alone must not load random answer-only media');
+  const ordinaryAnswerPreview = await ctx.request(
+    randomMediaReader.actor,
+    'GET',
+    `/admin/papers/${randomMediaPaperId}/preview/answers?difficulty=easy`,
+  );
+  assert.equal(ordinaryAnswerPreview.status, 403, 'papers:read alone must not open answer preview');
+
+  const randomAnswerPreview = await ctx.request(
+    randomMediaQuestionExporter.actor,
+    'GET',
+    `/admin/papers/${randomMediaPaperId}/preview/answers?difficulty=easy`,
+  );
+  assert.equal(randomAnswerPreview.status, 200, JSON.stringify(randomAnswerPreview));
+  assert.equal(randomAnswerPreview.data.questions[0].question_version_id, randomValidEasy.versionId);
+  assert.match(randomAnswerPreview.data.questions[0].analysis, new RegExp(`data-media-id="${randomMediaIds.valid_answer}"`));
+  const randomAnswerContent = await ctx.request(
+    randomMediaQuestionExporter.actor,
+    'GET',
+    `/media/${randomMediaIds.valid_answer}/content`,
+  );
+  assert.equal(randomAnswerContent.status, 200, `questions:export random answer: ${JSON.stringify(randomAnswerContent.json)}`);
+  const exportWithoutPaperRead = await ctx.request(
+    randomMediaQuestionExportOnly.actor,
+    'GET',
+    `/media/${randomMediaIds.valid_answer}/content`,
+  );
+  assert.equal(exportWithoutPaperRead.status, 403, 'questions:export without papers:read must not load paper media');
+
+  for (const field of [
+    'wrong_category', 'wrong_regulation', 'wrong_difficulty', 'wrong_status', 'stale_version', 'wrong_type', 'unrelated',
+  ]) {
+    const content = await ctx.request(
+      randomMediaQuestionExporter.actor,
+      'GET',
+      `/media/${randomMediaIds[field]}/content`,
+    );
+    assert.equal(content.status, 403, `random candidate boundary ${field}: ${JSON.stringify(content.json)}`);
+  }
+  const [staleVersionState] = await ctx.queryTestDb(
+    'SELECT old_version.status AS old_status, question.current_version_id, current_version.status AS current_status, current_version.difficulty AS current_difficulty FROM question_version old_version INNER JOIN question ON question.id = old_version.question_id INNER JOIN question_version current_version ON current_version.id = question.current_version_id WHERE old_version.id = ?',
+    [randomStaleVersion.versionId],
+  );
+  assert.equal(staleVersionState.old_status, 'approved');
+  assert.notEqual(String(staleVersionState.current_version_id), randomStaleVersion.versionId);
+  assert.equal(staleVersionState.current_status, 'approved');
+  assert.equal(staleVersionState.current_difficulty, 'medium');
+  await assertRandomMediaHasNoPaperReferences('after preview');
+
   stage = 'regulation duplicate-concept rollback and no-concept control';
   const regulationConcept = await ctx.request(admin.actor, 'POST', '/ai/question-concepts', {
     category_id: categoryId,

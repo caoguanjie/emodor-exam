@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Difficulty, PoolRule, QuestionType, RuleSnapshot } from '../src/common/training-contracts';
+import { Errors } from '../src/common/errors';
 import { ExamPaper } from '../src/entities/exam-paper.entity';
 import { PaperQuestion } from '../src/entities/paper-question.entity';
 import { PaperRelease } from '../src/entities/paper-release.entity';
@@ -65,6 +66,14 @@ function releaseFixture(regulationIds: string[]) {
   const releaseQuestions: any[] = [];
   const paperRepo = {
     findOne: vi.fn(async () => paper),
+    find: vi.fn(async ({ where }: any) => (
+      where.businessScope === 'training'
+      && where.mode === 'random'
+      && where.status === 'draft'
+      && String(where.categoryId) === String(paper.categoryId)
+        ? [paper]
+        : []
+    )),
     save: vi.fn(async (value: any) => value),
   };
   const paperQuestionRepo = { find: vi.fn(async () => []) };
@@ -99,6 +108,7 @@ function releaseFixture(regulationIds: string[]) {
     item.difficulty === filter.difficulty
       && (!filter.regulationIds?.length || Boolean(item.regulationId && filter.regulationIds.includes(item.regulationId)))
   )));
+  const registerRandomDraftMediaResolver = vi.fn();
   const service = Object.create(PaperReleaseService.prototype) as PaperReleaseService & Record<string, any>;
   Object.assign(service, {
     releaseRepo,
@@ -106,14 +116,89 @@ function releaseFixture(regulationIds: string[]) {
     releaseQuestionRepo,
     dataSource: { transaction: (work: (value: any) => Promise<unknown>) => work(manager) },
     categories: { lockActive: vi.fn(async () => ({ id: '7', status: 1 })) },
-    questions: { approvedCandidates },
+    questions: { approvedCandidates, registerRandomDraftMediaResolver },
     sampling: new SamplingService(),
     audit: { log: vi.fn() },
   });
-  return { service, paper, candidates, approvedCandidates };
+  return {
+    service,
+    paper,
+    candidates,
+    approvedCandidates,
+    paperRepo,
+    releaseRepo,
+    releaseQuestionRepo,
+    registerRandomDraftMediaResolver,
+  };
 }
 
 describe('immutable paper releases', () => {
+  it('registers a random-draft media lookup that reuses the fully validated candidate pool without writes', async () => {
+    const {
+      service,
+      approvedCandidates,
+      paperRepo,
+      releaseRepo,
+      releaseQuestionRepo,
+      registerRandomDraftMediaResolver,
+    } = releaseFixture([]);
+
+    service.onModuleInit();
+    const resolver = registerRandomDraftMediaResolver.mock.calls[0]?.[0];
+
+    await expect(resolver('v-101', '7')).resolves.toMatchObject({ versionId: 'v-101', categoryId: '7' });
+    await expect(resolver('v-101', '8')).resolves.toBeNull();
+
+    expect(paperRepo.find).toHaveBeenCalledWith({
+      where: { businessScope: 'training', mode: 'random', status: 'draft', categoryId: '7' },
+      order: { id: 'ASC' },
+    });
+    expect(approvedCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ categoryId: '7', type: 'single', difficulty: 'easy' }),
+      undefined,
+    );
+    expect(approvedCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ categoryId: '7', type: 'single', difficulty: 'hard' }),
+      undefined,
+    );
+    expect(releaseRepo.save).not.toHaveBeenCalled();
+    expect(releaseQuestionRepo.save).not.toHaveBeenCalled();
+    expect(paperRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('skips only explicit non-previewable random drafts while surfacing unexpected lookup failures', async () => {
+    const inactive = releaseFixture([]);
+    inactive.approvedCandidates.mockRejectedValue(Errors.categoryInactive());
+    inactive.service.onModuleInit();
+    const inactiveResolver = inactive.registerRandomDraftMediaResolver.mock.calls[0]?.[0];
+
+    await expect(inactiveResolver('v-101', '7')).resolves.toBeNull();
+
+    const invalid = releaseFixture([]);
+    invalid.approvedCandidates.mockResolvedValue([]);
+    invalid.service.onModuleInit();
+    const invalidResolver = invalid.registerRandomDraftMediaResolver.mock.calls[0]?.[0];
+
+    await expect(invalidResolver('v-101', '7')).resolves.toBeNull();
+
+    const invalidRule = releaseFixture([]);
+    invalidRule.paper.ruleConfig.rules = [
+      { type: 'single', count: 1, scoreCents: 5000 },
+      { type: 'single', count: 1, scoreCents: 5000 },
+    ];
+    invalidRule.service.onModuleInit();
+    const invalidRuleResolver = invalidRule.registerRandomDraftMediaResolver.mock.calls[0]?.[0];
+
+    await expect(invalidRuleResolver('v-101', '7')).resolves.toBeNull();
+
+    const unexpected = releaseFixture([]);
+    unexpected.approvedCandidates.mockRejectedValue(new Error('candidate lookup failed'));
+    unexpected.service.onModuleInit();
+    const unexpectedResolver = unexpected.registerRandomDraftMediaResolver.mock.calls[0]?.[0];
+
+    await expect(unexpectedResolver('v-101', '7')).rejects.toThrow('candidate lookup failed');
+  });
+
   it('deep-freezes the current approved candidate contents when publishing', async () => {
     const { service, candidates } = releaseFixture([]);
 

@@ -1,8 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { AuditService } from '../../common/audit.service';
-import { Errors } from '../../common/errors';
+import { BizError, Errors } from '../../common/errors';
 import type { Difficulty, PoolRule, QuestionOption, QuestionType, RuleSnapshot } from '../../common/training-contracts';
 import { ExamPaper } from '../../entities/exam-paper.entity';
 import { PaperQuestion } from '../../entities/paper-question.entity';
@@ -141,7 +141,7 @@ function releaseSnapshotFromEntity(version: QuestionVersion): ReleaseQuestionSna
 }
 
 @Injectable()
-export class PaperReleaseService {
+export class PaperReleaseService implements OnModuleInit {
   constructor(
     @InjectRepository(ExamPaper) private readonly paperRepo: Repository<ExamPaper>,
     @InjectRepository(PaperRelease) private readonly releaseRepo: Repository<PaperRelease>,
@@ -152,6 +152,34 @@ export class PaperReleaseService {
     private readonly sampling: SamplingService,
     private readonly audit: AuditService,
   ) {}
+
+  onModuleInit(): void {
+    this.questions.registerRandomDraftMediaResolver((versionId, categoryId) => (
+      this.randomDraftMediaCandidate(versionId, categoryId)
+    ));
+  }
+
+  private async randomDraftMediaCandidate(
+    versionId: string,
+    categoryId: string | null,
+  ): Promise<QuestionVersionSnapshot | null> {
+    if (!categoryId) return null;
+    const papers = await this.paperRepo.find({
+      where: { businessScope: 'training', mode: 'random', status: 'draft', categoryId },
+      order: { id: 'ASC' },
+    });
+    for (const paper of papers) {
+      try {
+        const { pool } = await this.randomPool(undefined, paper);
+        const candidate = pool.find((item) => String(item.versionId) === String(versionId));
+        if (candidate) return candidate;
+      } catch (error) {
+        if (error instanceof BizError && [40910, 40971, 40972].includes(error.code)) continue;
+        throw error;
+      }
+    }
+    return null;
+  }
 
   private ruleForPaper(paper: ExamPaper, rules: PoolRule[]): RuleSnapshot {
     const rule: RuleSnapshot = {

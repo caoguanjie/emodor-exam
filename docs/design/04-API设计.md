@@ -230,7 +230,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | GET | `/media/{id}/content` | 资源拥有者/已注册 owner authorizer | 私有流，支持单一 `Range: bytes=start-end`，命中返回 206 与 `Content-Range`；无效或不可满足 Range 返回 41601/HTTP 416；文件流跳过统一信封 |
 | DELETE | `/media/{id}` | 资源拥有者 | 有任何 `media_reference` 时返回 40913；无引用后先落内部 `deleting` 再删除物理文件，失败保留行供重试并返回 50004/HTTP 503，成功或文件已不存在才删数据库行 |
 
-`question_version` owner policy 保留上传者与 `questions:read` 的既有读取。仅有 `papers:read` 的非上传者只能读取真实 fixed draft 或不可变 release 所引用精确版本中的题干/选项图片；只出现在解析/rubric 的图片还必须同时具备 `papers:export`。未引用题库版本、错误字段或仅凭任意试卷权限均返回 40302；release 历史按其 `snapshot_json` 判断，不替换为当前题目版本。
+`question_version` owner policy 保留上传者与 `questions:read` 的既有读取。具有 `papers:read` 的非上传者只能读取真实 fixed draft、不可变 release，或当前 random draft 经既有 `randomPool/approvedCandidates` 完整规则验证后候选版本中的题干/选项图片；只出现在解析/rubric 的图片还必须具备 `papers:export` 或 `questions:export`。单独 `questions:export` 不构成试卷题图读取权。random 候选桥接仍精确限定类别、可选制度、题型、easy/hard、current approved 与考点容量，允许候选池内未被本次样例抽中的版本，但不落 `paper_question` 或伪造 release。错误类别/制度/难度/状态/current version/题型、无效草稿与无关题库版本均返回 40302；release 历史按其 `snapshot_json` 判断，不替换为当前题目版本。
 
 管理端头像绑定 `PUT /admin/students/{id}/avatar` 只接受 `avatar_id`，在同一用户行锁事务内重复 `lockManagedStudent` 最终检查并 bind；拥有任何 `sys_user_role` 链接的员工仍不属于学员管理范围。PC 选择新头像时只把上传结果暂存在当前表单，点击“保存”后才调用既有资料更新与独立头像绑定接口；取消不绑定该上传，任一保存请求失败后以详情 GET 对账并保留重试入口，不能把上传成功误当成资料已保存。
 

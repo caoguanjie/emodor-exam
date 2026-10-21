@@ -212,6 +212,7 @@ let formBaseline: Draft = clone(form);
 let questionBaseline: TrainingPaperQuestion[] = [];
 let viewContext = 0;
 let trainingLoadOperation = 0;
+let trainingOptionsOperation = 0;
 let legacyLoadOperation = 0;
 let configOperation = 0;
 let configApplied = 0;
@@ -226,6 +227,8 @@ let relationToken = 0;
 let viewActive = true;
 let viewDestroyed = false;
 let completedCopyNotice = false;
+let categoryOptionsLoaded = false;
+let relationOptionsCategory: Id | null = null;
 
 const unsaved = useUnsavedChanges(dirty, { onDiscard: restoreDraft });
 const editable = computed(() => paper.value?.status === 'draft' && auth.can('papers:write'));
@@ -287,19 +290,31 @@ async function loadTraining(resetDraft = true, expected?: { form: Draft; questio
 async function loadTrainingOptions() {
   if (!auth.can('papers:read')) return;
   const context = viewContext;
+  const operation = ++trainingOptionsOperation;
   const page = await http.get('/admin/papers/category-options', { params: { page: 1, page_size: 100 } }) as Page<{ id: Id; name: string }>;
-  if (context !== viewContext) return;
+  if (context !== viewContext || operation !== trainingOptionsOperation) return;
   categories.value = page.items;
+  categoryOptionsLoaded = true;
   await loadRelations(form.category_id, true);
 }
 
 async function loadRelations(categoryId: Id, preserve: boolean) {
   const context = viewContext;
   const token = ++relationToken;
-  if (!preserve) { form.regulation_ids = []; form.course_ids = []; }
-  regulationOptions.value = [];
-  courseOptions.value = [];
-  if (!categoryId || !auth.can('papers:read')) return;
+  if (!preserve) {
+    form.regulation_ids = [];
+    form.course_ids = [];
+    regulationOptions.value = [];
+    courseOptions.value = [];
+    relationOptionsCategory = null;
+  }
+  if (!categoryId || !auth.can('papers:read')) {
+    if (context !== viewContext || token !== relationToken) return;
+    regulationOptions.value = [];
+    courseOptions.value = [];
+    relationOptionsCategory = categoryId;
+    return;
+  }
   const [regs, courses] = await Promise.all([
     http.get('/admin/papers/regulation-options', { params: { category_id: categoryId, page: 1, page_size: 100 } }) as Promise<Page<NamedOption>>,
     http.get('/admin/papers/course-options', { params: { category_id: categoryId, page: 1, page_size: 100 } }) as Promise<Page<NamedOption>>,
@@ -307,6 +322,15 @@ async function loadRelations(categoryId: Id, preserve: boolean) {
   if (context !== viewContext || token !== relationToken || form.category_id !== categoryId) return;
   regulationOptions.value = regs.items;
   courseOptions.value = courses.items;
+  relationOptionsCategory = categoryId;
+}
+
+async function ensureTrainingOptions() {
+  if (!categoryOptionsLoaded) {
+    await loadTrainingOptions();
+    return;
+  }
+  if (relationOptionsCategory !== form.category_id) await loadRelations(form.category_id, true);
 }
 
 function onCategoryChange(value: Id) { void loadRelations(value, false); }
@@ -603,6 +627,7 @@ function recordCompletedCopy() { if (viewDestroyed) return; completedCopyNotice 
 function invalidateView() {
   viewContext += 1;
   trainingLoadOperation += 1;
+  trainingOptionsOperation += 1;
   legacyLoadOperation += 1;
   relationToken += 1;
   candidateOperation += 1;
@@ -613,13 +638,18 @@ function invalidateView() {
   if (previewVisible.value) previewVisible.value = false;
   else invalidatePreview();
 }
+async function reloadMissingTrainingDependencies() {
+  if (!paper.value) await loadTraining(true);
+  if (viewDestroyed || !viewActive || !paper.value) return;
+  await ensureTrainingOptions();
+}
 function reloadMissingDetail() {
   if (viewDestroyed || !viewActive) return;
   if (legacyMode) {
     if (!legacyPaper.value) void loadLegacy();
     return;
   }
-  if (!paper.value) void loadTraining(true);
+  void reloadMissingTrainingDependencies();
 }
 onActivated(() => {
   const wasInactive = !viewActive;

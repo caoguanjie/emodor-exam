@@ -385,6 +385,16 @@ function setResponder() {
   };
 }
 
+function respondWithTrainingOptions({ categories, regulations, courses }) {
+  const fallback = context.respond;
+  context.respond = async (method, path, body, config) => {
+    if (method === 'GET' && path === '/admin/papers/category-options') return { items: categories, total: categories.length, page: 1, page_size: 100 };
+    if (method === 'GET' && path === '/admin/papers/regulation-options') return { items: regulations, total: regulations.length, page: 1, page_size: 100 };
+    if (method === 'GET' && path === '/admin/papers/course-options') return { items: courses, total: courses.length, page: 1, page_size: 100 };
+    return fallback(method, path, body, config);
+  };
+}
+
 function stripClientGlue(code) {
   return code
     .replace(/^import \{ createHotContext[\s\S]*?import\.meta\.hot = [^;]+;\s*/, '')
@@ -766,6 +776,136 @@ test('fix2 reactivation preserves a loaded unsaved legacy draft without another 
   assert.equal(mounted.state.legacyStrategy.pass_score, 73);
   assert.equal(mounted.state.legacyPaper.questions[0].score, 95);
   assert.equal(mounted.state.legacyDirty, true);
+  mounted.unmount();
+});
+
+test('fix3 restores matching relation options after the inactive initial chain used an empty category', async () => {
+  context.trainingPaper = trainingPaper({
+    title: '含已保存关系的培训卷',
+    category_id: 'category-2',
+    regulation_ids: ['regulation-saved'],
+    course_ids: ['course-saved'],
+  });
+  respondWithTrainingOptions({
+    categories: [{ id: 'category-2', name: '类别二' }],
+    regulations: [{ id: 'regulation-saved', title: '已保存制度' }],
+    courses: [{ id: 'course-saved', title: '已保存课程' }],
+  });
+  const firstDetail = deferredRequest('GET', '/admin/papers/paper-1');
+  const mounted = await mountCached(PaperDetail);
+  await waitFor(() => context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length === 1, 'first detail request');
+
+  await mounted.deactivate();
+  firstDetail.resolve(context.trainingPaper);
+  await waitFor(() => context.calls.some((call) => call.method === 'GET' && call.path === '/admin/papers/category-options'), 'inactive initial option chain');
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.equal(mounted.state.paper, null);
+  assert.equal(mounted.state.form.category_id, '');
+  assert.deepEqual(mounted.state.regulationOptions, []);
+  assert.deepEqual(mounted.state.courseOptions, []);
+
+  await mounted.activate();
+  await waitFor(() => mounted.state.paper?.title === '含已保存关系的培训卷', 'recovered detail');
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.deepEqual(mounted.state.categories, [{ id: 'category-2', name: '类别二' }]);
+  assert.deepEqual(mounted.state.regulationOptions, [{ id: 'regulation-saved', title: '已保存制度' }]);
+  assert.deepEqual(mounted.state.courseOptions, [{ id: 'course-saved', title: '已保存课程' }]);
+  assert.deepEqual(mounted.state.form.regulation_ids, ['regulation-saved']);
+  assert.deepEqual(mounted.state.form.course_ids, ['course-saved']);
+  const relationCalls = context.calls.filter((call) => ['/admin/papers/regulation-options', '/admin/papers/course-options'].includes(call.path));
+  assert.ok(relationCalls.every((call) => call.config.params.category_id === 'category-2'));
+  mounted.unmount();
+});
+
+test('fix3 reloads category options invalidated by deactivation without rebasing the current draft', async () => {
+  context.trainingPaper = trainingPaper({
+    category_id: 'category-1',
+    regulation_ids: ['regulation-saved'],
+    course_ids: ['course-saved'],
+  });
+  respondWithTrainingOptions({
+    categories: [{ id: 'category-1', name: '当前类别' }],
+    regulations: [{ id: 'regulation-saved', title: '已保存制度' }, { id: 'regulation-draft', title: '草稿制度' }],
+    courses: [{ id: 'course-saved', title: '已保存课程' }, { id: 'course-draft', title: '草稿课程' }],
+  });
+  const staleCategories = deferredRequest('GET', '/admin/papers/category-options');
+  const mounted = await mountCached(PaperDetail);
+  await waitFor(() => mounted.state.paper, 'loaded detail before category options');
+  await waitFor(() => context.calls.filter((call) => call.path === '/admin/papers/category-options').length === 1, 'first category option request');
+  mounted.state.form.title = '类别请求期间的未保存标题';
+  mounted.state.form.regulation_ids = ['regulation-saved', 'regulation-draft'];
+  mounted.state.form.course_ids = ['course-saved', 'course-draft'];
+  await nextTick();
+
+  await mounted.deactivate();
+  staleCategories.resolve({ items: [{ id: 'stale-category', name: '迟到旧类别' }], total: 1, page: 1, page_size: 100 });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.deepEqual(mounted.state.categories, []);
+  const detailReads = context.calls.filter((call) => call.path === '/admin/papers/paper-1').length;
+
+  await mounted.activate();
+  assert.equal(context.calls.filter((call) => call.path === '/admin/papers/category-options').length, 2);
+  await waitFor(() => mounted.state.regulationOptions.length === 2 && mounted.state.courseOptions.length === 2, 'reloaded category dependency chain');
+  assert.deepEqual(mounted.state.categories, [{ id: 'category-1', name: '当前类别' }]);
+  assert.deepEqual(mounted.state.paper.regulation_ids, ['regulation-saved']);
+  assert.deepEqual(mounted.state.paper.course_ids, ['course-saved']);
+  assert.equal(mounted.state.form.title, '类别请求期间的未保存标题');
+  assert.deepEqual(mounted.state.form.regulation_ids, ['regulation-saved', 'regulation-draft']);
+  assert.deepEqual(mounted.state.form.course_ids, ['course-saved', 'course-draft']);
+  assert.equal(mounted.state.dirty, true);
+  assert.equal(context.calls.filter((call) => call.path === '/admin/papers/paper-1').length, detailReads);
+  mounted.unmount();
+});
+
+test('fix3 replaces invalidated relation options once and keeps a loaded draft on later activations', async () => {
+  context.trainingPaper = trainingPaper({
+    category_id: 'category-1',
+    regulation_ids: ['regulation-saved'],
+    course_ids: ['course-saved'],
+  });
+  respondWithTrainingOptions({
+    categories: [{ id: 'category-1', name: '当前类别' }],
+    regulations: [{ id: 'regulation-saved', title: '已保存制度' }, { id: 'regulation-draft', title: '草稿制度' }],
+    courses: [{ id: 'course-saved', title: '已保存课程' }, { id: 'course-draft', title: '草稿课程' }],
+  });
+  const staleRegulations = deferredRequest('GET', '/admin/papers/regulation-options');
+  const staleCourses = deferredRequest('GET', '/admin/papers/course-options');
+  const mounted = await mountCached(PaperDetail);
+  await waitFor(() => context.calls.some((call) => call.path === '/admin/papers/regulation-options'), 'first regulation option request');
+  await waitFor(() => context.calls.some((call) => call.path === '/admin/papers/course-options'), 'first course option request');
+  mounted.state.form.title = '关系请求期间的未保存标题';
+  mounted.state.form.regulation_ids = ['regulation-saved', 'regulation-draft'];
+  mounted.state.form.course_ids = ['course-saved', 'course-draft'];
+  await nextTick();
+
+  await mounted.deactivate();
+  staleRegulations.resolve({ items: [{ id: 'stale-regulation', title: '迟到旧制度' }], total: 1, page: 1, page_size: 100 });
+  staleCourses.resolve({ items: [{ id: 'stale-course', title: '迟到旧课程' }], total: 1, page: 1, page_size: 100 });
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.deepEqual(mounted.state.regulationOptions, []);
+  assert.deepEqual(mounted.state.courseOptions, []);
+
+  await mounted.activate();
+  assert.equal(context.calls.filter((call) => call.path === '/admin/papers/regulation-options').length, 2);
+  assert.equal(context.calls.filter((call) => call.path === '/admin/papers/course-options').length, 2);
+  await waitFor(() => mounted.state.regulationOptions.length === 2 && mounted.state.courseOptions.length === 2, 'reloaded relation options');
+  assert.deepEqual(mounted.state.paper.regulation_ids, ['regulation-saved']);
+  assert.deepEqual(mounted.state.paper.course_ids, ['course-saved']);
+  assert.equal(mounted.state.form.title, '关系请求期间的未保存标题');
+  assert.deepEqual(mounted.state.form.regulation_ids, ['regulation-saved', 'regulation-draft']);
+  assert.deepEqual(mounted.state.form.course_ids, ['course-saved', 'course-draft']);
+  assert.equal(mounted.state.dirty, true);
+
+  const optionReads = context.calls.filter((call) => ['/admin/papers/category-options', '/admin/papers/regulation-options', '/admin/papers/course-options'].includes(call.path)).length;
+  const detailReads = context.calls.filter((call) => call.path === '/admin/papers/paper-1').length;
+  await mounted.deactivate();
+  await mounted.activate();
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.equal(context.calls.filter((call) => ['/admin/papers/category-options', '/admin/papers/regulation-options', '/admin/papers/course-options'].includes(call.path)).length, optionReads);
+  assert.equal(context.calls.filter((call) => call.path === '/admin/papers/paper-1').length, detailReads);
+  assert.equal(mounted.state.form.title, '关系请求期间的未保存标题');
+  assert.deepEqual(mounted.state.form.regulation_ids, ['regulation-saved', 'regulation-draft']);
+  assert.deepEqual(mounted.state.form.course_ids, ['course-saved', 'course-draft']);
   mounted.unmount();
 });
 

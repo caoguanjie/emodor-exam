@@ -34,6 +34,11 @@ export type QuestionVersionSnapshot = Readonly<QuestionDraft & {
   approvedAt: string | null;
 }>;
 
+type RandomDraftMediaResolver = (
+  versionId: string,
+  categoryId: string | null,
+) => Promise<QuestionVersionSnapshot | null>;
+
 const QUESTION_VERSION_MEDIA_OWNER = 'question_version';
 
 type QuestionMediaFields = {
@@ -73,6 +78,8 @@ function releaseMediaFields(value: unknown): QuestionMediaFields | null {
 
 @Injectable()
 export class QuestionVersionService implements OnModuleInit {
+  private randomDraftMediaResolver?: RandomDraftMediaResolver;
+
   constructor(
     @InjectRepository(Question) private readonly questionRepo: Repository<Question>,
     @InjectRepository(QuestionVersion) private readonly versionRepo: Repository<QuestionVersion>,
@@ -96,11 +103,16 @@ export class QuestionVersionService implements OnModuleInit {
     });
   }
 
+  registerRandomDraftMediaResolver(resolver: RandomDraftMediaResolver): void {
+    if (this.randomDraftMediaResolver) throw Errors.internal('随机草稿媒体解析器重复注册');
+    this.randomDraftMediaResolver = resolver;
+  }
+
   private async canReadQuestionVersionMedia(actorId: string, versionId: string, assetId?: string): Promise<boolean> {
     const permissions = await this.access.permissions(actorId);
     if (permissions.includes('questions:read')) return true;
     if (!assetId || !permissions.includes('papers:read')) return false;
-    const includeAnswers = permissions.includes('papers:export');
+    const includeAnswers = permissions.includes('papers:export') || permissions.includes('questions:export');
     const exactVersionId = String(versionId);
     const exactAssetId = String(assetId);
 
@@ -126,12 +138,19 @@ export class QuestionVersionService implements OnModuleInit {
        WHERE release_question.question_version_id = ?`,
       [exactVersionId],
     );
-    return releaseRows.some((row: { snapshot_json?: unknown }) => {
+    const releaseAuthorized = releaseRows.some((row: { snapshot_json?: unknown }) => {
       const fields = releaseMediaFields(row.snapshot_json);
       if (!fields) return false;
       const releaseField = questionMediaField(fields, exactAssetId);
       return releaseField === 'prompt' || (releaseField === 'answer' && includeAnswers);
     });
+    if (releaseAuthorized || !version || !this.randomDraftMediaResolver) return releaseAuthorized;
+
+    const categoryId = version.categoryId == null ? null : String(version.categoryId);
+    const candidate = await this.randomDraftMediaResolver(exactVersionId, categoryId);
+    if (!candidate || String(candidate.versionId) !== exactVersionId || String(candidate.categoryId) !== categoryId) return false;
+    const randomField = questionMediaField(candidate, exactAssetId);
+    return randomField === 'prompt' || (randomField === 'answer' && includeAnswers);
   }
 
   private async assertSource(draft: ValidatedQuestionDraft): Promise<void> {
