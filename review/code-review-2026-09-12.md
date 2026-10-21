@@ -1,4 +1,4 @@
-# Code Review 报告 — RuleExam 全量新增代码
+# Code Review 报告 — EmodorRuleExam 全量新增代码
 
 - **日期**: 2026-09-12
 - **审查对象**: 工作区全部未提交新增文件（101 个，约 1.1 万行）：`server/`（NestJS 后端）、`web/`（Vue 3 前端）、`database/`（MySQL 初始化）、`deploy/`（nginx / .env.example）、`docker-compose.yml`、`tests/`（e2e 冒烟）、`README.md`，以及 `.gitignore` 修改。

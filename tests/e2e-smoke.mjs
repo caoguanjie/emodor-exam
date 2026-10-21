@@ -1,4 +1,4 @@
-// RuleExam 端到端冒烟测试：覆盖 README 1.1 全闭环
+// EmodorRuleExam 端到端冒烟测试：覆盖 README 1.1 全闭环
 // 制度上传 → 在线学习 → AI 出题 → 考试评分 → 统计跟进
 // 运行前提：API 服务已启动（见 tests/run-e2e.sh）；管理员初始口令经环境变量注入（不落源码）。
 //

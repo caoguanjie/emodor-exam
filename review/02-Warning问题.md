@@ -11,8 +11,8 @@
 **来源视角**：completeness
 
 **位置**：
-- [04-API设计.md §3.4.1 管理侧](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
-- [05-模块设计.md §3.4.4 版本管理](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
+- [04-API设计.md §3.4.1 管理侧](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
+- [05-模块设计.md §3.4.4 版本管理](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
 
 **Problem**：Requirement 1（制度文件管理设计）SHALL 条款明确列出"版本管理"，01 册 FR-REG-04 验收② 进一步要求「**历史版本内容仍可回看**」，05 §3.4.4（line 419）也声明「历史版本仅管理端版本管理页可见」。但 04 §3.4.1 管理侧接口清单（12 个端点）仅有 `GET /regulations/{id}/versions`（版本列表，含 `parse_status`），**未提供读取任一历史版本 `content_html` / `text_content` / PDF 文件流的端点**；员工侧 `GET /regulations/{id}/content` 又只返回 `current_version_id` 指向的版本（05 §3.4.6 校验链 ④）。「版本管理页可见」停留在文字承诺，无接口契约与数据流支撑，FR-REG-04 验收② 无法落地。
 
@@ -29,8 +29,8 @@
 **来源视角**：completeness
 
 **位置**：
-- [05-模块设计.md §3.4.6 在线阅读内容服务](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
-- [04-API设计.md §3.4.2 员工侧](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+- [05-模块设计.md §3.4.6 在线阅读内容服务](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
+- [04-API设计.md §3.4.2 员工侧](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 
 **Problem**：Requirement 1 SHALL 条款把"在线预览"与"文件格式与大小校验、文本解析、版本管理、发布/下架机制"并列为**制度管理员上传流程**的组成环节，语义上指向"管理员上传后、发布前预览解析产物以校对"。但设计中：
 1. 04 把 `GET /regulations/{id}/content` 归入"§3.4.2 员工侧（权限：员工，限发布范围内的本人）"，管理侧 §3.4.1 无对应预览端点
@@ -50,8 +50,8 @@
 **来源视角**：三视角合并命中（completeness W1 + correctness S35 + impact W4）
 
 **位置**：
-- [README.md §3.3 核心实体清单 / §3.2 术语表](/Users/pangongxia/agent_workspace/RuleExam/docs/design/README.md)
-- [03-数据库设计.md §3.4 exam_paper 设计说明（L458、L475）、§3.2.2 regulation_version](/Users/pangongxia/agent_workspace/RuleExam/docs/design/03-数据库设计.md)
+- [README.md §3.3 核心实体清单 / §3.2 术语表](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/README.md)
+- [03-数据库设计.md §3.4 exam_paper 设计说明（L458、L475）、§3.2.2 regulation_version](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/03-数据库设计.md)
 
 **Problem**：
 1. **基准回填缺口**：03 新增字段 `exam_paper.partial_credit_ratio`（DECIMAL(4,2)，默认 0.50），并被 04（L199/L209）、05（L687/L1118）、06（L24）、07（L304/L567）一致引用为多选漏选部分分的**试卷级配置字段**。但 README §3.2「试卷」术语与 §3.3 exam_paper 职责仅列「及格线/限时/最大补考次数/状态」，**未含该字段**。03 §3.4 设计说明第 3 条已自认「字段不在 README 3.3 清单内…后续须回填 README 修订」。按 README §5 变更协议「须先更新本 README 的约定基准，再同步修订受影响的分册」，此处基准（README）滞后于全套下游 schema，使 README 作为「一致性基准」不再完整/权威
@@ -68,7 +68,7 @@
 
 **来源视角**：correctness
 
-**位置**：[04-API设计.md §5 限流约定（L650）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+**位置**：[04-API设计.md §5 限流约定（L650）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 
 **Problem**：限流表把 `POST /learning/heartbeat、pause、resume` 三者合并为一条规则「节拍窗口限流：30 秒周期内异常高频丢弃（42901）」。但 04 §3.6 自己说明「pause/resume 独立端点的理由：**失焦是事件驱动（不定期）**，与 30 秒周期心跳分离」——事件驱动端点套用周期节拍窗口在语义上不成立。
 
@@ -86,7 +86,7 @@
 
 **来源视角**：correctness
 
-**位置**：[04-API设计.md §3.6（L227）与 §4.4 心跳示例（L439-L446）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+**位置**：[04-API设计.md §3.6（L227）与 §4.4 心跳示例（L439-L446）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 
 **Problem**：04 §3.6 的心跳处理链写「聚合触发时判定有效学习（会话结束 / 离线收口 / 定期 5 分钟，05 §5.4.6）」，同一段的响应定义却写「返回 `server_time`、`total_seconds`（实时累计）、**`is_valid`（达标即时提示）**」，§4.4 示例更给出「响应（成功，**达标当拍**）：`total_seconds: 1805`、`is_valid: true`、`valid_at: "2026-09-12T15:21:10.000+08:00"`」。
 
@@ -103,8 +103,8 @@
 **来源视角**：correctness
 
 **位置**：
-- [04-API设计.md §3.8 统计口径（L276）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
-- [05-模块设计.md §7.4.1 统计指标口径](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
+- [04-API设计.md §3.8 统计口径（L276）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
+- [05-模块设计.md §7.4.1 统计指标口径](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
 
 **Problem**：分布定义为 `[0-59] [60-69] [70-79] [80-89] [90-100]`，而 `exam_record.score` 与 `paper_question.score` 均为 `DECIMAL(5,2)`，且漏选部分分公式为 `round(paper_question.score × partial_credit_ratio, 2)`。`paper_question.score` 由组卷时自由配置（04 `PUT /ai/papers/{id}/questions` 支持逐题 `score`），只要出现奇数分值（如 7 分多选题，`round(7 × 0.5, 2) = 3.50`）或 `partial_credit_ratio` 取 0.25/0.75，总分必然带小数。
 
@@ -126,9 +126,9 @@
 **来源视角**：correctness
 
 **位置**：
-- [03-数据库设计.md §6.4 高频查询与索引支撑](/Users/pangongxia/agent_workspace/RuleExam/docs/design/03-数据库设计.md)
-- [07-安全与非功能设计.md §5.3 统计查询性能（L467）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
-- [05-模块设计.md §7.4.1](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
+- [03-数据库设计.md §6.4 高频查询与索引支撑](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/03-数据库设计.md)
+- [07-安全与非功能设计.md §5.3 统计查询性能（L467）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
+- [05-模块设计.md §7.4.1](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
 
 **Problem**：05 §7.4.1 与 06 §6.2 的口径是「每人最高分 = **该制度下全部作答** `MAX(score)`（跨试卷取最高）；多试卷时及格线取该考生最高分所在试卷的 `pass_score`」，而 03 §6.4 写的是「`GROUP BY user_id` 取 `MAX(score)`，支撑索引 `uk_paper_user_attempt`（**paper_id 前缀** + 回表）」，07 §5.3 沿用「取最高分（`uk_paper_user_attempt` 前缀）」。
 
@@ -147,8 +147,8 @@
 **来源视角**：correctness
 
 **位置**：
-- [05-模块设计.md §6.2 Redis Key 约定（L979-L985）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
-- [07-安全与非功能设计.md §6.2.2（L532）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+- [05-模块设计.md §6.2 Redis Key 约定（L979-L985）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
+- [07-安全与非功能设计.md §6.2.2（L532）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：05 键表中 `exam:answer:{record_id}`（Hash，每题一个 field）与 `exam:switch:{record_id}` 的生命周期只写「交卷落库后删除」「交卷写回后删除」，**均无 TTL**；而 07 §6.2.2 断言「`maxmemory` 512MB + `maxmemory-policy noeviction`（**全部业务键均带 TTL 自然过期**——见本册各键定义）」。断言与事实不符。
 
@@ -163,8 +163,8 @@
 **来源视角**：correctness
 
 **位置**：
-- [05-模块设计.md §5.4.4 滚动进度服务（L867-L874）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
-- [04-API设计.md §3.4.1（L159）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+- [05-模块设计.md §5.4.4 滚动进度服务（L867-L874）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
+- [04-API设计.md §3.4.1（L159）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 
 **Problem**：FR-REG-05 要求 `scroll_segments` 可配置并校验「非正整数拦截」，04 `PUT /regulations/{id}/learning-config` 接受该字段写入；但 05 §5.4.4 的位表同时写「`total_segments` = `regulation.scroll_segments`（当前版本固定 10）」与「`segments`：**长度恒为 10** 的 0/1 数组，`segments[9]` 为底部段」，并说「配置变更后新会话按新段数初始化」。三条陈述互斥。
 
@@ -185,9 +185,9 @@
 **来源视角**：correctness + impact 合并命中
 
 **位置**：
-- [06-关键流程.md §4.1 考试流程时序图（L484-L486、L542）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/06-关键流程.md)
-- [07-安全与非功能设计.md §3.2.2（L273-L282）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
-- [05-模块设计.md §6.4.4（L1086-L1090）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
+- [06-关键流程.md §4.1 考试流程时序图（L484-L486、L542）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/06-关键流程.md)
+- [07-安全与非功能设计.md §3.2.2（L273-L282）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
+- [05-模块设计.md §6.4.4（L1086-L1090）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
 
 **Problem**：
 1. **阈值级数**：07 §3.2.2 定稿两级（`switch_count > 3` 前端全屏警告；`switch_count ≥ 5` 记入风控标记 + 写审计），05 §6.4.4 却是单级「超过阈值（默认 5 次，可配置）」，**遗漏 >3 全屏警告弹窗**这一客户端行为
@@ -212,7 +212,7 @@ end
 
 **来源视角**：correctness
 
-**位置**：[05-模块设计.md §4.4.2 异步任务模型（L574）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
+**位置**：[05-模块设计.md §4.4.2 异步任务模型（L574）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
 
 **Problem**：05 §4.4.2 写「任务态仅存 Redis `ai:task:{task_id}`（TTL 24 小时），不建任务表（A-05）……**任务完成后题目明细统一走题库查询接口（按任务批次过滤）**」。但：
 - 03 `question` 表只有 `regulation_id` / `version_id` / `source` / `type` / `status` 等业务字段，**没有 `task_id` 或批次号**
@@ -230,8 +230,8 @@ end
 **来源视角**：correctness
 
 **位置**：
-- [05-模块设计.md §3.4.3 异步解析流水线](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
-- [03-数据库设计.md §3.2.2 regulation_version](/Users/pangongxia/agent_workspace/RuleExam/docs/design/03-数据库设计.md)
+- [05-模块设计.md §3.4.3 异步解析流水线](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
+- [03-数据库设计.md §3.2.2 regulation_version](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/03-数据库设计.md)
 
 **Problem**：解析由「上传后事件投递」+「定时扫描 `idx_parse_status`（`parse_status = pending`）兜底」双通道触发（07 §5.4 亦写「`regulation_version.idx_parse_status` 扫描 + Redis 队列加速」），但全套文档未定义任务抢占机制：`parse_status` 只有 `pending / parsed / failed` 三态，**没有 `parsing` 中间态**，也无 Redis 锁或 `UPDATE ... WHERE parse_status='pending'` 的乐观抢占。
 
@@ -252,8 +252,8 @@ end
 **来源视角**：correctness + impact 合并命中
 
 **位置**：
-- [04-API设计.md §5 限流约定（L649）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
-- [07-安全与非功能设计.md §2.2.2（L104）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+- [04-API设计.md §5 限流约定（L649）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
+- [07-安全与非功能设计.md §2.2.2（L104）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：
 1. 04 写 `POST /auth/login`「同 IP 10 次/分钟，**连续失败锁定 5 分钟**」，07 §2.2.2 写「同一 `username` 连续失败 **5 次** → 锁定 **10 分钟**（Redis `auth:fail:{username}`）」——计数维度（IP vs username）、次数阈值、锁定时长三项均不一致，实现者无法确定以哪份为准（07 附录虽声明冲突以其为基准，但 04 是前后端对接契约，错误提示文案「剩余时间」依赖该值）
@@ -269,8 +269,8 @@ end
 **来源视角**：correctness
 
 **位置**：
-- [07-安全与非功能设计.md §5.3 统计查询性能（L468）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
-- [04-API设计.md §3.8 统计模块](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+- [07-安全与非功能设计.md §5.3 统计查询性能（L468）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
+- [04-API设计.md §3.8 统计模块](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 
 **Problem**：07 §5.3 只定义了一个缓存键 `stat:regulation:{regulation_id}`（TTL 5 分钟 + 交卷/达标事件主动失效），但 04 `/statistics` 共 6 个接口覆盖**制度维度、部门维度、个人维度**三类（05 模块 6 职责亦为「三维统计」）。文档未声明部门/个人维度是否走缓存：若实现者按同一键规范缓存（这是最自然的复用），则 employee A 请求个人统计写入 `stat:regulation:{id}` 后，employee B（或 regulation_admin 查另一部门）命中同键 → **返回 A 的学习时长、考试分数与未完成状态**，直接违反 07 §2.3.3「employee 仅本人」的数据权限边界与 NFR-07。个人维度还包含「未完成人员清单」这类含姓名/工号的敏感列表，泄露面更大。
 
@@ -290,7 +290,7 @@ stat:dept:{regulation_id}:{department_id}       部门维度（管理端）
 
 **来源视角**：correctness
 
-**位置**：[07-安全与非功能设计.md §1.2 威胁模型（L26-L32）、§5.4 AI 出题](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+**位置**：[07-安全与非功能设计.md §1.2 威胁模型（L26-L32）、§5.4 AI 出题](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：07 §1.2 只识别 T1~T5（刷时长、替考、越权、信息泄露、恶意文件），**完全没有覆盖「上传内容作为 LLM 输入」这一新增攻击面**；05 §4.4.x 与 07 §5.4 只描述了「长文本分块 4000 字符 + 200 重叠」「结构化输出 schema 校验」，未定义任何提示词注入防御。
 
@@ -316,7 +316,7 @@ stat:dept:{regulation_id}:{department_id}       部门维度（管理端）
 
 **来源视角**：correctness
 
-**位置**：[07-安全与非功能设计.md §4.3.2 解析产物 XSS 净化（L403）、§4.4.2 CSP（L415）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+**位置**：[07-安全与非功能设计.md §4.3.2 解析产物 XSS 净化（L403）、§4.4.2 CSP（L415）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：净化白名单为「`p` / `h1`~`h6` / `ul` / `ol` / `li` / `table` / `thead` / `tbody` / `tr` / `td` / `th` / `strong` / `em` / `a[href^="http"]`」，**不含 `img`**；而同册 §4.4.2 的 CSP 却写 `img-src 'self' data:`，明确预期页面存在 `data:` 图片——两处互斥。
 
@@ -334,7 +334,7 @@ stat:dept:{regulation_id}:{department_id}       部门维度（管理端）
 
 **来源视角**：correctness
 
-**位置**：[07-安全与非功能设计.md §3.1.1（L159-L160）、§3.1.3 定稿规则 1~3（L220-L222）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+**位置**：[07-安全与非功能设计.md §3.1.1（L159-L160）、§3.1.3 定稿规则 1~3（L220-L222）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：07 §3.1.3 的规则是「前端每 5 秒采样 → 记入**本地**『段 → 连续停留秒数』缓冲 → 30 秒心跳携带『本周期内已确认 ≥10 秒的段集合』上报」。这意味着任一时刻本地缓冲中最多可能有**接近 30 秒的已确认段位尚未上报**。而 §3.1.1 又规定失焦即「停止心跳定时器」且「失焦期间同样停止滚动采样」——停止心跳的同时**没有定义 flush 动作**。
 
@@ -351,7 +351,7 @@ stat:dept:{regulation_id}:{department_id}       部门维度（管理端）
 
 **来源视角**：correctness
 
-**位置**：[07-安全与非功能设计.md §5.2 第 3 点（L463）、§5.6 阶段 1（L495）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+**位置**：[07-安全与非功能设计.md §5.2 第 3 点（L463）、§5.6 阶段 1（L495）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：降级设计为「Redis 不可用时心跳路径退化为直写 MySQL——`learning_session` 行级增量 UPDATE + **位图在应用内存合并**、随收口任务写 `learning_record`」。两处不成立：
 1. 07 §5.6 阶段 1 明确「api 容器横向扩展 ×2（nginx upstream 负载均衡）……Redis 集中状态天然支持多实例」，但**应用内存合并的位图是实例本地态**——同一会话的心跳被负载均衡分发到两个实例后，各自内存中只有部分段位，收口时互相覆盖（后写者胜），位图丢段；进程重启（`restart: unless-stopped`）时内存位图直接清零
@@ -369,8 +369,8 @@ stat:dept:{regulation_id}:{department_id}       部门维度（管理端）
 **来源视角**：correctness
 
 **位置**：
-- [03-数据库设计.md §3.4.5 exam_answer 与 §4.2 判分规则](/Users/pangongxia/agent_workspace/RuleExam/docs/design/03-数据库设计.md)
-- [07-安全与非功能设计.md §5.3（L467）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+- [03-数据库设计.md §3.4.5 exam_answer 与 §4.2 判分规则](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/03-数据库设计.md)
+- [07-安全与非功能设计.md §5.3（L467）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：`exam_answer.is_correct` 设计为三态（1 正确 / 0 错误 / NULL），NULL 同时承载两种语义：超时未作答（FR-EXM-03 验收③「未答题目不得分」）与多选漏选得部分分（`gained_score > 0` 但 `is_correct` 不为 1）。07 §5.3 只写「题目正确率（`exam_answer.idx_question`）」，04 与 05 §7.4.1 也未给出计算式。
 
@@ -397,8 +397,8 @@ FR-STT-04 的题目正确率用于「题目质量分析与题库优化」（重�
 **来源视角**：correctness
 
 **位置**：
-- [04-API设计.md §3.5 AI 出题模块（L190）与 §4.5 出题接口示例](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
-- [05-模块设计.md §4.4.2（L576）、§4.4.5](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
+- [04-API设计.md §3.5 AI 出题模块（L190）与 §4.5 出题接口示例](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
+- [05-模块设计.md §4.4.2（L576）、§4.4.5](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
 
 **Problem**：04 该接口的 body 只有 `regulation_id` / `question_count_single` / `question_count_multiple` 三个参数，**没有任何分值字段**；而 05 §4.4.2 的发起前置校验第③条是「**分值参数合计 = 100**（§4.4.5）」，§4.4.5 给出默认策略「20 单选 × 3 分 + 5 多选 × 8 分 = 100」。校验所需的入参在契约中不存在：
 - 若实现为「服务端按默认 3/8 分自动补全」，则前置校验③恒成立（20×3+5×8=100）形同虚设，且管理员无法按 FR-AIQ-07「策略可配置」调整单题分值
@@ -426,8 +426,8 @@ FR-STT-04 的题目正确率用于「题目质量分析与题库优化」（重�
 **来源视角**：correctness
 
 **位置**：
-- [04-API设计.md §4.4 心跳接口示例（L405-L411）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
-- [03-数据库设计.md §3.3.1 learning_session](/Users/pangongxia/agent_workspace/RuleExam/docs/design/03-数据库设计.md)
+- [04-API设计.md §4.4 心跳接口示例（L405-L411）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
+- [03-数据库设计.md §3.3.1 learning_session](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/03-数据库设计.md)
 
 **Problem**：03 数据库规范（§1.4）规定「主键一律 `BIGINT UNSIGNED` 自增」，`learning_session.id` 亦如此；而 04 §4.4 的请求示例写 `"session_id": "lrn-8f2c-01af"`（带前缀的字符串，形似 UUID 短码）。同一册内其他示例（如 `"version_id": 35`）用整型，风格也不统一。
 

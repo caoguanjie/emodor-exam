@@ -1,5 +1,5 @@
 # =====================================================================
-# RuleExam 制度学习及考试系统 · Docker Compose 一键部署（NFR-16）
+# EmodorRuleExam 制度学习及考试系统 · Docker Compose 一键部署（NFR-16）
 # 拓扑与 02 册 5.1 逐字对应：nginx + api + mysql + redis 四容器运行于
 # 自定义桥接网络 ruleexam-net；仅 nginx 对宿主机暴露 80/443；
 # mysql(3306) / redis(6379) / api(3000) 端口不映射宿主机（杜绝内网直连绕过鉴权）。

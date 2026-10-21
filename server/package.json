@@ -1,7 +1,7 @@
 {
-  "name": "ruleexam-server",
+  "name": "@emodor/RuleExam",
   "version": "1.0.0",
-  "description": "RuleExam 制度学习及考试系统 - NestJS API 服务",
+  "description": "EmodorRuleExam 制度学习及考试系统 - NestJS API 服务",
   "private": true,
   "engines": {
     "node": ">=22"

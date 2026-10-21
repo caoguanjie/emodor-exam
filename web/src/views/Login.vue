@@ -3,8 +3,8 @@
     <!-- 左侧品牌叙事：公文藏蓝 + 品牌 Logo -->
     <aside class="brand-pane">
       <div class="brand-top">
-        <img class="brand-logo" :src="brandLogo" alt="海珠区安全教育培训中心 Logo" />
-        <span class="brand-name">海珠区安全教育培训中心</span>
+        <img class="brand-logo" :src="brandLogo" alt="EmodorRuleExam Logo" />
+        <span class="brand-name">EmodorRuleExam</span>
       </div>
       <h1 class="brand-title re-display">让每一次安全培训<br />都真正落到实处</h1>
       <p class="brand-sub">安全培训 · 在线学习 · AI 出题 · 考试评分 · 统计跟进</p>
@@ -22,15 +22,15 @@
           <div><strong>风控考试</strong><em>权威计时 · 切屏监测 · 成绩不可改</em></div>
         </li>
       </ul>
-      <p class="brand-foot">海珠区安全教育培训中心</p>
+      <p class="brand-foot">EmodorRuleExam</p>
     </aside>
 
     <!-- 右侧登录表单 -->
     <main class="form-pane">
       <div class="form-card page-enter">
         <div class="form-brand-sm">
-          <img class="brand-logo-sm" :src="brandLogo" alt="海珠区安全教育培训中心 Logo" />
-          <span>海珠区安全教育培训中心</span>
+          <img class="brand-logo-sm" :src="brandLogo" alt="EmodorRuleExam Logo" />
+          <span>EmodorRuleExam</span>
         </div>
         <h2>登录</h2>
         <p class="form-hint">使用企业统一分配的账号进入系统</p>

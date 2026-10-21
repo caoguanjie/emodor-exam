@@ -2,9 +2,9 @@
   <el-container style="height:100%">
     <el-aside width="232px" class="aside">
       <div class="logo">
-        <img class="logo-badge" :src="brandLogo" alt="海珠区安全教育培训中心 Logo" />
+        <img class="logo-badge" :src="brandLogo" alt="EmodorRuleExam Logo" />
         <div class="logo-text">
-          <span class="logo-name">海珠区安全教育培训中心</span>
+          <span class="logo-name">EmodorRuleExam</span>
           <span class="logo-sub">安全教育培训与考试平台</span>
         </div>
       </div>

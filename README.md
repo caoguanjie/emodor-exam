@@ -1,4 +1,4 @@
-# RuleExam · 制度学习及考试系统
+# EmodorRuleExam · 制度学习及考试系统
 
 依据 [docs/design](docs/design/) 全套设计方案（8 册）实现的完整系统，覆盖「制度上传 → 在线学习 → AI 出题 → 考试评分 → 统计跟进」闭环。
 

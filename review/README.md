@@ -1,4 +1,4 @@
-# RuleExam 设计方案评审报告 · 索引
+# EmodorRuleExam 设计方案评审报告 · 索引
 
 > **一句话结论**：8 份设计文档完整度 ≈95%、核心口径高度一致，未发现「阻断下游开发」的顶层缺项；但存在 **10 项 Critical**（跨文档硬冲突、安全逻辑闭环缺陷、关键契约缺失）、**21 项 Warning**（数值/口径/边界条件不齐）、**15 项 Suggestion**（可读性与最佳实践），需在进入实现阶段前逐项收口。
 
@@ -9,7 +9,7 @@
 | 项 | 内容 |
 |---|---|
 | 评审对象 | `docs/design/` 下 8 份设计文档（README + 01~07 分册） |
-| 评审依据 | `.trae/specs/create-ruleexam-design/spec.md` 的 8 个 ADDED Requirements 与 Scenario |
+| 评审依据 | `.trae/specs/create-emodor-rule-exam-design/spec.md` 的 8 个 ADDED Requirements 与 Scenario |
 | 评审视角 | 三视角并行：completeness（完整性）、correctness（正确性）、impact（一致性回归） |
 | 评审范围 | 设计方案文档本身（不含代码，本阶段亦无代码产出） |
 | 报告结构 | README（本文档）+ 3 份分级 findings 文档 + 2 份矩阵附录 |

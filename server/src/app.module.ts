@@ -61,7 +61,7 @@ import { TasksService } from './tasks.service';
 
 const config = loadConfig();
 
-/** RuleExam 应用：NestJS 模块化单体（AD-02），六大业务模块 + 横切能力 */
+/** EmodorRuleExam 应用：NestJS 模块化单体（AD-02），六大业务模块 + 横切能力 */
 @Module({
   imports: [
     TypeOrmModule.forRoot(config.db),

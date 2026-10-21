@@ -1,4 +1,4 @@
-# Code Review 报告 — RuleExam 后端全量审查（server/）
+# Code Review 报告 — EmodorRuleExam 后端全量审查（server/）
 
 > **一句话结论**：对 `server/` 全部后端代码做全量审查（HEAD `5d6e3a0`），发现 **1 项 Critical + 6 项 Warning** 达到确认门限（置信 ≥80），其中最严重的是**考试进行中即可通过成绩接口拉取全卷答案与解析**（判分完整性击穿）；另 15 项 60–79 分档建议修复项；**上一轮 17 项修复逐项核查全部落地、无回归**。
 >

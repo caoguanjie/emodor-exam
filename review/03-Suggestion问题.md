@@ -11,8 +11,8 @@
 **来源视角**：completeness
 
 **位置**：
-- [05-模块设计.md §4.4.3 提示词策略](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
-- [05-模块设计.md §4.4.5 100 分分值分配规则](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
+- [05-模块设计.md §4.4.3 提示词策略](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
+- [05-模块设计.md §4.4.5 100 分分值分配规则](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
 
 **Problem**：Requirement 2 Scenario 列出结构化输出应包含"题干/选项/答案/解析/**分值**"五项。05 §4.4.3 提示词模板的 JSON Schema 仅约束 `type / stem / options / answer / analysis` 四项，**`score` 不由 AI 输出**，而是在 §4.4.5 落库时按模板（single 3 分 / multiple 8 分）写入 `question.score`。此设计在工程上更稳健（分值是业务配置而非语义内容，避免 AI 输出分值与模板冲突），但与 Requirement 字面表述存在偏差，文档未显式说明此取舍，评审者可能误判为遗漏。
 
@@ -24,7 +24,7 @@
 
 **来源视角**：correctness
 
-**位置**：[03-数据库设计.md §2.2 关系清单（L133-L137）与 §2.1 ER 图](/Users/pangongxia/agent_workspace/RuleExam/docs/design/03-数据库设计.md)
+**位置**：[03-数据库设计.md §2.2 关系清单（L133-L137）与 §2.1 ER 图](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/03-数据库设计.md)
 
 **Problem**：关系清单把 `learning_record ↔ sys_user / regulation` 标为 **1:N**，但该表的 `uk_user_regulation(user_id, regulation_id)` 唯一约束与文档自述「每人每制度一条汇总记录」表明实为 **1:1**（`learning_session` 才是 1:N）。基数标注错误会误导实现者按 1:N 建仓储方法（返回数组而非单对象）。另外 ER 图未画 `learning_record.version_id`（或 `learning_session.version_id`）到 `regulation_version` 的关系，而 05 §5.4.1 步骤 3 明确写入 `version_id = current_version_id`，04 进度响应也返回 `version_id` —— ER 关系不闭环。
 
@@ -36,7 +36,7 @@
 
 **来源视角**：correctness
 
-**位置**：[04-API设计.md §1.2 统一响应结构 · 分页约定（L41-L50）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+**位置**：[04-API设计.md §1.2 统一响应结构 · 分页约定（L41-L50）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 
 **Problem**：分页约定只规范了 `page` / `page_size` 与响应结构，全部 8 组列表接口（`/users`、`/regulations`、`/ai/questions`、`/statistics` 等）均未定义排序参数与默认排序键。缺失默认排序键会导致 `LIMIT/OFFSET` 分页在无 `ORDER BY` 时结果不确定（MySQL 不保证稳定顺序），翻页出现重复/遗漏行；题库、制度列表尤其明显。
 
@@ -48,7 +48,7 @@
 
 **来源视角**：correctness
 
-**位置**：[04-API设计.md §3.2 员工管理 /users（L127-L132）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+**位置**：[04-API设计.md §3.2 员工管理 /users（L127-L132）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 
 **Problem**：两条路由同级，`/users/{id}` 是通配占位符。NestJS（Express 路由）按注册顺序匹配，若 `@Get(':id')` 先于 `@Get('import-template')` 注册，则模板下载请求会被 `:id` 捕获并以 `id = "import-template"` 进入员工详情查询 → 参数校验失败（40xxx）或 BIGINT 隐式转换问题，模板永远下载不到。
 
@@ -60,7 +60,7 @@
 
 **来源视角**：correctness
 
-**位置**：[04-API设计.md §1.1 基础约定（L16）、§3.3（L146）、§3.4.1（L163、L166）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+**位置**：[04-API设计.md §1.1 基础约定（L16）、§3.3（L146）、§3.4.1（L163、L166）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 
 **Problem**：§1.1 声明「PUT 修改」，但 `PUT /regulations/{id}/archive`、`PUT /regulations/{id}/versions/{versionId}/retry`、`PUT /users/{id}/status`、`PUT /departments/{id}/parent` 都是**动作型端点**而非资源全量替换。其中 `retry` 语义上非幂等（每次调用都新建一次解析任务），用 PUT 会误导客户端做自动重试（PUT 幂等 → 重试安全），可能造成同一版本被多次投递解析（与 W-12 的并发双解析叠加）。§1.1 又写「POST 创建与动作」，自相矛盾。
 
@@ -73,8 +73,8 @@
 **来源视角**：correctness
 
 **位置**：
-- [07-安全与非功能设计.md §6.1 健康检查（L508）、§2.3.2（L126）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
-- [04-API设计.md §2 模块与路由总览（L85-L96）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+- [07-安全与非功能设计.md §6.1 健康检查（L508）、§2.3.2（L126）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
+- [04-API设计.md §2 模块与路由总览（L85-L96）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 
 **Problem**：07 §6.1 的 api 容器健康检查依赖 `GET /api/v1/health`（探活 MySQL 连接池 + Redis PING + 磁盘余量），§2.3.2 也写了「全部接口（除登录 / **健康检查**外）经三级守卫」；但 04 八大前缀共 63 个接口中**没有 health**，§1.4 守卫链章节也只豁免了「公开」标记的登录接口。契约缺失会导致：健康检查端点被全局守卫拦截（容器永远 unhealthy → `restart: unless-stopped` 无限重启），或实现者自行添加而响应结构不符合 `{code, message, data}` 约定。此外该端点会暴露内部依赖状态（MySQL/Redis/磁盘），若真豁免鉴权则需限定只允许容器网络访问。
 
@@ -86,7 +86,7 @@
 
 **来源视角**：correctness
 
-**位置**：[07-安全与非功能设计.md §3.1.2 容差校验算法伪码（L187-L190）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+**位置**：[07-安全与非功能设计.md §3.1.2 容差校验算法伪码（L187-L190）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：伪码 `delta_s = (now - last_beat_at) / 1000  # 向下取整`，每拍最多丢失 0.999 秒。默认 `required_minutes = 10`（600 秒）、30 秒/拍 → 约 20 拍，累计损失期望 ≈ 10 秒、最坏 ≈ 20 秒。表现为用户进度条显示 590/600 却迟迟不达标（`total_seconds` 是整型秒累加），需额外等待 1 拍，体验上像是 bug；对 `required_minutes` 较大的制度损失按比例放大（60 分钟制度损失约 60~120 秒）。
 
@@ -98,7 +98,7 @@
 
 **来源视角**：correctness
 
-**位置**：[07-安全与非功能设计.md §4.3.1 上传校验链（L387-L392）、§7.3（L606）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+**位置**：[07-安全与非功能设计.md §4.3.1 上传校验链（L387-L392）、§7.3（L606）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：§4.3.1 的四步校验（扩展名白名单 / Content-Type / 魔法数 / 大小上限）只覆盖 `.pdf` / `.docx`，而 `POST /users/import` 同样接受文件上传（`.xlsx`），07 仅在 §7.3 一句「非 Excel 文件整体拒绝」带过，未定义魔数校验与大小上限。`.xlsx` 本质是 ZIP（`PK\x03\x04` + `[Content_Types].xml`），与 docx 同族但需区分 `xl/workbook.xml`；xlsx 解析库（如 exceljs/xlsx）对超大文件或 zip bomb（高压缩比）敏感——1000 行上限是**业务级**校验，发生在解析**之后**，无法阻止解析阶段的资源耗尽（T5 威胁在导入路径上未闭合）。
 
@@ -111,8 +111,8 @@
 **来源视角**：correctness
 
 **位置**：
-- [01-需求分析.md §6 非功能需求 NFR-03](/Users/pangongxia/agent_workspace/RuleExam/docs/design/01-需求分析.md)
-- [07-安全与非功能设计.md §5.1 容量目标（L446）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+- [01-需求分析.md §6 非功能需求 NFR-03](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/01-需求分析.md)
+- [07-安全与非功能设计.md §5.1 容量目标（L446）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：01 NFR-03 写「统计查询 P95 ≤ 3 秒（**1 万员工**规模）」，03 §6.1 规模假设写 2,000 人、A-04 写「数千员工级」，三处口径不同。07 §5.1 用「在职员工 2,000 人（**统计性能按 1 万员工规模校验**）」做了调和，是正确处理方式，但上游两册未同步，读者从 01 或 03 入手仍会误判性能基准（索引设计与 `exam_answer` 300 万行估算都建立在 2,000 人之上）。
 
@@ -124,7 +124,7 @@
 
 **来源视角**：correctness
 
-**位置**：[07-安全与非功能设计.md §4.3.2 解析产物 XSS 净化（L403）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+**位置**：[07-安全与非功能设计.md §4.3.2 解析产物 XSS 净化（L403）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：白名单允许 `a[href^="http"]`，但净化规则未要求补 `rel="noopener noreferrer"`——`target="_blank"`（mammoth 可能保留）的链接在新窗口打开时，目标页可通过 `window.opener` 反向操作阅读页（`opener.location` 跳转），在内网系统上构成钓鱼跳板；同时 CSP 未限制 `connect-src` / 未声明外链策略，而系统部署于内网（A-04），`http(s)://` 外链多半不可达，点击后表现为长时间挂起。
 
@@ -137,8 +137,8 @@
 **来源视角**：correctness
 
 **位置**：
-- [05-模块设计.md §5.4.3 方案取舍（L857）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
-- [07-安全与非功能设计.md §3.3 防作弊能力边界声明](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+- [05-模块设计.md §5.4.3 方案取舍（L857）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
+- [07-安全与非功能设计.md §3.3 防作弊能力边界声明](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：05 §5.4.3 诚实指出「短时失焦（如 10 秒，断流封顶会因 `diff ≤ 45 秒` 而全额计入）」是显式 pause/resume 方案要解决的问题，但 07 §3.3 的边界声明表只列物理作弊（拍照、代考、线下协作、发呆），**未收录「前端未按约定调用 pause 时的时长误差上界」**。这是设计上已知且可量化的残余风险（每次 ≤45 秒，理论上反复触发可累积），应作为诚实边界的一部分写入安全册，否则验收时会被当作缺陷提出，且缺少「累计误差监控」的设计输入。
 
@@ -150,7 +150,7 @@
 
 **来源视角**：correctness
 
-**位置**：[07-安全与非功能设计.md §3.2.1 第 3 点（L266）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+**位置**：[07-安全与非功能设计.md §3.2.1 第 3 点（L266）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：题目乱序明确了「Fisher-Yates + seed 驱动的确定性 PRNG」，但选项乱序只写「PRNG 种子 = `hash(seed, question_id)`」，未指定：hash 算法（SHA-256? Blake2?）、输出如何截断为 PRNG 种子（取前 8 字节? 全 32 字节?）、PRNG 具体实现（`seedrandom`? 自研 xorshift?）、Fisher-Yates 的随机数取模方式（`% n` 会引入模偏差）。这些细节决定「同一记录任意时刻重算结果一致」能否成立——若实现者在恢复作答路径与交卷还原路径使用了不同 PRNG 库（或库升级改变算法），映射立即错位，后果同 C-05/C-06。
 
@@ -163,8 +163,8 @@
 **来源视角**：correctness
 
 **位置**：
-- [05-模块设计.md §6.4.5 交卷幂等三重保障](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
-- [07-安全与非功能设计.md §3.2.4（L313-L315）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+- [05-模块设计.md §6.4.5 交卷幂等三重保障](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
+- [07-安全与非功能设计.md §3.2.4（L313-L315）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：三重保障为 `SET exam:lock:submit:{record_id} NX EX 10` + 状态机单向 + `UPDATE ... WHERE status='in_progress'` 乐观锁。设计正确，但两处边界未写明：
 1. 判分事务若在 10 秒内未完成（25 题批量 INSERT + MySQL 抖动 + 100 人并发交卷峰值），锁自动过期而事务仍在进行，第二个请求可获得锁 → 此时依赖第二、三层拦截（`status` 已非 `in_progress` 或 UPDATE 影响行数 0），逻辑上安全，但**若第一个事务最终回滚**，`status` 仍为 `in_progress` 而考生已收到「交卷成功」以外的错误响应，重试路径未定义（Redis 暂存答案是否已被 DEL？）
@@ -178,7 +178,7 @@
 
 **来源视角**：impact
 
-**位置**：[04-API设计.md §5.2 错误码明细（L610-611）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+**位置**：[04-API设计.md §5.2 错误码明细（L610-611）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 
 **Problem**：40901「无考试资格」、40902「补考次数用尽」的业务码前缀为 `409`，但 HTTP 列映射为 **403**；而同为 `409xx` 段的 40903–40907 均映射 **409**。README §3.4 只约定 40xxx=客户端错误（已满足，非分段违规），但 04 内部「409 前缀→403」的编码约定不统一，易让前端按前缀推断 HTTP 语义时误判。
 
@@ -191,8 +191,8 @@
 **来源视角**：impact
 
 **位置**：
-- [README.md §3.2 核心术语表「有效学习」](/Users/pangongxia/agent_workspace/RuleExam/docs/design/README.md)（L72）
-- [05-模块设计.md §7.4 统计报表列定义](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)（L1174、L1285-1286）
+- [README.md §3.2 核心术语表「有效学习」](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/README.md)（L72）
+- [05-模块设计.md §7.4 统计报表列定义](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)（L1174、L1285-1286）
 
 **Problem**：README 基准术语为「有效学习」（`is_valid = 1`），01 FR-STT-01 亦用「学习完成率 = `is_valid` 人数 / 应学人数」。但 05 报表列名用「**已完成学习人数**」，属同义非基准表述。语义虽可推断为 `is_valid` 计数，但与基准术语存在轻微漂移，报表口径评审时可能引发「完成学习 vs 有效学习」的歧义。
 

@@ -11,8 +11,8 @@
 **来源视角**：impact（跨文档硬冲突）
 
 **位置**：
-- 基准侧：[05-模块设计.md §3.4.2 文件存储组织](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)（L374）
-- 漂移侧：[07-安全与非功能设计.md §4.3.2 文件存储与访问安全](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)（L400）
+- 基准侧：[05-模块设计.md §3.4.2 文件存储组织](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)（L374）
+- 漂移侧：[07-安全与非功能设计.md §4.3.2 文件存储与访问安全](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)（L400）
 
 **Problem**：同一个落库字段 `regulation_version.file_path` 的生成规则，两册给出**互斥**的定义：
 
@@ -35,7 +35,7 @@
 
 **来源视角**：correctness（安全逻辑不闭环）
 
-**位置**：[07-安全与非功能设计.md §2.1.4 登出与令牌吊销（L86）、§2.2.2（L105）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+**位置**：[07-安全与非功能设计.md §2.1.4 登出与令牌吊销（L86）、§2.2.2（L105）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：07 册 §2.1.4 第 2 点规定「改密成功、管理员重置密码、禁用账号时写入 `auth:block:{user_id}`，TTL = refresh 剩余有效期（最长 7 天）」，且守卫逻辑为「比对 `sub` 命中 `auth:block:{user_id}` 即拒绝」——这是一个**只认 `sub`、不认签发时刻**的判定。
 
@@ -55,8 +55,8 @@
 **来源视角**：correctness（安全逻辑不闭环）
 
 **位置**：
-- [07-安全与非功能设计.md §2.2.3 初始密码与首次登录强制改密（L111-L116）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
-- [04-API设计.md §3.1 认证模块（L119）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+- [07-安全与非功能设计.md §2.2.3 初始密码与首次登录强制改密（L111-L116）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
+- [04-API设计.md §3.1 认证模块（L119）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 
 **Problem**：07 册以 `last_login_at IS NULL` 作为「当前密码从未成功登录过」的唯一标记，但 04 §3.1 的登录规则明确写「**成功更新 `last_login_at`**」，而 07 §2.2.3 第 3 步又要求此时只签发 `pwd_pending: true` 的受限令牌。两者时序冲突。
 
@@ -76,9 +76,9 @@
 **来源视角**：correctness（数据模型缺陷 + 业务规则冲突）
 
 **位置**：
-- [03-数据库设计.md §3.4.4 exam_record（L513-L531）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/03-数据库设计.md)
-- [05-模块设计.md §6.4.3 考试计时服务（L1073）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
-- 关联：[02-系统架构.md §3.5 R1](/Users/pangongxia/agent_workspace/RuleExam/docs/design/02-系统架构.md)
+- [03-数据库设计.md §3.4.4 exam_record（L513-L531）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/03-数据库设计.md)
+- [05-模块设计.md §6.4.3 考试计时服务（L1073）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
+- 关联：[02-系统架构.md §3.5 R1](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/02-系统架构.md)
 
 **Problem**：三处口径互斥且缺字段支撑：
 1. 02 §3.5 R1 的应对措施原文是「**考试截止时间同步落 `exam_record`**，Redis 故障时定时任务直接扫库判超时」
@@ -97,7 +97,7 @@
 
 **来源视角**：correctness（安全与业务耦合缺陷）
 
-**位置**：[07-安全与非功能设计.md §3.2.1 试题与选项乱序（L264、L269）与 §2.1.3 密钥管理（L69）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+**位置**：[07-安全与非功能设计.md §3.2.1 试题与选项乱序（L264、L269）与 §2.1.3 密钥管理（L69）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：07 §3.2.1 第 1 点定稿 `seed = HMAC-SHA256(JWT_SECRET, exam_record.id)`，第 6 点进一步声称「seed 完全由 `exam_record.id` 派生、**可随时重算**……无需 Redis 键持久化、**无降级路径**」；05 §6.4.2 同口径「映射无需持久化」。
 
@@ -118,9 +118,9 @@
 **来源视角**：correctness（业务规则漏洞）
 
 **位置**：
-- [05-模块设计.md §4.4.6 题目编辑](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
-- [06-关键流程.md §5.3 题目状态机](/Users/pangongxia/agent_workspace/RuleExam/docs/design/06-关键流程.md)
-- 关联：[07-安全与非功能设计.md §3.2.1 第 3/5 点](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
+- [05-模块设计.md §4.4.6 题目编辑](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
+- [06-关键流程.md §5.3 题目状态机](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/06-关键流程.md)
+- 关联：[07-安全与非功能设计.md §3.2.1 第 3/5 点](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
 
 **Problem**：06 §5.3 状态机含自环 `approved --> approved : 编辑（保持 approved；判分始终以题目当前答案为准）`，05 §4.4.6 亦未限制「已被在考记录引用的题目不可编辑」，FR-AIQ-04 验收③ 更把「判分规则使用编辑后的答案」定为验收项。与 07 §3.2.1 第 3/5 点组合后产生两类硬错误：
 
@@ -138,8 +138,8 @@
 **来源视角**：correctness（跨文档硬冲突 + 契约不存在字段）
 
 **位置**：
-- [07-安全与非功能设计.md §3.1.1（L159-L160）、§3.1.2 伪码（L185-L186）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
-- [04-API设计.md §3.6 学习模块（L219-L229）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+- [07-安全与非功能设计.md §3.1.1（L159-L160）、§3.1.2 伪码（L185-L186）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
+- [04-API设计.md §3.6 学习模块（L219-L229）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 
 **Problem**：07 §3.1.1 规定前端「页面失焦 → **停止心跳定时器**（停止上报）；恢复聚焦 → 立即补发一次 `resumed` 心跳（计 0 秒）」，§3.1.2 伪码第一行即「若本心跳带 `resumed` 标记：HSET last_beat_at = now；计入 0 秒；返回」。
 
@@ -157,7 +157,7 @@
 
 **来源视角**：correctness（业务规则自相矛盾）
 
-**位置**：[05-模块设计.md §5.4.2 心跳处理流程（L812 与 L817）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
+**位置**：[05-模块设计.md §5.4.2 心跳处理流程（L812 与 L817）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
 
 **Problem**：同一张流程表内自相矛盾。步骤 1 写「`state = paused` 下的心跳**忽略计费**、仅更新滚动位置（见 5.4.3）」，步骤 6 却无条件写「锚点更新：`last_beat_at = 服务端当前时刻`、**`state = active`**」。
 
@@ -181,7 +181,7 @@
 **来源视角**：correctness（契约缺失）
 
 **位置**：
-- [04-API设计.md §3.2 员工管理 /users（L125-L133）、§3.5 AI 出题模块 /ai（L188-L201）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/04-API设计.md)
+- [04-API设计.md §3.2 员工管理 /users（L125-L133）、§3.5 AI 出题模块 /ai（L188-L201）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/04-API设计.md)
 - 依赖方：07 §2.2.3、§4.2.2；05 §2.2、§4.4.x；FR-ORG-03、FR-AIQ-01、FR-AIQ-06
 
 **Problem**：逐项核对确认四处契约缺失，且都有明确的 P0/P1 需求与安全册依赖：
@@ -212,8 +212,8 @@
 **来源视角**：correctness（架构决策冲突 + 数据持久性风险）
 
 **位置**：
-- [07-安全与非功能设计.md §4.2.2（L368）、§6.2.2（L530）、§4.2.3（L378）](/Users/pangongxia/agent_workspace/RuleExam/docs/design/07-安全与非功能设计.md)
-- [05-模块设计.md §4.4.1 AI 配置管理](/Users/pangongxia/agent_workspace/RuleExam/docs/design/05-模块设计.md)
+- [07-安全与非功能设计.md §4.2.2（L368）、§6.2.2（L530）、§4.2.3（L378）](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/07-安全与非功能设计.md)
+- [05-模块设计.md §4.4.1 AI 配置管理](/Users/pangongxia/agent_workspace/EmodorRuleExam/docs/design/05-模块设计.md)
 
 **Problem**：
 

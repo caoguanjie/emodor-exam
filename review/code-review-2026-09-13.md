@@ -1,4 +1,4 @@
-# Code Review 报告 — RuleExam 最近三次推送
+# Code Review 报告 — EmodorRuleExam 最近三次推送
 
 - **日期**：2026-09-13
 - **审查对象**：`HEAD~3..HEAD`（最近三次提交）

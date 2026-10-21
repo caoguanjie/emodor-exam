@@ -1,4 +1,4 @@
-# RuleExam API 服务镜像（NestJS，Node 22 —— unpdf@1.8.1 要求 engines.node>=22，勿降级）
+# EmodorRuleExam API 服务镜像（NestJS，Node 22 —— unpdf@1.8.1 要求 engines.node>=22，勿降级）
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./

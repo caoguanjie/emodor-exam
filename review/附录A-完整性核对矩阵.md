@@ -2,7 +2,7 @@
 
 > **来源视角**：completeness
 >
-> **核对方式**：将 `.trae/specs/create-ruleexam-design/spec.md` 的 8 个 ADDED Requirements 与其 Scenario 拆解为核对项清单，逐项在 8 份设计文档中查找证据（引用具体文件与小节标题）。
+> **核对方式**：将 `.trae/specs/create-emodor-rule-exam-design/spec.md` 的 8 个 ADDED Requirements 与其 Scenario 拆解为核对项清单，逐项在 8 份设计文档中查找证据（引用具体文件与小节标题）。
 
 ---
 

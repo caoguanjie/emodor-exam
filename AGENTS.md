@@ -1,4 +1,4 @@
-# AGENTS.md — RuleExam 工作区指引
+# AGENTS.md — EmodorRuleExam 工作区指引
 
 制度学习及考试系统：制度上传 → 在线学习 → AI 出题 → 考试评分 → 统计跟进。
 **`docs/design/`（8 册）是实现基准**：改数据库/API/流程前先读对应分册，改动后保持文档、`database/init.sql`、`server/src/entities/` 三方一致。
