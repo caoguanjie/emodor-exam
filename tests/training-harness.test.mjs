@@ -14,6 +14,7 @@ import { SUITE_REGISTRY } from './run-e2e.mjs';
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const JSZip = require('jszip');
 const mysql = require('mysql2/promise');
+const Redis = require('ioredis');
 const ROOT = join(import.meta.dirname, '..');
 const API_ENTRY = join(ROOT, 'server', 'dist', 'main.js');
 
@@ -106,12 +107,30 @@ after(async () => {
   await services?.cleanup();
 });
 
-test('training harness supports JSON, multipart, targeted queries, and restart preservation', async () => {
-  const loginActor = {};
-  const login = await harness.request(loginActor, 'POST', '/auth/login', {
-    username: 'admin',
-    password: harness.adminPassword,
+async function captchaLogin(password) {
+  const issued = await harness.request(null, 'POST', '/auth/captcha');
+  assert.equal(issued.status, 200);
+  assert.ok(issued.data?.captcha_id);
+  const redis = new Redis({
+    host: harness.env.REDIS_HOST,
+    port: Number(harness.env.REDIS_PORT),
+    password: harness.env.REDIS_PASSWORD || undefined,
   });
+  try {
+    const answer = await redis.get(`${harness.env.REDIS_KEY_PREFIX || ''}auth:captcha:${issued.data.captcha_id}`);
+    assert.ok(answer);
+    const actor = {};
+    const login = await harness.request(actor, 'POST', '/auth/login', {
+      username: 'admin', password, captcha_id: issued.data.captcha_id, captcha_code: answer,
+    });
+    return { actor, login };
+  } finally {
+    await redis.quit();
+  }
+}
+
+test('training harness supports JSON, multipart, targeted queries, and restart preservation', async () => {
+  const { actor: loginActor, login } = await captchaLogin(harness.adminPassword);
   assert.equal(login.status, 200);
   assert.equal(login.code, 0);
   assert.ok(login.data?.access_token);
@@ -126,12 +145,9 @@ test('training harness supports JSON, multipart, targeted queries, and restart p
     new_password: updatedPassword,
   });
   assert.equal(changed.status, 200);
-  const relogin = await harness.request(loginActor, 'POST', '/auth/login', {
-    username: 'admin',
-    password: updatedPassword,
-  });
+  const { actor: reloginActor, login: relogin } = await captchaLogin(updatedPassword);
   assert.equal(relogin.status, 200);
-  const actor = { accessToken: relogin.data.access_token, cookie: loginActor.cookie };
+  const actor = { accessToken: relogin.data.access_token, cookie: reloginActor.cookie };
   const department = await harness.request(actor, 'POST', '/departments', {
     parent_id: '1',
     name: `Harness ${randomBytes(4).toString('hex')}`,

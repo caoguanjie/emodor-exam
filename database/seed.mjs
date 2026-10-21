@@ -49,6 +49,52 @@ await conn.execute(
   [hash],
 );
 
+const permissions = [
+  ['training_categories:read', '查看培训类别'], ['training_categories:write', '维护培训类别'],
+  ['students:read', '查看学员'], ['students:write', '维护学员'],
+  ['departments:read', '查看部门'], ['departments:write', '维护部门'],
+  ['regulations:read', '查看制度'], ['regulations:write', '维护制度'], ['regulations:publish', '发布制度'],
+  ['ai:read', '查看 AI 配置与任务'], ['ai:write', '维护 AI 配置与任务'], ['ai:publish', '发布 AI 题目'], ['ai:review', '审核 AI 题目'],
+  ['questions:read', '查看题库'], ['questions:write', '维护题库'], ['questions:publish', '发布题库'], ['questions:review', '审核题目'], ['questions:export', '导出题库'],
+  ['papers:read', '查看试卷'], ['papers:write', '维护试卷'], ['papers:publish', '发布试卷'], ['papers:review', '审核试卷'], ['papers:export', '导出试卷'],
+  ['statistics:read', '查看统计'], ['statistics:export', '导出统计'],
+  ['roles:read', '查看角色'], ['roles:write', '维护角色'], ['administrators:read', '查看管理员'], ['administrators:write', '维护管理员角色'],
+  ['sessions:read', '查看在线会话'], ['sessions:write', '强制下线会话'], ['system_settings:read', '查看系统配置'], ['system_settings:write', '维护系统配置'],
+];
+for (const [code, name] of permissions) {
+  await conn.execute(
+    `INSERT INTO sys_permission (code, name) VALUES (?, ?)
+     ON DUPLICATE KEY UPDATE name = VALUES(name)`,
+    [code, name],
+  );
+}
+const legacyRegulation = [
+  'departments:read', 'regulations:read', 'regulations:write', 'regulations:publish',
+  'ai:read', 'ai:write', 'ai:review', 'questions:read', 'questions:write', 'questions:review',
+  'papers:read', 'papers:write', 'papers:publish', 'statistics:read', 'statistics:export',
+];
+const allPermissionCodes = permissions.map(([code]) => code);
+const roleDefinitions = [
+  ['super_admin', '超级管理员', 1, allPermissionCodes],
+  ['regulation_admin', '制度管理员', 1, legacyRegulation],
+  ['employee', '员工', 1, []],
+];
+for (const [code, name, isSystem, rolePermissions] of roleDefinitions) {
+  await conn.execute(
+    `INSERT INTO sys_role (code, name, is_system, status) VALUES (?, ?, ?, 1)
+     ON DUPLICATE KEY UPDATE name = VALUES(name), is_system = VALUES(is_system), status = 1`,
+    [code, name, isSystem],
+  );
+  const [[role]] = await conn.execute(`SELECT id FROM sys_role WHERE code = ?`, [code]);
+  for (const permissionCode of rolePermissions) {
+    const [[permission]] = await conn.execute(`SELECT id FROM sys_permission WHERE code = ?`, [permissionCode]);
+    await conn.execute(
+      `INSERT IGNORE INTO sys_role_permission (role_id, permission_id) VALUES (?, ?)`,
+      [role.id, permission.id],
+    );
+  }
+}
+
 const [[dept]] = await conn.execute(`SELECT COUNT(*) AS c FROM sys_department`);
 const [[user]] = await conn.execute(`SELECT COUNT(*) AS c FROM sys_user`);
 console.log(`种子数据就绪：部门 ${dept.c} 条，用户 ${user.c} 条（admin / 超级管理员，首登强制改密）`);

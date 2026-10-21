@@ -288,6 +288,10 @@ export class UsersService {
     const u = await this.userRepo.findOne({ where: { id } });
     if (!u) throw Errors.notFound('员工不存在');
     if (patch.role !== undefined) this.validateRole(patch.role);
+    if (patch.role !== undefined && u.role === RoleEnum.SUPER_ADMIN && patch.role !== RoleEnum.SUPER_ADMIN) {
+      const activeSuperCount = await this.userRepo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
+      if (Number(u.id) === 1 || activeSuperCount <= 1) throw Errors.lastSuperAdmin();
+    }
     if (patch.department_id) {
       const dept = await this.dataSource.getRepository(SysDepartment).findOne({ where: { id: patch.department_id } });
       if (!dept) throw Errors.param('部门不存在');
@@ -315,14 +319,15 @@ export class UsersService {
   async setStatus(id: string, status: 0 | 1, actor: { id: number; name: string }, ip: string | null) {
     const u = await this.userRepo.findOne({ where: { id } });
     if (!u) throw Errors.notFound('员工不存在');
-    if (Number(u.id) === 1 || (u.role === RoleEnum.SUPER_ADMIN && Number(u.id) === 1)) {
-      if (status === 0) throw Errors.param('超级管理员账号不可停用');
+    if (status === 0 && u.role === RoleEnum.SUPER_ADMIN) {
+      const activeSuperCount = await this.userRepo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
+      if (Number(u.id) === 1 || activeSuperCount <= 1) throw Errors.lastSuperAdmin();
     }
     u.status = status;
     await this.userRepo.save(u);
     if (status === 0) {
       // 用户级封禁：存量令牌即时失效（07 册 2.1.4）
-      // 向前推一秒，覆盖与停用请求同一秒签发的令牌；停用后不会再签发新令牌。
+      // 令牌 iat 只有秒精度；向前推进一秒，覆盖与停用请求同一秒签发的旧 access，停用后不会再签发新令牌。
       await this.redis.setUserBlock(Number(u.id), Math.floor(Date.now() / 1000) + 1, this.config.jwt.refreshExpiresDays * 86400);
     }
     this.audit.log({
@@ -345,7 +350,7 @@ export class UsersService {
     u.passwordHash = await bcrypt.hash(newPassword, 12);
     u.lastLoginAt = null;
     await this.userRepo.save(u);
-    await this.redis.setUserBlock(Number(u.id), Math.floor(Date.now() / 1000), this.config.jwt.refreshExpiresDays * 86400);
+    await this.redis.setUserBlock(Number(u.id), Math.floor(Date.now() / 1000) + 1, this.config.jwt.refreshExpiresDays * 86400);
     this.audit.log({
       actor_id: actor.id, actor_name: actor.name, action: 'user.password.reset', object_type: 'sys_user',
       object_id: id, detail: {}, result: 'success', source_ip: ip,

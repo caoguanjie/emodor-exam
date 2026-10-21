@@ -12,16 +12,22 @@
         <el-menu :default-active="route.path" router class="nav-menu">
           <template v-if="auth.isAdmin">
             <li class="nav-group">管理台</li>
-            <el-menu-item index="/admin/regulations"><el-icon><Document /></el-icon>制度管理</el-menu-item>
-            <el-menu-item index="/admin/questions"><el-icon><EditPen /></el-icon>题库与出题</el-menu-item>
-            <el-menu-item index="/admin/papers"><el-icon><Tickets /></el-icon>试卷管理</el-menu-item>
-            <el-menu-item index="/admin/statistics"><el-icon><DataAnalysis /></el-icon>统计报表</el-menu-item>
-            <template v-if="auth.isSuperAdmin">
-              <el-menu-item index="/admin/departments"><el-icon><OfficeBuilding /></el-icon>部门管理</el-menu-item>
-              <el-menu-item index="/admin/users"><el-icon><User /></el-icon>员工管理</el-menu-item>
-              <el-menu-item index="/admin/students"><el-icon><UserFilled /></el-icon>学员管理</el-menu-item>
-              <el-menu-item index="/admin/training-categories"><el-icon><CollectionTag /></el-icon>培训类别</el-menu-item>
-              <el-menu-item index="/admin/ai-config"><el-icon><Setting /></el-icon>AI 服务配置</el-menu-item>
+            <el-menu-item v-if="auth.can('regulations:read')" index="/admin/regulations"><el-icon><Document /></el-icon>制度管理</el-menu-item>
+            <el-menu-item v-if="auth.can('questions:read')" index="/admin/questions"><el-icon><EditPen /></el-icon>题库与出题</el-menu-item>
+            <el-menu-item v-if="auth.can('papers:read')" index="/admin/papers"><el-icon><Tickets /></el-icon>试卷管理</el-menu-item>
+            <el-menu-item v-if="auth.can('statistics:read')" index="/admin/statistics"><el-icon><DataAnalysis /></el-icon>统计报表</el-menu-item>
+            <template v-if="auth.isSuperAdmin || auth.can('students:read') || auth.can('training_categories:read') || auth.can('ai:read')">
+              <el-menu-item v-if="auth.isSuperAdmin" index="/admin/departments"><el-icon><OfficeBuilding /></el-icon>部门管理</el-menu-item>
+              <el-menu-item v-if="auth.isSuperAdmin" index="/admin/users"><el-icon><User /></el-icon>员工管理</el-menu-item>
+              <el-menu-item v-if="auth.can('students:read')" index="/admin/students"><el-icon><UserFilled /></el-icon>学员管理</el-menu-item>
+              <el-menu-item v-if="auth.can('training_categories:read')" index="/admin/training-categories"><el-icon><CollectionTag /></el-icon>培训类别</el-menu-item>
+              <el-menu-item v-if="auth.can('ai:read')" index="/admin/ai-config"><el-icon><Setting /></el-icon>AI 服务配置</el-menu-item>
+            </template>
+            <template v-if="auth.can('administrators:read') || auth.can('roles:read') || auth.can('sessions:read')">
+              <li class="nav-group nav-group-sub">系统治理</li>
+              <el-menu-item v-if="auth.can('administrators:read')" index="/admin/administrators"><el-icon><UserFilled /></el-icon>管理员</el-menu-item>
+              <el-menu-item v-if="auth.can('roles:read')" index="/admin/roles"><el-icon><SetUp /></el-icon>角色权限</el-menu-item>
+              <el-menu-item v-if="auth.can('sessions:read')" index="/admin/sessions"><el-icon><Monitor /></el-icon>在线会话</el-menu-item>
             </template>
           </template>
           <li class="nav-group">我的学习</li>
@@ -63,7 +69,7 @@
 import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
-  Document, EditPen, Tickets, DataAnalysis, OfficeBuilding, User, UserFilled, CollectionTag, Setting, Reading, AlarmClock, Medal, SwitchButton,
+  Document, EditPen, Tickets, DataAnalysis, OfficeBuilding, User, UserFilled, CollectionTag, Setting, SetUp, Monitor, Reading, AlarmClock, Medal, SwitchButton,
 } from '@element-plus/icons-vue';
 import { useAuthStore } from '../stores/auth';
 import brandLogo from '../assets/brand-logo.png';

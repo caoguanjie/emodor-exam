@@ -1,6 +1,6 @@
 -- =====================================================================
 -- EmodorRuleExam 制度学习及考试系统 · 数据库初始化脚本
--- 依据 docs/design/03-数据库设计.md 逐字建业务表（当前 14 张，InnoDB + utf8mb4）
+-- 依据 docs/design/03-数据库设计.md 逐字建 legacy、A2 培训身份及 A3 权限/会话业务表（当前 19 张，InnoDB + utf8mb4）
 -- 时间字段 DATETIME(3)；无数据库级外键（03 册 1.6 节，应用层维护）
 -- 枚举字段 VARCHAR + 应用层校验（03 册 1.7 节）
 -- 种子数据（根部门 / 超级管理员）由 database/seed.mjs 按环境变量生成，
@@ -51,6 +51,64 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   KEY `idx_department_status` (`department_id`, `status`),
   KEY `idx_training_identity` (`category_id`, `source`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='员工账号';
+
+CREATE TABLE IF NOT EXISTS `sys_role` (
+  `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `code`       VARCHAR(64)  NOT NULL COMMENT '角色代码，单家机构内唯一',
+  `name`       VARCHAR(128) NOT NULL COMMENT '角色名称',
+  `is_system`  TINYINT      NOT NULL DEFAULT 0 COMMENT '1=系统角色，不可删除',
+  `status`     TINYINT      NOT NULL DEFAULT 1 COMMENT '1=启用，0=停用',
+  `created_at` DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_sys_role_code` (`code`),
+  KEY `idx_sys_role_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='可配置业务角色';
+
+CREATE TABLE IF NOT EXISTS `sys_permission` (
+  `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `code`       VARCHAR(128) NOT NULL COMMENT '服务端注册权限代码',
+  `name`       VARCHAR(128) NOT NULL COMMENT '权限名称',
+  `created_at` DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_sys_permission_code` (`code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='权限白名单';
+
+CREATE TABLE IF NOT EXISTS `sys_role_permission` (
+  `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `role_id`       BIGINT UNSIGNED NOT NULL COMMENT '角色 id',
+  `permission_id` BIGINT UNSIGNED NOT NULL COMMENT '权限 id',
+  `created_at`    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_sys_role_permission` (`role_id`, `permission_id`),
+  KEY `idx_sys_role_permission_permission` (`permission_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='角色权限关系';
+
+CREATE TABLE IF NOT EXISTS `sys_user_role` (
+  `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id`    BIGINT UNSIGNED NOT NULL COMMENT '用户 id',
+  `role_id`    BIGINT UNSIGNED NOT NULL COMMENT '业务角色 id',
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_sys_user_role` (`user_id`, `role_id`),
+  KEY `idx_sys_user_role_role` (`role_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户业务角色关系';
+
+CREATE TABLE IF NOT EXISTS `auth_session` (
+  `id`           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `sid`          VARCHAR(64) NOT NULL COMMENT 'JWT 会话标识',
+  `user_id`      BIGINT UNSIGNED NOT NULL COMMENT '会话用户',
+  `user_agent`   VARCHAR(255) NULL,
+  `ip_address`   VARCHAR(64) NULL,
+  `last_seen_at` DATETIME(3) NOT NULL,
+  `revoked_at`   DATETIME(3) NULL,
+  `created_at`   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_auth_session_sid` (`sid`),
+  KEY `idx_auth_session_user_active` (`user_id`, `revoked_at`),
+  KEY `idx_auth_session_last_seen` (`last_seen_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='认证会话';
 
 -- ---------------------------------------------------------------------
 -- 2. 培训身份与可恢复导入域（2 张）

@@ -15,6 +15,7 @@ const require = createRequire(new URL('../server/package.json', import.meta.url)
 const JSZip = require('jszip');
 const mysql = require('mysql2/promise');
 const IS_MAIN = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
+const Redis = require('ioredis');
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:3000/api/v1';
 // 测试夹具口令运行期生成（安全约束：测试代码不落可用凭据字面量）
@@ -163,6 +164,31 @@ async function api(method, path, { token, body, raw } = {}) {
   return { status: res.status, json, text, headers: res.headers };
 }
 
+// 管理员登录必须走真实验证码链路。测试只读取本次 runner 注入的隔离 Redis
+// 前缀中的答案，不改变生产 API，也不把答案写入日志。
+async function adminCaptchaLogin(username, password) {
+  const issued = await api('POST', '/auth/captcha');
+  if (issued.status !== 200 || !issued.json?.data?.captcha_id) {
+    throw new Error(`管理员验证码签发失败：${issued.status}`);
+  }
+  const redis = new Redis({
+    host: process.env.REDIS_HOST || '127.0.0.1',
+    port: Number(process.env.REDIS_PORT || 6379),
+    password: process.env.REDIS_PASSWORD || undefined,
+    lazyConnect: false,
+  });
+  try {
+    const prefix = process.env.REDIS_KEY_PREFIX || '';
+    const answer = await redis.get(`${prefix}auth:captcha:${issued.json.data.captcha_id}`);
+    if (!answer) throw new Error('管理员验证码夹具答案不存在于本次隔离 Redis');
+    return api('POST', '/auth/login', {
+      body: { username, password, captcha_id: issued.json.data.captcha_id, captcha_code: answer },
+    });
+  } finally {
+    await redis.quit();
+  }
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -245,9 +271,9 @@ async function main() {
 
   console.log('\n== 1. 认证（FR-ORG-01 / 07 册 2.2.3 首登强制改密） ==');
   {
-    const bad = await api('POST', '/auth/login', { body: { username: 'admin', password: 'wrong-password-x' } });
+    const bad = await adminCaptchaLogin('admin', 'wrong-password-x');
     check('错误口令 → 40104（不泄露区别）', bad.status === 401 && bad.json?.code === 40104);
-    const r = await api('POST', '/auth/login', { body: { username: 'admin', password: ADMIN_INITIAL } });
+    const r = await adminCaptchaLogin('admin', ADMIN_INITIAL);
     check('首登成功且 force_change_password=true', r.status === 200 && r.json?.data?.force_change_password === true, JSON.stringify(r.json?.code));
     const restrictedToken = r.json?.data?.access_token;
     const blocked = await api('GET', '/regulations', { token: restrictedToken });
@@ -259,7 +285,7 @@ async function main() {
     const ch = await api('PUT', '/auth/password', { token: restrictedToken, body: { old_password: ADMIN_INITIAL, new_password: newPw } });
     check('修改密码成功并签发完整令牌', ch.status === 200 && !!ch.json?.data?.access_token, JSON.stringify(ch.json));
     state.tokens.admin = ch.json?.data?.access_token;
-    const again = await api('POST', '/auth/login', { body: { username: 'admin', password: newPw } });
+    const again = await adminCaptchaLogin('admin', newPw);
     check('新口令重新登录成功且不再强制改密', again.json?.data?.force_change_password === false);
     state.tokens.admin = again.json?.data?.access_token;
     const oldTokenCheck = await api('GET', '/auth/profile', { token: restrictedToken });
@@ -333,10 +359,10 @@ async function main() {
     const rbac = await api('POST', '/regulations', { token: state.tokens.emp, body: { title: 'x', category: 'x' } });
     check('employee 创建制度被拒（40301）', rbac.status === 403 && rbac.json?.code === 40301);
     // regulation_admin 调员工管理接口 → 40301（FR-ORG-05 验收②）
-    let ar = await api('POST', '/auth/login', { body: { username: 'regadmin', password: TEST_INIT_PW } });
+    let ar = await adminCaptchaLogin('regadmin', TEST_INIT_PW);
     const adminNewPw = 'Vb5' + Math.random().toString(16).slice(2, 12);
     await api('PUT', '/auth/password', { token: ar.json?.data?.access_token, body: { old_password: TEST_INIT_PW, new_password: adminNewPw } });
-    ar = await api('POST', '/auth/login', { body: { username: 'regadmin', password: adminNewPw } });
+    ar = await adminCaptchaLogin('regadmin', adminNewPw);
     state.tokens.regadmin = ar.json?.data?.access_token;
     const denied = await api('GET', '/users', { token: state.tokens.regadmin });
     check('regulation_admin 调员工管理被拒（40301）', denied.status === 403 && denied.json?.code === 40301);
@@ -371,7 +397,7 @@ async function main() {
       impJson?.data?.success_count === 2 && impJson?.data?.fail_count === 1 && impJson.data.failures[0].reason.includes('工号在文件内重复'),
       JSON.stringify(impJson?.data));
     // 导入成功的员工可登录（首登强制改密）
-    const impLogin = await api('POST', '/auth/login', { body: { username: 'impuser1', password: TEST_INIT_PW } });
+    const impLogin = await adminCaptchaLogin('impuser1', TEST_INIT_PW);
     check('导入成功的员工可直接登录（进入强制改密流程）', impLogin.json?.data?.force_change_password === true, JSON.stringify(impLogin.json?.code));
   }
 

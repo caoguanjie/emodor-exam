@@ -115,6 +115,34 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  /** 原子读取并删除一次性凭据（验证码/轮换票据）。 */
+  async getAndDelete(key: string): Promise<string | null> {
+    const scoped = this.scopedKey(key);
+    return this.withFallback(
+      async () => {
+        const client = this.client! as Redis & { getdel?: (key: string) => Promise<string | null> };
+        if (typeof client.getdel === 'function') {
+          try {
+            return await client.getdel(scoped);
+          } catch {
+            // Redis < 6.2 exposes no GETDEL; use an equivalent Lua operation
+            // rather than a racy GET followed by DEL.
+          }
+        }
+        return client.eval(
+          'local value = redis.call("GET", KEYS[1]); if value then redis.call("DEL", KEYS[1]); end; return value;',
+          1,
+          scoped,
+        ) as unknown as Promise<string | null>;
+      },
+      () => {
+        const value = this.memGet(scoped)?.value ?? null;
+        this.mem.delete(scoped);
+        return value;
+      },
+    );
+  }
+
   async exists(key: string): Promise<boolean> {
     const scoped = this.scopedKey(key);
     return this.withFallback(
@@ -163,6 +191,15 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   /** 登出吊销：EXISTS auth:blacklist:{jti}（jti 已由调用方白名单校验） */
   async isTokenBlacklisted(jti: string): Promise<boolean> {
     return this.exists(`auth:blacklist:${jti}`);
+  }
+
+  /** 会话强制下线标记，TTL 与 refresh 生命周期相同。 */
+  async revokeSession(sessionId: string, ttlSeconds: number): Promise<void> {
+    await this.set(`auth:session:revoked:${sessionId}`, '1', ttlSeconds);
+  }
+
+  async isSessionRevoked(sessionId: string): Promise<boolean> {
+    return this.exists(`auth:session:revoked:${sessionId}`);
   }
 
   /** 用户级封禁时刻：GET auth:block:{user_id}（值 = 封禁时刻秒级时间戳） */

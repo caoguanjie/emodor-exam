@@ -45,6 +45,17 @@
               <template #prefix><el-icon><Lock /></el-icon></template>
             </el-input>
           </el-form-item>
+          <el-form-item>
+            <div class="captcha-row">
+              <el-input v-model="captchaCode" placeholder="验证码（管理员必填）" size="large" maxlength="8" @keyup.enter="onLogin">
+                <template #prefix><el-icon><Key /></el-icon></template>
+              </el-input>
+              <button class="captcha-image" type="button" title="刷新验证码" @click="loadCaptcha">
+                <img v-if="captchaImage" :src="captchaImage" alt="验证码" />
+                <span v-else>加载中</span>
+              </button>
+            </div>
+          </el-form-item>
           <el-button type="primary" size="large" class="submit-btn" :loading="loading" native-type="submit">登 录</el-button>
         </el-form>
         <p class="form-foot">首次登录将要求修改初始密码</p>
@@ -54,10 +65,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
-import { User, Lock, Reading, EditPen } from '@element-plus/icons-vue';
+import { User, Lock, Key, Reading, EditPen } from '@element-plus/icons-vue';
 import { useAuthStore } from '../stores/auth';
+import http from '../api/http';
 import brandLogo from '../assets/brand-logo.png';
 
 const router = useRouter();
@@ -65,18 +77,30 @@ const route = useRoute();
 const auth = useAuthStore();
 const username = ref('');
 const password = ref('');
+const captchaId = ref('');
+const captchaImage = ref('');
+const captchaCode = ref('');
 const loading = ref(false);
+
+async function loadCaptcha() {
+  const issued: any = await http.post('/auth/captcha');
+  captchaId.value = issued.captcha_id;
+  captchaImage.value = issued.image;
+  captchaCode.value = '';
+}
 
 async function onLogin() {
   if (!username.value || !password.value) return;
   loading.value = true;
   try {
-    await auth.login(username.value, password.value);
+    await auth.login(username.value, password.value, captchaId.value || undefined, captchaCode.value || undefined);
     router.push(auth.needChangePassword ? '/change-password' : String(route.query.redirect || '/my/regulations'));
   } finally {
     loading.value = false;
   }
 }
+
+onMounted(() => { loadCaptcha().catch(() => undefined); });
 </script>
 
 <style scoped>
@@ -120,6 +144,11 @@ async function onLogin() {
 .form-card h2 { font-size: 24px; margin: 0 0 8px; font-weight: 600; }
 .form-hint { font-size: 13px; color: var(--re-text-3); margin: 0 0 26px; }
 .submit-btn { width: 100%; margin-top: 4px; letter-spacing: 6px; }
+.captcha-row { width: 100%; display: flex; gap: 10px; }
+.captcha-row .el-input { flex: 1; min-width: 0; }
+.captcha-image { width: 128px; height: 40px; flex: none; border: 1px solid var(--re-border); border-radius: 6px; padding: 0; background: #f2f5fb; cursor: pointer; overflow: hidden; }
+.captcha-image img { width: 100%; height: 100%; display: block; }
+.captcha-image span { color: var(--re-text-3); font-size: 12px; }
 .form-foot { text-align: center; font-size: 12px; color: var(--re-text-3); margin: 18px 0 0; }
 
 @media (max-width: 900px) {

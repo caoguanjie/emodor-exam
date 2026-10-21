@@ -11,8 +11,14 @@ import { GlobalExceptionFilter } from './common/http-exception.filter';
 import { DtoValidationPipe } from './common/dto-validation.pipe';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RedisService } from './common/redis.service';
 import { AuditService } from './common/audit.service';
+import { SysRole } from './entities/sys-role.entity';
+import { SysPermission } from './entities/sys-permission.entity';
+import { SysRolePermission } from './entities/sys-role-permission.entity';
+import { SysUserRole } from './entities/sys-user-role.entity';
+import { AuthSession } from './entities/auth-session.entity';
 
 // 业务表实体 + 迁移注册表（schema_migration 是运维元数据，不计入业务表清单）
 import { SysDepartment } from './entities/sys-department.entity';
@@ -33,6 +39,10 @@ import { SchemaMigration } from './entities/schema-migration.entity';
 
 import { AuthController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
+import { CaptchaService } from './modules/auth/captcha.service';
+import { SessionService } from './modules/auth/session.service';
+import { AccessController } from './modules/access/access.controller';
+import { AccessService } from './modules/access/access.service';
 import { DepartmentsController } from './modules/departments/departments.controller';
 import { DepartmentService } from './modules/departments/department.service';
 import { MeProfileController, StudentsController, UsersController } from './modules/users/users.controller';
@@ -75,19 +85,23 @@ const config = loadConfig();
       SysDepartment, SysUser, Regulation, RegulationVersion, RegulationScope,
       LearningSession, LearningRecord, Question, ExamPaper, PaperQuestion, ExamRecord, ExamAnswer, SchemaMigration,
       TrainingCategory, ImportBatch,
+      SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
+      TrainingCategory, ImportBatch,
+      SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
     ]),
     JwtModule.register({ secret: config.jwt.secret, signOptions: { expiresIn: config.jwt.expiresIn } }),
     ScheduleModule.forRoot(),
   ],
   controllers: [
     AuthController, DepartmentsController, UsersController, StudentsController, MeProfileController, CategoryController,
+    AuthController, AccessController, DepartmentsController, UsersController, StudentsController, MeProfileController, CategoryController,
     RegulationsController, AiController, LearningController, ExamsController,
     StatisticsController, HealthController,
   ],
   providers: [
     // 全局配置单例（loadConfig 启动时读取环境变量）
     { provide: AppConfig, useValue: config },
-    AuthService, DepartmentService, UsersService, UserImportService, CategoryService, ImportBatchService,
+    AuthService, CaptchaService, SessionService, AccessService, DepartmentService, UsersService, UserImportService, CategoryService, ImportBatchService,
     RegulationService, RegulationVersionService, RegulationScopeService, ParsePipelineService, ContentService,
     AiConfigService, AiGatewayService, PdfVisionService, QuestionGenerationService, QuestionReviewService, PaperService,
     LearningSessionService, ExamService, ShuffleService, GradingService, StatisticsService,
@@ -95,6 +109,7 @@ const config = loadConfig();
     // 守卫链（07 册 2.3.2）：① JWT 认证 → ② RBAC 角色（全局顺序注册）
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
     // 统一响应信封 { code, message, data }（README 3.4）
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
     // DTO 校验（class-validator 白名单 → 40001）

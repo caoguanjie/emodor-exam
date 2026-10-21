@@ -122,11 +122,12 @@
 
 | # | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|---|
-| 1 | POST | /auth/login | 公开 | 登录，签发双令牌 |
-| 2 | POST | /auth/refresh | 公开（需 refresh token） | 刷新令牌（轮换；refresh token 经 HttpOnly Cookie 读取，不走 body） |
-| 3 | GET | /auth/profile | 登录 | 当前用户信息（含角色、部门） |
-| 4 | PUT | /auth/password | 登录 | 修改本人密码 |
-| 5 | POST | /auth/logout | 登录 | 登出（写 jti 黑名单 + 审计日志，客户端清令牌） |
+| 1 | POST | /auth/captcha | 公开 | 生成管理员登录验证码（120 秒、一次消费） |
+| 2 | POST | /auth/login | 公开 | 员工兼容 username/password；管理员额外提交 captcha_id/captcha_code，签发带 sid 的双令牌 |
+| 3 | POST | /auth/refresh | 公开（需 refresh token） | 刷新令牌（轮换并废弃前一枚；refresh token 经 HttpOnly Cookie 读取，不走 body） |
+| 4 | GET | /auth/profile | 登录 | 当前用户信息（含角色、部门、有效权限） |
+| 5 | PUT | /auth/password | 登录 | 修改本人密码（body 固定 old_password/new_password） |
+| 6 | POST | /auth/logout | 登录 | 登出（写 jti 黑名单、吊销会话 + 审计日志，客户端清令牌） |
 
 **POST /auth/login**
 
@@ -134,6 +135,8 @@
 |---|---|---|---|---|
 | username | body | string | 是 | 用户名 |
 | password | body | string | 是 | 密码（明文传输依赖 HTTPS） |
+| captcha_id | body | string | 管理员必填 | /auth/captcha 返回的短期标识 |
+| captcha_code | body | string | 管理员必填 | 验证码答案；服务端一次消费，不在响应回显 |
 
 规则：凭据校验 → `status = 0` 拒绝 →「用户不存在」与「密码错误」返回同一错误码 40104（不泄露区别，05 册 2.4.1）；非首次登录成功后更新 `last_login_at`。首次登录（`last_login_at IS NULL`）校验通过时签发**受限令牌**（payload 含 `pwd_pending: true`），响应中携带 `force_change_password: true`（07 册 2.2），**此阶段不写入 `last_login_at`**；仅在 `PUT /auth/password` 成功（签发完整令牌）的同一事务内写入 `last_login_at`——防止丢弃受限令牌重新登录即绕过强制改密。
 
@@ -211,6 +214,17 @@
 | 40911 | 409 | 导入批次已确认，不能更换行集合 | 已提交批次使用不同合法行集合重试，或批次正被另一确认请求处理 |
 
 导入批次的 `owner_id` 是服务端从当前令牌取得，客户端不能指定；未提交批次保留预检结果供查询/恢复，确认成功后保存 `committed_rows/created_ids`。这套批次事实可由 B4 注册题库适配器复用，但通用服务不依赖 AI。
+### 3.2.1 管理权限与在线会话 /admin
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | /admin/permissions | roles:read | 服务端注册权限目录 |
+| GET | /admin/roles | roles:read | 角色与权限关系 |
+| POST / PUT | /admin/roles[/{id}] | roles:write | 新建/修改业务角色；只接受白名单权限 |
+| GET | /admin/administrators | administrators:read | 管理员及当前有效权限 |
+| PUT | /admin/administrators/{id}/roles | administrators:write | 多选业务角色；最高管理员保护 |
+| GET | /admin/sessions | sessions:read | 分页查看在线/已吊销会话 |
+| POST | /admin/sessions/{id}/revoke | sessions:write | 强制下线并立即吊销该 sid 的双令牌 |
 
 ### 3.3 部门管理 /departments（权限：管理）
 
@@ -730,6 +744,7 @@
 | 40909 | 409 | AI 服务未配置或配置不完整 | 未配置 base_url/api_key/model 即发起出题或连通性测试（FR-AIQ-01 验收③） |
 | 40910 | 409 | 培训类别不存在或已停用 | 学员/导入确认引用不存在或已停用类别；删除仍被学员引用的类别 |
 | 40911 | 409 | 导入批次已确认，不能更换行集合 | 批次确认重试更换合法行集合，或确认事务正在处理 |
+| 40912 | 409 | 至少保留一名启用的超级管理员 | 尝试删除/停用/清空最高管理员保护权限 |
 | 42201 | 422 | 文件格式不支持 | 上传非 pdf/docx（含魔法数不符） |
 | 42202 | 422 | 文件超过大小上限 | 上传超过 50MB |
 | 42203 | 422 | 发布校验未通过 | 制度发布缺前置（无生效版本/未配要求或范围）；试卷发布总分 ≠ 100 |
@@ -766,6 +781,7 @@
 
 | 接口 | 限流/约束 | 机制 |
 |---|---|---|
+| POST /auth/captcha | source_ip 每分钟最多 10 次；答案 120 秒 TTL 且一次消费 | Redis 短期键；生产响应不返回答案 |
 | POST /auth/login | username 维度：连续失败 5 次锁定 10 分钟（40106，message 含剩余秒数）；source_ip 维度：10 次/分钟 | 双计数防爆破（07 册 2.2.2）；Redis 故障时降级为仅 IP 维度进程内计数 + 登录接口 sys_user.status 校验兜底 |
 | POST /learning/heartbeat | 节拍窗口限流：30 秒周期内异常高频丢弃（42901） | 丢弃不影响时长正确性（服务端时钟差结算、credited 封顶 45 秒，天然幂等） |
 | POST /learning/heartbeat/pause、resume | 同一 session_id 每分钟最多 60 次；重复 pause / 重复 resume 幂等（第二次直接返回当前状态，不重复结算） | 事件驱动端点不适用 30 秒节拍窗口——丢弃 pause/resume 会破坏失焦语义（resume 被丢弃 → 下拍 diff 含整段失焦时间、pause 被丢弃 → 失焦期间照常计费，虚增最多 45 秒/次，故单独限流） |

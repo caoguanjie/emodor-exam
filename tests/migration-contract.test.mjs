@@ -1,6 +1,6 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -157,19 +157,29 @@ test('upgrade preserves existing rows and converges INFORMATION_SCHEMA with init
   const upgradeDb = await createDatabase('upgrade_' + randomBytes(3).toString('hex'));
 
   await admin.query(`${renderSchemaForDatabase(initSql, initDb)}`);
-  const oldSql = initSql.replace(/\n-- ---------------------------------------------------------------------\n-- 5\. 迁移元数据[\s\S]*$/u, '\n');
+  // Upgrade fixture is the accepted A1 schema, not the current init.sql;
+  // otherwise a new table already present in init would not exercise 002_access.
+  const acceptedA1Sql = execFileSync('git', ['show', 'a5955da4bf8022757008322d49b2db58d15aef74:database/init.sql'], { cwd: ROOT, encoding: 'utf8' });
+  const oldSql = acceptedA1Sql.replace(/\n-- ---------------------------------------------------------------------\n-- 5\. 迁移元数据[\s\S]*$/u, '\n');
   await admin.query(renderSchemaForDatabase(oldSql, upgradeDb));
   const upgrade = await connectionFor(upgradeDb);
   await upgrade.execute("INSERT INTO sys_department (name, sort, status) VALUES ('保留数据', 1, 1)");
   await applyMigrations({ connection: upgrade, database: upgradeDb });
   const [[row]] = await upgrade.query("SELECT name FROM sys_department WHERE name = '保留数据'");
   assert.equal(row.name, '保留数据');
+  const [[accessMigration]] = await upgrade.query(`SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = '002_access'`);
+  assert.equal(accessMigration.status, 'applied');
+  assert.deepEqual(accessMigration.progress, ['create_sys_role', 'create_sys_permission', 'create_sys_role_permission', 'create_sys_user_role', 'create_auth_session']);
   const [initTables] = await admin.query('SELECT TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME', [initDb]);
   const [upgradeTables] = await admin.query('SELECT TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME', [upgradeDb]);
   assert.deepEqual(upgradeTables, initTables);
   const [initColumns] = await admin.query('SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, ORDINAL_POSITION FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, ORDINAL_POSITION', [initDb]);
   const [upgradeColumns] = await admin.query('SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, ORDINAL_POSITION FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, ORDINAL_POSITION', [upgradeDb]);
   assert.deepEqual(upgradeColumns, initColumns);
+  const indexShape = 'TABLE_NAME, INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, COLLATION, SUB_PART, INDEX_TYPE';
+  const [initIndexes] = await admin.query(`SELECT ${indexShape} FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`, [initDb]);
+  const [upgradeIndexes] = await admin.query(`SELECT ${indexShape} FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`, [upgradeDb]);
+  assert.deepEqual(upgradeIndexes, initIndexes);
   await upgrade.end();
 });
 

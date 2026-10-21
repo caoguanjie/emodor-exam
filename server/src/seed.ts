@@ -2,6 +2,10 @@ import { DataSource } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { SysDepartment } from './entities/sys-department.entity';
 import { SysUser } from './entities/sys-user.entity';
+import { SysRole } from './entities/sys-role.entity';
+import { SysPermission } from './entities/sys-permission.entity';
+import { SysRolePermission } from './entities/sys-role-permission.entity';
+import { LEGACY_REGULATION_ADMIN_PERMISSIONS, PERMISSION_CATALOG, PERMISSION_NAMES } from './modules/access/permission-catalog';
 
 /**
  * 首次部署种子（03 册第 7 章初始化口径）：
@@ -13,6 +17,9 @@ import { SysUser } from './entities/sys-user.entity';
 export async function ensureSeedData(ds: DataSource): Promise<void> {
   const deptRepo = ds.getRepository(SysDepartment);
   const userRepo = ds.getRepository(SysUser);
+  const roleRepo = ds.getRepository(SysRole);
+  const permissionRepo = ds.getRepository(SysPermission);
+  const rolePermissionRepo = ds.getRepository(SysRolePermission);
 
   const deptCount = await deptRepo.count();
   if (deptCount === 0) {
@@ -40,6 +47,29 @@ export async function ensureSeedData(ds: DataSource): Promise<void> {
         lastLoginAt: null,
       });
       console.log('[seed] 超级管理员 admin 已创建（首登强制改密）；初始口令仅经环境变量注入，不落日志');
+    }
+  }
+
+  // 权限目录和三类系统角色幂等初始化；管理员业务角色关系可在后台另行配置。
+  const permissions = new Map<string, SysPermission>();
+  for (const code of PERMISSION_CATALOG) {
+    let permission = await permissionRepo.findOne({ where: { code } });
+    if (!permission) permission = await permissionRepo.save(permissionRepo.create({ code, name: PERMISSION_NAMES[code] }));
+    permissions.set(code, permission);
+  }
+  const roleDefinitions = [
+    { code: 'super_admin', name: '超级管理员', isSystem: 1, permissions: [...PERMISSION_CATALOG] },
+    { code: 'regulation_admin', name: '制度管理员', isSystem: 1, permissions: LEGACY_REGULATION_ADMIN_PERMISSIONS },
+    { code: 'employee', name: '员工', isSystem: 1, permissions: [] as string[] },
+  ];
+  for (const definition of roleDefinitions) {
+    let role = await roleRepo.findOne({ where: { code: definition.code } });
+    if (!role) role = await roleRepo.save(roleRepo.create({ code: definition.code, name: definition.name, isSystem: definition.isSystem, status: 1 }));
+    for (const code of definition.permissions) {
+      const permission = permissions.get(code);
+      if (!permission) continue;
+      const exists = await rolePermissionRepo.findOne({ where: { roleId: role.id, permissionId: permission.id } });
+      if (!exists) await rolePermissionRepo.insert({ roleId: role.id, permissionId: permission.id });
     }
   }
 }

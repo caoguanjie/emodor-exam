@@ -1,7 +1,8 @@
 import { Body, Controller, Get, HttpCode, Post, Put, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { IsString, MinLength, MaxLength } from 'class-validator';
+import { IsOptional, IsString, MinLength, MaxLength } from 'class-validator';
 import { AuthService } from './auth.service';
+import { CaptchaService } from './captcha.service';
 import { Public } from '../../common/guards/public.decorator';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
 import { DtoValidationPipe } from '../../common/dto-validation.pipe';
@@ -10,6 +11,8 @@ import { REFRESH_COOKIE } from '../../common/guards/jwt-auth.guard';
 class LoginDto {
   @IsString() @MinLength(1) @MaxLength(64) username!: string;
   @IsString() @MinLength(1) @MaxLength(128) password!: string;
+  @IsOptional() @IsString() @MaxLength(64) captcha_id?: string;
+  @IsOptional() @IsString() @MinLength(4) @MaxLength(16) captcha_code?: string;
 }
 
 class ChangePasswordDto {
@@ -20,13 +23,20 @@ class ChangePasswordDto {
 /** /auth 认证模块（04 册 3.1）：登录、刷新、个人信息、改密、登出 */
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(private readonly auth: AuthService, private readonly captcha: CaptchaService) {}
+
+  @Public()
+  @HttpCode(200)
+  @Post('captcha')
+  async captchaImage(@Req() req: Request) {
+    return this.captcha.issue(req.ip || 'unknown');
+  }
 
   @Public()
   @HttpCode(200)
   @Post('login')
   async login(@Body(new DtoValidationPipe()) dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    return this.auth.login(dto.username, dto.password, req.ip || null, req, res);
+    return this.auth.login(dto.username, dto.password, req.ip || null, req, res, dto.captcha_id, dto.captcha_code);
   }
 
   @Public()
@@ -51,7 +61,7 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    return this.auth.changePassword(user.id, dto.old_password, dto.new_password, req.ip || null, res);
+    return this.auth.changePassword(user.id, dto.old_password, dto.new_password, req.ip || null, res, user, req.cookies?.[REFRESH_COOKIE], req);
   }
 
   @HttpCode(200)

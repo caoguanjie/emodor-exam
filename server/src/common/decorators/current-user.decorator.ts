@@ -7,6 +7,7 @@ export interface AuthUser {
   role: string;
   jti: string;
   iat: number;
+  sid?: string;
   pwdPending?: boolean;
 }
 

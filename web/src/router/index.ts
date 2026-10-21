@@ -21,17 +21,20 @@ const routes: RouteRecordRaw[] = [
       { path: 'my/scores', component: () => import('../views/employee/MyScores.vue'), meta: { title: '我的成绩' } },
       { path: 'my/scores/:recordId', component: () => import('../views/employee/ScoreDetail.vue'), meta: { title: '成绩明细' } },
       // ---- 管理端 ----
-      { path: 'admin/departments', component: () => import('../views/admin/Departments.vue'), meta: { title: '部门管理', admin: true } },
+      { path: 'admin/departments', component: () => import('../views/admin/Departments.vue'), meta: { title: '部门管理', admin: true, superOnly: true } },
       { path: 'admin/users', component: () => import('../views/admin/Users.vue'), meta: { title: '员工管理', admin: true, superOnly: true } },
-      { path: 'admin/students', component: () => import('../views/admin/Users.vue'), meta: { title: '学员管理', admin: true, superOnly: true } },
-      { path: 'admin/training-categories', component: () => import('../views/admin/TrainingCategories.vue'), meta: { title: '培训类别', admin: true, superOnly: true } },
-      { path: 'admin/regulations', component: () => import('../views/admin/Regulations.vue'), meta: { title: '制度管理', admin: true } },
-      { path: 'admin/regulations/:id', component: () => import('../views/admin/RegulationDetail.vue'), meta: { title: '制度详情', admin: true } },
-      { path: 'admin/questions', component: () => import('../views/admin/Questions.vue'), meta: { title: '题库与出题', admin: true } },
-      { path: 'admin/papers', component: () => import('../views/admin/Papers.vue'), meta: { title: '试卷管理', admin: true } },
-      { path: 'admin/papers/:id', component: () => import('../views/admin/PaperDetail.vue'), meta: { title: '组卷', admin: true } },
-      { path: 'admin/statistics', component: () => import('../views/admin/Statistics.vue'), meta: { title: '统计报表', admin: true } },
-      { path: 'admin/ai-config', component: () => import('../views/admin/AiConfig.vue'), meta: { title: 'AI 服务配置', admin: true, superOnly: true } },
+      { path: 'admin/students', component: () => import('../views/admin/Users.vue'), meta: { title: '学员管理', admin: true, permission: 'students:read' } },
+      { path: 'admin/training-categories', component: () => import('../views/admin/TrainingCategories.vue'), meta: { title: '培训类别', admin: true, permission: 'training_categories:read' } },
+      { path: 'admin/regulations', component: () => import('../views/admin/Regulations.vue'), meta: { title: '制度管理', admin: true, permission: 'regulations:read' } },
+      { path: 'admin/regulations/:id', component: () => import('../views/admin/RegulationDetail.vue'), meta: { title: '制度详情', admin: true, permission: 'regulations:read' } },
+      { path: 'admin/questions', component: () => import('../views/admin/Questions.vue'), meta: { title: '题库与出题', admin: true, permission: 'questions:read' } },
+      { path: 'admin/papers', component: () => import('../views/admin/Papers.vue'), meta: { title: '试卷管理', admin: true, permission: 'papers:read' } },
+      { path: 'admin/papers/:id', component: () => import('../views/admin/PaperDetail.vue'), meta: { title: '组卷', admin: true, permission: 'papers:read' } },
+      { path: 'admin/statistics', component: () => import('../views/admin/Statistics.vue'), meta: { title: '统计报表', admin: true, permission: 'statistics:read' } },
+      { path: 'admin/ai-config', component: () => import('../views/admin/AiConfig.vue'), meta: { title: 'AI 服务配置', admin: true, permission: 'ai:read' } },
+      { path: 'admin/administrators', component: () => import('../views/admin/Administrators.vue'), meta: { title: '管理员', admin: true, permission: 'administrators:read' } },
+      { path: 'admin/roles', component: () => import('../views/admin/Roles.vue'), meta: { title: '角色权限', admin: true, permission: 'roles:read' } },
+      { path: 'admin/sessions', component: () => import('../views/admin/OnlineSessions.vue'), meta: { title: '在线会话', admin: true, permission: 'sessions:read' } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },
@@ -52,6 +55,7 @@ router.beforeEach(async (to) => {
   }
   if (auth.needChangePassword && to.path !== '/change-password') return '/change-password';
   if (to.meta.admin && !auth.isAdmin) return '/my/regulations';
-  if (to.meta.superOnly && !auth.isSuperAdmin) return '/admin/statistics';
+  if (to.meta.superOnly && !auth.isSuperAdmin) return '/my/regulations';
+  if (to.meta.permission && !auth.can(String(to.meta.permission))) return '/my/regulations';
   return true;
 });

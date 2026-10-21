@@ -5,6 +5,7 @@ import { Request } from 'express';
 import { AppConfig } from '../../config/configuration';
 import { Errors } from '../errors';
 import { RedisService } from '../redis.service';
+import { SessionService } from '../../modules/auth/session.service';
 import { AuthUser } from '../decorators/current-user.decorator';
 import { PUBLIC_KEY } from './public.decorator';
 
@@ -28,6 +29,7 @@ export class JwtAuthGuard implements CanActivate {
     private readonly reflector: Reflector,
     private readonly redis: RedisService,
     private readonly config: AppConfig,
+    private readonly sessions: SessionService,
   ) {}
 
   /** 验签：先主密钥后轮换过渡旧密钥（07 册 2.1.3），过期与伪造分别映射 40102/40101 */
@@ -77,6 +79,13 @@ export class JwtAuthGuard implements CanActivate {
     const blockTs = await this.redis.getTokenBlockTs(userId);
     if (blockTs && Number(payload.iat) < Number(blockTs)) throw Errors.tokenRevoked();
 
+    // 新令牌绑定 auth_session；旧的无 sid 令牌继续走原有黑名单/用户封禁兼容路径。
+    const sid = payload.sid === undefined ? undefined : String(payload.sid);
+    if (sid !== undefined) {
+      if (!/^[a-f0-9]{48}$/.test(sid) || await this.sessions.isRevoked(sid)) throw Errors.tokenRevoked();
+      await this.sessions.touch(sid);
+    }
+
     // ⑤ 受限令牌（首次登录强制改密，07 册 2.2.3）：仅放行修改本人密码
     if (payload.pwd_pending === true) {
       const path = (req.baseUrl || '') + (req.route?.path || req.url || '');
@@ -90,6 +99,7 @@ export class JwtAuthGuard implements CanActivate {
       role: typeof payload.role === 'string' ? payload.role : '',
       jti: String(payload.jti ?? ''),
       iat: Number(payload.iat ?? 0),
+      sid,
       pwdPending: payload.pwd_pending === true,
     };
     return true;
