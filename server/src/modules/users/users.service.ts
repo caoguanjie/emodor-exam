@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { SysUser } from '../../entities/sys-user.entity';
 import { SysDepartment } from '../../entities/sys-department.entity';
@@ -13,6 +13,7 @@ import { validatePasswordStrength } from '../../common/password-policy';
 import { CategoryService } from '../training/category.service';
 import { SessionService } from '../auth/session.service';
 import { AccessService } from '../access/access.service';
+import { SysUserRole } from '../../entities/sys-user-role.entity';
 
 const VALID_ROLES: Role[] = [RoleEnum.SUPER_ADMIN, RoleEnum.REGULATION_ADMIN, RoleEnum.EMPLOYEE];
 
@@ -122,7 +123,11 @@ export class UsersService {
   async listStudents(query: { page?: number; page_size?: number; keyword?: string; category_id?: string; source?: string; status?: number }) {
     const page = Math.max(1, Number(query.page || 1));
     const pageSize = Math.min(100, Math.max(1, Number(query.page_size || 20)));
-    const qb = this.userRepo.createQueryBuilder('u').where('u.role = :role', { role: RoleEnum.EMPLOYEE });
+    const qb = this.userRepo.createQueryBuilder('u')
+      .where('u.role = :role', { role: RoleEnum.EMPLOYEE })
+      // Any explicit business-role link makes an employee a managed administrator,
+      // even when that role currently has no permissions or is inactive.
+      .andWhere('NOT EXISTS (SELECT 1 FROM sys_user_role student_role WHERE student_role.user_id = u.id)');
     if (query.keyword?.trim()) {
       qb.andWhere('(u.username LIKE :kw OR u.real_name LIKE :kw OR u.employee_no LIKE :kw)', { kw: `%${query.keyword.trim()}%` });
     }
@@ -139,7 +144,11 @@ export class UsersService {
   }
 
   async studentDetail(id: string) {
-    const user = await this.userRepo.findOne({ where: { id: String(id), role: RoleEnum.EMPLOYEE } });
+    const user = await this.userRepo.createQueryBuilder('u')
+      .where('u.id = :id', { id: String(id) })
+      .andWhere('u.role = :role', { role: RoleEnum.EMPLOYEE })
+      .andWhere('NOT EXISTS (SELECT 1 FROM sys_user_role student_role WHERE student_role.user_id = u.id)')
+      .getOne();
     if (!user) throw Errors.notFound('学员不存在');
     return this.sanitizeStudent(user);
   }
@@ -204,11 +213,7 @@ export class UsersService {
     try {
       user = await this.dataSource.transaction(async (manager) => {
         const repo = manager.getRepository(SysUser);
-        const lockedUser = await manager.findOne(SysUser, {
-          where: { id: String(id), role: RoleEnum.EMPLOYEE },
-          lock: { mode: 'pessimistic_write' },
-        });
-        if (!lockedUser) throw Errors.notFound('学员不存在');
+        const lockedUser = await this.lockManagedStudent(manager, id);
         if (patch.category_id !== undefined) await this.categories.lockActive(manager, patch.category_id);
         if (patch.real_name !== undefined) lockedUser.realName = patch.real_name;
         if (patch.employee_no !== undefined) lockedUser.employeeNo = patch.employee_no || null;
@@ -237,15 +242,35 @@ export class UsersService {
   }
 
   async setStudentStatus(id: string, status: 0 | 1, actor: { id: number; name: string }, ip: string | null) {
-    const user = await this.userRepo.findOne({ where: { id: String(id), role: RoleEnum.EMPLOYEE } });
-    if (!user) throw Errors.notFound('学员不存在');
-    return this.setStatus(String(id), status, actor, ip);
+    return this.setStatus(String(id), status, actor, ip, { requireManagedStudent: true });
   }
 
   async resetStudentPassword(id: string, newPassword: string, actor: { id: number; name: string }, ip: string | null) {
-    const user = await this.userRepo.findOne({ where: { id: String(id), role: RoleEnum.EMPLOYEE } });
+    return this.resetPassword(String(id), newPassword, actor, ip, { requireManagedStudent: true });
+  }
+
+  /**
+   * A training-managed student is an employee with no explicit business-role
+   * links. The user row is the shared serialization point with AccessService:
+   * role assignment locks role rows first and then this same user row, while
+   * student mutations lock only the user row before checking links.
+   */
+  private async lockManagedStudent(manager: EntityManager, id: string): Promise<SysUser> {
+    const user = await manager.findOne(SysUser, {
+      where: { id: String(id), role: RoleEnum.EMPLOYEE },
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!user) throw Errors.notFound('学员不存在');
-    return this.resetPassword(String(id), newPassword, actor, ip);
+    await this.assertManagedStudent(manager, user);
+    return user;
+  }
+
+  private async assertManagedStudent(manager: EntityManager, user: SysUser): Promise<void> {
+    if (user.role !== RoleEnum.EMPLOYEE) throw Errors.notFound('学员不存在');
+    const link = await manager.getRepository(SysUserRole).findOne({
+      where: { userId: String(user.id) },
+    });
+    if (link) throw Errors.notFound('学员不存在');
   }
 
   async updateSelfProfile(id: string, patch: { real_name?: string; phone?: string | null; email?: string | null }) {
@@ -361,12 +386,14 @@ export class UsersService {
   }
 
   /** 启停（1=启用 / 0=停用）：停用即刻无法登录、敏感路径即时失效、不计入应学人数（FR-ORG-03） */
-  async setStatus(id: string, status: 0 | 1, actor: { id: number; name: string }, ip: string | null) {
-    const u = await this.userRepo.findOne({ where: { id } });
-    if (!u) throw Errors.notFound('员工不存在');
-    if (status === 0 && u.role === RoleEnum.SUPER_ADMIN) {
-      const activeSuperCount = await this.userRepo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
-      if (Number(u.id) === 1 || activeSuperCount <= 1) throw Errors.lastSuperAdmin();
+  async setStatus(id: string, status: 0 | 1, actor: { id: number; name: string }, ip: string | null, options: { requireManagedStudent?: boolean } = {}) {
+    let u: SysUser | null = options.requireManagedStudent ? null : await this.userRepo.findOne({ where: { id } });
+    if (!options.requireManagedStudent) {
+      if (!u) throw Errors.notFound('员工不存在');
+      if (status === 0 && u.role === RoleEnum.SUPER_ADMIN) {
+        const activeSuperCount = await this.userRepo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
+        if (Number(u.id) === 1 || activeSuperCount <= 1) throw Errors.lastSuperAdmin();
+      }
     }
     const oldSids: string[] = [];
     await this.dataSource.transaction(async (manager) => {
@@ -375,7 +402,8 @@ export class UsersService {
         .setLock('pessimistic_write')
         .where('u.id = :id', { id })
         .getOne();
-      if (!current) throw Errors.notFound('员工不存在');
+      if (!current) throw Errors.notFound(options.requireManagedStudent ? '学员不存在' : '员工不存在');
+      if (options.requireManagedStudent) await this.assertManagedStudent(manager, current);
       if (status === 0 && current.role === RoleEnum.SUPER_ADMIN) {
         const activeSuperCount = await repo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
         if (Number(current.id) === 1 || activeSuperCount <= 1) throw Errors.lastSuperAdmin();
@@ -384,8 +412,9 @@ export class UsersService {
       current.authVersion = this.authVersion(current) + 1;
       await repo.save(current);
       oldSids.push(...await this.sessions.invalidateUser(manager, id));
-      Object.assign(u, current);
+      u = current;
     });
+    if (!u) throw Errors.notFound(options.requireManagedStudent ? '学员不存在' : '员工不存在');
     await this.sessions.markRevoked(oldSids);
     if (status === 0) {
       // 用户级封禁：存量令牌即时失效（07 册 2.1.4）
@@ -400,16 +429,17 @@ export class UsersService {
   }
 
   /** 重置密码：旧密码立即失效、回到强制改密流程（FR-ORG-03 验收③ + 07 册 2.2.3） */
-  async resetPassword(id: string, newPassword: string, actor: { id: number; name: string }, ip: string | null) {
-    const u = await this.userRepo.findOne({ where: { id } });
-    if (!u) throw Errors.notFound('员工不存在');
-    // 与改密（auth）同策略：弱口令黑名单 + 个人信息子串一并拦截（07 册 2.2.2 三层统一）
-    validatePasswordStrength(
-      newPassword,
-      { username: u.username, employeeNo: u.employeeNo, realName: u.realName },
-      '初始密码',
-    );
-    const hash = await bcrypt.hash(newPassword, 12);
+  async resetPassword(id: string, newPassword: string, actor: { id: number; name: string }, ip: string | null, options: { requireManagedStudent?: boolean } = {}) {
+    let u: SysUser | null = options.requireManagedStudent ? null : await this.userRepo.findOne({ where: { id } });
+    if (!options.requireManagedStudent) {
+      if (!u) throw Errors.notFound('员工不存在');
+      // 与改密（auth）同策略：弱口令黑名单 + 个人信息子串一并拦截（07 册 2.2.2 三层统一）
+      validatePasswordStrength(
+        newPassword,
+        { username: u.username, employeeNo: u.employeeNo, realName: u.realName },
+        '初始密码',
+      );
+    }
     const oldSids: string[] = [];
     await this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(SysUser);
@@ -417,14 +447,24 @@ export class UsersService {
         .setLock('pessimistic_write')
         .where('u.id = :id', { id })
         .getOne();
-      if (!current) throw Errors.notFound('员工不存在');
+      if (!current) throw Errors.notFound(options.requireManagedStudent ? '学员不存在' : '员工不存在');
+      if (options.requireManagedStudent) {
+        await this.assertManagedStudent(manager, current);
+        validatePasswordStrength(
+          newPassword,
+          { username: current.username, employeeNo: current.employeeNo, realName: current.realName },
+          '初始密码',
+        );
+      }
+      const hash = await bcrypt.hash(newPassword, 12);
       current.passwordHash = hash;
       current.forcePasswordChange = 1;
       current.authVersion = this.authVersion(current) + 1;
       await repo.save(current);
       oldSids.push(...await this.sessions.invalidateUser(manager, id));
-      Object.assign(u, current);
+      u = current;
     });
+    if (!u) throw Errors.notFound(options.requireManagedStudent ? '学员不存在' : '员工不存在');
     await this.sessions.markRevoked(oldSids);
     await this.redis.setUserBlock(Number(u.id), Math.floor(Date.now() / 1000) + 1, this.config.jwt.refreshExpiresDays * 86400);
     this.audit.log({
