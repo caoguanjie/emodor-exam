@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { proveMenuStructureSerialization } from './support/system-menu-concurrency-checks.mjs';
+import { randomStrongPassword } from './training-access.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
@@ -19,7 +20,7 @@ async function captchaAnswer(ctx, captchaId) {
   finally { await redis.quit(); }
 }
 
-async function loginUser(ctx, username, password, label) {
+async function loginUser(ctx, username, password, label, ...personalValues) {
   const sequence = (loginUser.sequence = (loginUser.sequence || 250) + 1);
   const headers = { 'X-Forwarded-For': `198.51.100.${sequence}` };
   const issued = await ctx.request(null, 'POST', '/auth/captcha', undefined, headers);
@@ -33,17 +34,20 @@ async function loginUser(ctx, username, password, label) {
   assert(login.status === 200, `${label} login failed: ${login.status}`);
   actor.accessToken = login.data.access_token;
   if (!login.data.force_change_password) return actor;
-  const nextPassword = `Q${randomBytes(16).toString('hex')}Z9`;
+  const nextPassword = randomStrongPassword(username, ...personalValues);
   const changed = await ctx.request(actor, 'PUT', '/auth/password', {
     old_password: password, new_password: nextPassword,
   });
-  assert(changed.status === 200 && changed.data?.access_token, `${label} initial password change failed`);
+  assert(
+    changed.status === 200 && changed.data?.access_token,
+    `${label} initial password change failed: ${changed.status}/${changed.code}/${changed.message}`,
+  );
   actor.accessToken = changed.data.access_token;
   return actor;
 }
 
 async function loginAdmin(ctx) {
-  return loginUser(ctx, 'admin', ctx.adminPassword, 'A5 admin');
+  return loginUser(ctx, 'admin', ctx.adminPassword, 'A5 admin', '超级管理员');
 }
 
 function pngFixture() {
@@ -86,11 +90,12 @@ export async function run(ctx) {
   });
   assert(writerRole.status === 200 && writerRole.data?.id, `menu writer role create failed: ${writerRole.status}`);
   const writerUsername = `a5_menu_writer_${randomBytes(4).toString('hex')}`;
-  const writerPassword = `Q${randomBytes(16).toString('hex')}Z9`;
+  const writerRealName = 'A5 菜单维护员';
+  const writerPassword = randomStrongPassword(writerUsername, writerRealName);
   const writerUser = await ctx.request(admin, 'POST', '/users', {
     username: writerUsername,
     password: writerPassword,
-    real_name: 'A5 菜单维护员',
+    real_name: writerRealName,
     role: 'employee',
   });
   assert(writerUser.status === 200 && writerUser.data?.id, `menu writer user create failed: ${writerUser.status}`);
@@ -98,7 +103,7 @@ export async function run(ctx) {
     role_ids: [String(writerRole.data.id)],
   });
   assert(writerAssigned.status === 200, `menu writer role assignment failed: ${writerAssigned.status}`);
-  const writer = await loginUser(ctx, writerUsername, writerPassword, 'A5 menu writer');
+  const writer = await loginUser(ctx, writerUsername, writerPassword, 'A5 menu writer', writerRealName);
   const rolesCatalogDenied = await ctx.request(writer, 'GET', '/admin/permissions');
   assert(rolesCatalogDenied.status === 403, `menu writer unexpectedly received roles catalog: ${rolesCatalogDenied.status}`);
   const permissionOptions = await ctx.request(writer, 'GET', '/admin/menus/permission-options');
