@@ -38,7 +38,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 
 ### 1.4 A1—C7 模块与验收进度映射
 
-当前进度：A1—A3 已验收；A4 的代码、接口回归与独立审查已通过；A5 已完成源码独立审查及后台系统管理边界的真实 PC 验收；B1 课程主体与 B3 版本题库的源码、迁移和独立回归已通过并完成后端兼容集成。仍待后续 owner 完成并验收的组合项包括 B1 `/me/home`、A5 shell 中的课程菜单/路由、CourseDetail 与 Questions 离页保护，以及 B3 真实 PC 链路；C1 发布快照尚未实现。A4 的伪格式/超限/头像真实 PC 补验按用户“稍后处理，先继续代码”决定留到 C7，未标记通过；[证据及边界](../../review/2026-10-21-training-a4-media-acceptance.md)。下表列各阶段最终应具备的证据，不代表所有任务已完成，也不代表已部署至开发库或生产库。
+当前进度：A1—A3 已验收；A4 的代码、接口回归与独立审查已通过；A5 已完成源码独立审查及后台系统管理边界的真实 PC 验收；B1 课程主体与 B3 版本题库的源码、迁移和独立回归已通过并完成后端兼容集成。B1 final 已用真实 A5 配置服务接入 `/me/home`、课程菜单/路由与分区未保存保护，自动回归完成后仍由 root 统一做课程真实 PC 验收；Questions 未保存接线与 B3 真实 PC 链路由 B3 final 收口，C1 发布快照尚未实现。A4 的伪格式/超限/头像真实 PC 补验按用户“稍后处理，先继续代码”决定留到 C7，未标记通过；[证据及边界](../../review/2026-10-21-training-a4-media-acceptance.md)。下表列各阶段最终应具备的证据，不代表所有任务已完成，也不代表已部署至开发库或生产库。
 
 | owner 任务 | 目标模块/链路 | 必须留下的验收证据 |
 |---|---|---|
@@ -208,7 +208,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 **API 命名**
 
 - REST 风格，统一前缀 `/api/v1`。
-- legacy 模块路由：`/auth`、`/users`、`/departments`、`/regulations`、`/learning`、`/exams`、`/statistics`、`/ai`；已实现增量另含 `/admin/training-categories`、`/admin/students`、`/admin/courses`、`/admin` 权限/会话/系统配置路由、`/me`、`/me/courses`、`/media` 与公开 `/site-config`。
+- legacy 模块路由：`/auth`、`/users`、`/departments`、`/regulations`、`/learning`、`/exams`、`/statistics`、`/ai`；已实现增量另含 `/admin/training-categories`、`/admin/students`、`/admin/courses`、`/admin` 权限/会话/系统配置路由、`/me`（含 `/me/home`）、`/me/courses`、`/media` 与公开 `/site-config`。
 - 路由与模块的对应关系固定如下：
 
 | 模块（固定名称） | 路由前缀 |
@@ -216,7 +216,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | 1. 组织权限与后台公共模块 | `/auth`、`/users`、`/departments`、`/admin/training-categories`、`/admin/students`、`/admin`、`/me`、`/media`、`/site-config` |
 | 2. 制度文件管理模块 | `/regulations` |
 | 3. AI 出题模块 | `/ai` |
-| 4. 学习行为管控模块 | `/learning`、`/admin/courses`、`/me/courses` |
+| 4. 学习行为管控模块 | `/learning`、`/admin/courses`、`/me/courses`、`/me/home` |
 | 5. 考试评分模块 | `/exams` |
 | 6. 统计报表模块 | `/statistics` |
 

@@ -6,6 +6,7 @@ import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { Errors, RoleEnum } from '../../common/errors';
 import { Roles } from '../../common/guards/roles.guard';
 import { CategoryService } from '../training/category.service';
+import { SystemService } from '../system/system.service';
 import {
   CategoryOptionsQueryDto, CHAPTER_KEYS, COURSE_KEYS, CourseListQueryDto, CreateChapterDto, CreateCourseDto,
   CreateLessonDto, LESSON_CREATE_KEYS, LESSON_UPDATE_KEYS, ReplaceVideoDto, UpdateChapterDto, UpdateCourseDto, UpdateLessonDto,
@@ -175,6 +176,28 @@ export class CourseAdminController {
   ) {
     assertKeys(req.body, ['asset_id'], '视频版本请求');
     return this.lessons.replaceVideo(id(courseId, 'course_id'), id(lessonId, 'lesson_id'), dto.asset_id, this.actor(user), req.ip || null);
+  }
+}
+
+@Controller('me')
+export class LearnerHomeController {
+  constructor(
+    private readonly courses: CourseService,
+    private readonly system: SystemService,
+  ) {}
+
+  @Get('home')
+  async home(
+    @Query(new StrictDtoValidationPipe(['page', 'page_size'])) query: CourseListQueryDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    assertKeys(req.query, ['page', 'page_size'], '首页课程查询');
+    const [siteConfig, courses] = await Promise.all([
+      this.system.publicConfig(),
+      this.courses.visibleCourses(String(user.id), query.page ?? 1, query.page_size ?? 20),
+    ]);
+    return { site_config: siteConfig, courses };
   }
 }
 

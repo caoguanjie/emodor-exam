@@ -577,6 +577,7 @@ INSERT INTO `sys_menu` (`id`, `parent_id`, `name`, `type`, `route_path`, `permis
   (15,1,'员工管理','menu','/admin/users','students:read','User',60,1),
   (16,1,'学员管理','menu','/admin/students','students:read','UserFilled',70,1),
   (17,1,'培训类别','menu','/admin/training-categories','training_categories:read','CollectionTag',80,1),
+  (19,1,'课程管理','menu','/admin/courses',NULL,'Notebook',85,1),
   (18,1,'AI 服务配置','menu','/admin/ai-config',NULL,'Cpu',90,1),
   (20,2,'管理员','menu','/admin/administrators','administrators:read','UserFilled',10,1),
   (21,2,'角色权限','menu','/admin/roles','roles:read','SetUp',20,1),

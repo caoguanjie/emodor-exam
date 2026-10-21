@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训类别/学员/本人资料、A3 权限/会话、A4 受控媒体、A5 后台公共配置、B1 课程主体与 B3 四题型版本题库接口均以实际 controller/entity/migration 为准。A5 系统配置页已完成独立审查与有界 PC 验证，但不代表开发库/生产库已升级；B1 `/me/home`、A5 壳中的课程菜单/路由、B1/B3 编辑器未保存接线仍待 final owner 完成。B2 视频进度、B4 题库导入、C1 发布/个人题单及后续草稿、阅卷、监控和统计仍未实现。所有接口继续使用 `/api/v1`、`{code,message,data}`、严格 DTO/未知字段拒绝、所有权校验和 HttpOnly refresh Cookie；私有媒体与公开品牌内容流例外跳过信封。
+> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训类别/学员/本人资料、A3 权限/会话、A4 受控媒体、A5 后台公共配置、B1 课程主体与 B3 四题型版本题库接口均以实际 controller/entity/migration 为准。A5 系统配置页已完成独立审查与有界 PC 验证，但不代表开发库/生产库已升级；B1 final 已接入真实 `/me/home`、课程菜单/路由和 Courses/CourseDetail 分区未保存保护，真实课程 PC 验收仍由 root 统一执行；B3 编辑器接线和真实 PC 由其 final owner 收口。B2 视频进度、B4 题库导入、C1 发布/个人题单及后续草稿、阅卷、监控和统计仍未实现。所有接口继续使用 `/api/v1`、`{code,message,data}`、严格 DTO/未知字段拒绝、所有权校验和 HttpOnly refresh Cookie；私有媒体与公开品牌内容流例外跳过信封。
 
 ---
 
@@ -106,7 +106,7 @@
 | /users | 1. 组织权限模块 | 8 | 员工 CRUD、重置密码、批量导入、启停 |
 | /admin/training-categories | 1. 组织权限模块（A2） | 6 | 培训类别分页、详情、增改、启停、引用保护删除 |
 | /admin/students | 1. 组织权限模块（A2/A4） | 11 | 学员分页、CRUD、头像、启停、重置密码、xlsx 模板/预检/批次确认 |
-| /me | 1. 组织权限模块（A2/A4） | 2 | 本人资料查询与姓名/联系方式/头像修改 |
+| /me | 1. 组织权限模块（A2/A4）及 4. 学习行为管控模块（B1） | 3 | 本人资料查询/修改；首页组合公开站点配置与本人可见课程分页 |
 | /media | 1. 组织权限模块（A4） | 5 | 受控上传、限制查询、状态/Range 读取、引用保护删除 |
 | /admin | 1. 组织权限模块（A3/A5） | 24 | A3 权限/角色/管理员/会话 10 个；A5 菜单/字典/站点配置/审计 14 个 |
 | /site-config | 1. 组织权限模块（A5） | 2 | 严格公开 Logo/轮播白名单；仅当前配置的品牌图片内容流 |
@@ -120,7 +120,7 @@
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**按当前 controller HTTP 方法装饰器机械盘点，合计 152 个接口（151 个业务接口 + 1 个健康检查），其中 `/regulations` 18 个、`/ai` 26 个、B1 课程 16 个、A5 `/admin` 14 个与 `/site-config` 2 个；私有媒体与公开品牌内容流不包统一信封。**
+**按当前 controller HTTP 方法装饰器机械盘点，合计 153 个接口（152 个业务接口 + 1 个健康检查），其中 `/regulations` 18 个、`/ai` 26 个、B1 课程/首页 17 个、A5 `/admin` 14 个与 `/site-config` 2 个；私有媒体与公开品牌内容流不包统一信封。**
 
 ---
 
@@ -488,7 +488,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 **GET /statistics/export**：查询参数 `type`（regulation_overview / uncompleted / user_detail）+ `regulation_id`；返回 Excel 二进制流（07 册 4.2 下载鉴权）。
 
-### 3.9 B1 课程内容 /admin/courses、/me/courses
+### 3.9 B1 课程内容 /admin/courses、/me/courses、/me/home
 
 管理接口使用细权限，不要求类别管理权限。`GET /admin/courses/category-options` 是课程编辑器专用的启用类别窄查询；上传封面/视频仍调用 A4 `/media/upload`，因此操作者还需 `media:write`。
 
@@ -508,6 +508,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | POST | /admin/courses/{id}/lessons/{lessonId}/versions | courses:write | `{asset_id}`；追加视频版本并返回 `{version_id,asset_id,duration_ms,version_no}` |
 | GET | /me/courses | 登录本人 | query `page/page_size`；`Page<CourseSummary>` |
 | GET | /me/courses/{id} | 登录本人 | 可见课程目录；不返回管理员推荐/制度关联配置 |
+| GET | /me/home | 登录本人 | query `page/page_size`，默认 `1/20`；`{site_config:PublicSiteConfig,courses:Page<CourseSummary>}` |
 
 `CreateCourse = {title,category_id,cover_asset_id?,description?,regulation_ids?,is_recommended?,sort_order?}`；`UpdateCourse` 字段相同且全可选。所有 ID 为正十进制字符串，`cover_asset_id` 与 `regulation_ids` 可为 null，`regulation_ids` 最多 100 项且写入前逐一验证制度存在。`CourseSummary = {id,title,category_id,cover_asset_id,status,required_lesson_count}`。管理详情另含 `description/regulation_ids/is_recommended/sort_order/missing_required_lesson_ids/published_at/created_at/updated_at` 及：
 
@@ -526,7 +527,9 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 课程状态为 `draft / published / offline`。只有 draft/offline 可改变章节或课时结构；published 仍允许追加新 `lesson_version`，旧版本与媒体引用不覆盖。上架时锁定并确认类别启用，并要求每个必学课时的当前版本属于该课时、时长大于 0，且媒体为 ready 的 video；不满足返回 40930。课程的 `regulation_ids` 只是信息关联，不能进入抽题池或变成学习门槛。
 
-学员可见集合固定为：账号启用、`source=institution`、有类别、课程 `status=published` 且类别相同；排序为推荐优先、`sort_order ASC,id DESC`。external 或缺来源/类别返回空页，跨类别/下架详情返回 40302。B1 core 不注册 `/me/home`；root 合入 A5 后才由真实 `SystemService.publicConfig()` 与同一可见集合组合首页。
+学员可见集合固定为：账号启用、`source=institution`、有类别、课程 `status=published` 且类别相同；排序为推荐优先、`sort_order ASC,id DESC`。external 或缺来源/类别返回空页，跨类别/下架详情返回 40302。`GET /me/home` 直接并行组合真实 `SystemService.publicConfig()` 与 `CourseService.visibleCourses()`，所以站点字段仍只有 `logo_asset_id/banners`，课程集合、排序、分页及 external 空页语义与 `/me/courses` 完全相同；不另造推荐可见性、完成度或学习门槛。
+
+PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可见，`/admin/courses/{id}` 仍要求 `courses:read`。这只是前端注册路由的 `permissionAny` 语义；服务端每个 API 的 `@Permissions` 仍保持 AND 守卫，不改变全局授权模型。write-only 账号可创建课程，但不会读取列表或跳转到无权详情。
 
 ---
 
@@ -917,7 +920,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | /users | — | — | — | 全部 8 个 |
 | /admin/training-categories | — | — | — | A2 候选实现全部 6 个；A3 映射 training_categories:read/write |
 | /admin/students | — | — | — | A2/A4 实现全部 11 个；A3 映射 students:read/write |
-| /me | — | GET/PATCH 本人资料 | — | 同左 |
+| /me | — | GET/PATCH 本人资料；GET `/me/home` 按本人身份返回公开配置与可见课程 | — | 同左 |
 | /me/courses | — | 同类别已上架课程分页/详情；external 默认空 | — | 同左（仍按本人类别收口） |
 | /media | — | 本人头像上传/所有权范围读取 | 非头像上传需 `media:write` | 同左 |
 | /admin 权限/会话 | — | — | 按 `roles/administrators/sessions:*` | 按各接口注册权限 |
@@ -962,7 +965,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 | 校验项 | 结果 |
 |---|---|
-| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；A2—A5、B1 与 B3 增量 `/admin/training-categories`、`/admin/students`、`/admin`、`/me`、`/media`、`/site-config`、`/admin/courses`、`/me/courses` 及 `/ai` 版本题库端点已由 entity/controller 同步落地；B1 课程菜单/首页与 B1/B3 未保存接线仍待 final owner |
+| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；A2—A5、B1 与 B3 增量 `/admin/training-categories`、`/admin/students`、`/admin`、`/me`（含 `/me/home`）、`/media`、`/site-config`、`/admin/courses`、`/me/courses` 及 `/ai` 版本题库端点已由 entity/controller 同步落地；B1 课程菜单/路由与分区未保存接线已完成，B3 final 边界另行验收 |
 | 当前表名/字段名（snake_case）与 03 册 | 一致（含 A5 三张公共配置表、`regulation.category_id`、四张课程内容表、`question_concept`、`question_version` 与 question 兼容列）；新增字段以迁移/entity/API 同步为准 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
 | 心跳/失焦/乱序/超时/切屏行为与 05 册 | 一致（5.4.2/5.4.3/6.4.1~6.4.5 逐条对应） |

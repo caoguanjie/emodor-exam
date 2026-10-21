@@ -13,6 +13,14 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function flattenNavigation(nodes, output = []) {
+  for (const node of nodes || []) {
+    output.push(node);
+    flattenNavigation(node.children, output);
+  }
+  return output;
+}
+
 async function captchaAnswer(ctx, captchaId) {
   const redis = new Redis({
     host: ctx.env.REDIS_HOST || '127.0.0.1',
@@ -164,6 +172,11 @@ async function runBody(ctx) {
   assert(narrowWriterCourse.status === 200 && narrowWriterCourse.data?.id, `courses:write could not create: ${narrowWriterCourse.status}`);
   const narrowWriterList = await ctx.request(permissionUser.actor, 'GET', '/admin/courses');
   assert(narrowWriterList.status === 403, `courses:write unexpectedly granted courses:read: ${narrowWriterList.status}`);
+  const narrowWriterNavigation = await ctx.request(permissionUser.actor, 'GET', '/admin/menus/navigation');
+  const courseMenu = flattenNavigation(narrowWriterNavigation.data)
+    .find((item) => item.route_path === '/admin/courses');
+  assert(narrowWriterNavigation.status === 200 && courseMenu?.permission_code === null,
+    `write-only course navigation missing or over-constrained: ${narrowWriterNavigation.status}`);
 
   const regulation = await ctx.request(admin, 'POST', '/regulations', {
     title: `B1 关联制度 ${randomBytes(3).toString('hex')}`,
@@ -234,6 +247,29 @@ async function runBody(ctx) {
     && String(institutionPageTwo.data.items[0]?.id) === secondaryId, 'institution course page 2 mismatch');
   const externalCourses = await ctx.request(external.actor, 'GET', '/me/courses?page=1&page_size=20');
   assert(externalCourses.status === 200 && externalCourses.data?.total === 0, 'external learner received assigned courses');
+  const publicSiteConfig = await ctx.request(null, 'GET', '/site-config');
+  const institutionHome = await ctx.request(institution.actor, 'GET', '/me/home');
+  assert(institutionHome.status === 200
+    && JSON.stringify(Object.keys(institutionHome.data || {}).sort()) === JSON.stringify(['courses', 'site_config'])
+    && JSON.stringify(institutionHome.data.site_config) === JSON.stringify(publicSiteConfig.data)
+    && institutionHome.data.courses?.page === 1
+    && institutionHome.data.courses?.page_size === 20
+    && institutionHome.data.courses?.total === 2
+    && String(institutionHome.data.courses?.items?.[0]?.id) === courseId,
+  `learner home composition/defaults mismatch: ${institutionHome.status}`);
+  const institutionHomePageTwo = await ctx.request(institution.actor, 'GET', '/me/home?page=2&page_size=1');
+  assert(institutionHomePageTwo.status === 200
+    && JSON.stringify(institutionHomePageTwo.data.site_config) === JSON.stringify(publicSiteConfig.data)
+    && institutionHomePageTwo.data.courses?.page === 2
+    && institutionHomePageTwo.data.courses?.page_size === 1
+    && String(institutionHomePageTwo.data.courses?.items?.[0]?.id) === secondaryId,
+  `learner home pagination mismatch: ${institutionHomePageTwo.status}`);
+  const externalHome = await ctx.request(external.actor, 'GET', '/me/home');
+  assert(externalHome.status === 200 && externalHome.data?.courses?.total === 0
+    && JSON.stringify(externalHome.data.site_config) === JSON.stringify(publicSiteConfig.data),
+  'external learner home did not reuse the empty visible-course set');
+  const invalidHomeQuery = await ctx.request(institution.actor, 'GET', '/me/home?unexpected=1');
+  assert(invalidHomeQuery.status === 400, `learner home accepted an unknown query: ${invalidHomeQuery.status}`);
   const institutionDetail = await ctx.request(institution.actor, 'GET', `/me/courses/${courseId}`);
   assert(institutionDetail.status === 200 && institutionDetail.data?.chapters?.[0]?.lessons?.[0]?.current_version?.version_id === String(replaceVideo.data.version_id), 'learner course detail/current version mismatch');
   const otherCategoryCourse = await ctx.request(otherCategory.actor, 'GET', `/me/courses/${courseId}`);

@@ -136,6 +136,7 @@ type ImportResult = { batch_id: Id; created_ids: Id[]; committed_rows: number[] 
 | `009_attempt_snapshot.sql` C2 | `exam_assignment`、`exam_record_question`；`exam_record` | assignment(paper_id,user_id) 唯一；record(assignment_id,attempt_no) 唯一并保留原(paper_id,user_id,attempt_no) 唯一；active_assignment_id 可空唯一；题单(record_id,position) 唯一 |
 | `010_answers.sql` C3 | 修改 `exam_answer`、`exam_record` | answer(record_id,record_question_id) 唯一；draft_revision、heartbeat、提交与判分状态 |
 | `011_manual_grading.sql` C4 | `exam_review_event`；`exam_answer`、`exam_record` | answer.row_version 乐观锁；事件保存修改前后分数，最终汇总同记录事务锁 |
+| `012_course_navigation.sql` B1 final | `sys_menu` 数据 | 在不改写已登记 `004/005` checksum 的前提下幂等注册 `/admin/courses`；保留已有合法名称、排序、图标与启停配置，不重复菜单 |
 
 不伪造旧快照：旧结束记录 `snapshot_origin=legacy_unavailable`；旧发布卷的新开考为 `legacy_start`；新发布/开考为 `release`。已有类别/来源/难度未知保持 null，不创建“默认初级”回填。旧引用题编辑前存一份升级时当前版本并注明捕获时间，不称之为历史考试时的原版本。
 

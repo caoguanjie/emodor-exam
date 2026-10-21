@@ -1,4 +1,5 @@
 export const QUESTION_ROUTE_PERMISSIONS = ['questions:read', 'questions:write'] as const;
+export const COURSE_ROUTE_PERMISSIONS = ['courses:read', 'courses:write'] as const;
 
 export interface RouteAccessMeta {
   superAdminOnly?: unknown;

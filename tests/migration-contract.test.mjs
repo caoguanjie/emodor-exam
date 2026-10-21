@@ -367,6 +367,82 @@ test('005 course table probes reject same-count index drift without destroying r
   }
 });
 
+test('012 course navigation applies after registered predecessors, preserves customization, and matches fresh init', async () => {
+  const upgradeDb = await createDatabase('course_nav_upgrade_' + randomBytes(3).toString('hex'));
+  const freshDb = await createDatabase('course_nav_fresh_' + randomBytes(3).toString('hex'));
+  const preNavigationSql = execFileSync(
+    'git',
+    ['show', 'd36c3ecb7294b0e5ca4e5bdeb2d9cfa442617032:database/init.sql'],
+    { cwd: ROOT, encoding: 'utf8' },
+  );
+  await admin.query(renderSchemaForDatabase(preNavigationSql, upgradeDb));
+  const conn = await connectionFor(upgradeDb);
+  const definitions = await listMigrations();
+  const predecessorIds = [
+    '000_migration_registry', '001_training_identity', '002_access', '003_media',
+    '004_system', '005_courses', '007_question_bank',
+  ];
+  const predecessors = predecessorIds.map((id) => definitions.find((item) => item.id === id));
+  assert.equal(predecessors.every(Boolean), true, 'all accepted predecessor migrations must be present');
+  const navigation = definitions.find((item) => item.id === '012_course_navigation');
+  assert.ok(navigation, '012_course_navigation must be registered as an independent migration');
+
+  await applyMigrations({ connection: conn, database: upgradeDb, migrations: predecessors });
+  const [registryBefore] = await conn.query(
+    `SELECT migration_id, checksum, status FROM \`${migrationTable}\` WHERE migration_id IN (?) ORDER BY migration_id`,
+    [predecessorIds],
+  );
+  assert.deepEqual(registryBefore.map((row) => row.migration_id), predecessorIds);
+
+  const first = await applyMigrations({
+    connection: conn, database: upgradeDb, migrations: [...predecessors, navigation],
+  });
+  assert.deepEqual(first.applied, ['012_course_navigation']);
+  const [registryAfter] = await conn.query(
+    `SELECT migration_id, checksum, status FROM \`${migrationTable}\` WHERE migration_id IN (?) ORDER BY migration_id`,
+    [predecessorIds],
+  );
+  assert.deepEqual(registryAfter, registryBefore, 'adding 012 must not rewrite accepted migration checksums');
+
+  const [[seeded]] = await conn.query(
+    "SELECT id, parent_id, name, type, route_path, permission_code, icon, sort, status FROM sys_menu WHERE route_path = '/admin/courses'",
+  );
+  assert.deepEqual({
+    id: String(seeded.id), parent_id: String(seeded.parent_id), name: seeded.name, type: seeded.type,
+    route_path: seeded.route_path, permission_code: seeded.permission_code, icon: seeded.icon,
+    sort: Number(seeded.sort), status: Number(seeded.status),
+  }, {
+    id: '19', parent_id: '1', name: '课程管理', type: 'menu', route_path: '/admin/courses',
+    permission_code: null, icon: 'Notebook', sort: 85, status: 1,
+  });
+
+  await conn.query("UPDATE sys_menu SET name = '自定义课程入口', icon = 'Reading', sort = 815, status = 0 WHERE route_path = '/admin/courses'");
+  await conn.execute(`DELETE FROM \`${migrationTable}\` WHERE migration_id = ?`, [navigation.id]);
+  const recovered = await applyMigrations({ connection: conn, database: upgradeDb, migrations: [navigation] });
+  assert.deepEqual(recovered.applied, ['012_course_navigation']);
+  const [[customized]] = await conn.query(
+    "SELECT COUNT(*) AS count, MIN(name) AS name, MIN(icon) AS icon, MIN(sort) AS sort, MIN(status) AS status FROM sys_menu WHERE route_path = '/admin/courses'",
+  );
+  assert.deepEqual({
+    count: Number(customized.count), name: customized.name, icon: customized.icon,
+    sort: Number(customized.sort), status: Number(customized.status),
+  }, { count: 1, name: '自定义课程入口', icon: 'Reading', sort: 815, status: 0 });
+  const repeated = await applyMigrations({ connection: conn, database: upgradeDb, migrations: [navigation] });
+  assert.deepEqual(repeated.applied, []);
+  const [[repeatCount]] = await conn.query("SELECT COUNT(*) AS count FROM sys_menu WHERE route_path = '/admin/courses'");
+  assert.equal(Number(repeatCount.count), 1);
+  await conn.end();
+
+  await admin.query(renderSchemaForDatabase(initSql, freshDb));
+  const fresh = await connectionFor(freshDb);
+  const [[freshProbe]] = await fresh.execute(navigation.steps[0].checkSql);
+  assert.equal(Number(freshProbe.complete), 1, 'fresh init must satisfy the 012 completion probe');
+  await applyMigrations({ connection: fresh, database: freshDb, migrations: [navigation] });
+  const [[freshCount]] = await fresh.query("SELECT COUNT(*) AS count FROM sys_menu WHERE route_path = '/admin/courses' AND type = 'menu' AND permission_code IS NULL");
+  assert.equal(Number(freshCount.count), 1);
+  await fresh.end();
+});
+
 test('media migration completion checks reject same-count schema drift without destroying rows', async () => {
   const base = await migration();
   const media = await migration('003_media');
