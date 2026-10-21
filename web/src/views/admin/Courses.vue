@@ -74,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onActivated, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useRouter } from 'vue-router';
 import http from '../../api/http';
@@ -112,6 +112,9 @@ let createContextToken = 0;
 let createOperationSequence = 0;
 let createLatestOperation = 0;
 let createLastAppliedOperation = 0;
+let listRequestSequence = 0;
+let listLatestRequest = 0;
+let initialActivationSeen = false;
 const createCourseId = ref<Id | null>(null);
 const createUnsaved = useUnsavedChanges(createDirty, { onDiscard: discardCreate });
 
@@ -165,6 +168,8 @@ async function loadCategories() {
 }
 async function load() {
   if (!canRead.value) return;
+  const request = ++listRequestSequence;
+  listLatestRequest = request;
   loading.value = true;
   try {
     const params = {
@@ -175,9 +180,12 @@ async function load() {
       ...(query.status ? { status: query.status } : {}),
     };
     const result = await http.get('/admin/courses', { params }) as Page<CourseRow>;
+    if (request !== listLatestRequest) return;
     items.value = result.items;
     total.value = result.total;
-  } finally { loading.value = false; }
+  } finally {
+    if (request === listLatestRequest) loading.value = false;
+  }
 }
 function search() { query.page = 1; void load(); }
 function openCreate() {
@@ -240,4 +248,11 @@ async function offline(row: CourseRow) {
 }
 
 onMounted(async () => { await loadCategories(); if (canRead.value) await load(); });
+onActivated(async () => {
+  if (!initialActivationSeen) {
+    initialActivationSeen = true;
+    return;
+  }
+  if (canRead.value) await load();
+});
 </script>

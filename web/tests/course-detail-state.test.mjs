@@ -31,8 +31,11 @@ const initialCourse = Object.freeze({
   chapters: [],
 });
 
+const initialCoursePage = Object.freeze({ items: [], total: 0, page: 1, page_size: 20 });
+
 const testContext = {
   course: structuredClone(initialCourse),
+  coursePage: structuredClone(initialCoursePage),
   calls: [],
   messages: [],
   failRequests: new Set(),
@@ -82,6 +85,12 @@ const httpStubCode = `
     }
     return null;
   };
+  const recomputeMissingLessons = () => {
+    context.course.missing_required_lesson_ids = (context.course.chapters || [])
+      .flatMap((chapter) => chapter.lessons)
+      .filter((lesson) => lesson.required && !lesson.current_version)
+      .map((lesson) => lesson.id);
+  };
   const lessonResponse = (entry, fallback) => ({
     id: entry?.lesson.id || fallback.id,
     course_id: context.course.id,
@@ -93,21 +102,24 @@ const httpStubCode = `
     current_version_id: entry?.lesson.current_version?.version_id || null,
   });
   export default {
-    async get(path) {
-      context.calls.push({ method: 'GET', path });
+    async get(path, config) {
+      context.calls.push({ method: 'GET', path, params: clone(config?.params) });
       rejectConfigured('GET', path);
-      if (path === '/admin/courses/course-1') return clone(context.course);
-      if (path === '/admin/courses') return { items: [], total: 0, page: 1, page_size: 20 };
+      let response;
+      if (path === '/admin/courses/course-1') response = context.course;
+      else if (path === '/admin/courses') response = context.coursePage;
       if (path === '/admin/courses/category-options') {
-        return { items: [{ id: 'category-1', name: '默认类别' }], total: 1, page: 1, page_size: 100 };
-      }
-      if (path === '/regulations') {
-        return { list: [
+        response = { items: [{ id: 'category-1', name: '默认类别' }], total: 1, page: 1, page_size: 100 };
+      } else if (path === '/regulations') {
+        response = { list: [
           { id: 11, title: '制度十一', category: 'legacy-a', category_id: null, description: null, status: 'published', current_version_id: 1 },
           { id: 12, title: '制度十二', category: 'legacy-b', category_id: 'category-1', description: null, status: 'published', current_version_id: 2 },
         ], total: 2, page: 1, page_size: 100 };
       }
-      throw new Error('unexpected GET ' + path);
+      if (response === undefined) throw new Error('unexpected GET ' + path);
+      const captured = clone(response);
+      await waitConfigured('GET', path);
+      return captured;
     },
     async put(path, body) {
       context.calls.push({ method: 'PUT', path, body: clone(body) });
@@ -124,6 +136,7 @@ const httpStubCode = `
           required: Boolean(body.required),
           sort_order: body.sort_order,
         });
+        recomputeMissingLessons();
         return lessonResponse(entry, {
           id: lessonId, chapter_id: 'chapter-unknown', title: body.title,
           required: Boolean(body.required), sort_order: body.sort_order,
@@ -145,6 +158,7 @@ const httpStubCode = `
           current_version: body.asset_id ? { version_id: 'version-created', asset_id: body.asset_id, duration_ms: 60_000 } : null,
         };
         if (chapter) chapter.lessons.push(lesson);
+        recomputeMissingLessons();
         return lessonResponse(chapter ? { chapter, lesson } : null, {
           id: lesson.id, chapter_id: body.chapter_id, title: lesson.title,
           required: lesson.required, sort_order: lesson.sort_order,
@@ -160,6 +174,7 @@ const httpStubCode = `
         if (entry) entry.lesson.current_version = {
           version_id: saved.version_id, asset_id: saved.asset_id, duration_ms: saved.duration_ms,
         };
+        recomputeMissingLessons();
         return saved;
       }
       if (path.endsWith('/publish')) context.course.status = 'published';
@@ -355,7 +370,14 @@ async function mountCourses() {
   const state = app._instance.setupState;
   await waitFor(() => state.categories.length === 1, 1800, 'course list category options');
   await nextTick();
-  return { app, root, state, unmount: () => app.unmount() };
+  return { app, instance: app._instance, root, state, unmount: () => app.unmount() };
+}
+
+async function activate(instance) {
+  const hooks = instance.a || [];
+  assert.ok(hooks.length > 0, 'cached view should register an activated hook');
+  await Promise.all(hooks.map((hook) => hook()));
+  await nextTick();
 }
 
 function updateBinding(node, value) {
@@ -417,6 +439,7 @@ after(async () => {
 
 beforeEach(() => {
   testContext.course = structuredClone(initialCourse);
+  testContext.coursePage = structuredClone(initialCoursePage);
   testContext.calls = [];
   testContext.messages = [];
   testContext.failRequests = new Set();
@@ -466,6 +489,63 @@ test('keeps unsaved description and uploaded cover while chapter and lesson save
   await mounted.state.saveLesson();
   assert.equal(mounted.state.form.description, '尚未保存的简介');
   assert.equal(mounted.state.form.cover_asset_id, 'cover-draft');
+  mounted.unmount();
+});
+
+test('refreshes the server missing-video summary after confirmed lesson metadata without resetting a course draft', async () => {
+  testContext.course.missing_required_lesson_ids = ['lesson-1'];
+  testContext.course.chapters = [{
+    id: 'chapter-1',
+    title: '第一章',
+    sort_order: 1,
+    lessons: [{
+      id: 'lesson-1', title: '第一课', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
+    }],
+  }];
+  const mounted = await mountCourseDetail();
+  mounted.state.form.description = '未保存的课程简介';
+  const lesson = mounted.state.course.chapters[0].lessons[0];
+  mounted.state.openLesson('chapter-1', lesson);
+  mounted.state.lessonForm.required = false;
+  await nextTick();
+
+  await mounted.state.saveLesson();
+  await nextTick();
+
+  assert.deepEqual(mounted.state.course.missing_required_lesson_ids, []);
+  assert.equal(findNodes(mounted.root, (node) => node.type === 'alert' && String(node.props.title).includes('缺少可用视频')).length, 0);
+  assert.equal(mounted.state.form.description, '未保存的课程简介');
+  mounted.unmount();
+});
+
+test('clears the missing-video summary only after the lesson version is confirmed ready by the catalog', async () => {
+  testContext.course.missing_required_lesson_ids = ['lesson-1'];
+  testContext.course.chapters = [{
+    id: 'chapter-1',
+    title: '第一章',
+    sort_order: 1,
+    lessons: [{
+      id: 'lesson-1', title: '第一课', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
+    }],
+  }];
+  const mounted = await mountCourseDetail();
+  mounted.state.form.description = '另一份未保存简介';
+  const lesson = mounted.state.course.chapters[0].lessons[0];
+  mounted.state.openLesson('chapter-1', lesson);
+  mounted.state.lessonForm.asset_id = 'video-ready';
+  const version = deferRequest('POST', '/admin/courses/course-1/lessons/lesson-1/versions');
+  const pending = mounted.state.saveLesson();
+  await waitFor(() => testContext.calls.some((call) => call.method === 'POST' && call.path.endsWith('/lessons/lesson-1/versions')), 1800, 'lesson version save');
+
+  assert.deepEqual(mounted.state.course.missing_required_lesson_ids, ['lesson-1']);
+  assert.equal(findNodes(mounted.root, (node) => node.type === 'alert' && String(node.props.title).includes('缺少可用视频')).length, 1);
+  version.resolve();
+  await pending;
+  await nextTick();
+
+  assert.deepEqual(mounted.state.course.missing_required_lesson_ids, []);
+  assert.equal(findNodes(mounted.root, (node) => node.type === 'alert' && String(node.props.title).includes('缺少可用视频')).length, 0);
+  assert.equal(mounted.state.form.description, '另一份未保存简介');
   mounted.unmount();
 });
 
@@ -577,6 +657,82 @@ test('protects the Courses create draft and never redirects a write-only creator
   assert.equal(mounted.state.createVisible, false);
   assert.equal(mounted.state.form.title, '');
   assert.equal(createSource.dirty.value, false);
+  mounted.unmount();
+});
+
+test('refreshes a cached course list on reactivation without resetting its query or create draft', async () => {
+  const mounted = await mountCourses();
+  await waitFor(() => testContext.calls.some((call) => call.method === 'GET' && call.path === '/admin/courses'), 1800, 'initial course list');
+  await activate(mounted.instance);
+
+  mounted.state.query.page = 2;
+  mounted.state.query.keyword = '安全';
+  mounted.state.query.category_id = 'category-1';
+  mounted.state.query.status = 'draft';
+  mounted.state.openCreate();
+  mounted.state.form.title = '未保存的新课程';
+  testContext.coursePage = {
+    items: [{
+      id: 'course-created', title: '已保存课程', category_id: 'category-1', required_lesson_count: 0,
+      is_recommended: false, sort_order: 0, status: 'draft',
+    }],
+    total: 21,
+    page: 2,
+    page_size: 20,
+  };
+
+  await activate(mounted.instance);
+  await waitFor(() => mounted.state.total === 21, 1800, 'reactivated course list');
+  const lastListCall = testContext.calls.filter((call) => call.method === 'GET' && call.path === '/admin/courses').at(-1);
+  assert.deepEqual(lastListCall.params, {
+    page: 2,
+    page_size: 20,
+    keyword: '安全',
+    category_id: 'category-1',
+    status: 'draft',
+  });
+  assert.equal(mounted.state.items[0].id, 'course-created');
+  assert.equal(mounted.state.query.page, 2);
+  assert.equal(mounted.state.form.title, '未保存的新课程');
+  assert.equal(mounted.state.createVisible, true);
+  mounted.unmount();
+});
+
+test('ignores an older course list response after a newer query has completed', async () => {
+  const mounted = await mountCourses();
+  await waitFor(() => testContext.calls.some((call) => call.method === 'GET' && call.path === '/admin/courses'), 1800, 'initial course list');
+
+  mounted.state.query.keyword = '旧查询';
+  testContext.coursePage = {
+    items: [{
+      id: 'course-old', title: '旧结果', category_id: 'category-1', required_lesson_count: 0,
+      is_recommended: false, sort_order: 0, status: 'draft',
+    }],
+    total: 1,
+    page: 1,
+    page_size: 20,
+  };
+  const older = deferRequest('GET', '/admin/courses');
+  const olderLoad = mounted.state.load();
+  await waitFor(() => testContext.calls.some((call) => call.method === 'GET' && call.params?.keyword === '旧查询'), 1800, 'older course query');
+
+  mounted.state.query.keyword = '新查询';
+  testContext.coursePage = {
+    items: [{
+      id: 'course-new', title: '新结果', category_id: 'category-1', required_lesson_count: 0,
+      is_recommended: false, sort_order: 0, status: 'draft',
+    }],
+    total: 1,
+    page: 1,
+    page_size: 20,
+  };
+  await mounted.state.load();
+  assert.equal(mounted.state.items[0].id, 'course-new');
+
+  older.resolve();
+  await olderLoad;
+  assert.equal(mounted.state.items[0].id, 'course-new');
+  assert.equal(mounted.state.query.keyword, '新查询');
   mounted.unmount();
 });
 

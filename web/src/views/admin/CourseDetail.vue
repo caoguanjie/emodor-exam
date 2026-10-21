@@ -202,7 +202,15 @@ function syncLessonDraftState() {
 function courseLesson(lessonId: Id) {
   return course.value?.chapters.flatMap((chapter) => chapter.lessons).find((lesson) => lesson.id === lessonId);
 }
+function syncMissingRequiredLesson(lessonId: Id, missing: boolean) {
+  if (!course.value) return;
+  const missingIds = new Set(course.value.missing_required_lesson_ids || []);
+  if (missing) missingIds.add(lessonId);
+  else missingIds.delete(lessonId);
+  course.value.missing_required_lesson_ids = [...missingIds];
+}
 function syncSavedLessonMetadata(saved: SavedLessonMetadata) {
+    syncMissingRequiredLesson(saved.id, saved.required && !saved.current_version_id);
   const row = courseLesson(saved.id);
   if (!row) return;
   Object.assign(row, {
@@ -213,6 +221,7 @@ function syncSavedLessonMetadata(saved: SavedLessonMetadata) {
   });
 }
 function syncSavedLessonVersion(lessonId: Id, saved: LessonVersionView) {
+    syncMissingRequiredLesson(lessonId, false);
   const row = courseLesson(lessonId);
   if (row) row.current_version = { ...saved };
 }
