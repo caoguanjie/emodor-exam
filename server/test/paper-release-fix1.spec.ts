@@ -341,6 +341,65 @@ describe('release-backed legacy paper compatibility', () => {
   });
 });
 
+describe('paper copy title boundary', () => {
+  function copyFixture(scope: 'regulation' | 'training', title: string) {
+    const source: any = {
+      id: '11', regulationId: scope === 'regulation' ? '9' : null, businessScope: scope, mode: 'fixed',
+      categoryId: scope === 'training' ? '7' : null, requiresLearning: scope === 'regulation' ? 1 : 0,
+      regulationIds: scope === 'regulation' ? ['9'] : [], courseIds: [], ruleConfig: { rules: [] },
+      title, totalScore: '100.00', passScore: '60.00', durationMinutes: 30,
+      maxAttempts: 3, partialCreditRatio: '0.50', status: 'published', createdBy: '3',
+    };
+    const saved: any[] = [];
+    const paperRepo = {
+      findOne: vi.fn(async () => source),
+      create: vi.fn((value: any) => ({ ...value })),
+      save: vi.fn(async (value: any) => {
+        const created = { id: '12', ...value };
+        saved.push(created);
+        return created;
+      }),
+    };
+    const itemRepo = {
+      find: vi.fn(async () => []),
+      create: vi.fn((value: any) => ({ ...value })),
+      save: vi.fn(async (value: any) => value),
+    };
+    const manager = { getRepository(entity: unknown) {
+      if (entity === ExamPaper) return paperRepo;
+      if (entity === PaperQuestion) return itemRepo;
+      throw new Error(`unexpected repository ${(entity as any)?.name}`);
+    } };
+    const service = Object.create(PaperService.prototype) as PaperService & Record<string, any>;
+    Object.assign(service, {
+      paperRepo,
+      releaseService: { latestForPaper: vi.fn(async () => null) },
+      categories: { lockActive: vi.fn(async () => ({ id: '7', status: 1 })) },
+      dataSource: { transaction: (work: (value: any) => Promise<unknown>) => work(manager) },
+      audit: { log: vi.fn() },
+    });
+    return { service, source, saved };
+  }
+
+  it.each([
+    ['legacy short title', 'regulation', '制度考试', '制度考试（副本）'],
+    ['training short title', 'training', '培训考试', '培训考试（副本）'],
+    ['legacy 128 emoji title', 'regulation', '😀'.repeat(128), `${'😀'.repeat(124)}（副本）`],
+    ['training 128 CJK title', 'training', '培'.repeat(128), `${'培'.repeat(124)}（副本）`],
+  ] as const)('%s reserves the suffix without mutating the source', async (_label, scope, title, expected) => {
+    const { service, source, saved } = copyFixture(scope, title);
+
+    const copied = scope === 'regulation'
+      ? await service.copy('11', { id: 3, name: 'admin' }, null)
+      : await service.copyTraining('11', { id: '3', name: 'admin' }, null);
+
+    expect(copied.title).toBe(expected);
+    expect(Array.from(copied.title)).toHaveLength(Math.min(Array.from(title).length + 4, 128));
+    expect(saved[0].title).toBe(expected);
+    expect(source.title).toBe(title);
+  });
+});
+
 describe('training paper stale pre-read protection', () => {
   function staleFixture() {
     const current: any = {

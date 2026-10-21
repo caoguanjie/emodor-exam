@@ -87,8 +87,9 @@
     </el-card>
 
     <el-dialog v-model="candidateVisible" title="选择当前审核通过的题目版本" width="900px">
-      <div class="toolbar"><el-select v-model="candidateQuery.type" placeholder="题型" clearable style="width:140px" @change="loadCandidates"><el-option v-for="item in questionTypes" :key="item" :label="typeLabel(item)" :value="item" /></el-select><el-select v-model="candidateQuery.difficulty" placeholder="难度" clearable style="width:140px" @change="loadCandidates"><el-option label="初级" value="easy" /><el-option label="中级" value="medium" /><el-option label="高级" value="hard" /></el-select></div>
-      <el-table :data="candidates" @selection-change="(rows: TrainingPaperQuestion[]) => (pickedCandidates = rows)"><el-table-column type="selection" width="50" /><el-table-column prop="question_version_id" label="版本 ID" width="100" /><el-table-column prop="stem" label="题干" min-width="280" show-overflow-tooltip /><el-table-column label="题型/难度" width="120"><template #default="{ row }">{{ typeLabel(row.type) }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column><el-table-column label="考点" width="110"><template #default="{ row }">{{ row.concept_id || '独立题' }}</template></el-table-column><el-table-column label="建议分" width="90"><template #default="{ row }">{{ row.score_cents / 100 }}</template></el-table-column></el-table>
+      <div class="toolbar"><el-select v-model="candidateQuery.type" placeholder="题型" clearable style="width:140px" @change="changeCandidateFilter"><el-option v-for="item in questionTypes" :key="item" :label="typeLabel(item)" :value="item" /></el-select><el-select v-model="candidateQuery.difficulty" placeholder="难度" clearable style="width:140px" @change="changeCandidateFilter"><el-option label="初级" value="easy" /><el-option label="中级" value="medium" /><el-option label="高级" value="hard" /></el-select></div>
+      <el-table :key="candidateSession" :data="candidates" row-key="question_version_id" @selection-change="updateCandidateSelection"><el-table-column type="selection" width="50" :reserve-selection="true" /><el-table-column prop="question_version_id" label="版本 ID" width="100" /><el-table-column prop="stem" label="题干" min-width="280" show-overflow-tooltip /><el-table-column label="题型/难度" width="120"><template #default="{ row }">{{ typeLabel(row.type) }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column><el-table-column label="考点" width="110"><template #default="{ row }">{{ row.concept_id || '独立题' }}</template></el-table-column><el-table-column label="建议分" width="90"><template #default="{ row }">{{ row.score_cents / 100 }}</template></el-table-column></el-table>
+      <div class="candidate-pagination"><span class="hint inline">已选 {{ pickedCandidates.length }} 题</span><el-pagination :current-page="candidatePage.page" :page-size="candidatePage.page_size" :total="candidatePage.total" layout="total, prev, pager, next" @current-change="changeCandidatePage" /></div>
       <template #footer><el-button @click="candidateVisible = false">取消</el-button><el-button type="primary" @click="addCandidates">加入题单</el-button></template>
     </el-dialog>
 
@@ -193,6 +194,8 @@ const candidateVisible = ref(false);
 const candidates = ref<TrainingPaperQuestion[]>([]);
 const pickedCandidates = ref<TrainingPaperQuestion[]>([]);
 const candidateQuery = reactive<{ type: QuestionType | ''; difficulty: Difficulty | '' }>({ type: '', difficulty: '' });
+const candidatePage = reactive({ page: 1, page_size: 50, total: 0 });
+const candidateSession = ref(0);
 const previewVisible = ref(false);
 const previewSession = ref<PreviewSession | null>(null);
 const preview = computed(() => previewSession.value?.data || null);
@@ -375,14 +378,32 @@ async function saveConfig() {
 }
 
 function addRule() { const used = new Set(form.rules.map((item) => item.type)); const next = questionTypes.find((item) => !used.has(item)); if (next) form.rules.push({ type: next, count: 1, score_cents: 1000 }); }
-async function openCandidatePicker() { candidateVisible.value = true; await loadCandidates(); }
+async function openCandidatePicker() {
+  candidatePage.page = 1;
+  candidatePage.total = 0;
+  pickedCandidates.value = [];
+  candidateSession.value += 1;
+  candidateVisible.value = true;
+  await loadCandidates();
+}
 async function loadCandidates() {
   const context = viewContext;
   const operation = ++candidateOperation;
-  const params = { page: 1, page_size: 100, ...(candidateQuery.type ? { type: candidateQuery.type } : {}), ...(candidateQuery.difficulty ? { difficulty: candidateQuery.difficulty } : {}) };
+  const params = { page: candidatePage.page, page_size: candidatePage.page_size, ...(candidateQuery.type ? { type: candidateQuery.type } : {}), ...(candidateQuery.difficulty ? { difficulty: candidateQuery.difficulty } : {}) };
   const page = await http.get(`/admin/papers/${paperId}/candidates`, { params }) as Page<TrainingPaperQuestion>;
   if (context !== viewContext || operation !== candidateOperation || !candidateVisible.value) return;
   candidates.value = page.items;
+  candidatePage.page = page.page;
+  candidatePage.page_size = page.page_size;
+  candidatePage.total = page.total;
+}
+async function changeCandidatePage(page: number) { candidatePage.page = page; await loadCandidates(); }
+async function changeCandidateFilter() { candidatePage.page = 1; await loadCandidates(); }
+function updateCandidateSelection(rows: TrainingPaperQuestion[]) {
+  const selected = new Map(pickedCandidates.value.map((item) => [String(item.question_version_id), item]));
+  for (const item of candidates.value) selected.delete(String(item.question_version_id));
+  for (const item of rows) selected.set(String(item.question_version_id), item);
+  pickedCandidates.value = [...selected.values()];
 }
 function addCandidates() { const versionIds = new Set(fixedQuestions.value.map((item) => item.question_version_id)); const concepts = new Set(fixedQuestions.value.map((item) => item.concept_id ? `concept:${item.concept_id}` : `question:${item.question_id}`)); for (const item of pickedCandidates.value) { const key = item.concept_id ? `concept:${item.concept_id}` : `question:${item.question_id}`; if (versionIds.has(item.question_version_id) || concepts.has(key)) continue; versionIds.add(item.question_version_id); concepts.add(key); fixedQuestions.value.push({ ...clone(item), sort: fixedQuestions.value.length }); } candidateVisible.value = false; }
 function removeFixed(row: TrainingPaperQuestion) { fixedQuestions.value = fixedQuestions.value.filter((item) => item.question_version_id !== row.question_version_id); fixedQuestions.value.forEach((item, index) => { item.sort = index; }); }
@@ -670,6 +691,7 @@ onMounted(async () => { if (legacyMode) await loadLegacy(); else { await loadTra
 .hint { color:var(--el-text-color-secondary); font-size:12px; line-height:1.5; margin-top:4px; width:100%; }
 .hint.inline { margin-left:8px; width:auto; }.hint.ok { color:var(--el-color-success); }.hint.danger { color:var(--el-color-danger); }
 .rules { width:100%; }.rule-row { display:grid; grid-template-columns:90px 120px 140px 60px 60px; align-items:center; gap:8px; margin-bottom:8px; }
+.candidate-pagination { display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
 .preview-question { padding:14px 0; border-bottom:1px solid var(--el-border-color-lighter); }.preview-title { font-weight:600; }.answer { margin-top:8px; padding:10px; background:var(--el-fill-color-light); color:var(--el-color-success); }
 :deep(.el-card) { border-radius:var(--re-radius); border:1px solid var(--re-border); box-shadow:var(--re-shadow-card); }
 </style>

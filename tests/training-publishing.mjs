@@ -936,12 +936,18 @@ async function runPublishing(ctx) {
   const copyUnknownBody = await ctx.request(admin.actor, 'POST', `/ai/papers/${legacyPaperId}/copy`, { unexpected: true });
   assert.equal(copyUnknownBody.status, 400);
   assert.equal(copyUnknownBody.code, 40001);
+  const maxLegacyCopyTitle = '😀'.repeat(128);
+  await ctx.queryTestDb('UPDATE exam_paper SET title = ? WHERE id = ?', [maxLegacyCopyTitle, legacyPaperId]);
   const legacyCopy = await ctx.request(admin.actor, 'POST', `/ai/papers/${legacyPaperId}/copy`, {});
   assert.equal(legacyCopy.status, 200, `legacy copy: ${JSON.stringify(legacyCopy)}`);
   assert.equal(typeof legacyCopy.data.id, 'number');
   assert.equal(legacyCopy.data.status, 'draft');
   assert.equal(legacyCopy.data.release_id, null);
   assert.equal(legacyCopy.data.rules_locked, false);
+  assert.equal(legacyCopy.data.title, `${'😀'.repeat(124)}（副本）`);
+  assert.equal(Array.from(legacyCopy.data.title).length, 128);
+  const [legacyCopySource] = await ctx.queryTestDb('SELECT title FROM exam_paper WHERE id = ?', [legacyPaperId]);
+  assert.equal(legacyCopySource.title, maxLegacyCopyTitle, 'legacy copy must not mutate the source title');
   const legacyCopyId = String(legacyCopy.data.id);
   const copyRows = await ctx.queryTestDb(
     'SELECT question_version_id, score FROM paper_question WHERE paper_id = ? ORDER BY sort',
@@ -1015,10 +1021,16 @@ async function runPublishing(ctx) {
   assert.match(JSON.stringify(deficitPublish.data), /"available":1/);
 
   stage = 'training copy transitions and lists';
+  const maxTrainingCopyTitle = '培'.repeat(128);
+  await ctx.queryTestDb('UPDATE exam_paper SET title = ? WHERE id = ?', [maxTrainingCopyTitle, fixedId]);
   const copied = await ctx.request(admin.actor, 'POST', `/admin/papers/${fixedId}/copy`);
   assert.equal(copied.status, 200, JSON.stringify(copied));
   assert.equal(copied.data.status, 'draft');
   assert.equal(copied.data.mode, 'fixed');
+  assert.equal(copied.data.title, `${'培'.repeat(124)}（副本）`);
+  assert.equal(Array.from(copied.data.title).length, 128);
+  const [trainingCopySource] = await ctx.queryTestDb('SELECT title FROM exam_paper WHERE id = ?', [fixedId]);
+  assert.equal(trainingCopySource.title, maxTrainingCopyTitle, 'training copy must not mutate the source title');
   const withdrawn = await ctx.request(admin.actor, 'POST', `/admin/papers/${randomId}/withdraw`);
   assert.equal(withdrawn.status, 200, JSON.stringify(withdrawn));
   assert.equal(withdrawn.data.status, 'withdrawn');

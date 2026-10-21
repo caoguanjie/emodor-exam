@@ -19,6 +19,14 @@ import { PaperReleaseService } from '../exams/paper-release.service';
 type PaperActor = { id: string | number; name: string };
 type FixedQuestionInput = { question_version_id: string; score_cents: number };
 
+const PAPER_TITLE_MAX_CODE_POINTS = 128;
+const PAPER_COPY_SUFFIX = '（副本）';
+
+function copyPaperTitle(title: string): string {
+  const prefixLength = PAPER_TITLE_MAX_CODE_POINTS - Array.from(PAPER_COPY_SUFFIX).length;
+  return `${Array.from(title).slice(0, prefixLength).join('')}${PAPER_COPY_SUFFIX}`;
+}
+
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -318,7 +326,7 @@ export class PaperService {
         regulationIds: cloneJson(source.regulationIds || (source.regulationId ? [String(source.regulationId)] : [])),
         courseIds: cloneJson(source.courseIds || []),
         ruleConfig: rule ? cloneJson(rule) : source.ruleConfig ? cloneJson(source.ruleConfig) : null,
-        title: `${source.title}（副本）`,
+        title: copyPaperTitle(source.title),
         totalScore: source.totalScore,
         passScore: rule ? (rule.passCents / 100).toFixed(2) : source.passScore,
         durationMinutes: rule?.durationMinutes ?? source.durationMinutes,
@@ -719,7 +727,7 @@ export class PaperService {
         regulationId: null, businessScope: 'training', mode: locked.mode, categoryId: locked.categoryId,
         requiresLearning: locked.requiresLearning, regulationIds: cloneJson(locked.regulationIds || []),
         courseIds: cloneJson(locked.courseIds || []), ruleConfig: locked.ruleConfig ? cloneJson(locked.ruleConfig) : null,
-        title: `${locked.title}（副本）`, totalScore: locked.totalScore, passScore: locked.passScore,
+        title: copyPaperTitle(locked.title), totalScore: locked.totalScore, passScore: locked.passScore,
         durationMinutes: locked.durationMinutes, maxAttempts: locked.maxAttempts,
         partialCreditRatio: locked.partialCreditRatio, status: 'draft', createdBy: String(actor.id),
       }));

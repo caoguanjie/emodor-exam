@@ -577,6 +577,75 @@ test('saves five same-type fixed scores, reopens, and omits derived rules from a
   mounted.unmount();
 });
 
+test('pages fixed candidates beyond 100 while preserving cross-page selections and rejecting stale pages', async () => {
+  const allCandidates = Array.from({ length: 120 }, (_, index) => question(index + 1, 100));
+  const fallback = context.respond;
+  const candidatePage = (page, pageSize = 50) => ({
+    items: allCandidates.slice((page - 1) * pageSize, page * pageSize),
+    total: allCandidates.length,
+    page,
+    page_size: pageSize,
+  });
+  context.respond = async (method, path, body, config) => {
+    if (method === 'GET' && path === '/admin/papers/paper-1/candidates') {
+      return candidatePage(config.params.page, config.params.page_size);
+    }
+    return fallback(method, path, body, config);
+  };
+
+  const mounted = await mountDetail();
+  await mounted.state.openCandidatePicker();
+  await nextTick();
+  const firstRequest = context.calls.filter((call) => call.path === '/admin/papers/paper-1/candidates').at(-1);
+  assert.deepEqual(firstRequest.config.params, { page: 1, page_size: 50 });
+  assert.equal(mounted.state.candidates.length, 50);
+  assert.equal(mounted.state.candidates[0].question_version_id, 'version-1');
+
+  let candidateTable = walk(mounted.root, (node) => node.type === 'table' && typeof node.props?.onSelectionChange === 'function')[0];
+  let pagination = walk(mounted.root, (node) => node.type === 'pagination')[0];
+  assert.ok(candidateTable, 'candidate table must expose its real selection event');
+  assert.ok(pagination, 'candidate picker must render visible pagination');
+  assert.equal(pagination.props.total, 120);
+  assert.equal(pagination.props.pageSize ?? pagination.props['page-size'], 50);
+  candidateTable.props.onSelectionChange([mounted.state.candidates[5]]);
+
+  await pagination.props.onCurrentChange(3);
+  await nextTick();
+  assert.equal(mounted.state.candidates.length, 20);
+  assert.equal(mounted.state.candidates[0].question_version_id, 'version-101');
+  candidateTable = walk(mounted.root, (node) => node.type === 'table' && typeof node.props?.onSelectionChange === 'function')[0];
+  candidateTable.props.onSelectionChange([mounted.state.candidates[5]]);
+  assert.deepEqual(mounted.state.pickedCandidates.map((item) => item.question_version_id).sort(), ['version-106', 'version-6']);
+
+  mounted.state.candidateQuery.type = 'multiple';
+  const typeFilter = walk(mounted.root, (node) => node.type === 'select' && node.props?.placeholder === '题型')[0];
+  assert.ok(typeFilter, 'candidate type filter must expose its real change event');
+  await typeFilter.props.onChange('multiple');
+  await nextTick();
+  const filteredRequest = context.calls.filter((call) => call.path === '/admin/papers/paper-1/candidates').at(-1);
+  assert.deepEqual(filteredRequest.config.params, { page: 1, page_size: 50, type: 'multiple' });
+  assert.deepEqual(mounted.state.pickedCandidates.map((item) => item.question_version_id).sort(), ['version-106', 'version-6']);
+
+  pagination = walk(mounted.root, (node) => node.type === 'pagination')[0];
+  const stalePage = deferredRequest('GET', '/admin/papers/paper-1/candidates');
+  const latestPage = deferredRequest('GET', '/admin/papers/paper-1/candidates');
+  const staleLoad = pagination.props.onCurrentChange(2);
+  const latestLoad = pagination.props.onCurrentChange(3);
+  await waitFor(() => context.calls.filter((call) => call.path === '/admin/papers/paper-1/candidates').length >= 5, 'out-of-order candidate pages');
+  latestPage.resolve(candidatePage(3));
+  await latestLoad;
+  stalePage.resolve(candidatePage(2));
+  await staleLoad;
+  assert.equal(mounted.state.candidatePage.page, 3);
+  assert.equal(mounted.state.candidates[0].question_version_id, 'version-101');
+  assert.deepEqual(mounted.state.pickedCandidates.map((item) => item.question_version_id).sort(), ['version-106', 'version-6']);
+
+  mounted.state.addCandidates();
+  assert.ok(mounted.state.fixedQuestions.some((item) => item.question_version_id === 'version-6'));
+  assert.ok(mounted.state.fixedQuestions.some((item) => item.question_version_id === 'version-106'));
+  mounted.unmount();
+});
+
 test('a delayed GET after config save or publish cannot overwrite edits made after the submitted snapshot', async () => {
   const mounted = await mountDetail();
   mounted.state.form.title = '配置提交 A';
