@@ -41,6 +41,8 @@ const testContext = {
   learningEnds: 0,
   examStarts: 0,
   settingsReads: 0,
+  aiConfigReads: 0,
+  aiConfigGet: null,
   logoutCalls: 0,
   tabResetCalls: 0,
   permissions: new Set(['system_settings:read', 'system_settings:write']),
@@ -119,7 +121,11 @@ const httpStubCode = `
         { id: 'role-2', code: 'role_two', name: '角色二', status: 1, is_system: false },
       ];
       if (path === '/admin/roles') return clone(context.roles);
-      if (path === '/ai/config') return { base_url: 'https://ai.example.test/v1', model: 'model-baseline', api_key_masked: '****base' };
+      if (path === '/ai/config') {
+        context.aiConfigReads += 1;
+        if (context.aiConfigGet) return context.aiConfigGet();
+        return { base_url: 'https://ai.example.test/v1', model: 'model-baseline', api_key_masked: '****base' };
+      }
       if (path === '/admin/menus/permission-options') {
         return [{ code: 'system_settings:write', name: '系统配置维护' }];
       }
@@ -348,6 +354,26 @@ async function waitFor(predicate, label, timeoutMs = 1800) {
   }
 }
 
+function deferred() {
+  let resolvePromise;
+  let rejectPromise;
+  const promise = new Promise((resolveValue, rejectValue) => {
+    resolvePromise = resolveValue;
+    rejectPromise = rejectValue;
+  });
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
+}
+
+function findHostNode(root, predicate) {
+  if (!root) return null;
+  if (predicate(root)) return root;
+  for (const child of Array.isArray(root.children) ? root.children : []) {
+    const found = findHostNode(child, predicate);
+    if (found) return found;
+  }
+  return null;
+}
+
 let vite;
 let MainLayout;
 let Reading;
@@ -548,6 +574,8 @@ beforeEach(() => {
   testContext.learningEnds = 0;
   testContext.examStarts = 0;
   testContext.settingsReads = 0;
+  testContext.aiConfigReads = 0;
+  testContext.aiConfigGet = null;
   testContext.logoutCalls = 0;
   testContext.tabResetCalls = 0;
   testContext.permissions = new Set([
@@ -1038,6 +1066,104 @@ test('AI config keeps a cancelled inline draft, restores server baseline on disc
   assert.equal(restored.setupState.form.api_key, '');
   assert.equal(restored.setupState.dirty, false);
   assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/ai/config' && call.body.base_url === 'https://saved.example.test/v1' && call.body.api_key === 'saved-key'));
+  mounted.unmount();
+});
+
+test('AI config locks its real controls until a deferred readable baseline is captured', async () => {
+  const pending = deferred();
+  testContext.aiConfigGet = () => pending.promise;
+  const mounted = await mountShell('/admin/ai-config');
+  const aiConfig = findInstance(mounted.app, 'masked');
+  const baseUrlInput = findHostNode(
+    mounted.rootNode,
+    (node) => node.type === 'el-input' && String(node.props.placeholder || '').startsWith('如 https://open.bigmodel.cn'),
+  );
+
+  assert.ok(baseUrlInput, 'real AI config base_url input should be mounted');
+  assert.equal(baseUrlInput.props.disabled, true, 'readable config must not accept edits before GET establishes its baseline');
+  assert.equal(aiConfig.setupState.initializing, true);
+  assert.equal(aiConfig.setupState.dirty, false);
+
+  pending.resolve({ base_url: 'https://deferred.example.test/v1', model: 'deferred-model', api_key_masked: '****deferred' });
+  await waitFor(() => aiConfig.setupState.initializing === false, 'AI config initialization');
+  assert.equal(aiConfig.setupState.form.base_url, 'https://deferred.example.test/v1');
+  assert.equal(aiConfig.setupState.form.model, 'deferred-model');
+  assert.equal(aiConfig.setupState.form.api_key, '');
+  assert.equal(aiConfig.setupState.dirty, false, 'loaded response becomes the discard baseline');
+  assert.equal(baseUrlInput.props.disabled, false);
+
+  aiConfig.setupState.form.api_key = 'after-load-key';
+  assert.equal(aiConfig.setupState.dirty, true, 'edits made after initialization remain a local draft');
+  await flushUpdates();
+  assert.equal(aiConfig.setupState.form.api_key, 'after-load-key');
+
+  testContext.confirmDecisions.push(true);
+  await mounted.router.push('/other');
+  await mounted.router.push('/admin/ai-config');
+  const restored = findInstance(mounted.app, 'masked');
+  assert.equal(restored.uid, aiConfig.uid);
+  assert.equal(restored.setupState.form.base_url, 'https://deferred.example.test/v1');
+  assert.equal(restored.setupState.form.model, 'deferred-model');
+  assert.equal(restored.setupState.form.api_key, '');
+  assert.equal(restored.setupState.dirty, false);
+  mounted.unmount();
+});
+
+test('AI config exposes a locked error state and can retry its initial readable baseline', async () => {
+  let attempt = 0;
+  testContext.aiConfigGet = async () => {
+    attempt += 1;
+    if (attempt === 1) throw new Error('fixture read failure');
+    return { base_url: 'https://retry.example.test/v1', model: 'retry-model', api_key_masked: '****retry' };
+  };
+  const mounted = await mountShell('/admin/ai-config');
+  const aiConfig = findInstance(mounted.app, 'masked');
+  await waitFor(() => !!aiConfig.setupState.loadError, 'AI config load error');
+  const baseUrlInput = findHostNode(
+    mounted.rootNode,
+    (node) => node.type === 'el-input' && String(node.props.placeholder || '').startsWith('如 https://open.bigmodel.cn'),
+  );
+
+  assert.equal(aiConfig.setupState.initializing, false);
+  assert.equal(baseUrlInput.props.disabled, true, 'failed readable baseline must not expose an unbased draft');
+  assert.equal(aiConfig.setupState.dirty, false);
+
+  await aiConfig.setupState.loadConfig();
+  assert.equal(testContext.aiConfigReads, 2);
+  assert.equal(aiConfig.setupState.loadError, '');
+  assert.equal(aiConfig.setupState.form.base_url, 'https://retry.example.test/v1');
+  assert.equal(aiConfig.setupState.form.model, 'retry-model');
+  assert.equal(aiConfig.setupState.dirty, false);
+  assert.equal(baseUrlInput.props.disabled, false);
+  mounted.unmount();
+});
+
+test('AI config write-only mode skips the readable baseline and remains editable', async () => {
+  testContext.permissions = new Set(['ai_config:write']);
+  const mounted = await mountShell('/admin/ai-config');
+  const aiConfig = findInstance(mounted.app, 'masked');
+  const baseUrlInput = findHostNode(
+    mounted.rootNode,
+    (node) => node.type === 'el-input' && String(node.props.placeholder || '').startsWith('如 https://open.bigmodel.cn'),
+  );
+
+  assert.equal(testContext.aiConfigReads, 0);
+  assert.equal(aiConfig.setupState.initializing, false);
+  assert.equal(aiConfig.setupState.loadError, '');
+  assert.equal(baseUrlInput.props.disabled, false);
+  aiConfig.setupState.form.base_url = 'https://writer.example.test/v1';
+  aiConfig.setupState.form.api_key = 'writer-key';
+  aiConfig.setupState.form.model = 'writer-model';
+  assert.equal(aiConfig.setupState.dirty, true);
+
+  await aiConfig.setupState.onSave();
+  assert.equal(aiConfig.setupState.dirty, false);
+  assert.ok(testContext.calls.some((call) => (
+    call.method === 'PUT'
+    && call.path === '/ai/config'
+    && call.body.base_url === 'https://writer.example.test/v1'
+    && call.body.api_key === 'writer-key'
+  )));
   mounted.unmount();
 });
 
