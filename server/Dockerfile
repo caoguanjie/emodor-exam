@@ -12,7 +12,7 @@ FROM node:22-alpine
 ENV NODE_ENV=production TZ=Asia/Shanghai
 WORKDIR /app
 # 扫描版 PDF 多模态兜底需要 pdfinfo / pdftoppm，将页面渲染为 image_url。
-RUN apk add --no-cache poppler-utils
+RUN apk add --no-cache poppler-utils ffmpeg
 # 运行期依赖仅 prod（镜像瘦身）：直接复用 build 阶段 node_modules（当前全为运行所需）
 COPY --from=build /staging/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

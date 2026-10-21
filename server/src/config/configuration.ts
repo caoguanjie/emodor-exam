@@ -14,6 +14,16 @@ export class AppConfig {
   examShuffleSecret: string;
   appEncryptionKey?: string;
   upload: { dir: string; maxUploadSizeMb: number; maxImportSizeMb: number; maxImportRows: number };
+  media: {
+    videoMaxBytes: number;
+    imageMaxBytes: number;
+    imageMaxPixels: number;
+    probeTimeoutMs: number;
+    ffprobePath: string;
+    ffmpegPath: string;
+    allowedImageTypes: string[];
+    allowedVideoTypes: string[];
+  };
   corsOrigins: string[];
   dataDir: string;
   logDir: string;
@@ -101,6 +111,18 @@ export function loadConfig(): AppConfig {
       maxUploadSizeMb: Number(process.env.MAX_UPLOAD_SIZE || 50),
       maxImportSizeMb: 5,
       maxImportRows: 1000,
+    },
+    media: {
+      // Multer and nginx are deliberately bounded to the same 512 MiB media
+      // contract; a larger env value must not advertise an unreachable limit.
+      videoMaxBytes: envInt('MEDIA_VIDEO_MAX_BYTES', 512 * 1024 * 1024, 1, 512 * 1024 * 1024),
+      imageMaxBytes: envInt('MEDIA_IMAGE_MAX_BYTES', 10 * 1024 * 1024, 1, 100 * 1024 * 1024),
+      imageMaxPixels: envInt('MEDIA_IMAGE_MAX_PIXELS', 25_000_000, 1, 100_000_000),
+      probeTimeoutMs: envInt('MEDIA_PROBE_TIMEOUT_MS', 30_000, 1_000, 120_000),
+      ffprobePath: process.env.FFPROBE_PATH || 'ffprobe',
+      ffmpegPath: process.env.FFMPEG_PATH || 'ffmpeg',
+      allowedImageTypes: ['image/jpeg', 'image/png', 'image/webp'],
+      allowedVideoTypes: ['video/mp4'],
     },
     dataDir: process.env.DATA_DIR || './data',
     logDir: process.env.LOG_DIR || './data/logs',

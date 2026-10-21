@@ -39,6 +39,10 @@ export class SysUser {
   @Column({ type: 'varchar', length: 128, nullable: true })
   email: string | null;
 
+  /** 受控媒体头像资源；本人资料与学员管理只保存 media_asset.id。 */
+  @Column({ name: 'avatar_id', type: 'bigint', nullable: true })
+  avatarId: string | null;
+
   /** 1=启用（在职），0=停用 */
   @Column({ type: 'tinyint', default: 1 })
   status: number;

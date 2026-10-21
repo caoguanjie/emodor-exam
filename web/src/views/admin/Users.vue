@@ -57,6 +57,9 @@
           <el-form-item v-if="!studentForm.id" label="初始密码"><el-input v-model="studentForm.password" show-password placeholder="≥8 位（字母+数字）" /></el-form-item>
           <el-form-item label="手机号"><el-input v-model="studentForm.phone" maxlength="20" /></el-form-item>
           <el-form-item label="邮箱"><el-input v-model="studentForm.email" maxlength="128" /></el-form-item>
+          <el-form-item v-if="studentForm.id && auth.can('students:write')" label="头像">
+            <MediaUpload v-model="studentForm.avatar_id" purpose="avatar" :owner-id="String(studentForm.id)" :disabled="studentForm.status === 0" @update:model-value="onStudentAvatarChange" />
+          </el-form-item>
         </el-form>
         <template #footer><el-button @click="studentDialog = false">取消</el-button><el-button v-if="auth.can('students:write')" type="primary" @click="saveStudent">保存</el-button></template>
       </el-dialog>
@@ -172,6 +175,7 @@ import http, { download, upload } from '../../api/http';
 import { useAuthStore } from '../../stores/auth';
 import { formatDateTime } from '../../utils/format';
 import ImportPreview from '../../components/ImportPreview.vue';
+import MediaUpload from '../../components/MediaUpload.vue';
 import type { ImportPreview as ImportPreviewData } from '../../api/training-types';
 
 const route = useRoute();
@@ -264,6 +268,14 @@ function openStudentEdit(row: any) {
   Object.keys(studentForm).forEach((key) => delete studentForm[key]);
   Object.assign(studentForm, row, { department_id: row.department_id || '', category_id: row.category_id || '', employee_no: row.employee_no || '' });
   studentDialog.value = true;
+}
+
+async function onStudentAvatarChange(assetId: string | null) {
+  if (!studentForm.id) return;
+  studentForm.avatar_id = assetId;
+  await http.put(`/admin/students/${studentForm.id}/avatar`, { avatar_id: assetId });
+  ElMessage.success(assetId ? '头像已更新' : '头像已清除');
+  await loadStudents();
 }
 async function saveStudent() {
   if (!studentForm.username || !studentForm.real_name || !studentForm.source || !studentForm.category_id || (!studentForm.id && !studentForm.password)) {

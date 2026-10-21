@@ -1,6 +1,6 @@
 -- =====================================================================
 -- EmodorRuleExam 制度学习及考试系统 · 数据库初始化脚本
--- 依据 docs/design/03-数据库设计.md 逐字建 legacy、A2 培训身份及 A3 权限/会话业务表（当前 19 张，InnoDB + utf8mb4）
+-- 依据 docs/design/03-数据库设计.md 逐字建 legacy、A2 培训身份、A3 权限/会话及 A4 媒体业务表（当前 21 张，InnoDB + utf8mb4）
 -- 时间字段 DATETIME(3)；无数据库级外键（03 册 1.6 节，应用层维护）
 -- 枚举字段 VARCHAR + 应用层校验（03 册 1.7 节）
 -- 种子数据（根部门 / 超级管理员）由 database/seed.mjs 按环境变量生成，
@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   `role`          VARCHAR(32)  NOT NULL DEFAULT 'employee' COMMENT 'super_admin / regulation_admin / employee',
   `phone`         VARCHAR(20)  NULL,
   `email`         VARCHAR(128) NULL,
+  `avatar_id`     BIGINT UNSIGNED NULL COMMENT '受控媒体头像资源 id',
   `status`        TINYINT      NOT NULL DEFAULT 1 COMMENT '1=启用（在职），0=停用',
   `auth_version`  INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '认证世代；密码/身份/管理权限变更递增',
   `force_password_change` TINYINT NOT NULL DEFAULT 0 COMMENT '1=当前口令必须改密；与登录统计分离',
@@ -329,7 +330,45 @@ CREATE TABLE IF NOT EXISTS `exam_answer` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='答题明细';
 
 -- ---------------------------------------------------------------------
--- 5. 迁移元数据（由 database/migrate.mjs 管理；不属于业务表数量）
+-- 5. 受控媒体域（2 张，A4）
+-- ---------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS `media_asset` (
+  `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `owner_id`      BIGINT UNSIGNED NOT NULL COMMENT '业务拥有者；由服务端从身份/管理目标确定',
+  `uploaded_by`   BIGINT UNSIGNED NOT NULL COMMENT '上传操作者',
+  `purpose`       VARCHAR(32) NOT NULL COMMENT 'avatar / course_cover / video / question / branding',
+  `media_kind`    VARCHAR(16) NOT NULL COMMENT 'image / video',
+  `original_name` VARCHAR(255) NULL COMMENT '仅展示元数据，不参与路径拼接',
+  `mime_type`     VARCHAR(128) NOT NULL,
+  `storage_key`   VARCHAR(512) NOT NULL COMMENT '服务端生成的私有相对路径',
+  `size_bytes`    BIGINT UNSIGNED NOT NULL,
+  `sha256`        CHAR(64) NOT NULL,
+  `status`        VARCHAR(16) NOT NULL DEFAULT 'processing' COMMENT 'processing / ready / failed',
+  `duration_ms`   BIGINT UNSIGNED NULL COMMENT '视频实际探测时长；图片为 NULL',
+  `probe_error`   VARCHAR(512) NULL COMMENT '失败摘要，不含本地路径',
+  `created_at`    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_media_asset_storage_key` (`storage_key`),
+  KEY `idx_media_asset_owner_purpose` (`owner_id`, `purpose`),
+  KEY `idx_media_asset_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='受控媒体资源';
+
+CREATE TABLE IF NOT EXISTS `media_reference` (
+  `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `asset_id`   BIGINT UNSIGNED NOT NULL COMMENT 'media_asset.id；应用层维护引用完整性',
+  `owner_type` VARCHAR(64) NOT NULL COMMENT '业务归属类型，必须注册 authorizer',
+  `owner_id`   BIGINT UNSIGNED NOT NULL COMMENT '业务归属实体 id',
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_media_reference_owner` (`asset_id`, `owner_type`, `owner_id`),
+  KEY `idx_media_reference_asset` (`asset_id`),
+  KEY `idx_media_reference_owner` (`owner_type`, `owner_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='媒体业务引用';
+
+-- ---------------------------------------------------------------------
+-- 6. 迁移元数据（由 database/migrate.mjs 管理；不属于业务表数量）
 -- ---------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS `schema_migration` (

@@ -33,7 +33,9 @@ async function bootstrap() {
   // 数据 / 日志 / 上传目录就绪
   mkdirSync(config.upload.dir, { recursive: true });
   mkdirSync(join(config.upload.dir, 'tmp'), { recursive: true });
+  mkdirSync(join(config.upload.dir, 'tmp', 'media'), { recursive: true });
   mkdirSync(join(config.upload.dir, 'regulations'), { recursive: true });
+  mkdirSync(join(config.upload.dir, 'media'), { recursive: true });
   mkdirSync(config.dataDir, { recursive: true });
   mkdirSync(config.logDir, { recursive: true });
 

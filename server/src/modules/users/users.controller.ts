@@ -86,6 +86,11 @@ class SelfProfileDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(64) real_name?: string;
   @IsOptional() @IsString() @MaxLength(20) phone?: string;
   @IsOptional() @IsString() @MaxLength(128) email?: string;
+  @IsOptional() @IsString() @MaxLength(32) avatar_id?: string | null;
+}
+
+class StudentAvatarDto {
+  @IsOptional() @IsString() @MaxLength(32) avatar_id?: string | null;
 }
 
 class StudentListQueryDto {
@@ -310,6 +315,13 @@ export class StudentsController {
     return this.users.setStudentStatus(id, dto.status as 0 | 1, this.actor(user), req.ip || null);
   }
 
+  @Put(':id/avatar')
+  @Permissions('students:write')
+  updateAvatar(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['avatar_id'])) dto: StudentAvatarDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertImportObject(req.body, ['avatar_id'], '学员头像请求');
+    return this.users.updateStudentAvatar(id, dto.avatar_id || null, this.actor(user), req.ip || null);
+  }
+
   @Put(':id/password')
   @Permissions('students:write')
   async resetPassword(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['password'])) dto: StudentResetPasswordDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
@@ -331,11 +343,11 @@ export class MeProfileController {
 
   @Patch('profile')
   update(
-    @Body(new StrictDtoValidationPipe(['real_name', 'phone', 'email'])) dto: SelfProfileDto,
+    @Body(new StrictDtoValidationPipe(['real_name', 'phone', 'email', 'avatar_id'])) dto: SelfProfileDto,
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
-    assertImportObject(req.body, ['real_name', 'phone', 'email'], '本人资料请求');
+    assertImportObject(req.body, ['real_name', 'phone', 'email', 'avatar_id'], '本人资料请求');
     return this.users.updateSelfProfile(String(user.id), dto);
   }
 }

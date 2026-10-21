@@ -36,6 +36,8 @@ import { PaperQuestion } from './entities/paper-question.entity';
 import { ExamRecord } from './entities/exam-record.entity';
 import { ExamAnswer } from './entities/exam-answer.entity';
 import { SchemaMigration } from './entities/schema-migration.entity';
+import { MediaAsset } from './entities/media-asset.entity';
+import { MediaReference } from './entities/media-reference.entity';
 
 import { AuthController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
@@ -74,6 +76,9 @@ import { StatisticsController } from './modules/statistics/statistics.controller
 import { StatisticsService } from './modules/statistics/statistics.service';
 import { HealthController } from './modules/health/health.controller';
 import { TasksService } from './tasks.service';
+import { MediaController } from './modules/media/media.controller';
+import { MediaService } from './modules/media/media.service';
+import { MediaProbeService } from './modules/media/media-probe.service';
 
 const config = loadConfig();
 
@@ -86,6 +91,7 @@ const config = loadConfig();
       LearningSession, LearningRecord, Question, ExamPaper, PaperQuestion, ExamRecord, ExamAnswer, SchemaMigration,
       TrainingCategory, ImportBatch,
       SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
+      MediaAsset, MediaReference,
       TrainingCategory, ImportBatch,
       SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
     ]),
@@ -97,6 +103,7 @@ const config = loadConfig();
     AuthController, AccessController, DepartmentsController, UsersController, StudentsController, MeProfileController, CategoryController,
     RegulationsController, AiController, LearningController, ExamsController,
     StatisticsController, HealthController,
+    MediaController,
   ],
   providers: [
     // 全局配置单例（loadConfig 启动时读取环境变量）
@@ -106,6 +113,7 @@ const config = loadConfig();
     AiConfigService, AiGatewayService, PdfVisionService, QuestionGenerationService, QuestionReviewService, PaperService,
     LearningSessionService, ExamService, ShuffleService, GradingService, StatisticsService,
     RedisService, AuditService, TasksService,
+    MediaService, MediaProbeService,
     // 守卫链（07 册 2.3.2）：① JWT 认证 → ② 细权限映射 → ③ 兼容角色边界
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },

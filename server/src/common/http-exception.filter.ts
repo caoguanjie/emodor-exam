@@ -21,6 +21,10 @@ function traceId(): string {
 export class GlobalExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
     const res = host.switchToHttp().getResponse<Response>();
+    if ((exception as any)?.code === 'LIMIT_FILE_SIZE') {
+      res.status(422).json({ code: 42202, message: '文件超过大小上限', data: null });
+      return;
+    }
     if (exception instanceof BizError) {
       res.status(exception.httpStatus).json({
         code: exception.code,

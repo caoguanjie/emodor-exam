@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-21）**：本册 70 个接口是当前 legacy 制度/AI/阅读/旧固定卷 API 基线；A2 已追加培训类别、学员来源、可恢复导入与本人资料的精确 DTO/错误/分页契约。课程视频、题库版本、发布/个人题单、持久草稿、图片答案/阅卷、监控和场次统计接口仍由后续任务在实际 migration/entity/controller 存在后补入。所有接口继续使用 `/api/v1`、`{code,message,data}`、DTO 校验、所有权校验和 HttpOnly refresh Cookie。
+> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训类别/学员/本人资料与 A4 受控媒体接口均以实际 controller/entity/migration 为准。课程表单、题库版本、发布/个人题单、持久草稿、图片答案/阅卷、监控和场次统计接口仍由后续任务在实际实现后补入。所有接口继续使用 `/api/v1`、`{code,message,data}`、DTO 校验、所有权校验和 HttpOnly refresh Cookie。
 
 ---
 
@@ -103,7 +103,8 @@
 | /users | 1. 组织权限模块 | 8 | 员工 CRUD、重置密码、批量导入、启停 |
 | /admin/training-categories | 1. 组织权限模块（A2） | 6 | 培训类别分页、详情、增改、启停、引用保护删除 |
 | /admin/students | 1. 组织权限模块（A2） | 10 | 学员分页、CRUD、启停、重置密码、xlsx 模板/预检/批次确认 |
-| /me | 1. 组织权限模块（A2） | 2 | 本人资料查询与姓名/联系方式修改 |
+| /me | 1. 组织权限模块（A2/A4） | 2 | 本人资料查询与姓名/联系方式/头像修改 |
+| /media | 1. 组织权限模块（A4） | 5 | 受控上传、限制查询、状态/Range 读取、引用保护删除 |
 | /departments | 1. 组织权限模块 | 5 | 部门树、CRUD、层级调整 |
 | /regulations | 2. 制度文件管理模块 | 15 | 制度 CRUD、版本上传与历史回看、管理端预览、范围与学习要求配置、发布、阅读内容 |
 | /ai | 3. AI 出题模块 | 16 | AI 配置（`ai_config:read/write`；super_admin 天然拥有）、出题任务、题目审核编辑、人工录入、试卷管理与组卷 |
@@ -112,7 +113,7 @@
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**合计 88 个接口（87 个业务接口 + 1 个健康检查，含 A2 增量）。**
+**合计 93 个接口（92 个业务接口 + 1 个健康检查，含 A2/A4 增量；媒体内容流不包统一信封）。**
 
 ---
 
@@ -206,11 +207,23 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | # | 方法 | 路径 | 请求 | 成功 data |
 |---|---|---|---|---|
 | 1 | GET | /me/profile | — | 当前用户资料（含 `category_id/source`，旧用户可为 null） |
-| 2 | PATCH | /me/profile | 仅允许 `real_name?`、`phone?`、`email?` | 更新后的资料 |
+| 2 | PATCH | /me/profile | 仅允许 `real_name?`、`phone?`、`email?`、`avatar_id?` | 更新后的资料 |
 
-`source/category_id/role/avatar_id/avatarId/username/department_id` 等未知或越权字段均返回 40001，不静默丢弃；头像字段待 A4 接入后另行扩展。
+`source/category_id/role/avatarId/username/department_id` 等未知或越权字段均返回 40001，不静默丢弃；`avatar_id` 只接受已经由本人上传且 ready 的头像资源，绑定与旧资源解绑在同一事务内完成。
 
-### 3.2.4 A2 导入错误与恢复语义
+### 3.2.4 受控媒体 /media（A4）
+
+| 方法 | 路径 | 权限 | 请求与响应 |
+|---|---|---|---|
+| GET | `/media/limits` | 登录 | 返回 `video_max_bytes`（默认 536870912，服务端/网关硬上限一致）、`image_max_bytes`（默认 10485760）、`image_max_pixels`（默认 25000000）、`probe_timeout_ms`（默认 30000）及允许类型；不返回路径/密钥 |
+| POST | `/media/upload` | 登录；非头像用途需 `media:write` | multipart `file` + `purpose`（avatar/course_cover/video/question/branding），可选头像 `owner_id`；`answer` 直接 400 拒绝。成功 `data={asset_id,status,duration_ms}`（A1 新接口 ID 均为字符串），视频实际探测后才为 ready |
+| GET | `/media/{id}` | 资源拥有者/已注册 owner authorizer | 查询 `asset_id/purpose/media_kind/mime_type/size_bytes/status/duration_ms`；processing/failed 不可读取文件 |
+| GET | `/media/{id}/content` | 资源拥有者/已注册 owner authorizer | 私有流，支持单一 `Range: bytes=start-end`，命中返回 206 与 `Content-Range`；文件流跳过统一信封 |
+| DELETE | `/media/{id}` | 资源拥有者 | 有任何 `media_reference` 时返回 40913，不删除已引用文件；孤儿文件按延迟清理策略处理 |
+
+管理端头像绑定 `PUT /admin/students/{id}/avatar` 只接受 `avatar_id`，在同一用户行锁事务内重复 `lockManagedStudent` 最终检查并 bind；拥有任何 `sys_user_role` 链接的员工仍不属于学员管理范围。
+
+### 3.2.5 A2 导入错误与恢复语义
 
 | code | HTTP | message（示例） | 触发场景 |
 |---|---|---|---|
@@ -753,6 +766,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 40910 | 409 | 培训类别不存在或已停用 | 学员/导入确认引用不存在或已停用类别；删除仍被学员引用的类别 |
 | 40911 | 409 | 导入批次已确认，不能更换行集合 | 批次确认重试更换合法行集合，或确认事务正在处理 |
 | 40912 | 409 | 至少保留一名启用的超级管理员 | 尝试删除/停用/清空最高管理员保护权限 |
+| 40913 | 409 | 媒体仍被业务引用，不能删除 | `media_reference` 存在时删除媒体资源 |
 | 42201 | 422 | 文件格式不支持 | 上传非 pdf/docx（含魔法数不符） |
 | 42202 | 422 | 文件超过大小上限 | 上传超过 50MB |
 | 42203 | 422 | 发布校验未通过 | 制度发布缺前置（无生效版本/未配要求或范围）；试卷发布总分 ≠ 100 |

@@ -14,6 +14,7 @@ import { CategoryService } from '../training/category.service';
 import { SessionService } from '../auth/session.service';
 import { AccessService } from '../access/access.service';
 import { SysUserRole } from '../../entities/sys-user-role.entity';
+import { MediaService } from '../media/media.service';
 
 const VALID_ROLES: Role[] = [RoleEnum.SUPER_ADMIN, RoleEnum.REGULATION_ADMIN, RoleEnum.EMPLOYEE];
 
@@ -30,6 +31,7 @@ export class UsersService {
     private readonly categories: CategoryService,
     private readonly sessions: SessionService,
     private readonly access: AccessService,
+    private readonly media: MediaService,
   ) {}
 
   private authVersion(u: SysUser): number {
@@ -46,6 +48,7 @@ export class UsersService {
       role: u.role,
       phone: u.phone,
       email: u.email,
+      avatar_id: u.avatarId ? String(u.avatarId) : null,
       status: u.status,
       auth_version: this.authVersion(u),
       force_password_change: u.forcePasswordChange === undefined ? u.lastLoginAt === null : Number(u.forcePasswordChange) === 1,
@@ -104,6 +107,7 @@ export class UsersService {
       role: u.role,
       phone: u.phone,
       email: u.email,
+      avatar_id: u.avatarId ? String(u.avatarId) : null,
       status: Number(u.status),
       last_login_at: u.lastLoginAt,
       created_at: u.createdAt,
@@ -273,7 +277,7 @@ export class UsersService {
     if (link) throw Errors.notFound('学员不存在');
   }
 
-  async updateSelfProfile(id: string, patch: { real_name?: string; phone?: string | null; email?: string | null }) {
+  async updateSelfProfile(id: string, patch: { real_name?: string; phone?: string | null; email?: string | null; avatar_id?: string | null }) {
     const user = await this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(SysUser);
       const current = await repo.findOne({
@@ -284,7 +288,34 @@ export class UsersService {
       if (patch.real_name !== undefined) current.realName = patch.real_name;
       if (patch.phone !== undefined) current.phone = patch.phone || null;
       if (patch.email !== undefined) current.email = patch.email || null;
+      if (patch.avatar_id !== undefined) {
+        const previous = current.avatarId;
+        if (patch.avatar_id) {
+          await this.media.bind(manager, String(patch.avatar_id), 'user_avatar', String(id));
+        }
+        if (previous && previous !== patch.avatar_id) {
+          await this.media.unbind(manager, String(previous), 'user_avatar', String(id));
+        }
+        current.avatarId = patch.avatar_id || null;
+      }
       return repo.save(current);
+    });
+    return this.sanitizeStudent(user);
+  }
+
+  async updateStudentAvatar(id: string, avatarId: string | null, actor: { id: number; name: string }, ip: string | null) {
+    let user!: SysUser;
+    await this.dataSource.transaction(async (manager) => {
+      const current = await this.lockManagedStudent(manager, String(id));
+      const previous = current.avatarId;
+      if (avatarId) await this.media.bind(manager, String(avatarId), 'user_avatar', String(id));
+      if (previous && previous !== avatarId) await this.media.unbind(manager, String(previous), 'user_avatar', String(id));
+      current.avatarId = avatarId || null;
+      user = await manager.getRepository(SysUser).save(current);
+    });
+    this.audit.log({
+      actor_id: actor.id, actor_name: actor.name, action: 'student.avatar', object_type: 'sys_user',
+      object_id: id, detail: { avatar_id: avatarId }, result: 'success', source_ip: ip,
     });
     return this.sanitizeStudent(user);
   }
