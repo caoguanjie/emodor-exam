@@ -34,7 +34,7 @@
 
 **Interfaces:** Consumes 已批准设计与现有 SQL。Produces `validateTestTarget({database,sql}): {database,sql}`、`renderSchemaForDatabase(sql,database): string`、总计划 §2.1 类型与 §3 测试上下文；`migrate.mjs --check|--apply`、`run-e2e.mjs --suite smoke|all|<registered-name>`。新增 `REDIS_KEY_PREFIX`，默认空以兼容现状，测试用每次运行独立前缀。
 
-- [ ] **Step 1: 写隔离及升级契约测试。** `test-target.test.mjs` 使用 Node `assert`，有效 SQL 为真实 init.sql；`migration-contract` 建旧结构样例并检查保留数据、进行中记录阻断、失败续跑、校验和冲突以及初始化/升级后 INFORMATION_SCHEMA 一致。
+- [x] **Step 1: 写隔离及升级契约测试。** `test-target.test.mjs` 使用 Node `assert`，有效 SQL 为真实 init.sql；`migration-contract` 建旧结构样例并检查保留数据、进行中记录阻断、失败续跑、校验和冲突以及初始化/升级后 INFORMATION_SCHEMA 一致。
   ```js
   assert.throws(() => validateTestTarget({ database: 'ruleexam', sql }));
   const target = validateTestTarget({ database: 'ruleexam_test_training', sql });
@@ -42,11 +42,13 @@
   assert.doesNotMatch(target.sql, /USE `ruleexam`/);
   assert.throws(() => validateTestTarget({ database: 'ruleexam_test_training', sql: sql + '\nUSE `other_db`;' }));
   ```
-- [ ] **Step 2: 红灯。** `node --test tests/test-target.test.mjs`，预期缺少保护模块/断言失败；此步不得启动旧的删库脚本。
-- [ ] **Step 3: 先修文档并定义共同类型。** 去除固定 12 表限制；明确受控图片阅卷不等于改最终总分、新培训考试不强制阅读、双端仍延期。将总计划字段/状态/API 命名纳入 03—06 册，旧业务盘点文档保持证据性质；不扩展设计默认业务范围。
-- [ ] **Step 4: 实现保护器、升级器与测试上下文。** 只改 SQL 中已识别的 CREATE DATABASE/USE，发现额外库切换即拒绝；种子和 API 共用验证后的目标。测试存储/日志/AI 配置用 `mkdtemp` 独立目录，Redis 前缀隔离（含 Lua/扫描）；禁止 FLUSHDB。支持 API 重启且保留同一测试数据、密钥与上传目录。suite 名称白名单映射独立文件，不能拼任意命令。schema 升级元数据检查与可续跑规则按总计划 §2.2。
-- [ ] **Step 5: 绿灯。** `node --test tests/test-target.test.mjs`；隔离确认后 `DB_DATABASE=ruleexam_test_training node --test tests/migration-contract.test.mjs` 和 `DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite smoke`。预期全部通过，开发库及其存储未被访问/修改；另运行 `cd server && npm run build && npm test`。应用 API 基线已有失败则记录并解决本任务造成的失败，不吞掉失败继续。
-- [ ] **Step 6: 本地提交。** 审核 A1 明确文件/改动块后 `git commit -m "test: isolate training integration database and define contracts"`。
+- [x] **Step 2: 红灯。** `node --test tests/test-target.test.mjs`，预期缺少保护模块/断言失败；此步不得启动旧的删库脚本。
+- [x] **Step 3: 先修文档并定义共同类型。** 去除固定 12 表限制；明确受控图片阅卷不等于改最终总分、新培训考试不强制阅读、双端仍延期。将总计划字段/状态/API 命名纳入 03—06 册，旧业务盘点文档保持证据性质；不扩展设计默认业务范围。
+- [x] **Step 4: 实现保护器、升级器与测试上下文。** 只改 SQL 中已识别的 CREATE DATABASE/USE，发现额外库切换即拒绝；种子和 API 共用验证后的目标。测试存储/日志/AI 配置用 `mkdtemp` 独立目录，Redis 前缀隔离（含 Lua/扫描）；禁止 FLUSHDB。支持 API 重启且保留同一测试数据、密钥与上传目录。suite 名称白名单映射独立文件，不能拼任意命令。schema 升级元数据检查与可续跑规则按总计划 §2.2。
+- [x] **Step 5: 绿灯。** `node --test tests/test-target.test.mjs`；隔离确认后 `DB_DATABASE=ruleexam_test_training node --test tests/migration-contract.test.mjs` 和 `DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite smoke`。预期全部通过，开发库及其存储未被访问/修改；另运行 `cd server && npm run build && npm test`。应用 API 基线已有失败则记录并解决本任务造成的失败，不吞掉失败继续。
+- [x] **Step 6: 本地提交。** 审核 A1 明确文件/改动块后 `git commit -m "test: isolate training integration database and define contracts"`。
+
+**A1 验收记录（2026-10-21）：** 最终代码候选 `2e53d56` 的基础组合测试 39/39 通过，旧 smoke 94/94、server 26 项与构建、web 类型检查与构建通过；独立审查遗留项均关闭。未提供外部 DB_PASSWORD，实际数据库测试使用运行期随机口令的 `--ephemeral` 自有 MySQL/Redis，不读取 `.env` 或连接开发库。范围及证据见 [A1 基础验收](../../../review/2026-10-21-training-a1-foundation.md)。A2 以后仍待实施。
 
 ### Task A2: 类别、学员来源与可恢复导入
 
