@@ -1,0 +1,97 @@
+{
+  "node": "v25.9.0",
+  "tiptap": "3.32.0",
+  "environment": "isolated jsdom API probes, not Vue app/browser acceptance",
+  "results": [
+    {
+      "name": "public exports used by Vue editor remain present",
+      "status": "passed",
+      "evidence": {
+        "TableKit": true,
+        "TextStyleKit": true,
+        "vueBindings": true
+      }
+    },
+    {
+      "name": "source extension list duplicates horizontalRule",
+      "status": "passed",
+      "evidence": {
+        "extensionCount": 2,
+        "warnings": [
+          "[tiptap warn]: Duplicate extension names found: ['horizontalRule']. This can lead to issues."
+        ]
+      }
+    },
+    {
+      "name": "setContent update emission is explicitly controllable",
+      "status": "passed",
+      "evidence": {
+        "defaultEmits": true,
+        "explicitFalseSuppresses": true
+      }
+    },
+    {
+      "name": "readonly editor still accepts programmatic mutation",
+      "status": "passed",
+      "evidence": {
+        "editable": false,
+        "commandChangedContent": true
+      }
+    },
+    {
+      "name": "official FontSize writes a textStyle mark",
+      "status": "passed",
+      "evidence": {
+        "markType": "textStyle",
+        "fontSize": "18px"
+      }
+    },
+    {
+      "name": "official LineHeight defaults differ from legacy paragraph attrs",
+      "status": "passed",
+      "evidence": {
+        "legacyParagraphAttrRetained": false,
+        "officialMarkType": "textStyle",
+        "officialMarkLineHeight": "2"
+      }
+    },
+    {
+      "name": "legacy paragraph schema can preserve existing lineHeight JSON",
+      "status": "passed",
+      "evidence": {
+        "legacyParagraphAttrRetained": true
+      }
+    },
+    {
+      "name": "TableKit still supports insertion and JSON table schema",
+      "status": "passed",
+      "evidence": {
+        "rows": 2,
+        "firstCell": "tableHeader"
+      }
+    },
+    {
+      "name": "beta.7 already exports TableKit and official text style helpers",
+      "status": "passed",
+      "evidence": {
+        "baseline": "3.0.0-beta.7",
+        "alreadyPresent": [
+          "TableKit",
+          "TextStyleKit",
+          "FontSize",
+          "LineHeight"
+        ]
+      }
+    },
+    {
+      "name": "beta.7 already emits updates by default and contains HorizontalRule",
+      "status": "passed",
+      "evidence": {
+        "baseline": "3.0.0-beta.7",
+        "defaultEmits": true,
+        "explicitFalseSuppresses": true,
+        "StarterKitIncludesHorizontalRule": true
+      }
+    }
+  ]
+}

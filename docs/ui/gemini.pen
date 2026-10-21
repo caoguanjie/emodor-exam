@@ -1,0 +1,83 @@
+{
+  "version": "2.21",
+  "children": [],
+  "variables": {
+    "ink": {
+      "type": "color",
+      "value": "#16202E"
+    },
+    "ink-2": {
+      "type": "color",
+      "value": "#5B6675"
+    },
+    "ink-3": {
+      "type": "color",
+      "value": "#98A2AF"
+    },
+    "paper": {
+      "type": "color",
+      "value": "#F1F2EF"
+    },
+    "surface": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "line": {
+      "type": "color",
+      "value": "#E5E7E3"
+    },
+    "line-strong": {
+      "type": "color",
+      "value": "#C9D0C9"
+    },
+    "accent": {
+      "type": "color",
+      "value": "#D1502A"
+    },
+    "accent-soft": {
+      "type": "color",
+      "value": "#FBEAE3"
+    },
+    "ok": {
+      "type": "color",
+      "value": "#1B8A5A"
+    },
+    "ok-soft": {
+      "type": "color",
+      "value": "#E7F3EC"
+    },
+    "bad": {
+      "type": "color",
+      "value": "#C33A2E"
+    },
+    "bad-soft": {
+      "type": "color",
+      "value": "#FAE9E6"
+    },
+    "warn": {
+      "type": "color",
+      "value": "#A9701C"
+    },
+    "warn-soft": {
+      "type": "color",
+      "value": "#FBF1E0"
+    },
+    "white": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "serif": {
+      "type": "string",
+      "value": "Noto Serif SC"
+    },
+    "sans": {
+      "type": "string",
+      "value": "Noto Sans SC"
+    },
+    "mono": {
+      "type": "string",
+      "value": "IBM Plex Mono"
+    }
+  },
+  "fileToken": "7bb821fd-b0cc-46e4-bd56-ac36b2943b8b"
+}
