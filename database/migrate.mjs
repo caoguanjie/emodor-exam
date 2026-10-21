@@ -443,6 +443,9 @@ function validateReplacementChains(definitions) {
     if (targetPosition > successorPosition) {
       throw new Error(`migration ${successorKey} @replaces-check target must be in an earlier migration: ${targetKey}`);
     }
+    if (target.migration.id >= successor.migration.id) {
+      throw new Error(`migration ${successorKey} @replaces-check target migration id must sort earlier: ${target.migration.id}`);
+    }
   }
   return definitions;
 }

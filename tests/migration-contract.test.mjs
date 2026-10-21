@@ -181,6 +181,21 @@ CREATE TABLE second_shape (id INT PRIMARY KEY);
     /earlier migration|forward|reverse/i,
   );
 
+  const reversedIdTarget = replacementFixture('002_reversed_target', 'reversed_target');
+  const reversedIdSuccessor = replacementFixture(
+    '001_reversed_successor',
+    'reversed_successor',
+    '002_reversed_target/reversed_target',
+  );
+  await assert.rejects(
+    () => inspectMigrations({
+      connection,
+      database,
+      migrations: [reversedIdTarget, reversedIdSuccessor],
+    }),
+    /earlier migration|file order|migration id|forward|reverse/i,
+  );
+
   const cycleA = replacementFixture('001_cycle_a', 'cycle_a', '002_cycle_b/cycle_b');
   const cycleB = replacementFixture('002_cycle_b', 'cycle_b', '001_cycle_a/cycle_a');
   await assert.rejects(
@@ -536,7 +551,7 @@ test('010 resumes when its exam_record ALTER committed before successor progress
   }
 });
 
-test('confirmed 010 progress makes its full probe authoritative for old shape and column or index drift', async () => {
+test('confirmed 010 progress makes its full probe authoritative for old shape and column or index drift', async (t) => {
   const variants = [
     {
       name: 'restored_old_shape',
@@ -568,6 +583,16 @@ test('confirmed 010 progress makes its full probe authoritative for old shape an
       oldProbe: 0,
     },
     {
+      name: 'legacy_index_missing',
+      sql: 'ALTER TABLE exam_record DROP INDEX idx_status_deadline',
+      oldProbe: 0,
+    },
+    {
+      name: 'legacy_column_missing',
+      sql: 'ALTER TABLE exam_record DROP COLUMN started_at',
+      oldProbe: 0,
+    },
+    {
       name: 'new_column_drift',
       sql: 'ALTER TABLE exam_record MODIFY COLUMN draft_revision INT NOT NULL DEFAULT 0',
       oldProbe: 0,
@@ -575,39 +600,41 @@ test('confirmed 010 progress makes its full probe authoritative for old shape an
   ];
 
   for (const variant of variants) {
-    const database = await createDatabase(`${variant.name}_${randomBytes(3).toString('hex')}`);
-    await admin.query(renderSchemaForDatabase(initSql, database));
-    const conn = await connectionFor(database);
-    try {
-      const attempts = await migration('009_attempt_snapshot');
-      const answers = await migration('010_answers');
-      const definitions = [attempts, answers];
-      await applyMigrations({ connection: conn, database, migrations: definitions });
-      await conn.query(variant.sql);
+    await t.test(variant.name, async () => {
+      const database = await createDatabase(`${variant.name}_${randomBytes(3).toString('hex')}`);
+      await admin.query(renderSchemaForDatabase(initSql, database));
+      const conn = await connectionFor(database);
+      try {
+        const attempts = await migration('009_attempt_snapshot');
+        const answers = await migration('010_answers');
+        const definitions = [attempts, answers];
+        await applyMigrations({ connection: conn, database, migrations: definitions });
+        await conn.query(variant.sql);
 
-      const predecessorStep = attempts.steps.find((step) => step.id === 'extend_exam_record_attempt_snapshot');
-      const successorStep = answers.steps.find((step) => step.id === 'extend_exam_record_submission');
-      const [[oldCompletion]] = await conn.execute(predecessorStep.checkSql);
-      const [[newCompletion]] = await conn.execute(successorStep.checkSql);
-      assert.equal(Number(oldCompletion.complete), variant.oldProbe, `${variant.name} predecessor fixture`);
-      assert.equal(Number(newCompletion.complete), 0, `${variant.name} successor fixture`);
-      const [before] = await conn.query(
-        `SELECT migration_id, status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id IN (?, ?) ORDER BY migration_id`,
-        [attempts.id, answers.id],
-      );
+        const predecessorStep = attempts.steps.find((step) => step.id === 'extend_exam_record_attempt_snapshot');
+        const successorStep = answers.steps.find((step) => step.id === 'extend_exam_record_submission');
+        const [[oldCompletion]] = await conn.execute(predecessorStep.checkSql);
+        const [[newCompletion]] = await conn.execute(successorStep.checkSql);
+        assert.equal(Number(oldCompletion.complete), variant.oldProbe, `${variant.name} predecessor fixture`);
+        assert.equal(Number(newCompletion.complete), 0, `${variant.name} successor fixture`);
+        const [before] = await conn.query(
+          `SELECT migration_id, status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id IN (?, ?) ORDER BY migration_id`,
+          [attempts.id, answers.id],
+        );
 
-      await assert.rejects(
-        () => applyMigrations({ connection: conn, database, migrations: definitions }),
-        /009_attempt_snapshot\/extend_exam_record_attempt_snapshot.*confirmed successor 010_answers\/extend_exam_record_submission.*invariant is false/i,
-      );
-      const [afterRows] = await conn.query(
-        `SELECT migration_id, status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id IN (?, ?) ORDER BY migration_id`,
-        [attempts.id, answers.id],
-      );
-      assert.deepEqual(afterRows, before);
-    } finally {
-      await conn.end();
-    }
+        await assert.rejects(
+          () => applyMigrations({ connection: conn, database, migrations: definitions }),
+          /009_attempt_snapshot\/extend_exam_record_attempt_snapshot.*confirmed successor 010_answers\/extend_exam_record_submission.*invariant is false/i,
+        );
+        const [afterRows] = await conn.query(
+          `SELECT migration_id, status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id IN (?, ?) ORDER BY migration_id`,
+          [attempts.id, answers.id],
+        );
+        assert.deepEqual(afterRows, before);
+      } finally {
+        await conn.end();
+      }
+    });
   }
 });
 
