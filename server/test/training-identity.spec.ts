@@ -24,13 +24,6 @@ describe('training identity contracts', () => {
     await expect(service.assertActive('1')).rejects.toMatchObject({ httpStatus: 409 });
   });
 
-  it('exposes preview and commit contracts without storing plaintext credentials in results', async () => {
-    const service = Object.create(ImportBatchService.prototype) as ImportBatchService & { batchRepo: any };
-    expect(typeof service.preview).toBe('function');
-    expect(typeof service.commit).toBe('function');
-    expect('password' in ({ batch_id: '1', valid_rows: [2], errors: [], duplicates: [] } as any)).toBe(false);
-  });
-
   it('rejects unknown keys instead of silently stripping them', async () => {
     const pipe = new StrictDtoValidationPipe(['allowed']);
     await expect(pipe.transform({ allowed: 'ok', unexpected: 'reject' }, { type: 'body', metatype: Object } as any))

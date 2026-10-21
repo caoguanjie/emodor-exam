@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { applyMigrations } from '../database/migrate.mjs';
+import { applyMigrations, listMigrations } from '../database/migrate.mjs';
 import { createEphemeralServices } from './support/ephemeral-services.mjs';
 import { renderSchemaForDatabase } from './support/test-target.mjs';
 
@@ -15,6 +15,7 @@ const ROOT = join(import.meta.dirname, '..');
 const BASE = 'a5955da4bf8022757008322d49b2db58d15aef74';
 let services;
 let admin;
+let trainingIdentityMigration;
 const databases = new Set();
 
 async function createDatabase(prefix) {
@@ -47,7 +48,15 @@ async function schemaSnapshot(connection) {
   return { tables, columns, indexes };
 }
 
+async function assertProbeIncomplete(connection, stepId) {
+  const step = trainingIdentityMigration.steps.find((candidate) => candidate.id === stepId);
+  assert.ok(step, `missing migration step ${stepId}`);
+  const [[row]] = await connection.query(step.checkSql);
+  assert.equal(Number(row.complete), 0, `${stepId} probe accepted a drifted schema`);
+}
+
 before(async () => {
+  trainingIdentityMigration = (await listMigrations()).find(({ id }) => id === '001_training_identity');
   services = await createEphemeralServices();
   admin = await mysql.createConnection({
     host: services.mysql.host,
@@ -89,7 +98,7 @@ test('A2 upgrades accepted A1 schema, preserves legacy null provenance, and conv
   await legacy.end();
 });
 
-test('A2 migration refuses wrong primary/auto-increment and composite-index drift', async () => {
+test('A2 migration refuses engine, key-shape, and index drift', async () => {
   const legacySql = execFileSync('git', ['show', `${BASE}:database/init.sql`], { cwd: ROOT, encoding: 'utf8' });
   const wrongCategoryDatabase = await createDatabase('a2_drift_category');
   await admin.query(renderSchemaForDatabase(legacySql, wrongCategoryDatabase));
@@ -103,14 +112,58 @@ test('A2 migration refuses wrong primary/auto-increment and composite-index drif
   );
   await wrongCategory.end();
 
-  const wrongIndexDatabase = await createDatabase('a2_drift_index');
   const currentSql = await readFile(join(ROOT, 'database', 'init.sql'), 'utf8');
+
+  const wrongEngineDatabase = await createDatabase('a2_drift_engine');
+  await admin.query(renderSchemaForDatabase(currentSql, wrongEngineDatabase));
+  const wrongEngine = await connectionFor(wrongEngineDatabase);
+  await wrongEngine.execute('ALTER TABLE training_category ENGINE=MyISAM');
+  await assertProbeIncomplete(wrongEngine, 'create_training_category');
+  await assert.rejects(
+    () => applyMigrations({ connection: wrongEngine, database: wrongEngineDatabase }),
+    /migration probe .*create_training_category .*incomplete|remained incomplete/,
+  );
+  await wrongEngine.end();
+
+  const wrongCategoryIndexDatabase = await createDatabase('a2_drift_category_index');
+  await admin.query(renderSchemaForDatabase(currentSql, wrongCategoryIndexDatabase));
+  const wrongCategoryIndex = await connectionFor(wrongCategoryIndexDatabase);
+  await wrongCategoryIndex.execute(
+    'ALTER TABLE training_category DROP INDEX uk_training_category_name, ADD UNIQUE INDEX uk_training_category_name (name, status)',
+  );
+  await assertProbeIncomplete(wrongCategoryIndex, 'create_training_category');
+  await assert.rejects(
+    () => applyMigrations({ connection: wrongCategoryIndex, database: wrongCategoryIndexDatabase }),
+    /migration probe .*create_training_category .*incomplete|remained incomplete/,
+  );
+  await wrongCategoryIndex.end();
+
+  const wrongIdentityIndexDatabase = await createDatabase('a2_drift_identity_index');
+  await admin.query(renderSchemaForDatabase(currentSql, wrongIdentityIndexDatabase));
+  const wrongIdentityIndex = await connectionFor(wrongIdentityIndexDatabase);
+  await wrongIdentityIndex.execute(
+    'ALTER TABLE sys_user DROP INDEX idx_training_identity, ADD INDEX idx_training_identity (category_id, source, status)',
+  );
+  await assertProbeIncomplete(wrongIdentityIndex, 'add_sys_user_training_index');
+  await assert.rejects(
+    () => applyMigrations({ connection: wrongIdentityIndex, database: wrongIdentityIndexDatabase }),
+    /migration probe .*add_sys_user_training_index .*incomplete|remained incomplete|Duplicate key name/,
+  );
+  await wrongIdentityIndex.end();
+
+  const wrongIndexDatabase = await createDatabase('a2_drift_index');
   await admin.query(renderSchemaForDatabase(currentSql, wrongIndexDatabase));
   const wrongIndex = await connectionFor(wrongIndexDatabase);
-  await wrongIndex.execute('ALTER TABLE import_batch DROP INDEX idx_import_batch_owner_kind, ADD INDEX idx_import_batch_owner_only (owner_id)');
+  await wrongIndex.execute(
+    'ALTER TABLE import_batch DROP INDEX idx_import_batch_owner_kind, ADD INDEX idx_import_batch_owner_kind (owner_id, kind, status)',
+  );
+  await wrongIndex.execute(
+    'ALTER TABLE import_batch DROP INDEX idx_import_batch_status, ADD INDEX idx_import_batch_status (status, kind)',
+  );
+  await assertProbeIncomplete(wrongIndex, 'create_import_batch');
   await assert.rejects(
     () => applyMigrations({ connection: wrongIndex, database: wrongIndexDatabase }),
-    /migration probe .*create_import_batch .*incomplete|remained incomplete/,
+    /migration probe .*create_import_batch .*incomplete|remained incomplete|Duplicate key name/,
   );
   await wrongIndex.end();
 });
