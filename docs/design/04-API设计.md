@@ -82,7 +82,7 @@
 | 交卷 `POST /exams/records/{id}/submit` | 三层幂等（05 册 6.4.5）：状态前置校验 + Redis 提交锁 + 事务内终态判定；重复调用返回首次评分结果 |
 | 会话开始 `POST /learning/sessions/start` | 单活跃会话约束（后开者胜）：同 user + regulation 已有活跃会话时，旧会话被结束落库并返回新会话（05 册 5.4.1） |
 | 学习心跳 | 天然幂等：以服务端时钟差结算，重复/乱序心跳不虚增时长（45 秒封顶，05 册 5.4.2） |
-| 视频会话开始 `POST /me/video-sessions` | `sys_user` 行锁串行；后开者关闭该用户所有活动制度阅读/视频会话；`active_user_id` 可空唯一索引兜底 |
+| 视频会话开始 `POST /me/video-sessions` | 短事务持 `sys_user` 行锁做范围/活动重查；旧 reading 在释放事务连接后按原算法收口并最多重试 3 次，最终事务关闭旧 video 后再取新锚点；`active_user_id` 可空唯一索引兜底 |
 | 视频心跳 | `seq` 严格递增；重复/乱序返回当前进度，服务端时钟 + 45 秒封顶 + 2 秒位置容差决定可确认区间 |
 
 ### 1.6 当前 API 与融合计划的边界
@@ -117,13 +117,14 @@
 | /admin/courses | 4. 学习行为管控模块（B1 内容侧） | 14 | 课程、章节、视频课时、不可变内容版本、上架/下架与类别选项 |
 | /me/courses | 4. 学习行为管控模块（B1/B2） | 3 | 本人同类别已上架课程分页、目录与当前必学视频完成汇总；external 分母为零 |
 | /me/video-sessions | 4. 学习行为管控模块（B2） | 3 | 视频会话开始、递增序号心跳、主动关闭 |
+| /me/video-records | 4. 学习行为管控模块（B2） | 1 | 本人不可变视频版本学习记录分页历史 |
 | /ai | 3. AI 出题模块 | 26 | AI 配置/任务、B3 类别与考点窄选项、四题型版本审核、人工录入、试卷管理与组卷 |
 | /learning | 4. 学习行为管控模块 | 7 | 学习列表、会话生命周期、心跳、进度 |
 | /exams | 5. 考试评分模块 | 8 | 可考列表、开考、心跳、切屏、交卷、成绩 |
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**按当前 controller HTTP 方法装饰器机械盘点，合计 157 个接口（156 个业务接口 + 1 个健康检查），B2 新增视频会话 3 个与课程进度 1 个；私有媒体与公开品牌内容流不包统一信封。**
+**按当前 controller HTTP 方法装饰器机械盘点，合计 158 个接口（157 个业务接口 + 1 个健康检查），B2 新增视频会话 3 个、课程进度 1 个与本人视频记录 1 个；私有媒体与公开品牌内容流不包统一信封。**
 
 ---
 
@@ -534,13 +535,14 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可见，`/admin/courses/{id}` 仍要求 `courses:read`。这只是前端注册路由的 `permissionAny` 语义；服务端每个 API 的 `@Permissions` 仍保持 AND 守卫，不改变全局授权模型。write-only 账号可创建课程，但不会读取列表或跳转到无权详情。
 
-### 3.10 B2 视频学习 /me/video-sessions、/me/courses/{id}/progress
+### 3.10 B2 视频学习 /me/video-sessions、/me/video-records、/me/courses/{id}/progress
 
 | 方法 | 路径 | 权限 | 请求与成功 data |
 |---|---|---|---|
 | POST | /me/video-sessions | 登录本人 | `{lesson_id:Id}`；返回 `VideoSessionView` |
 | POST | /me/video-sessions/{id}/heartbeat | 登录本人 | `VideoHeartbeat`；返回 `VideoProgress` |
 | POST | /me/video-sessions/{id}/close | 登录本人 | 无 body；只收口、不补记未上报区间，返回 `VideoProgress` |
+| GET | /me/video-records | 登录本人 | `page` 默认 1、`page_size` 默认 20 且范围 1—100；返回本人历史 `Page<VideoRecordView>`，未知 query 拒绝 |
 | GET | /me/courses/{id}/progress | 登录本人 | 返回当前应学集合 `CourseProgress` |
 
 ```ts
@@ -548,14 +550,15 @@ type VideoHeartbeat = { seq:number; position_ms:number; state:'playing'|'paused'
 type VideoProgress = { confirmed_position_ms:number; credited_ms:number; coverage_ms:number;
   duration_ms:number; completed:boolean; last_seq:number };
 type VideoSessionView = { session_id:Id; version_id:Id; heartbeat_interval_ms:30000; progress:VideoProgress };
+type VideoRecordView = { record_id:Id; lesson_id:Id; version_id:Id; progress:VideoProgress };
 type CourseProgress = { required:number; completed:number; completion_rate:number|null; lessons:VideoProgress[] };
 ```
 
-start 在一个事务内锁定 `sys_user`，重新检查账号启用、`source=institution`、类别、课程 published、课时归属及 `current_version_id`，不能只相信 `LessonVersionService.current()` 或事务外 `assignedCourseIds()`。后开会话关闭该用户跨所有制度的活动阅读会话和旧视频会话。阅读 start 同样锁用户行；其 DB 会话提交后发布 Redis 前再次锁用户并检查 DB 活动所有权，避免已被视频替换的迟到 Redis 指针复活旧阅读计时。
+start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`source=institution`、类别、课程 published、课时归属及 `current_version_id`，不能只相信 `LessonVersionService.current()` 或事务外 `assignedCourseIds()`。若发现活动 reading，事务立即释放；随后才在事务外等待原 reading mutex 并调用唯一的旧阅读 flush 算法，再重新进入短事务权威校验，最多竞争重试 3 次，仍被抢占返回会话冲突。最终无活动 reading 的事务用同一 manager 关闭旧 video，完成后重新取服务端时钟作为新会话锚点。阅读 start 使用同一循环并在锁内复核账号状态。其 DB 会话提交后发布 Redis 前再次锁用户并检查 DB `ended_at` 与当前活动所有权，避免已被视频替换的迟到 Redis 指针复活旧阅读计时；若 phase2 在真正替换前完成并返回 200，后续 start 仍会收口它，最终所有权以 DB 为准。
 
-心跳以数据库中的 `last_seq/last_heartbeat_at/anchor_position_ms/anchor_state` 为权威，进程重启后继续。仅前一锚点为 playing 且本拍为 playing/ended 时可确认区间；有效时长取服务端间隔、45 秒和真实位置前进量的最小值。前进超过可计间隔 + 2 秒视为跳播：不增加 `coverage_ms`，只把下一拍锚点移到新位置。paused/buffering/background 不计时；重复观看可增加 `credited_ms`，合并后的覆盖区间不重复增加。`state=ended` 同拍结算合法区间后关闭会话。
+心跳以数据库中的 `last_seq/last_heartbeat_at/anchor_position_ms/anchor_state` 为权威，进程重启后继续。仅前一锚点为 playing 且本拍为 playing/ended 时可确认区间；先以完整的非负服务端实际间隔判断 `forward_ms ≤ server_elapsed_ms + 2000`，再将有效时长取服务端间隔、45 秒和真实位置前进量的最小值。过大前进不增加 `coverage_ms`，只把下一拍锚点移到新位置。paused/buffering/background 不计时；重复观看可增加 `credited_ms`，合并后的覆盖区间不重复增加。`state=ended` 同拍结算合法区间后关闭会话。
 
-完成条件是 `coverage_ms / duration_ms ≥ 0.95`。课程分母只包含当前账号类别下已上架课程的必学课时当前版本；external、停用、无类别或零必学课程返回 `required=0,completed=0,completion_rate=null`，不会自动完成。视频替换后旧版本记录保留，但不计入新版本完成；课程下架、当前版本替换或学员来源/类别变化会关闭后续视频计时。该 API 证明服务端协议与恢复能力，不证明真实注意力、移动端全屏/锁屏/微信或弱网体验。
+完成条件是 `coverage_ms / duration_ms ≥ 0.95`。课程分母只包含当前账号类别下已上架课程的必学课时当前版本；external、停用、无类别或零必学课程返回 `required=0,completed=0,completion_rate=null`，不会自动完成。视频替换后旧版本记录保留，但不计入新版本完成；课程下架、当前版本替换或学员来源/类别变化会关闭后续视频计时。`GET /me/video-records` 只按令牌本人查询历史记录，不按当前课程/来源/类别重新过滤，不返回媒体 URL，也不重开会话；账号停用仍由全局认证守卫拒绝。该 API 证明服务端协议与恢复能力，不证明真实注意力、移动端全屏/锁屏/微信或弱网体验。
 
 ---
 

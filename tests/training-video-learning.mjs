@@ -12,6 +12,42 @@ function assert(condition, message) {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+export function strictTestDbConfig(ctx) {
+  const required = ['DB_HOST', 'DB_PORT', 'DB_USERNAME', 'DB_PASSWORD', 'DB_DATABASE'];
+  for (const name of required) {
+    if (typeof ctx?.env?.[name] !== 'string' || ctx.env[name].length === 0) {
+      throw new Error(`training-video-learning requires explicit ${name}`);
+    }
+  }
+  if (!/^[1-9]\d*$/.test(ctx.env.DB_PORT) || Number(ctx.env.DB_PORT) > 65_535) {
+    throw new Error('training-video-learning requires a valid DB_PORT');
+  }
+  if (!/^ruleexam_test_[A-Za-z0-9_]+$/.test(ctx.env.DB_DATABASE)) {
+    throw new Error('training-video-learning requires an isolated ruleexam_test_* database');
+  }
+  return {
+    host: ctx.env.DB_HOST,
+    port: Number(ctx.env.DB_PORT),
+    user: ctx.env.DB_USERNAME,
+    password: ctx.env.DB_PASSWORD,
+    database: ctx.env.DB_DATABASE,
+  };
+}
+
+async function within(promise, timeoutMs, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function captchaAnswer(ctx, captchaId) {
   const redis = new Redis({
     host: ctx.env.REDIS_HOST || '127.0.0.1',
@@ -101,13 +137,7 @@ async function createReadingFixture(ctx, { categoryId, adminId, title = 'B2 并�
 }
 
 async function holdUserRow(ctx, userId) {
-  const connection = await mysql.createConnection({
-    host: ctx.env.DB_HOST || '127.0.0.1',
-    port: Number(ctx.env.DB_PORT || 3306),
-    user: ctx.env.DB_USERNAME || 'root',
-    password: ctx.env.DB_PASSWORD || undefined,
-    database: ctx.env.DB_DATABASE,
-  });
+  const connection = await mysql.createConnection(strictTestDbConfig(ctx));
   await connection.beginTransaction();
   await connection.execute('SELECT id FROM sys_user WHERE id = ? FOR UPDATE', [userId]);
   let released = false;
@@ -120,13 +150,7 @@ async function holdUserRow(ctx, userId) {
 }
 
 async function waitForLockWaits(ctx, minimum, label) {
-  const observer = await mysql.createConnection({
-    host: ctx.env.DB_HOST || '127.0.0.1',
-    port: Number(ctx.env.DB_PORT || 3306),
-    user: ctx.env.DB_USERNAME || 'root',
-    password: ctx.env.DB_PASSWORD || undefined,
-    database: ctx.env.DB_DATABASE,
-  });
+  const observer = await mysql.createConnection(strictTestDbConfig(ctx));
   const started = Date.now();
   try {
     while (Date.now() - started < 8_000) {
@@ -180,11 +204,13 @@ async function ageReadingHeartbeat(ctx, sessionId) {
 
 async function runBody(ctx) {
   ctx.reportOwnedRuntime?.({ stage: 'training-video-learning-start', database: ctx.env.DB_DATABASE });
+  assert(ctx.env.DB_POOL_SIZE === '2', 'training-video-learning requires DB_POOL_SIZE=2 for the pool exhaustion regression');
   const admin = await login(ctx, 'admin', ctx.adminPassword, '超级管理员');
   const adminProfile = await ctx.request(admin, 'GET', '/auth/profile');
   const adminId = String(adminProfile.data?.id);
   const categoryId = await createCategory(ctx, admin);
   const learner = await createStudent(ctx, admin, categoryId);
+  const otherLearner = await createStudent(ctx, admin, categoryId);
   const course = await createCourseFixture(ctx, { categoryId, adminId });
   const zeroRequired = await createCourseFixture(ctx, {
     categoryId, adminId, required: false, title: 'B2 零必学课程',
@@ -208,27 +234,40 @@ async function runBody(ctx) {
   });
   assert(unknownStartField.status === 400 && unknownStartField.code === 40001,
     `unknown video start field was accepted: ${unknownStartField.status}/${unknownStartField.code}`);
+  const unknownHistoryQuery = await ctx.request(learner.actor, 'GET', '/me/video-records?user_id=1');
+  assert(unknownHistoryQuery.status === 400 && unknownHistoryQuery.code === 40001,
+    `unknown video history query was accepted: ${unknownHistoryQuery.status}/${unknownHistoryQuery.code}`);
+  const oversizedHistoryPage = await ctx.request(learner.actor, 'GET', '/me/video-records?page_size=101');
+  assert(oversizedHistoryPage.status === 400 && oversizedHistoryPage.code === 40001,
+    `oversized video history page was accepted: ${oversizedHistoryPage.status}/${oversizedHistoryPage.code}`);
+  const otherLearnerHistory = await ctx.request(otherLearner.actor, 'GET', '/me/video-records');
+  assert(otherLearnerHistory.status === 200 && otherLearnerHistory.data?.total === 0,
+    'video history leaked another learner records');
 
   // Concurrent reading -> video: video is queued second and must become the only owner.
-  const [readingFirst, videoSecond] = await raceStarts(
+  const [readingFirst, videoSecond] = await within(raceStarts(
     ctx,
     learner.id,
     () => ctx.request(learner.actor, 'POST', '/learning/sessions/start', { regulation_id: reading.regulationId }),
     () => ctx.request(learner.actor, 'POST', '/me/video-sessions', { lesson_id: course.lessonId }),
-  );
-  assert(readingFirst.status === 409 && videoSecond.status === 200,
+  ), 8_000, 'pool-size-2 reading/video start barrier');
+  assert((readingFirst.status === 200 || (readingFirst.status === 409 && readingFirst.code === 40906))
+    && videoSecond.status === 200,
     `reading->video race failed: ${readingFirst.status}/${videoSecond.status}`);
   assert(typeof videoSecond.data?.session_id === 'string' && typeof videoSecond.data?.version_id === 'string',
     'video start did not preserve bigint IDs as strings');
   const activeAfterVideo = await ctx.queryTestDb(
-    'SELECT id FROM video_learning_session WHERE active_user_id = ? AND ended_at IS NULL', [learner.id]);
+    'SELECT id, started_at FROM video_learning_session WHERE active_user_id = ? AND ended_at IS NULL', [learner.id]);
   const activeReadingsAfterVideo = await ctx.queryTestDb(
     'SELECT id FROM learning_session WHERE user_id = ? AND ended_at IS NULL', [learner.id]);
   assert(activeAfterVideo.length === 1 && activeReadingsAfterVideo.length === 0,
     'reading->video race left multiple active session types');
   const replacedReadingRows = await ctx.queryTestDb(
-    'SELECT id FROM learning_session WHERE user_id = ? ORDER BY id DESC LIMIT 1', [learner.id]);
+    'SELECT id, ended_at, duration_seconds FROM learning_session WHERE user_id = ? ORDER BY id DESC LIMIT 1', [learner.id]);
   assert(replacedReadingRows.length === 1, 'reading->video race did not create a reading row');
+  assert(replacedReadingRows[0].ended_at
+    && new Date(replacedReadingRows[0].ended_at).getTime() <= new Date(activeAfterVideo[0].started_at).getTime(),
+  'reading->video race overlapped the ended reading with the new video anchor');
   const replacedReadingHeartbeat = await ctx.request(learner.actor, 'POST', '/learning/heartbeat', {
     session_id: String(replacedReadingRows[0].id), dwell_segments: [], scroll_percent: 0,
   });
@@ -250,9 +289,14 @@ async function runBody(ctx) {
   const activeVideosAfterReading = await ctx.queryTestDb(
     'SELECT id FROM video_learning_session WHERE active_user_id = ? AND ended_at IS NULL', [learner.id]);
   const activeReadings = await ctx.queryTestDb(
-    'SELECT id FROM learning_session WHERE user_id = ? AND ended_at IS NULL', [learner.id]);
+    'SELECT id, started_at FROM learning_session WHERE user_id = ? AND ended_at IS NULL', [learner.id]);
   assert(activeVideosAfterReading.length === 0 && activeReadings.length === 1,
     'video->reading race left multiple active session types');
+  const replacedVideoRows = await ctx.queryTestDb(
+    'SELECT ended_at FROM video_learning_session WHERE id = ?', [String(videoFirst.data.session_id)]);
+  assert(replacedVideoRows[0]?.ended_at
+    && new Date(replacedVideoRows[0].ended_at).getTime() <= new Date(activeReadings[0].started_at).getTime(),
+  'video->reading race overlapped the ended video with the new reading anchor');
   const replacedVideoHeartbeat = await videoHeartbeat(
     ctx, learner.actor, String(videoFirst.data.session_id), 1, 0, 'paused');
   assert(replacedVideoHeartbeat.status === 409 && replacedVideoHeartbeat.code === 40950,
@@ -366,6 +410,20 @@ async function runBody(ctx) {
   assert(resetProgress.status === 200 && resetProgress.data?.required === 1
     && resetProgress.data?.completed === 0 && resetProgress.data?.completion_rate === 0,
   'new current version reused old completion');
+  const historyAfterReplacement = await ctx.request(learner.actor, 'GET', '/me/video-records');
+  const oldVersionHistory = historyAfterReplacement.data?.items?.find(
+    (item) => item.version_id === course.versionId,
+  );
+  assert(historyAfterReplacement.status === 200 && historyAfterReplacement.data?.page === 1
+    && historyAfterReplacement.data?.page_size === 20 && historyAfterReplacement.data?.total >= 1,
+  `video history pagination mismatch after replacement: ${historyAfterReplacement.status}`);
+  assert(oldVersionHistory?.record_id && typeof oldVersionHistory.record_id === 'string'
+    && oldVersionHistory.lesson_id === course.lessonId
+    && typeof oldVersionHistory.version_id === 'string'
+    && oldVersionHistory.progress?.completed === true
+    && oldVersionHistory.progress?.coverage_ms === 95_000
+    && !Object.hasOwn(oldVersionHistory, 'media_url'),
+  'video replacement hid or altered the immutable historical progress');
 
   const currentSession = await ctx.request(learner.actor, 'POST', '/me/video-sessions', { lesson_id: course.lessonId });
   assert(currentSession.status === 200 && String(currentSession.data?.version_id) === version2,
@@ -377,6 +435,11 @@ async function runBody(ctx) {
   const offlineStart = await ctx.request(learner.actor, 'POST', '/me/video-sessions', { lesson_id: course.lessonId });
   assert(offlineStart.status === 409 && offlineStart.code === 40951,
     `offline start expected 40951, got ${offlineStart.status}/${offlineStart.code}`);
+  const historyWhileOffline = await ctx.request(learner.actor, 'GET', '/me/video-records?page=1&page_size=100');
+  assert(historyWhileOffline.status === 200
+    && historyWhileOffline.data?.items?.some((item) => item.version_id === course.versionId
+      && item.progress?.coverage_ms === 95_000),
+  'course offline state hid historical video progress');
 
   await ctx.queryTestDb('UPDATE training_course SET status = ? WHERE id = ?', ['published', course.courseId]);
   await ctx.queryTestDb('UPDATE sys_user SET source = ? WHERE id = ?', ['external', learner.id]);
@@ -387,8 +450,17 @@ async function runBody(ctx) {
   const retained = await ctx.queryTestDb(
     'SELECT COUNT(*) AS count FROM video_learning_record WHERE user_id = ?', [learner.id]);
   assert(Number(retained[0]?.count) >= 2, 'source change deleted historical video records');
+  const historyAfterSourceChange = await ctx.request(learner.actor, 'GET', '/me/video-records?page=1&page_size=1');
+  assert(historyAfterSourceChange.status === 200 && historyAfterSourceChange.data?.total >= 2
+    && historyAfterSourceChange.data?.items?.length === 1,
+  'source change hid historical video records or broke pagination');
   const externalStart = await ctx.request(learner.actor, 'POST', '/me/video-sessions', { lesson_id: course.lessonId });
   assert(externalStart.status === 403, `external video start expected 403, got ${externalStart.status}`);
+
+  await ctx.queryTestDb('UPDATE sys_user SET status = 0 WHERE id = ?', [learner.id]);
+  const disabledHistory = await ctx.request(learner.actor, 'GET', '/me/video-records');
+  assert(disabledHistory.status === 403 && disabledHistory.code === 40105,
+    `disabled account history expected 40105, got ${disabledHistory.status}/${disabledHistory.code}`);
 }
 
 export async function run(ctx) {

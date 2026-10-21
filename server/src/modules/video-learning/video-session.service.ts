@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource, EntityManager, In, IsNull, LessThan } from 'typeorm';
-import type { Id } from '../../common/training-contracts';
+import type { Id, Page } from '../../common/training-contracts';
 import { Errors } from '../../common/errors';
 import { CourseLesson } from '../../entities/course-lesson.entity';
 import { LessonVersion } from '../../entities/lesson-version.entity';
@@ -21,10 +21,12 @@ import type {
   CourseProgress,
   VideoHeartbeat,
   VideoProgress,
+  VideoRecordView,
   VideoSessionView,
 } from './video-learning.dto';
 
 const VIDEO_STALE_AFTER_MS = 90_000;
+const ACTIVITY_START_MAX_RETRIES = 3;
 
 function numberValue(value: string | number | null | undefined): number {
   const parsed = Number(value ?? 0);
@@ -123,42 +125,51 @@ export class VideoSessionService {
   }
 
   async start(userId: Id, lessonId: Id): Promise<VideoSessionView> {
-    return this.dataSource.transaction(async (manager) => {
-      const { version } = await this.currentScope(manager, userId, lessonId);
-      const now = new Date();
+    for (let retries = 0; retries <= ACTIVITY_START_MAX_RETRIES; retries += 1) {
+      const outcome = await this.dataSource.transaction(async (manager) => {
+        const { version } = await this.currentScope(manager, userId, lessonId);
+        if ((await this.learning.activeSessionIds(manager, String(userId))).length > 0) return null;
 
-      // Every start holds sys_user first. Reading flush does not acquire that lock,
-      // so both start directions serialize without a reverse lock order.
-      await this.learning.closeActiveForUser(String(userId), now);
-      await manager.getRepository(VideoLearningSession)
-        .createQueryBuilder()
-        .update(VideoLearningSession)
-        .set({ activeUserId: null, endedAt: now })
-        .where('active_user_id = :userId AND ended_at IS NULL', { userId: String(userId) })
-        .execute();
+        const closeTime = new Date();
+        await manager.getRepository(VideoLearningSession)
+          .createQueryBuilder()
+          .update(VideoLearningSession)
+          .set({ activeUserId: null, endedAt: closeTime })
+          .where('active_user_id = :userId AND ended_at IS NULL', { userId: String(userId) })
+          .execute();
 
-      const record = await this.recordFor(manager, userId, version);
-      const sessionRepo = manager.getRepository(VideoLearningSession);
-      const session = await sessionRepo.save(sessionRepo.create({
-        recordId: String(record.id),
-        userId: String(userId),
-        lessonVersionId: String(version.id),
-        activeUserId: String(userId),
-        startedAt: now,
-        lastHeartbeatAt: now,
-        endedAt: null,
-        lastSeq: 0,
-        anchorPositionMs: String(record.confirmedPositionMs || '0'),
-        anchorState: 'playing',
-        creditedMs: '0',
-      }));
-      return {
-        session_id: String(session.id),
-        version_id: String(version.id),
-        heartbeat_interval_ms: VIDEO_HEARTBEAT_INTERVAL_MS,
-        progress: this.progressView(record, session.lastSeq),
-      };
-    });
+        // The anchor is sampled only after old reading flushes have returned and
+        // the prior video close has completed, so credited windows cannot overlap.
+        const startedAt = new Date();
+        const record = await this.recordFor(manager, userId, version);
+        const sessionRepo = manager.getRepository(VideoLearningSession);
+        const session = await sessionRepo.save(sessionRepo.create({
+          recordId: String(record.id),
+          userId: String(userId),
+          lessonVersionId: String(version.id),
+          activeUserId: String(userId),
+          startedAt,
+          lastHeartbeatAt: startedAt,
+          endedAt: null,
+          lastSeq: 0,
+          anchorPositionMs: String(record.confirmedPositionMs || '0'),
+          anchorState: 'playing',
+          creditedMs: '0',
+        }));
+        return {
+          session_id: String(session.id),
+          version_id: String(version.id),
+          heartbeat_interval_ms: VIDEO_HEARTBEAT_INTERVAL_MS,
+          progress: this.progressView(record, session.lastSeq),
+        } as VideoSessionView;
+      });
+      if (outcome) return outcome;
+      if (retries === ACTIVITY_START_MAX_RETRIES) {
+        throw Errors.videoSessionConflict('学习会话竞争，请重试');
+      }
+      await this.learning.closeActiveForUser(String(userId), new Date());
+    }
+    throw Errors.videoSessionConflict('学习会话竞争，请重试');
   }
 
   private async sessionStillAvailable(
@@ -294,6 +305,35 @@ export class VideoSessionService {
         completion_rate: courseCompletionRate(required.lessons.length, completed),
         lessons,
       };
+    });
+  }
+
+  async records(userId: Id, page = 1, pageSize = 20): Promise<Page<VideoRecordView>> {
+    const normalizedPage = Math.max(1, Math.trunc(page));
+    const normalizedPageSize = Math.min(100, Math.max(1, Math.trunc(pageSize)));
+    return this.dataSource.transaction(async (manager) => {
+      const [records, total] = await manager.getRepository(VideoLearningRecord).findAndCount({
+        where: { userId: String(userId) },
+        order: { id: 'DESC' },
+        skip: (normalizedPage - 1) * normalizedPageSize,
+        take: normalizedPageSize,
+      });
+      const versionIds = records.map((record) => String(record.lessonVersionId));
+      const versions = versionIds.length
+        ? await manager.getRepository(LessonVersion).findBy({ id: In(versionIds) })
+        : [];
+      const byId = new Map(versions.map((version) => [String(version.id), version]));
+      const items = records.map((record) => {
+        const version = byId.get(String(record.lessonVersionId));
+        if (!version) throw Errors.internal('视频学习记录版本引用异常');
+        return {
+          record_id: String(record.id),
+          lesson_id: String(version.lessonId),
+          version_id: String(record.lessonVersionId),
+          progress: this.progressView(record),
+        };
+      });
+      return { items, total, page: normalizedPage, page_size: normalizedPageSize };
     });
   }
 

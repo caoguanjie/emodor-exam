@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import { Request } from 'express';
 import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator';
 import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
@@ -6,8 +6,10 @@ import { Errors } from '../../common/errors';
 import {
   StartVideoSessionDto,
   VIDEO_HEARTBEAT_KEYS,
+  VIDEO_RECORD_QUERY_KEYS,
   VIDEO_START_KEYS,
   VideoHeartbeatDto,
+  VideoRecordQueryDto,
 } from './video-learning.dto';
 import { VideoSessionService } from './video-session.service';
 
@@ -51,6 +53,16 @@ export class VideoLearningController {
   @Post('video-sessions/:id/close')
   close(@Param('id') sessionId: string, @CurrentUser() user: AuthUser) {
     return this.sessions.close(String(user.id), id(sessionId, 'session_id'));
+  }
+
+  @Get('video-records')
+  records(
+    @Query(new StrictDtoValidationPipe(VIDEO_RECORD_QUERY_KEYS)) query: VideoRecordQueryDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    assertKeys(req.query, VIDEO_RECORD_QUERY_KEYS, '视频学习记录查询');
+    return this.sessions.records(String(user.id), query.page ?? 1, query.page_size ?? 20);
   }
 
   @Get('courses/:id/progress')

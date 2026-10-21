@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getMetadataArgsStorage } from 'typeorm';
 import {
   courseCompletionRate,
@@ -15,6 +15,8 @@ import { LearningSession } from '../src/entities/learning-session.entity';
 import { LearningRecord, ScrollCoverageUtil } from '../src/entities/learning-record.entity';
 import { Regulation } from '../src/entities/regulation.entity';
 import { SysUser } from '../src/entities/sys-user.entity';
+import { LessonVersion } from '../src/entities/lesson-version.entity';
+import { loadConfig } from '../src/config/configuration';
 
 const DURATION_MS = 100_000;
 
@@ -98,6 +100,34 @@ describe('verified video coverage', () => {
     expect(longHeartbeat.creditedMs).toBeLessThanOrEqual(45_000);
     expect(longHeartbeat.creditedMs).toBe(45_000);
     expect(longHeartbeat.interval).toEqual([0, 45_000]);
+  });
+
+  it('uses the full 60-second elapsed time for jump validation before capping credit at 45 seconds', () => {
+    const result = creditVideoInterval(
+      anchor(),
+      { seq: 1, position_ms: 60_000, state: 'playing' },
+      60_000,
+      DURATION_MS,
+    );
+
+    expect(result).toEqual({
+      nextAnchor: { seq: 1, positionMs: 60_000, state: 'playing' },
+      creditedMs: 45_000,
+      interval: [0, 45_000],
+    });
+  });
+
+  it('rejects a 62,001-millisecond jump after 60 seconds of real elapsed time', () => {
+    const result = creditVideoInterval(
+      anchor(),
+      { seq: 1, position_ms: 62_001, state: 'playing' },
+      60_000,
+      DURATION_MS,
+    );
+
+    expect(result.creditedMs).toBe(0);
+    expect(result.interval).toBeNull();
+    expect(result.nextAnchor.positionMs).toBe(62_001);
   });
 
   it('rejects a forward jump beyond real elapsed time plus two-second tolerance', () => {
@@ -307,9 +337,179 @@ describe('video learning persistence contract', () => {
     expect(session.creditedMs).toBe('12345');
     expect(save).toHaveBeenCalledTimes(1);
   });
+
+  it('returns paginated self history by immutable version without consulting current course scope', async () => {
+    const record = {
+      id: '900', userId: '31', lessonVersionId: '501', durationMs: '100000',
+      creditedMs: '125000', coverageMs: '95000', confirmedPositionMs: '95000',
+      completed: 1, coverageIntervals: [[0, 95000]],
+    } as VideoLearningRecord;
+    const recordRepo = {
+      findAndCount: vi.fn().mockResolvedValue([[record], 21]),
+    };
+    const versionRepo = {
+      findBy: vi.fn().mockResolvedValue([{ id: '501', lessonId: '101' } as LessonVersion]),
+    };
+    const manager = {
+      getRepository(entity: unknown) {
+        if (entity === VideoLearningRecord) return recordRepo;
+        if (entity === LessonVersion) return versionRepo;
+        throw new Error(`unexpected repository ${(entity as any)?.name}`);
+      },
+    };
+    const dataSource = { transaction: vi.fn(async (work) => work(manager)) };
+    const courses = { requiredVideoLessons: vi.fn(() => { throw new Error('current scope must not hide history'); }) };
+    const service = new VideoSessionService(dataSource as any, {} as any, courses as any);
+
+    await expect((service as any).records('31', 2, 20)).resolves.toEqual({
+      items: [{
+        record_id: '900',
+        lesson_id: '101',
+        version_id: '501',
+        progress: {
+          confirmed_position_ms: 95_000,
+          credited_ms: 125_000,
+          coverage_ms: 95_000,
+          duration_ms: 100_000,
+          completed: true,
+          last_seq: 0,
+        },
+      }],
+      total: 21,
+      page: 2,
+      page_size: 20,
+    });
+    expect(recordRepo.findAndCount).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: '31' }, skip: 20, take: 20,
+    }));
+    expect(courses.requiredVideoLessons).not.toHaveBeenCalled();
+  });
 });
 
-function lockedUserRepository(user = { id: '31' }) {
+function videoStartService(options: {
+  activeReadingRounds?: number;
+  closeAdvancesTo?: Date;
+  failCloseInsideTransaction?: boolean;
+} = {}) {
+  let inTransaction = false;
+  let readingChecks = 0;
+  let savedSession: VideoLearningSession | null = null;
+  let closedVideoAt: Date | null = null;
+  const record = {
+    id: '800', userId: '31', lessonVersionId: '501', durationMs: '100000',
+    creditedMs: '0', coverageIntervals: [], coverageMs: '0', confirmedPositionMs: '0', completed: 0,
+  } as VideoLearningRecord;
+  const updateBuilder: any = {
+    update: vi.fn().mockReturnThis(),
+    set: vi.fn(),
+    where: vi.fn().mockReturnThis(),
+    execute: vi.fn().mockResolvedValue({ affected: 1 }),
+  };
+  updateBuilder.set.mockImplementation((value) => {
+    closedVideoAt = value.endedAt;
+    return updateBuilder;
+  });
+  const videoRepo = {
+    createQueryBuilder: vi.fn().mockReturnValue(updateBuilder),
+    create: vi.fn((value) => value),
+    save: vi.fn(async (value) => {
+      savedSession = Object.assign({ id: '901' }, value) as VideoLearningSession;
+      return savedSession;
+    }),
+  };
+  const manager = {
+    getRepository(entity: unknown) {
+      if (entity === VideoLearningSession) return videoRepo;
+      throw new Error(`unexpected repository ${(entity as any)?.name}`);
+    },
+  };
+  const dataSource = {
+    transaction: vi.fn(async (work) => {
+      inTransaction = true;
+      try { return await work(manager); }
+      finally { inTransaction = false; }
+    }),
+  };
+  const learning = {
+    activeSessionIds: vi.fn(async () => {
+      const active = readingChecks < (options.activeReadingRounds ?? 0);
+      readingChecks += 1;
+      return active ? ['701'] : [];
+    }),
+    closeActiveForUser: vi.fn(async () => {
+      if (options.failCloseInsideTransaction && inTransaction) {
+        throw new Error('reading flush waited while a user transaction held a pool connection');
+      }
+      if (options.closeAdvancesTo) vi.setSystemTime(options.closeAdvancesTo);
+    }),
+  };
+  const service = new VideoSessionService(dataSource as any, learning as any, {} as any);
+  (service as any).currentScope = vi.fn().mockResolvedValue({ version: { id: '501' } });
+  (service as any).recordFor = vi.fn().mockResolvedValue(record);
+  return {
+    service,
+    learning,
+    savedSession: () => savedSession,
+    closedVideoAt: () => closedVideoAt,
+  };
+}
+
+describe('video start coordination', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('waits for reading flush only after releasing the sys_user transaction connection', async () => {
+    const { service } = videoStartService({ activeReadingRounds: 1, failCloseInsideTransaction: true });
+
+    await expect(service.start('31', '101')).resolves.toMatchObject({
+      session_id: '901', version_id: '501',
+    });
+  });
+
+  it('bounds persistent reading-start contention to three out-of-transaction flush retries', async () => {
+    const { service, learning } = videoStartService({ activeReadingRounds: 4 });
+
+    await expect(service.start('31', '101')).rejects.toMatchObject({ code: 40950, httpStatus: 409 });
+    expect(learning.closeActiveForUser).toHaveBeenCalledTimes(3);
+  });
+
+  it('anchors a new video only after a delayed in-flight reading heartbeat has been closed', async () => {
+    vi.useFakeTimers();
+    const beforeClose = new Date('2026-10-21T00:00:00.000Z');
+    const afterClose = new Date('2026-10-21T00:00:05.000Z');
+    vi.setSystemTime(beforeClose);
+    const fixture = videoStartService({ activeReadingRounds: 1, closeAdvancesTo: afterClose });
+
+    await fixture.service.start('31', '101');
+
+    expect(fixture.closedVideoAt()?.getTime()).toBeGreaterThanOrEqual(afterClose.getTime());
+    expect(fixture.savedSession()?.startedAt.getTime()).toBeGreaterThanOrEqual(afterClose.getTime());
+    expect(fixture.savedSession()?.lastHeartbeatAt.getTime()).toBeGreaterThanOrEqual(afterClose.getTime());
+  });
+});
+
+describe('database pool configuration', () => {
+  const originalPoolSize = process.env.DB_POOL_SIZE;
+
+  afterEach(() => {
+    if (originalPoolSize === undefined) delete process.env.DB_POOL_SIZE;
+    else process.env.DB_POOL_SIZE = originalPoolSize;
+  });
+
+  it('uses an explicitly configured positive DB pool size', () => {
+    process.env.DB_POOL_SIZE = '2';
+    const db = loadConfig().db as any;
+
+    expect(db.poolSize).toBe(2);
+    expect(db.extra?.connectionLimit).toBe(2);
+  });
+
+  it.each(['0', '-1', '1.5', 'abc'])('rejects invalid DB_POOL_SIZE=%s at startup', (value) => {
+    process.env.DB_POOL_SIZE = value;
+    expect(() => loadConfig()).toThrow(/DB_POOL_SIZE/);
+  });
+});
+
+function lockedUserRepository(user = { id: '31', status: 1 }) {
   const query = {
     setLock: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
@@ -330,18 +530,32 @@ function readingStartService(options: {
   failPointerWrite?: boolean;
   failAfterPublish?: boolean;
   failRedisCleanup?: boolean;
+  activeReadingBeforeStart?: boolean;
+  persistentActiveReading?: boolean;
+  failCloseInsideTransaction?: boolean;
+  lockedUserStatus?: number;
 } = {}) {
   const session = readingFixture();
+  const preexistingSession = { ...readingFixture(), id: '699', regulationId: '40' } as LearningSession;
+  let createdPersisted = false;
+  let activeReadingBeforeStart = options.activeReadingBeforeStart === true;
+  let inTransaction = false;
   const record = {
     id: '800', userId: '31', regulationId: '41', versionId: '51', totalSeconds: 0,
     maxScrollPercent: 0, scrollCoverage: ScrollCoverageUtil.empty(10), isValid: 0, validAt: null,
   } as LearningRecord;
-  const managerSave = vi.fn(async (value) => value);
+  const managerSave = vi.fn(async (value) => {
+    createdPersisted = true;
+    return value;
+  });
   const sessionManagerRepo = {
     create: vi.fn((value) => Object.assign(session, value)),
     save: managerSave,
     findOne: vi.fn(async () => session),
-    find: vi.fn(async () => session.endedAt ? [] : [session]),
+    find: vi.fn(async () => {
+      if (createdPersisted) return session.endedAt ? [] : [session];
+      return activeReadingBeforeStart ? [preexistingSession] : [];
+    }),
   };
   const recordManagerRepo = {
     findOne: vi.fn().mockResolvedValue(record),
@@ -354,8 +568,8 @@ function readingStartService(options: {
       update: vi.fn().mockReturnThis(), set: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(), execute: vi.fn().mockResolvedValue({ affected: 0 }),
     }),
   };
-  const firstUserRepo = lockedUserRepository();
-  const secondUserRepo = lockedUserRepository();
+  const firstUserRepo = lockedUserRepository({ id: '31', status: options.lockedUserStatus ?? 1 });
+  const secondUserRepo = lockedUserRepository({ id: '31', status: options.lockedUserStatus ?? 1 });
   const manager = (userRepo: any) => ({
     getRepository(entity: unknown) {
       if (entity === SysUser) return userRepo;
@@ -371,6 +585,7 @@ function readingStartService(options: {
       transactionNo += 1;
       const currentTransaction = transactionNo;
       const endedBefore = session.endedAt;
+      inTransaction = true;
       try {
         const result = await work(manager(currentTransaction === 1 ? firstUserRepo : secondUserRepo));
         if (currentTransaction === 1 && options.replacedBeforePublish) session.endedAt = new Date();
@@ -382,6 +597,8 @@ function readingStartService(options: {
         // Simulate transaction rollback of any in-callback endedAt mutation.
         if (currentTransaction >= 2) session.endedAt = endedBefore;
         throw error;
+      } finally {
+        inTransaction = false;
       }
     }),
   };
@@ -411,7 +628,12 @@ function readingStartService(options: {
     dataSource,
     content: { readingContent: vi.fn().mockResolvedValue({}) },
     userContext: vi.fn().mockResolvedValue({ role: 'employee', departmentId: '1' }),
-    closeActiveForUser: vi.fn().mockResolvedValue(undefined),
+    closeActiveForUser: vi.fn(async () => {
+      if (options.failCloseInsideTransaction && inTransaction) {
+        throw new Error('reading flush waited while a user transaction held a pool connection');
+      }
+      if (!options.persistentActiveReading) activeReadingBeforeStart = false;
+    }),
   });
   return { service, session, redis, managerSave };
 }
@@ -440,6 +662,32 @@ describe('cross-type active learning coordination', () => {
     expect(managerSave).toHaveBeenCalled();
     expect(redis.hsetAll).not.toHaveBeenCalled();
     expect(redis.set).not.toHaveBeenCalled();
+  });
+
+  it('releases the sys_user transaction before flushing a prior reading during reading start', async () => {
+    const { service } = readingStartService({
+      activeReadingBeforeStart: true,
+      failCloseInsideTransaction: true,
+    });
+
+    await expect(service.start('41', 31)).resolves.toMatchObject({ session_id: 700 });
+  });
+
+  it('bounds reading-start contention to three out-of-transaction flush retries', async () => {
+    const { service } = readingStartService({
+      activeReadingBeforeStart: true,
+      persistentActiveReading: true,
+    });
+
+    await expect(service.start('41', 31)).rejects.toMatchObject({ code: 40906, httpStatus: 409 });
+    expect(service.closeActiveForUser).toHaveBeenCalledTimes(3);
+  });
+
+  it('rechecks disabled account status while holding the activity user row', async () => {
+    const { service } = readingStartService({ lockedUserStatus: 0 });
+
+    await expect(service.start('41', 31)).rejects.toMatchObject({ code: 40105, httpStatus: 403 });
+    expect(service.closeActiveForUser).not.toHaveBeenCalled();
   });
 
   it('fails closed when Redis pointer publication fails after the reading row commits', async () => {

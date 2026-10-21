@@ -39,22 +39,20 @@ export function creditVideoInterval(
   };
   const previousPosition = position(previous.positionMs, durationMs);
   const currentPosition = nextAnchor.positionMs;
-  const elapsed = Math.min(
-    VIDEO_HEARTBEAT_CAP_MS,
-    Math.max(0, Number.isFinite(elapsedMs) ? Math.trunc(elapsedMs) : 0),
-  );
+  const realElapsed = Math.max(0, Number.isFinite(elapsedMs) ? Math.trunc(elapsedMs) : 0);
+  const creditWindow = Math.min(VIDEO_HEARTBEAT_CAP_MS, realElapsed);
   const forwardMs = currentPosition - previousPosition;
   const canCreditState = previous.state === 'playing'
     && (input.state === 'playing' || input.state === 'ended');
 
-  if (!canCreditState || elapsed === 0 || forwardMs <= 0) {
+  if (!canCreditState || realElapsed === 0 || forwardMs <= 0) {
     return { nextAnchor, creditedMs: 0, interval: null };
   }
-  if (forwardMs > elapsed + VIDEO_POSITION_TOLERANCE_MS) {
+  if (forwardMs > realElapsed + VIDEO_POSITION_TOLERANCE_MS) {
     return { nextAnchor, creditedMs: 0, interval: null };
   }
 
-  const creditedMs = Math.min(elapsed, forwardMs);
+  const creditedMs = Math.min(creditWindow, forwardMs);
   return {
     nextAnchor,
     creditedMs,

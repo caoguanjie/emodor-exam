@@ -1,4 +1,5 @@
-import { IsIn, IsInt, IsString, Matches, Max, Min } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsIn, IsInt, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
 
 const ID_PATTERN = /^[1-9]\d*$/;
 
@@ -18,6 +19,15 @@ export class VideoHeartbeatDto implements VideoHeartbeat {
   @IsInt() @Min(1) @Max(4_294_967_295) seq!: number;
   @IsInt() @Min(0) @Max(Number.MAX_SAFE_INTEGER) position_ms!: number;
   @IsString() @IsIn(['playing', 'paused', 'buffering', 'background', 'ended']) state!: VideoPlaybackState;
+}
+
+const QueryNumber = () => Transform(({ value }) => (
+  value === undefined || value === null || value === '' ? undefined : Number(value)
+));
+
+export class VideoRecordQueryDto {
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(1_000_000) page?: number;
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
 }
 
 export interface VideoProgress {
@@ -43,5 +53,13 @@ export interface CourseProgress {
   lessons: VideoProgress[];
 }
 
+export interface VideoRecordView {
+  record_id: string;
+  lesson_id: string;
+  version_id: string;
+  progress: VideoProgress;
+}
+
 export const VIDEO_START_KEYS = ['lesson_id'] as const;
 export const VIDEO_HEARTBEAT_KEYS = ['seq', 'position_ms', 'state'] as const;
+export const VIDEO_RECORD_QUERY_KEYS = ['page', 'page_size'] as const;

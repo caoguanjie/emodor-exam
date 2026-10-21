@@ -108,7 +108,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | 培训课程 | 按一个培训类别组织的学习内容（training_course），状态为 draft / published / offline；课程可推荐、排序、配置封面与可选制度信息关联，但制度关联不构成抽题池或学习门槛。 |
 | 课程章节与视频课时 | course_chapter 与 course_lesson 分别排序；本期课时类型仅 video。发布后的媒体替换追加 lesson_version 并更新 current_version_id，旧版本不可原地改写。 |
 | 视频学习记录与会话 | video_learning_record 按用户+不可变课时版本保存有效时长、去重覆盖、断点与完成；video_learning_session 保存递增序号及服务端锚点，重启可恢复。 |
-| 心跳上报 | 默认每 30 秒上报。制度阅读携带滚动段位并用 Redis 累计；视频携带递增 seq、position_ms 与播放状态并逐拍落库。两者单次最多确认 45 秒，暂停/后台不计。 |
+| 心跳上报 | 默认每 30 秒上报。制度阅读携带滚动段位并用 Redis 累计；视频携带递增 seq、position_ms 与播放状态并逐拍落库。视频先按完整服务端间隔 +2 秒判断跳播，再把单次确认封顶 45 秒；暂停/后台不计。 |
 | 滚动覆盖率 | 阅读内容按固定 10 段划分、以 JSON 位图记录的已读到位情况（learning_record.scroll_coverage）；其中底部段必须被覆盖，是「有效学习」的必要条件之一。 |
 | 考试资格 | **legacy 制度固定卷**员工参加某制度考试的前置条件：该员工在该制度上的学习已达「有效学习」标准；资格校验发生在发起考试时。计划中的新培训考试默认关闭该学习门槛，但仍执行发布、身份、次数、服务端期限与权限校验。 |
 | 试题 | 题库中的稳定身份（question），当前 B3 已支持 `single/multiple/judgment/image`、`easy/medium/hard`、可选考点、`ai/manual/import` 来源与不可变 question_version；`current_version_id` 指向当前版本。legacy AI 生成、固定卷组卷与自动评分仍只支持 single/multiple，B4 导入流程与 C1 发布快照尚未实现。 |
@@ -216,7 +216,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 **API 命名**
 
 - REST 风格，统一前缀 `/api/v1`。
-- legacy 模块路由：`/auth`、`/users`、`/departments`、`/regulations`、`/learning`、`/exams`、`/statistics`、`/ai`；已实现增量另含 `/admin/training-categories`、`/admin/students`、`/admin/courses`、`/admin`、`/me`（含 `/me/home` 与 `/me/video-sessions`）、`/me/courses`、`/media` 与公开 `/site-config`。
+- legacy 模块路由：`/auth`、`/users`、`/departments`、`/regulations`、`/learning`、`/exams`、`/statistics`、`/ai`；已实现增量另含 `/admin/training-categories`、`/admin/students`、`/admin/courses`、`/admin`、`/me`（含 `/me/home`、`/me/video-sessions` 与本人 `/me/video-records` 历史）、`/me/courses`、`/media` 与公开 `/site-config`。
 - 路由与模块的对应关系固定如下：
 
 | 模块（固定名称） | 路由前缀 |
@@ -224,7 +224,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | 1. 组织权限与后台公共模块 | `/auth`、`/users`、`/departments`、`/admin/training-categories`、`/admin/students`、`/admin`、`/me`、`/media`、`/site-config` |
 | 2. 制度文件管理模块 | `/regulations` |
 | 3. AI 出题模块 | `/ai` |
-| 4. 学习行为管控模块 | `/learning`、`/admin/courses`、`/me/courses`、`/me/home`、`/me/video-sessions` |
+| 4. 学习行为管控模块 | `/learning`、`/admin/courses`、`/me/courses`、`/me/home`、`/me/video-sessions`、`/me/video-records` |
 | 5. 考试评分模块 | `/exams` |
 | 6. 统计报表模块 | `/statistics` |
 

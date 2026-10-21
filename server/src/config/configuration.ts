@@ -78,6 +78,15 @@ function mediaEnvInt(name: string, fallback: number, min: number, max: number): 
   return value;
 }
 
+function positiveEnvInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  if (!/^[1-9]\d*$/.test(raw)) throw new Error(`环境变量 ${name} 必须是正整数`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) throw new Error(`环境变量 ${name} 超出支持范围`);
+  return value;
+}
+
 export function loadConfig(): AppConfig {
   const env = process.env.NODE_ENV || 'development';
   const isProd = env === 'production';
@@ -85,6 +94,7 @@ export function loadConfig(): AppConfig {
   if (!process.env.TZ) process.env.TZ = tz;
 
   const dbPassword = process.env.DB_PASSWORD ?? '';
+  const dbPoolSize = positiveEnvInt('DB_POOL_SIZE', 20);
   return {
     env,
     port: Number(process.env.PORT || 3000),
@@ -100,8 +110,8 @@ export function loadConfig(): AppConfig {
       entities: [__dirname + '/../entities/*.entity.js'],
       synchronize: false, // 表结构以 database/init.sql 为唯一权威（03 册）
       logging: false,
-      poolSize: 20,
-      extra: { connectionLimit: 20 },
+      poolSize: dbPoolSize,
+      extra: { connectionLimit: dbPoolSize },
     } as TypeOrmModuleOptions,
     redis: {
       host: process.env.REDIS_HOST || '127.0.0.1',
