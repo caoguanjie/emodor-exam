@@ -431,7 +431,7 @@ test('010 upgrades completed C2 answers by record-scoped item identity without c
   }
 });
 
-test('000 through 010 upgrades once from the accepted A1 schema and then reapplies as a no-op', async () => {
+test('the complete migration chain upgrades once from the accepted A1 schema and then reapplies as a no-op', async () => {
   const database = await createDatabase('succession_a1_' + randomBytes(3).toString('hex'));
   const acceptedA1Sql = execFileSync(
     'git',
@@ -441,25 +441,73 @@ test('000 through 010 upgrades once from the accepted A1 schema and then reappli
   await admin.query(renderSchemaForDatabase(acceptedA1Sql, database));
   const conn = await connectionFor(database);
   try {
-    const throughAnswers = (await listMigrations())
-      .filter((item) => Number(item.id.slice(0, 3)) <= 10);
-    assert.deepEqual(throughAnswers.map((item) => item.id), [
+    const definitions = await listMigrations();
+    assert.deepEqual(definitions.map((item) => item.id), [
       '000_migration_registry', '001_training_identity', '002_access', '003_media',
       '004_system', '005_courses', '006_video_learning', '007_question_bank',
-      '008_paper_release', '009_attempt_snapshot', '010_answers',
+      '008_paper_release', '009_attempt_snapshot', '010_answers', '011_manual_grading',
+      '012_course_navigation', '013_exam_monitor_navigation',
     ]);
 
-    const first = await applyMigrations({ connection: conn, database, migrations: throughAnswers });
-    assert.deepEqual(first.applied, throughAnswers.map((item) => item.id));
+    await conn.query("INSERT INTO sys_department (name, sort, status) VALUES ('完整升级保留数据', 917, 0)");
+    let reservedMenusBefore;
+    const first = await applyMigrations({
+      connection: conn,
+      database,
+      migrations: definitions,
+      onCheckpoint: async ({ event, migrationId, stepId }) => {
+        if (event !== 'after-step-sql'
+          || migrationId !== '004_system'
+          || stepId !== 'seed_registered_menus') return;
+        await conn.query("UPDATE sys_menu SET name = CONCAT(name, '-旧库定制'), icon = CONCAT('Legacy', id), sort = sort + 900, status = 0 WHERE id BETWEEN 20 AND 26");
+        [reservedMenusBefore] = await conn.query(
+          'SELECT id, parent_id, name, type, route_path, permission_code, icon, sort, status FROM sys_menu WHERE id BETWEEN 20 AND 26 ORDER BY id',
+        );
+      },
+    });
+    assert.deepEqual(first.applied, definitions.map((item) => item.id));
+    assert.equal(reservedMenusBefore?.length, 7, 'the fixture must customize all reserved system menu IDs');
     const [[columns]] = await conn.query(
       "SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'exam_record'",
     );
     assert.equal(Number(columns.count), 30);
+    const [[indexes]] = await conn.query(
+      "SELECT COUNT(DISTINCT INDEX_NAME) AS count FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'exam_record'",
+    );
+    assert.equal(Number(indexes.count), 9);
+    const attempts = definitions.find((item) => item.id === '009_attempt_snapshot');
+    const answers = definitions.find((item) => item.id === '010_answers');
+    const predecessorStep = attempts.steps.find((step) => step.id === 'extend_exam_record_attempt_snapshot');
+    const successorStep = answers.steps.find((step) => step.id === 'extend_exam_record_submission');
+    const [[predecessorCompletion]] = await conn.execute(predecessorStep.checkSql);
+    const [[successorCompletion]] = await conn.execute(successorStep.checkSql);
+    assert.equal(Number(predecessorCompletion.complete), 0, '009 legacy shape is superseded after 010');
+    assert.equal(Number(successorCompletion.complete), 1, '010 must own the complete 30-column and 9-index shape');
+    const [[preservedDepartment]] = await conn.query(
+      "SELECT name, sort, status FROM sys_department WHERE name = '完整升级保留数据'",
+    );
+    assert.deepEqual({
+      name: preservedDepartment.name,
+      sort: Number(preservedDepartment.sort),
+      status: Number(preservedDepartment.status),
+    }, { name: '完整升级保留数据', sort: 917, status: 0 });
+    const [reservedMenusAfter] = await conn.query(
+      'SELECT id, parent_id, name, type, route_path, permission_code, icon, sort, status FROM sys_menu WHERE id BETWEEN 20 AND 26 ORDER BY id',
+    );
+    assert.deepEqual(reservedMenusAfter, reservedMenusBefore);
+    const [newNavigation] = await conn.query(
+      "SELECT id, route_path FROM sys_menu WHERE route_path IN ('/admin/courses','/admin/grading','/admin/exam-records','/admin/exam-monitor') ORDER BY route_path",
+    );
+    assert.deepEqual(newNavigation.map((row) => row.route_path), [
+      '/admin/courses', '/admin/exam-monitor', '/admin/exam-records', '/admin/grading',
+    ]);
+    assert.equal(new Set(newNavigation.map((row) => String(row.id))).size, newNavigation.length);
+    assert.equal(newNavigation.every((row) => Number(row.id) < 20 || Number(row.id) > 26), true);
     const [before] = await conn.query(
       `SELECT migration_id, checksum, status, attempts, progress FROM \`${migrationTable}\` ORDER BY migration_id`,
     );
 
-    const repeated = await applyMigrations({ connection: conn, database, migrations: throughAnswers });
+    const repeated = await applyMigrations({ connection: conn, database, migrations: definitions });
     assert.deepEqual(repeated.applied, []);
     const [afterRows] = await conn.query(
       `SELECT migration_id, checksum, status, attempts, progress FROM \`${migrationTable}\` ORDER BY migration_id`,
@@ -470,24 +518,23 @@ test('000 through 010 upgrades once from the accepted A1 schema and then reappli
   }
 });
 
-test('latest init with an empty registry records 009 and 010 independently and tolerates later columns', async () => {
+test('latest init with an empty registry records the complete chain and reapplies as a no-op', async () => {
   const database = await createDatabase('succession_fresh_' + randomBytes(3).toString('hex'));
   await admin.query(renderSchemaForDatabase(initSql, database));
   const conn = await connectionFor(database);
   try {
-    const attempts = await migration('009_attempt_snapshot');
-    const answers = await migration('010_answers');
-    const definitions = [attempts, answers];
+    const [[emptyRegistry]] = await conn.query(`SELECT COUNT(*) AS count FROM \`${migrationTable}\``);
+    assert.equal(Number(emptyRegistry.count), 0, 'latest init must start with an empty migration registry');
+    const definitions = await listMigrations();
     const first = await applyMigrations({ connection: conn, database, migrations: definitions });
-    assert.deepEqual(first.applied, ['009_attempt_snapshot', '010_answers']);
+    assert.deepEqual(first.applied, definitions.map((item) => item.id));
     const [registered] = await conn.query(
-      `SELECT migration_id, status, progress FROM \`${migrationTable}\` WHERE migration_id IN (?, ?) ORDER BY migration_id`,
-      [attempts.id, answers.id],
+      `SELECT migration_id, status, progress FROM \`${migrationTable}\` ORDER BY migration_id`,
     );
-    assert.deepEqual(registered.map((row) => [row.migration_id, row.status, row.progress]), [
-      [attempts.id, 'applied', attempts.steps.map((step) => step.id)],
-      [answers.id, 'applied', answers.steps.map((step) => step.id)],
-    ]);
+    assert.deepEqual(
+      registered.map((row) => [row.migration_id, row.status, row.progress]),
+      definitions.map((item) => [item.id, 'applied', item.steps.map((step) => step.id)]),
+    );
 
     const repeated = await applyMigrations({ connection: conn, database, migrations: definitions });
     assert.deepEqual(repeated.applied, []);
