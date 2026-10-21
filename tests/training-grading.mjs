@@ -191,6 +191,7 @@ async function runGrading(ctx) {
     stage = 'frozen question media';
     const promptAssetId = await uploadQuestionImage(ctx, setup, `c4-prompt-${runSuffix}.png`);
     const analysisAssetId = await uploadQuestionImage(ctx, setup, `c4-analysis-${runSuffix}.png`);
+    const wrongAnalysisAssetId = await uploadQuestionImage(ctx, setup, `c4-wrong-analysis-${runSuffix}.png`);
     const pool = [
       await createQuestionVersion(ctx, {
         categoryId, actorId: setupId, type: 'single', scoreCents: 1500,
@@ -200,7 +201,8 @@ async function runGrading(ctx) {
       }),
       await createQuestionVersion(ctx, {
         categoryId, actorId: setupId, type: 'multiple', scoreCents: 1500, stem: '<p>多选部分分</p>',
-        options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }, { key: 'C', text: '丙' }], answer: [0, 1], analysis: '<p>多选解析</p>', rubric: null,
+        options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }, { key: 'C', text: '丙' }], answer: [0, 1],
+        analysis: `<p>多选解析<img data-media-id="${wrongAnalysisAssetId}"></p>`, rubric: null,
       }),
     ];
     for (let index = 1; index <= 4; index += 1) {
@@ -223,6 +225,7 @@ async function runGrading(ctx) {
     assert.equal((await ctx.request(learner, 'GET', `/media/${analysisAssetId}/content`)).status, 403);
     assert.equal((await ctx.request(reviewers[0], 'GET', `/media/${promptAssetId}/content`)).status, 200);
     assert.equal((await ctx.request(reviewers[0], 'GET', `/media/${analysisAssetId}/content`)).status, 403);
+    assert.equal((await ctx.request(learner, 'GET', `/media/${wrongAnalysisAssetId}/content`)).status, 403);
     assert.equal((await ctx.request(other, 'GET', `/media/${promptAssetId}/content`)).status, 403);
 
     stage = 'submit three answered images and one unanswered image';
@@ -257,8 +260,17 @@ async function runGrading(ctx) {
     assert.equal(queue.data.items[0].record_id, recordId);
     assert.equal(queue.data.items[0].pending_items, 3);
     assert.equal(queue.data.items[0].image_items, 3);
-    const adminResult = await ctx.request(reviewers[0], 'GET', `/admin/exam-records/${recordId}/result`);
-    assert.equal(adminResult.status, 200, JSON.stringify(adminResult));
+    await ctx.queryTestDb(
+      "DELETE FROM media_reference WHERE asset_id = ? AND owner_type = 'exam_record_question' AND owner_id = ?",
+      [analysisAssetId, single.item_id],
+    );
+    assert.equal((await ctx.request(reviewers[0], 'GET', `/media/${analysisAssetId}/content`)).status, 403);
+    assert.equal((await ctx.request(learner, 'GET', `/media/${analysisAssetId}/content`)).status, 403);
+    const concurrentResultReads = await Promise.all([
+      ctx.request(learner, 'GET', `/me/exam-records/${recordId}/result`),
+      ctx.request(reviewers[1], 'GET', `/admin/exam-records/${recordId}/result`),
+    ]);
+    assert.equal(concurrentResultReads.every((response) => response.status === 200), true, JSON.stringify(concurrentResultReads));
     assert.equal((await ctx.request(reviewers[0], 'GET', `/media/${answerAssets[0]}/content`)).status, 200);
     assert.equal((await ctx.request(reviewers[0], 'GET', `/media/${analysisAssetId}/content`)).status, 200);
     assert.equal((await ctx.request(learner, 'GET', `/media/${analysisAssetId}/content`)).status, 200);
@@ -271,15 +283,6 @@ async function runGrading(ctx) {
       [analysisAssetId, single.item_id],
     );
     assert.equal(Number(resultRefs[0].count), 1, 'lazy result reference must be idempotent');
-    await Promise.all([
-      ctx.request(learner, 'GET', `/me/exam-records/${recordId}/result`),
-      ctx.request(reviewers[1], 'GET', `/admin/exam-records/${recordId}/result`),
-    ]);
-    const refsAfterConcurrentRead = await ctx.queryTestDb(
-      "SELECT COUNT(*) AS count FROM media_reference WHERE asset_id = ? AND owner_type = 'exam_record_question' AND owner_id = ?",
-      [analysisAssetId, single.item_id],
-    );
-    assert.equal(Number(refsAfterConcurrentRead[0].count), 1);
     const wrongPending = await ctx.request(learner, 'GET', '/me/wrong-questions?page=1&page_size=20');
     assert.equal(wrongPending.status, 200, JSON.stringify(wrongPending));
     assert.equal(wrongPending.data.items.some((item) => item.record_id === recordId), false);
@@ -336,6 +339,11 @@ async function runGrading(ctx) {
     const history = await ctx.request(learner, 'GET', '/me/exam-records?page=1&page_size=20');
     assert.equal(history.status, 200, JSON.stringify(history));
     assert.equal(history.data.items.find((item) => item.record_id === recordId).score, 67.5);
+    await ctx.queryTestDb(
+      "DELETE FROM media_reference WHERE asset_id = ? AND owner_type = 'exam_record_question' AND owner_id = ?",
+      [wrongAnalysisAssetId, multiple.item_id],
+    );
+    assert.equal((await ctx.request(learner, 'GET', `/media/${wrongAnalysisAssetId}/content`)).status, 403);
     const wrongPage1 = await ctx.request(learner, 'GET', '/me/wrong-questions?page=1&page_size=2');
     const wrongPage2 = await ctx.request(learner, 'GET', '/me/wrong-questions?page=2&page_size=2');
     assert.equal(wrongPage1.status, 200, JSON.stringify(wrongPage1));
@@ -343,6 +351,12 @@ async function runGrading(ctx) {
     assert.equal(wrongPage1.data.total, 3);
     const wrongIds = [...wrongPage1.data.items, ...wrongPage2.data.items].map((item) => item.item_id).sort();
     assert.deepEqual(wrongIds, [multiple.item_id, images[0].item_id, images[3].item_id].sort());
+    const wrongResultRefs = await ctx.queryTestDb(
+      "SELECT COUNT(*) AS count FROM media_reference WHERE asset_id = ? AND owner_type = 'exam_record_question' AND owner_id = ?",
+      [wrongAnalysisAssetId, multiple.item_id],
+    );
+    assert.equal(Number(wrongResultRefs[0].count), 1, 'wrong-item first read must repair result media reference');
+    assert.equal((await ctx.request(learner, 'GET', `/media/${wrongAnalysisAssetId}/content`)).status, 200);
 
     stage = 'snapshotless legacy truth and old interface shape';
     const legacyRecordId = await createLegacyRecord(ctx, { userId: learnerId, actorId: setupId, questionId: pool[0].questionId });

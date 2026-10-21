@@ -359,7 +359,13 @@ export class MediaService {
     if (!asset || String(asset.status) !== 'ready') throw Errors.notFound('媒体不存在或尚未就绪');
     if (!policy.allowedPurposes.includes(asset.purpose as MediaPurpose)) throw Errors.dataForbidden('媒体用途不匹配');
     await policy.validateBinding?.(manager, asset, String(ownerId));
-    const existing = await manager.getRepository(MediaReference).findOne({ where: { assetId: String(assetId), ownerType, ownerId: String(ownerId) } });
+    // This must be a current locking read. Under REPEATABLE READ a plain read
+    // can retain a snapshot from before a concurrent binder committed, then
+    // attempt the same unique insert after waiting for the asset lock.
+    const existing = await manager.getRepository(MediaReference).findOne({
+      where: { assetId: String(assetId), ownerType, ownerId: String(ownerId) },
+      lock: { mode: 'pessimistic_read' },
+    });
     if (!existing) {
       await manager.getRepository(MediaReference).insert({ assetId: String(assetId), ownerType, ownerId: String(ownerId) });
     }

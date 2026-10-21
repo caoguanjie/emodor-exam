@@ -156,17 +156,39 @@ export class ExamHistoryService {
     if (!record.submittedAt) throw Errors.internal('历史考试结果缺少交卷时间');
     let snapshot = suppliedSnapshot;
     if (!snapshot) {
+      if (!record.assignmentId) return projectSnapshotlessLegacy(record);
+      if (!record.ruleSnapshot) throw Errors.internal('考试记录缺少冻结规则');
       const itemCount = await manager.getRepository(ExamRecordQuestion).count({ where: { recordId: String(record.id) } });
-      if (!itemCount || !record.assignmentId || !record.ruleSnapshot) return projectSnapshotlessLegacy(record);
+      if (!itemCount) throw Errors.internal('考试记录缺少冻结题单');
       snapshot = await this.reader.forGrading(manager, String(record.id));
     }
-    for (const item of snapshot.items) {
-      for (const assetId of resultMediaIds(item)) {
-        await this.media.bind(manager, String(assetId), 'exam_record_question', String(item.itemId));
-      }
-    }
+    await this.ensureResultMediaReferences(manager, snapshot.items);
     const rows = suppliedRows || await manager.getRepository(ExamAnswer).find({ where: { examRecordId: String(record.id) } });
     return projectFinalResult(record, snapshot, rows);
+  }
+
+  private async ensureResultMediaReferences(
+    manager: EntityManager,
+    items: GradingSnapshotItem[],
+  ): Promise<void> {
+    const references = new Map<string, { assetId: string; itemId: string }>();
+    for (const item of items) {
+      for (const assetId of resultMediaIds(item)) {
+        const reference = { assetId: String(assetId), itemId: String(item.itemId) };
+        references.set(`${reference.assetId}:${reference.itemId}`, reference);
+      }
+    }
+    const compareId = (left: string, right: string) => {
+      const leftId = BigInt(left);
+      const rightId = BigInt(right);
+      return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+    };
+    const ordered = [...references.values()].sort((left, right) => (
+      compareId(left.assetId, right.assetId) || compareId(left.itemId, right.itemId)
+    ));
+    for (const reference of ordered) {
+      await this.media.bind(manager, reference.assetId, 'exam_record_question', reference.itemId);
+    }
   }
 
   async history(userId: Id, page: number, pageSize: number): Promise<Page<ExamHistoryItem>> {
@@ -240,7 +262,12 @@ export class ExamHistoryService {
       const recordById = new Map(records.map((record) => [String(record.id), record]));
       const answerByItem = new Map(answers.filter((answer) => answer.recordQuestionId)
         .map((answer) => [`${answer.examRecordId}:${answer.recordQuestionId}`, answer]));
-      const result: WrongItem[] = [];
+      const pageRows: Array<{
+        record: ExamRecord;
+        submittedAt: string;
+        item: GradingSnapshotItem;
+        answer: ExamAnswer | undefined;
+      }> = [];
       for (const idRow of idRows) {
         const itemRow = itemById.get(String(idRow.item_id));
         const record = recordById.get(String(idRow.record_id));
@@ -252,12 +279,19 @@ export class ExamHistoryService {
           displayToOriginal: [...itemRow.displayToOriginal],
           position: Number(itemRow.position),
         };
-        result.push({
-          record_id: String(record.id),
-          submitted_at: new Date(record.submittedAt).toISOString(),
-          ...projectResultItem(snapshot, String(record.id), answerByItem.get(`${record.id}:${itemRow.id}`)),
+        pageRows.push({
+          record,
+          submittedAt: new Date(record.submittedAt).toISOString(),
+          item: snapshot,
+          answer: answerByItem.get(`${record.id}:${itemRow.id}`),
         });
       }
+      await this.ensureResultMediaReferences(manager, pageRows.map((row) => row.item));
+      const result: WrongItem[] = pageRows.map(({ record, submittedAt, item, answer }) => ({
+        record_id: String(record.id),
+        submitted_at: submittedAt,
+        ...projectResultItem(item, String(record.id), answer),
+      }));
       return { items: result, total, page: safePage, page_size: safePageSize };
     });
   }
