@@ -30,6 +30,7 @@ export const SUITE_REGISTRY = Object.freeze({
   'training-media': join(ROOT, 'tests', 'training-media.mjs'),
   'training-system': join(ROOT, 'tests', 'training-system.mjs'),
   'training-courses': join(ROOT, 'tests', 'training-courses.mjs'),
+  'training-video-learning': join(ROOT, 'tests', 'training-video-learning.mjs'),
   'training-question-bank': join(ROOT, 'tests', 'training-question-bank.mjs'),
 });
 
@@ -37,6 +38,12 @@ export function resolveSuitePaths(selector, registry = SUITE_REGISTRY) {
   if (selector === 'all') return [...new Set(Object.values(registry))];
   if (!Object.hasOwn(registry, selector)) throw new Error(`未知测试套件：${selector}`);
   return [registry[selector]];
+}
+
+export function suiteRuntimeEnvOverrides(suitePath) {
+  return suitePath === SUITE_REGISTRY['training-video-learning']
+    ? { DB_POOL_SIZE: '2' }
+    : {};
 }
 
 export async function runSelectedSuites(suitePaths, { isInterrupted = () => false, runSuite } = {}) {
@@ -257,6 +264,7 @@ export async function runSuiteInRuntime(suitePath, ephemeral, runState = { inter
         REDIS_PASSWORD: redis.password || '',
         API_PORT: String(apiPort),
         ...(ephemeral ? { MOCK_AI_PORT: '0', MOCK_AI_PORT_MODE: 'ephemeral' } : {}),
+        ...suiteRuntimeEnvOverrides(suitePath),
       },
     });
     await waitForLifecycleProbe('harness-created', { harnessRoot: createdHarness.root });

@@ -1,11 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, LessThan, Repository } from 'typeorm';
+import { DataSource, EntityManager, IsNull, LessThan, Repository } from 'typeorm';
 import { LearningSession } from '../../entities/learning-session.entity';
 import { LearningRecord, ScrollCoverage, ScrollCoverageUtil } from '../../entities/learning-record.entity';
 import { Regulation } from '../../entities/regulation.entity';
 import { SysUser } from '../../entities/sys-user.entity';
 import { ExamPaper } from '../../entities/exam-paper.entity';
+import { VideoLearningSession } from '../../entities/video-learning-session.entity';
 import { Errors, RegulationStatus } from '../../common/errors';
 import { RedisService } from '../../common/redis.service';
 import { RegulationScopeService } from '../regulations/regulation-scope.service';
@@ -17,6 +18,7 @@ import { RoleEnum } from '../../common/errors';
 export const SESSION_TTL_SECONDS = 6 * 3600; // learn:session:{id} TTL 6 小时兜底过期
 export const OFFLINE_THRESHOLD_MS = 90_000; // 90 秒无心跳判定离线（05 册 5.4.6）
 const START_LOCK_TTL = 10; // learn:lock:start:{user_id}:{regulation_id} TTL 10 秒
+const ACTIVITY_START_MAX_RETRIES = 3;
 import { HEARTBEAT_CAP_MS } from './tolerance';
 
 export interface SessionState {
@@ -159,6 +161,78 @@ export class LearningSessionService {
     }
   }
 
+  private async lockActivityUser(manager: EntityManager, userId: number | string): Promise<SysUser> {
+    const user = await manager.getRepository(SysUser)
+      .createQueryBuilder('user')
+      .setLock('pessimistic_write')
+      .where('user.id = :userId', { userId: String(userId) })
+      .getOne();
+    if (!user) throw Errors.notFound('用户不存在');
+    return user;
+  }
+
+  /** Authoritative in-transaction recheck; this method never borrows outside the caller's manager. */
+  async activeSessionIds(manager: EntityManager, userId: string): Promise<string[]> {
+    const sessions = await manager.getRepository(LearningSession).find({
+      where: { userId: String(userId), endedAt: IsNull() },
+      order: { id: 'ASC' },
+    });
+    return sessions.map((session) => String(session.id));
+  }
+
+  /** Must be awaited without a caller-owned DB transaction/connection. */
+  async closeActiveForUser(userId: string, closeTime: Date): Promise<void> {
+    const sessions = await this.sessionRepo.find({
+      where: { userId: String(userId), endedAt: IsNull() },
+      order: { id: 'ASC' },
+    });
+    for (const session of sessions) {
+      await this.flushSession(String(session.id), closeTime);
+    }
+  }
+
+  private initialProgress(regulation: Regulation, record: LearningRecord) {
+    const coverage = ScrollCoverageUtil.normalize(record.scrollCoverage, regulation.scrollSegments);
+    const requiredSeconds = regulation.requiredMinutes * 60;
+    const totalSeconds = Number(record.totalSeconds || 0);
+    return {
+      regulation_id: Number(regulation.id),
+      version_id: Number(record.versionId),
+      total_seconds: totalSeconds,
+      required_seconds: requiredSeconds,
+      remaining_seconds: Math.max(0, requiredSeconds - totalSeconds),
+      max_scroll_percent: Number(record.maxScrollPercent || 0),
+      scroll_coverage: coverage,
+      is_valid: record.isValid === 1,
+      valid_at: record.validAt ?? null,
+    };
+  }
+
+  private async failClosedNewSession(session: LearningSession, userId: number, regulationId: string): Promise<void> {
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        await this.lockActivityUser(manager, userId);
+        const repo = manager.getRepository(LearningSession);
+        const current = await repo.findOne({ where: { id: String(session.id), userId: String(userId) } });
+        if (current && !current.endedAt) {
+          current.endedAt = new Date();
+          await repo.save(current);
+        }
+      });
+    } catch {
+      // Preserve the original start error. A later heartbeat still rechecks DB before Redis.
+    }
+    // Redis cleanup must not participate in the DB compensation transaction: an
+    // outage here cannot roll back the authoritative ended_at update.
+    await this.redis.del(this.sessionKey(session.id)).catch(() => undefined);
+    try {
+      const active = await this.redis.get(this.activeKey(userId, regulationId));
+      if (active === String(session.id)) {
+        await this.redis.del(this.activeKey(userId, regulationId)).catch(() => undefined);
+      }
+    } catch { /* stale Redis state cannot override DB ended_at */ }
+  }
+
   /** 学习进度视图（库内聚合 + 进行中会话的 Redis 实时累计展示） */
   async progressView(regulation: Regulation, userId: number, includeGap = true) {
     const record = await this.recordRepo.findOne({ where: { userId: String(userId), regulationId: regulation.id } });
@@ -221,49 +295,107 @@ export class LearningSessionService {
     await this.content.readingContent(regulationId, { id: userId, role: ctx.role, departmentId: ctx.departmentId }, false);
 
     // 单活跃会话约束（后开者胜出，阻断双标签页并行刷时长，05 册 5.4.1 步骤 2）。
-    // 关键段（读活跃指针 → flush 旧会话 → INSERT → 写回指针）以 SETNX 互斥，防 check-then-act 竞态
-    // 产生孤儿活跃会话 N 倍计费（参照考试开考 exam:lock:start，05 册 AD-04）
+    // 每制度 SETNX 先挡同目标重复提交；跨制度/视频由下方 sys_user 短事务循环统一协调。
     const locked = await this.redis.setNx(`learn:lock:start:${userId}:${regulationId}`, '1', START_LOCK_TTL);
     if (!locked) throw Errors.tooManyRequests('正在开始学习，请勿重复操作');
 
+    let created: { session: LearningSession; record: LearningRecord } | null = null;
     try {
-      const activeSessionId = await this.redis.get(this.activeKey(userId, regulationId));
-      if (activeSessionId) {
-        await this.flushSession(activeSessionId, new Date());
+      // Phase 1 never waits for a reading mutex while holding a DB connection.
+      // Each short transaction rechecks the user row and all active readings. A
+      // concurrent start discovered there is flushed only after that transaction
+      // has released its connection, then the authoritative check is retried.
+      for (let retries = 0; retries <= ACTIVITY_START_MAX_RETRIES; retries += 1) {
+        const attempt = await this.dataSource.transaction(async (manager) => {
+          const user = await this.lockActivityUser(manager, userId);
+          if (Number(user.status) !== 1) throw Errors.accountDisabled();
+          if ((await this.activeSessionIds(manager, String(userId))).length > 0) return null;
+
+          const closeTime = new Date();
+          await manager.getRepository(VideoLearningSession)
+            .createQueryBuilder()
+            .update(VideoLearningSession)
+            .set({ activeUserId: null, endedAt: closeTime })
+            .where('active_user_id = :userId AND ended_at IS NULL', { userId: String(userId) })
+            .execute();
+
+          const startedAt = new Date();
+          const sessionRepo = manager.getRepository(LearningSession);
+          const session = await sessionRepo.save(sessionRepo.create({
+            userId: String(userId),
+            regulationId,
+            versionId: regulation.currentVersionId!,
+            startedAt,
+            endedAt: null,
+            durationSeconds: 0,
+          }));
+          const record = await this.ensureRecordTx(manager, session, regulation);
+          return { session, record };
+        });
+        if (attempt) {
+          created = attempt;
+          break;
+        }
+        if (retries === ACTIVITY_START_MAX_RETRIES) {
+          throw Errors.sessionConflict('学习会话竞争，请重试');
+        }
+        await this.closeActiveForUser(String(userId), new Date());
       }
+      if (!created) throw Errors.sessionConflict('学习会话竞争，请重试');
 
-      const session = await this.sessionRepo.save(
-        this.sessionRepo.create({
-          userId: String(userId),
-          regulationId,
-          versionId: regulation.currentVersionId!,
-          startedAt: new Date(),
-          endedAt: null,
-          durationSeconds: 0,
-        }),
-      );
-      const now = Date.now();
-      const state: SessionState = {
-        duration_ms: 0,
-        segments: new Array(regulation.scrollSegments).fill(0),
-        max_scroll_percent: 0,
-        last_beat_at: now,
-        state: 'active',
-        paused_at: 0,
-      };
-      await this.writeSessionState(session.id, state);
-      await this.redis.set(this.activeKey(userId, regulationId), String(session.id), SESSION_TTL_SECONDS);
-      await this.ensureRecord(regulation, userId, regulation.currentVersionId!);
+      // Phase 2 republishes Redis only after re-locking sys_user and rechecking DB
+      // ownership. A video/reading start that won between the two phases makes this
+      // start stale; its late Redis write is forbidden.
+      await this.dataSource.transaction(async (manager) => {
+        const user = await this.lockActivityUser(manager, userId);
+        if (Number(user.status) !== 1) throw Errors.accountDisabled();
+        const sessionRepo = manager.getRepository(LearningSession);
+        const current = await sessionRepo.findOne({
+          where: { id: String(created!.session.id), userId: String(userId) },
+        });
+        const activeReadings = await sessionRepo.find({
+          where: { userId: String(userId), endedAt: IsNull() },
+          order: { id: 'ASC' },
+        });
+        const activeVideo = await manager.getRepository(VideoLearningSession).findOne({
+          where: { activeUserId: String(userId), endedAt: IsNull() },
+        });
+        if (!current || current.endedAt || activeVideo
+          || activeReadings.length !== 1 || String(activeReadings[0].id) !== String(current.id)) {
+          throw Errors.sessionConflict('学习会话已被后续会话替换');
+        }
 
-      const progress = await this.progressView(regulation, userId, false);
+        const state: SessionState = {
+          duration_ms: 0,
+          segments: new Array(regulation.scrollSegments).fill(0),
+          max_scroll_percent: 0,
+          last_beat_at: Date.now(),
+          state: 'active',
+          paused_at: 0,
+        };
+        try {
+          await this.writeSessionState(current.id, state);
+          await this.redis.set(this.activeKey(userId, regulationId), String(current.id), SESSION_TTL_SECONDS);
+        } catch (error) {
+          current.endedAt = new Date();
+          await sessionRepo.save(current);
+          await this.redis.del(this.sessionKey(current.id)).catch(() => undefined);
+          await this.redis.del(this.activeKey(userId, regulationId)).catch(() => undefined);
+          throw error;
+        }
+      });
+
       return {
-        session_id: Number(session.id),
+        session_id: Number(created.session.id),
         server_time: new Date().toISOString(),
         heartbeat_interval_seconds: 30,
-        progress,
+        progress: this.initialProgress(regulation, created.record),
       };
+    } catch (error) {
+      if (created) await this.failClosedNewSession(created.session, userId, regulationId);
+      throw error;
     } finally {
-      await this.redis.del(`learn:lock:start:${userId}:${regulationId}`);
+      await this.redis.del(`learn:lock:start:${userId}:${regulationId}`).catch(() => undefined);
     }
   }
 

@@ -488,7 +488,51 @@ CREATE TABLE IF NOT EXISTS `lesson_version` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='视频课时不可变内容版本';
 
 -- ---------------------------------------------------------------------
--- 7. 后台公共配置域（3 张，A5）
+-- 7. 视频学习域（2 张，B2）
+-- ---------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS `video_learning_record` (
+  `id`                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id`               BIGINT UNSIGNED NOT NULL,
+  `lesson_version_id`     BIGINT UNSIGNED NOT NULL,
+  `duration_ms`           BIGINT UNSIGNED NOT NULL COMMENT '不可变课时版本时长快照',
+  `credited_ms`           BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '有效播放时长，可含重复观看',
+  `coverage_intervals`    JSON NOT NULL COMMENT '已确认去重播放区间，毫秒',
+  `coverage_ms`           BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '去重覆盖毫秒',
+  `confirmed_position_ms` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '最远已确认断点',
+  `is_completed`          TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '覆盖达到 95%',
+  `completed_at`          DATETIME(3) NULL,
+  `last_learn_at`         DATETIME(3) NULL,
+  `created_at`            DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`            DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_video_learning_record_user_version` (`user_id`, `lesson_version_id`),
+  KEY `idx_video_learning_record_user_completed` (`user_id`, `is_completed`),
+  KEY `idx_video_learning_record_version` (`lesson_version_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='学员视频版本学习汇总';
+
+CREATE TABLE IF NOT EXISTS `video_learning_session` (
+  `id`                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `record_id`          BIGINT UNSIGNED NOT NULL,
+  `user_id`            BIGINT UNSIGNED NOT NULL,
+  `lesson_version_id`  BIGINT UNSIGNED NOT NULL,
+  `active_user_id`     BIGINT UNSIGNED NULL COMMENT '活动所有者；结束后置 NULL',
+  `started_at`         DATETIME(3) NOT NULL,
+  `last_heartbeat_at`  DATETIME(3) NOT NULL,
+  `ended_at`           DATETIME(3) NULL,
+  `last_seq`           INT UNSIGNED NOT NULL DEFAULT 0,
+  `anchor_position_ms` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  `anchor_state`       VARCHAR(32) NOT NULL DEFAULT 'playing' COMMENT 'playing / paused / buffering / background / ended',
+  `credited_ms`        BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_video_learning_session_active_user` (`active_user_id`),
+  KEY `idx_video_learning_session_user_started` (`user_id`, `started_at`),
+  KEY `idx_video_learning_session_last_heartbeat` (`last_heartbeat_at`),
+  KEY `idx_video_learning_session_record` (`record_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='可恢复视频学习会话';
+
+-- ---------------------------------------------------------------------
+-- 8. 后台公共配置域（3 张，A5）
 -- ---------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS `sys_menu` (

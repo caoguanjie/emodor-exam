@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训类别/学员/本人资料、A3 权限/会话、A4 受控媒体、A5 后台公共配置、B1 课程主体与 B3 四题型版本题库接口均以实际 controller/entity/migration 为准。A5 系统配置页已完成独立审查与有界 PC 验证，但不代表开发库/生产库已升级；B1 final 已接入真实 `/me/home`、课程菜单/路由和 Courses/CourseDetail 分区未保存保护，真实课程 PC 验收仍由 root 统一执行；B3 编辑器接线和真实 PC 由其 final owner 收口。B2 视频进度、B4 题库导入、C1 发布/个人题单及后续草稿、阅卷、监控和统计仍未实现。所有接口继续使用 `/api/v1`、`{code,message,data}`、严格 DTO/未知字段拒绝、所有权校验和 HttpOnly refresh Cookie；私有媒体与公开品牌内容流例外跳过信封。
+> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训类别/学员/本人资料、A3 权限/会话、A4 受控媒体、A5 后台公共配置、B1 课程主体、B2 视频学习与 B3 四题型版本题库接口均以实际 controller/entity/migration 为准。B2 提供完整后端 API、持久会话与集成测试目标，不代表独立 H5、全屏/锁屏、微信或手机弱网体验已验收。B4 题库导入、C1 发布/个人题单及后续草稿、阅卷、监控和统计仍未实现。所有接口继续使用 `/api/v1`、`{code,message,data}`、严格 DTO/未知字段拒绝、所有权校验和 HttpOnly refresh Cookie；私有媒体与公开品牌内容流例外跳过信封。
 
 ---
 
@@ -20,7 +20,7 @@
 | 认证方式 | `Authorization: Bearer <access_token>`（JWT 双令牌，见 1.3） |
 | 时间格式 | ISO 8601（`2026-09-12T14:30:00.000+08:00`）；纯秒数字段（如 `total_seconds`）为整型 |
 | 字段命名 | JSON 字段一律 snake_case，与数据库字段对齐（03 册） |
-| ID 字段 | legacy 接口继续保留既有 number 响应以兼容页面；A1 后新增培训接口的 `id` 与 body/path 中 `*_id`（含 B1 课程 ID、B3 `question_id/current_version_id/category_id`）统一使用正十进制字符串，避免 BIGINT 经 JavaScript `Number` 丢精度。异步 `task_id` 仍是服务端业务字符串 |
+| ID 字段 | legacy 接口继续保留既有 number 响应以兼容页面；A1 后新增培训接口的 `id` 与 body/path 中 `*_id`（含 B1 课程、B2 视频会话/版本、B3 `question_id/current_version_id/category_id`）统一使用正十进制字符串，避免 BIGINT 经 JavaScript `Number` 丢精度。异步 `task_id` 仍是服务端业务字符串 |
 | 幂等性 | GET/PUT 天然幂等；POST 中的关键动作（交卷、开考、会话开始）通过服务端状态校验实现幂等（见 1.5） |
 
 ### 1.2 统一响应结构
@@ -82,14 +82,16 @@
 | 交卷 `POST /exams/records/{id}/submit` | 三层幂等（05 册 6.4.5）：状态前置校验 + Redis 提交锁 + 事务内终态判定；重复调用返回首次评分结果 |
 | 会话开始 `POST /learning/sessions/start` | 单活跃会话约束（后开者胜）：同 user + regulation 已有活跃会话时，旧会话被结束落库并返回新会话（05 册 5.4.1） |
 | 学习心跳 | 天然幂等：以服务端时钟差结算，重复/乱序心跳不虚增时长（45 秒封顶，05 册 5.4.2） |
+| 视频会话开始 `POST /me/video-sessions` | 短事务持 `sys_user` 行锁做范围/活动重查；旧 reading 在释放事务连接后按原算法收口并最多重试 3 次，最终事务关闭旧 video 后再取新锚点；`active_user_id` 可空唯一索引兜底 |
+| 视频心跳 | `seq` 严格递增；重复/乱序返回当前进度，服务端时钟 + 45 秒封顶 + 2 秒位置容差决定可确认区间 |
 
 ### 1.6 当前 API 与融合计划的边界
 
 | API 范围 | 文档状态 | 规则 |
 |---|---|---|
 | `/auth`、`/users`、`/departments`、`/regulations`、`/ai`、`/learning`、旧 `/exams`、旧 `/statistics` | 当前 legacy 契约 | 旧制度阅读资格、旧固定卷字段与自动客观评分保持兼容；下发不含答案/解析，refresh 走 HttpOnly Cookie，DTO/统一信封不变 |
-| `/admin/training-categories`、`/admin/students`、`/me`、`/admin` 权限/会话/系统配置、`/media`、`/site-config`、B1 课程/视频内容版本、B3 四题型题库版本 | 当前增量契约（A2—A5/B1/B3） | A5 DTO、权限与公开白名单按实际 controller/service；B1/B3 使用字符串 ID 与 `Page.items`，课程不提前承载 B2 视频进度，题目 revision 不冒充发布或个人题单快照 |
-| 视频进度、题库导入、发布快照、个人题单、持久草稿、图片答案/阅卷、监控、培训统计 | 计划契约（B2/B4/C1—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后才补精确契约，不由 B1/B3 提前制造学习、发布或考试快照 |
+| `/admin/training-categories`、`/admin/students`、`/me`、`/admin` 权限/会话/系统配置、`/media`、`/site-config`、B1 课程/视频内容版本、B2 视频会话/进度、B3 四题型题库版本 | 当前增量契约（A2—A5/B1—B3） | 新接口使用字符串 ID；B2 课程完成与制度阅读分开，B3 revision 不冒充发布或个人题单快照 |
+| 题库导入、发布快照、个人题单、持久草稿、图片答案/阅卷、监控、培训统计 | 计划契约（B4/C1—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后才补精确契约 |
 | 旧固定卷 vs 新培训考试开考 | 两条口径并存 | 旧固定卷继续检查 `learning_record.is_valid`；新培训考试默认关闭学习门槛，但仍检查发布、类别/来源、权限、次数、身份状态和服务端 deadline |
 
 目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 客观题自动判分/图片题待阅 → 受控逐题评分 → 服务端汇总 → 最终结果只读。具体字段由 C1—C4 落地后补入，不能让旧 `/exams` 响应提前承载两套不兼容语义。
@@ -98,7 +100,7 @@
 
 ## 2. 模块与路由总览
 
-当前 legacy 基线与 A2—A5、B1、B3 增量路由均使用同一 `/api/v1` 前缀。下表的数量按当前 controller HTTP 方法装饰器机械盘点：
+当前 legacy 基线与 A2—A5、B1—B3 增量路由均使用同一 `/api/v1` 前缀。下表的数量按当前 controller HTTP 方法装饰器机械盘点：
 
 | 路由前缀 | 所属模块（固定名称） | 接口数 | 说明 |
 |---|---|---|---|
@@ -113,14 +115,16 @@
 | /departments | 1. 组织权限模块 | 6 | 部门树、CRUD、层级调整与启停 |
 | /regulations | 2. 制度文件管理模块 | 18 | 制度 CRUD、版本/文件读取、管理端预览、范围与学习要求配置、发布、阅读内容及写权限类别选项 |
 | /admin/courses | 4. 学习行为管控模块（B1 内容侧） | 14 | 课程、章节、视频课时、不可变内容版本、上架/下架与类别选项 |
-| /me/courses | 4. 学习行为管控模块（B1 内容侧） | 2 | 本人同类别已上架课程分页与目录；external 默认空 |
+| /me/courses | 4. 学习行为管控模块（B1/B2） | 3 | 本人同类别已上架课程分页、目录与当前必学视频完成汇总；external 分母为零 |
+| /me/video-sessions | 4. 学习行为管控模块（B2） | 3 | 视频会话开始、递增序号心跳、主动关闭 |
+| /me/video-records | 4. 学习行为管控模块（B2） | 1 | 本人不可变视频版本学习记录分页历史 |
 | /ai | 3. AI 出题模块 | 26 | AI 配置/任务、B3 类别与考点窄选项、四题型版本审核、人工录入、试卷管理与组卷 |
 | /learning | 4. 学习行为管控模块 | 7 | 学习列表、会话生命周期、心跳、进度 |
 | /exams | 5. 考试评分模块 | 8 | 可考列表、开考、心跳、切屏、交卷、成绩 |
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**按当前 controller HTTP 方法装饰器机械盘点，合计 153 个接口（152 个业务接口 + 1 个健康检查），其中 `/regulations` 18 个、`/ai` 26 个、B1 课程/首页 17 个、A5 `/admin` 14 个与 `/site-config` 2 个；私有媒体与公开品牌内容流不包统一信封。**
+**按当前 controller HTTP 方法装饰器机械盘点，合计 158 个接口（157 个业务接口 + 1 个健康检查），B2 新增视频会话 3 个、课程进度 1 个与本人视频记录 1 个；私有媒体与公开品牌内容流不包统一信封。**
 
 ---
 
@@ -531,6 +535,31 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可见，`/admin/courses/{id}` 仍要求 `courses:read`。这只是前端注册路由的 `permissionAny` 语义；服务端每个 API 的 `@Permissions` 仍保持 AND 守卫，不改变全局授权模型。write-only 账号可创建课程，但不会读取列表或跳转到无权详情。
 
+### 3.10 B2 视频学习 /me/video-sessions、/me/video-records、/me/courses/{id}/progress
+
+| 方法 | 路径 | 权限 | 请求与成功 data |
+|---|---|---|---|
+| POST | /me/video-sessions | 登录本人 | `{lesson_id:Id}`；返回 `VideoSessionView` |
+| POST | /me/video-sessions/{id}/heartbeat | 登录本人 | `VideoHeartbeat`；返回 `VideoProgress` |
+| POST | /me/video-sessions/{id}/close | 登录本人 | 无 body；只收口、不补记未上报区间，返回 `VideoProgress` |
+| GET | /me/video-records | 登录本人 | `page` 默认 1、`page_size` 默认 20 且范围 1—100；返回本人历史 `Page<VideoRecordView>`，未知 query 拒绝 |
+| GET | /me/courses/{id}/progress | 登录本人 | 返回当前应学集合 `CourseProgress` |
+
+```ts
+type VideoHeartbeat = { seq:number; position_ms:number; state:'playing'|'paused'|'buffering'|'background'|'ended' };
+type VideoProgress = { confirmed_position_ms:number; credited_ms:number; coverage_ms:number;
+  duration_ms:number; completed:boolean; last_seq:number };
+type VideoSessionView = { session_id:Id; version_id:Id; heartbeat_interval_ms:30000; progress:VideoProgress };
+type VideoRecordView = { record_id:Id; lesson_id:Id; version_id:Id; progress:VideoProgress };
+type CourseProgress = { required:number; completed:number; completion_rate:number|null; lessons:VideoProgress[] };
+```
+
+start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`source=institution`、类别、课程 published、课时归属及 `current_version_id`，不能只相信 `LessonVersionService.current()` 或事务外 `assignedCourseIds()`。若发现活动 reading，事务立即释放；随后才在事务外等待原 reading mutex 并调用唯一的旧阅读 flush 算法，再重新进入短事务权威校验，最多竞争重试 3 次，仍被抢占返回会话冲突。最终无活动 reading 的事务用同一 manager 关闭旧 video，完成后重新取服务端时钟作为新会话锚点。阅读 start 使用同一循环并在锁内复核账号状态。其 DB 会话提交后发布 Redis 前再次锁用户并检查 DB `ended_at` 与当前活动所有权，避免已被视频替换的迟到 Redis 指针复活旧阅读计时；若 phase2 在真正替换前完成并返回 200，后续 start 仍会收口它，最终所有权以 DB 为准。
+
+心跳以数据库中的 `last_seq/last_heartbeat_at/anchor_position_ms/anchor_state` 为权威，进程重启后继续。仅前一锚点为 playing 且本拍为 playing/ended 时可确认区间；先以完整的非负服务端实际间隔判断 `forward_ms ≤ server_elapsed_ms + 2000`，再将有效时长取服务端间隔、45 秒和真实位置前进量的最小值。过大前进不增加 `coverage_ms`，只把下一拍锚点移到新位置。paused/buffering/background 不计时；重复观看可增加 `credited_ms`，合并后的覆盖区间不重复增加。`state=ended` 同拍结算合法区间后关闭会话。
+
+完成条件是 `coverage_ms / duration_ms ≥ 0.95`。课程分母只包含当前账号类别下已上架课程的必学课时当前版本；external、停用、无类别或零必学课程返回 `required=0,completed=0,completion_rate=null`，不会自动完成。视频替换后旧版本记录保留，但不计入新版本完成；课程下架、当前版本替换或学员来源/类别变化会关闭后续视频计时。`GET /me/video-records` 只按令牌本人查询历史记录，不按当前课程/来源/类别重新过滤，不返回媒体 URL，也不重开会话；账号停用仍由全局认证守卫拒绝。该 API 证明服务端协议与恢复能力，不证明真实注意力、移动端全屏/锁屏/微信或弱网体验。
+
 ---
 
 ## 4. 核心接口 JSON 示例
@@ -897,6 +926,8 @@ PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可�
 | 40920 | 409 | 系统配置仍被引用，不能删除 | 菜单存在子项/对应权限被角色引用，或固定业务字典尝试修改/删除 |
 | 40930 | 409 | 课程状态冲突 | 必学视频未就绪、已上架课程直接修改章节/课时结构，或视频资源缺少有效服务端时长 |
 | 40940 | 409 | 题目当前版本已变化或不存在 | 编辑/审核/重生成的显式 expected_version_id 与锁内 current_version_id 不一致，或 identity/current_version 指针损坏；不写新 revision，客户端刷新后重试 |
+| 40950 | 409 | 视频学习会话已结束或被替换 | 心跳指向已关闭、已被阅读/视频新会话取代或不属于当前活动所有者的会话 |
+| 40951 | 409 | 课程或视频版本当前不可学习 | 课程下架、课时当前版本替换，或会话后续范围检查失败；服务端先关闭活动视频所有权再返回 |
 | 42201 | 422 | 文件格式不支持 | 上传非 pdf/docx（含魔法数不符） |
 | 41601 | 416 | 请求的媒体范围无效 | `Range` 语法非法、多段范围或起止超出文件边界 |
 | 42202 | 422 | 文件超过大小上限 | 制度文件超过 50MB，或媒体图片/视频超过当前配置限制；Multer 拦截与业务层统一此码 |
@@ -944,6 +975,7 @@ PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可�
 | POST /auth/login | username 维度：连续失败 5 次锁定 10 分钟（40106，message 含剩余秒数）；source_ip 维度：10 次/分钟 | 双计数防爆破（07 册 2.2.2）；Redis 故障时降级为仅 IP 维度进程内计数 + 登录接口 sys_user.status 校验兜底 |
 | POST /learning/heartbeat | 节拍窗口限流：30 秒周期内异常高频丢弃（42901） | 丢弃不影响时长正确性（服务端时钟差结算、credited 封顶 45 秒，天然幂等） |
 | POST /learning/heartbeat/pause、resume | 同一 session_id 每分钟最多 60 次；重复 pause / 重复 resume 幂等（第二次直接返回当前状态，不重复结算） | 事件驱动端点不适用 30 秒节拍窗口——丢弃 pause/resume 会破坏失焦语义（resume 被丢弃 → 下拍 diff 含整段失焦时间、pause 被丢弃 → 失焦期间照常计费，虚增最多 45 秒/次，故单独限流） |
+| POST /me/video-sessions/{id}/heartbeat | 客户端默认 30 秒；序号必须递增，单次最多确认 45 秒 | DB session→record 行锁；重放/乱序返回当前进度，暂停/缓冲/后台零累计，跳播不写覆盖 |
 | POST /exams/records/{id}/heartbeat | 30 秒节拍窗口限流 | 作答暂存幂等（覆盖写） |
 | POST /exams/records/{id}/switch | 1 秒去抖窗口 | Redis INCR + 窗口合并（前端 500ms 事件合并后上报，服务端 1 秒二次去抖，05 册 6.4.4） |
 | POST /exams/records/{id}/submit | 幂等：重复交卷返回首次结果 | 三层幂等（05 册 6.4.5） |
@@ -965,8 +997,8 @@ PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可�
 
 | 校验项 | 结果 |
 |---|---|
-| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；A2—A5、B1 与 B3 增量 `/admin/training-categories`、`/admin/students`、`/admin`、`/me`（含 `/me/home`）、`/media`、`/site-config`、`/admin/courses`、`/me/courses` 及 `/ai` 版本题库端点已由 entity/controller 同步落地；B1 课程菜单/路由与分区未保存接线已完成，B3 final 边界另行验收 |
-| 当前表名/字段名（snake_case）与 03 册 | 一致（含 A5 三张公共配置表、`regulation.category_id`、四张课程内容表、`question_concept`、`question_version` 与 question 兼容列）；新增字段以迁移/entity/API 同步为准 |
+| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；A2—A5、B1—B3 增量路由已由 entity/controller 同步落地；B2 新增 `/me/video-sessions` 与课程 progress，不新增独立 H5 |
+| 当前表名/字段名（snake_case）与 03 册 | 一致（含四张课程内容表、两张视频学习表、两张版本题库表）；新增字段以 migration/entity/API 同步为准 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
 | 心跳/失焦/乱序/超时/切屏行为与 05 册 | 一致（5.4.2/5.4.3/6.4.1~6.4.5 逐条对应） |
 | 统计口径与 05 册 7.4.1 | 一致（七项指标逐字对齐） |
