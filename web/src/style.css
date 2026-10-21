@@ -208,3 +208,28 @@ body {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }
+
+/* ---------- 打印：让业务正文脱离应用壳滚动区并按纸张分页 ---------- */
+@media print {
+  html, body, #app {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  body { background: #fff !important; }
+
+  .aside, .header, .tabs-bar { display: none !important; }
+
+  .shell, .content-shell, .main, .page-enter {
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .main { padding: 0 !important; }
+  .page-enter { animation: none !important; }
+}
