@@ -39,7 +39,22 @@ function check(name, cond, extra = '') {
 }
 
 // ---------- 极简 Mock AI 服务（OpenAI 兼容 /chat/completions） ----------
-const MOCK_PORT = 9101;
+function parseMockAiPort(rawPort) {
+  if (rawPort === undefined || rawPort === '') return 9101;
+  if (!/^[0-9]{1,5}$/.test(rawPort)) {
+    throw new Error('MOCK_AI_PORT 必须是 1024-65535 的十进制端口');
+  }
+  const port = Number(rawPort);
+  if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) {
+    throw new Error('MOCK_AI_PORT 必须是 1024-65535 的十进制端口');
+  }
+  return port;
+}
+
+// Standalone invocation keeps the historical 9101 default. The ephemeral
+// runner injects a free per-runtime value, so concurrent smoke children stay
+// isolated without accepting arbitrary host/URL input.
+const MOCK_PORT = parseMockAiPort(process.env.MOCK_AI_PORT);
 const MOCK_QUESTIONS = buildMockQuestions();
 
 function buildMockQuestions() {

@@ -23,8 +23,22 @@ const mysql = require('mysql2/promise');
 export const SUITE_REGISTRY = Object.freeze({
   smoke: join(ROOT, 'tests', 'suites', 'e2e-smoke-adapter.mjs'),
   'e2e-smoke': join(ROOT, 'tests', 'suites', 'e2e-smoke-adapter.mjs'),
-  all: join(ROOT, 'tests', 'suites', 'e2e-smoke-adapter.mjs'),
 });
+
+export function resolveSuitePaths(selector, registry = SUITE_REGISTRY) {
+  if (selector === 'all') return [...new Set(Object.values(registry))];
+  if (!Object.hasOwn(registry, selector)) throw new Error(`未知测试套件：${selector}`);
+  return [registry[selector]];
+}
+
+export async function runSelectedSuites(suitePaths, { isInterrupted = () => false, runSuite } = {}) {
+  if (typeof runSuite !== 'function') throw new TypeError('runSelectedSuites requires runSuite');
+  for (const suitePath of suitePaths) {
+    if (isInterrupted()) return;
+    await runSuite(suitePath);
+    if (isInterrupted()) return;
+  }
+}
 
 export function parseArgs(argv) {
   let suite = 'smoke';
@@ -41,7 +55,7 @@ export function parseArgs(argv) {
       throw new Error(`未知参数：${arg}`);
     }
   }
-  if (!Object.hasOwn(SUITE_REGISTRY, suite)) throw new Error(`未知测试套件：${suite}`);
+  resolveSuitePaths(suite);
   return { suite, ephemeral };
 }
 
@@ -64,8 +78,7 @@ async function resetSchema({ host, port, user, password, database }) {
   }
 }
 
-export async function run() {
-  const { suite, ephemeral } = parseArgs(process.argv.slice(2));
+export async function runSuiteInRuntime(suitePath, ephemeral, runState = { interrupted: false }, { suiteModule = undefined } = {}) {
   let services;
   let harness;
   let interrupted = false;
@@ -176,6 +189,7 @@ export async function run() {
   for (const signal of ['SIGINT', 'SIGTERM']) {
     const handler = () => {
       interrupted = true;
+      runState.interrupted = true;
       process.exitCode = signal === 'SIGINT' ? 130 : 143;
       releaseLifecycleProbe?.();
       reportOwnedRuntime({ stage: 'signal-received', signal });
@@ -213,6 +227,10 @@ export async function run() {
     }
     quoteDatabase(database);
     const apiPort = ephemeral ? await getFreePort() : Number(process.env.API_PORT || process.env.PORT || 3000);
+    // The legacy smoke suite starts an in-process Mock AI server. Reserve a
+    // different owned port for every ephemeral runtime so concurrent suites
+    // never contend on the old standalone default (9101).
+    const mockAiPort = ephemeral ? await getFreePort() : undefined;
     const createdHarness = await createTrainingHarness({
       port: apiPort,
       redisPrefix: `e2e:${randomBytes(10).toString('hex')}:`,
@@ -229,6 +247,7 @@ export async function run() {
         REDIS_PORT: String(redis.port),
         REDIS_PASSWORD: redis.password || '',
         API_PORT: String(apiPort),
+        ...(mockAiPort === undefined ? {} : { MOCK_AI_PORT: String(mockAiPort) }),
       },
     });
     await waitForLifecycleProbe('harness-created', { harnessRoot: createdHarness.root });
@@ -246,12 +265,12 @@ export async function run() {
     await harness.restartApi();
     if (interrupted) return;
 
-    console.log(`[3/4] 执行测试套件（${suite}）`);
-    const suiteModule = await import(pathToFileURL(SUITE_REGISTRY[suite]).href);
+    console.log(`[3/4] 执行测试套件（${suitePath}）`);
+    const selectedSuite = suiteModule || await import(pathToFileURL(suitePath).href);
     if (interrupted) return;
-    if (typeof suiteModule.run !== 'function') throw new Error(`测试套件缺少 run(ctx)：${suite}`);
+    if (typeof selectedSuite.run !== 'function') throw new Error(`测试套件缺少 run(ctx)：${suitePath}`);
     try {
-      await suiteModule.run({
+      await selectedSuite.run({
         baseUrl: harness.baseUrl,
         env: harness.env,
         adminPassword: harness.adminPassword,
@@ -270,6 +289,15 @@ export async function run() {
     await cleanup();
     for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
   }
+}
+
+export async function run() {
+  const { suite, ephemeral } = parseArgs(process.argv.slice(2));
+  const runState = { interrupted: false };
+  await runSelectedSuites(resolveSuitePaths(suite), {
+    isInterrupted: () => runState.interrupted,
+    runSuite: (suitePath) => runSuiteInRuntime(suitePath, ephemeral, runState),
+  });
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
