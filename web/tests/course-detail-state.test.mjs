@@ -43,6 +43,7 @@ const testContext = {
   routerPushes: [],
   unsavedSources: [],
   deferredRequests: new Map(),
+  deferredResponses: new Map(),
 };
 let clientComponentCode = '';
 let courseListClientCode = '';
@@ -77,6 +78,14 @@ const httpStubCode = `
     const key = method + ' ' + path;
     const queue = context.deferredRequests.get(key);
     if (queue?.length) await queue.shift().promise;
+  };
+  const waitConfiguredResponse = async (method, path) => {
+    const key = method + ' ' + path;
+    const queue = context.deferredResponses.get(key);
+    if (!queue?.length) return;
+    const deferred = queue.shift();
+    deferred.blocked = true;
+    await deferred.promise;
   };
   const findLesson = (lessonId) => {
     for (const chapter of context.course.chapters || []) {
@@ -137,10 +146,12 @@ const httpStubCode = `
           sort_order: body.sort_order,
         });
         recomputeMissingLessons();
-        return lessonResponse(entry, {
+        const response = lessonResponse(entry, {
           id: lessonId, chapter_id: 'chapter-unknown', title: body.title,
           required: Boolean(body.required), sort_order: body.sort_order,
         });
+        await waitConfiguredResponse('PUT', path);
+        return response;
       }
       return {};
     },
@@ -405,6 +416,17 @@ function deferRequest(method, path) {
   return deferred;
 }
 
+function deferResponse(method, path) {
+  let resolvePromise;
+  const promise = new Promise((resolve) => { resolvePromise = resolve; });
+  const deferred = { promise, resolve: resolvePromise, blocked: false };
+  const key = `${method} ${path}`;
+  const queue = testContext.deferredResponses.get(key) || [];
+  queue.push(deferred);
+  testContext.deferredResponses.set(key, queue);
+  return deferred;
+}
+
 before(async () => {
   globalThis.__courseDetailStateTest = testContext;
   vite = await createServer({
@@ -447,6 +469,7 @@ beforeEach(() => {
   testContext.routerPushes = [];
   testContext.unsavedSources = [];
   testContext.deferredRequests = new Map();
+  testContext.deferredResponses = new Map();
 });
 
 test('normalizes legacy numeric regulation options and saves add, echo, and removal as string IDs', async () => {
@@ -546,6 +569,59 @@ test('clears the missing-video summary only after the lesson version is confirme
   assert.deepEqual(mounted.state.course.missing_required_lesson_ids, []);
   assert.equal(findNodes(mounted.root, (node) => node.type === 'alert' && String(node.props.title).includes('缺少可用视频')).length, 0);
   assert.equal(mounted.state.form.description, '另一份未保存简介');
+  mounted.unmount();
+});
+
+test('an older metadata snapshot cannot restore a missing-video warning after a newer confirmed version', async () => {
+  testContext.course.missing_required_lesson_ids = ['lesson-1'];
+  testContext.course.chapters = [{
+    id: 'chapter-1',
+    title: '第一章',
+    sort_order: 1,
+    lessons: [{
+      id: 'lesson-1', title: '原课时', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
+    }],
+  }];
+  const mounted = await mountCourseDetail();
+  const lessonSource = testContext.unsavedSources[2];
+  const metadataPath = '/admin/courses/course-1/lessons/lesson-1';
+  const versionPath = `${metadataPath}/versions`;
+
+  mounted.state.openLesson('chapter-1', mounted.state.course.chapters[0].lessons[0]);
+  mounted.state.lessonForm.title = '已确认资料 A';
+  const metadataResponse = deferResponse('PUT', metadataPath);
+  const metadataSave = mounted.state.saveLesson();
+  await waitFor(() => metadataResponse.blocked, 1800, 'metadata A response snapshot');
+
+  await mounted.state.closeLesson();
+  mounted.state.openLesson('chapter-1', mounted.state.course.chapters[0].lessons[0]);
+  mounted.state.lessonForm.asset_id = 'video-b';
+  const videoRequest = deferRequest('POST', versionPath);
+  const videoSave = mounted.state.saveLesson();
+  await waitFor(() => testContext.calls.some((call) => call.method === 'POST' && call.path === versionPath), 1800, 'video B request');
+  mounted.state.lessonForm.title = '重开后的未保存草稿 C';
+  await nextTick();
+  videoRequest.resolve();
+  await videoSave;
+
+  assert.deepEqual(mounted.state.course.missing_required_lesson_ids, []);
+  assert.equal(mounted.state.course.chapters[0].lessons[0].current_version.asset_id, 'video-b');
+  assert.equal(mounted.state.lessonForm.title, '重开后的未保存草稿 C');
+  assert.equal(mounted.state.lessonVisible, true);
+  assert.equal(lessonSource.dirty.value, true);
+
+  metadataResponse.resolve();
+  await metadataSave;
+  await nextTick();
+
+  const persistedRow = mounted.state.course.chapters[0].lessons[0];
+  assert.deepEqual(mounted.state.course.missing_required_lesson_ids, []);
+  assert.equal(findNodes(mounted.root, (node) => node.type === 'alert' && String(node.props.title).includes('缺少可用视频')).length, 0);
+  assert.equal(persistedRow.title, '已确认资料 A', 'the confirmed metadata receipt must still update the parent row');
+  assert.equal(persistedRow.current_version.asset_id, 'video-b');
+  assert.equal(mounted.state.lessonForm.title, '重开后的未保存草稿 C');
+  assert.equal(mounted.state.lessonVisible, true);
+  assert.equal(lessonSource.dirty.value, true);
   mounted.unmount();
 });
 

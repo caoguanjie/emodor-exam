@@ -210,8 +210,8 @@ function syncMissingRequiredLesson(lessonId: Id, missing: boolean) {
   course.value.missing_required_lesson_ids = [...missingIds];
 }
 function syncSavedLessonMetadata(saved: SavedLessonMetadata) {
-    syncMissingRequiredLesson(saved.id, saved.required && !saved.current_version_id);
   const row = courseLesson(saved.id);
+  syncMissingRequiredLesson(saved.id, saved.required && !saved.current_version_id && !row?.current_version);
   if (!row) return;
   Object.assign(row, {
     title: saved.title,
