@@ -237,6 +237,7 @@ CREATE TABLE IF NOT EXISTS `schema_migration` (
   `applied_at`   DATETIME(3)  NULL,
   `attempts`      INT          NOT NULL DEFAULT 0,
   `error_message` TEXT         NULL,
+  `progress`      JSON         NULL COMMENT '已验证完成的稳定 step id 数组',
   PRIMARY KEY (`migration_id`),
   KEY `idx_schema_migration_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='受控数据库迁移注册表';

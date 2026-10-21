@@ -5,9 +5,17 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { applyMigrations, getMigrationChecksum, inspectMigrations, validateMigrationTarget, REGISTRY_TABLE } from '../database/migrate.mjs';
+import {
+  applyMigrations,
+  getMigrationChecksum,
+  inspectMigrations,
+  listMigrations,
+  parseMigrationText,
+  validateMigrationTarget,
+  REGISTRY_TABLE,
+} from '../database/migrate.mjs';
 import { createEphemeralServices } from './support/ephemeral-services.mjs';
-import { renderSchemaForDatabase, isSafeTestDatabase } from './support/test-target.mjs';
+import { renderSchemaForDatabase } from './support/test-target.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const mysql = require('mysql2/promise');
@@ -17,52 +25,94 @@ const migrationTable = 'schema_migration';
 
 let services;
 let admin;
-let database;
+const databases = new Set();
 
 before(async () => {
-  if (process.env.DB_PASSWORD) {
-    database = process.env.DB_DATABASE || 'ruleexam_test_training';
-    assert.ok(isSafeTestDatabase(database), 'migration tests require a safe test database');
-    admin = await mysql.createConnection({
-      host: process.env.DB_HOST || '127.0.0.1',
-      port: Number(process.env.DB_PORT || 3306),
-      user: process.env.DB_USERNAME || 'root',
-      password: process.env.DB_PASSWORD,
-      multipleStatements: true,
-    });
-  } else {
-    services = await createEphemeralServices();
-    database = `ruleexam_test_${randomBytes(5).toString('hex')}`;
-    admin = await mysql.createConnection({
-      host: services.mysql.host,
-      port: services.mysql.port,
-      user: services.mysql.user,
-      password: services.mysql.password,
-      multipleStatements: true,
-    });
-  }
-  await admin.query(`DROP DATABASE IF EXISTS \`${database}\`; CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;`);
+  services = await createEphemeralServices();
+  admin = await mysql.createConnection({
+    host: services.mysql.host,
+    port: services.mysql.port,
+    user: services.mysql.user,
+    password: services.mysql.password,
+    multipleStatements: true,
+  });
 });
 
 after(async () => {
-  await admin?.query(`DROP DATABASE IF EXISTS \`${database}\``).catch(() => undefined);
-  await admin?.query(`DROP DATABASE IF EXISTS \`${database}_init\``).catch(() => undefined);
-  await admin?.query(`DROP DATABASE IF EXISTS \`${database}_upgrade\``).catch(() => undefined);
+  for (const database of databases) {
+    await admin?.query(`DROP DATABASE IF EXISTS \`${database}\``).catch(() => undefined);
+  }
   await admin?.end().catch(() => undefined);
   await services?.cleanup();
 });
 
-async function connectionFor(name = database) {
-  const cfg = services
-    ? { host: services.mysql.host, port: services.mysql.port, user: services.mysql.user, password: services.mysql.password }
-    : { host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: process.env.DB_USERNAME || 'root', password: process.env.DB_PASSWORD };
-  return mysql.createConnection({ ...cfg, database: name, multipleStatements: true });
+async function createDatabase(suffix = randomBytes(5).toString('hex')) {
+  const database = `ruleexam_test_${suffix}`;
+  databases.add(database);
+  await admin.query(`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`);
+  return database;
 }
 
+async function connectionFor(database) {
+  return mysql.createConnection({
+    host: services.mysql.host,
+    port: services.mysql.port,
+    user: services.mysql.user,
+    password: services.mysql.password,
+    database,
+    multipleStatements: true,
+  });
+}
+
+async function migration(id = '000_migration_registry') {
+  return (await listMigrations()).find((item) => item.id === id);
+}
+
+function fixtureMigration(id, text) {
+  return parseMigrationText(id, text);
+}
+
+test('active in-progress exam records block check and apply before registry writes', async () => {
+  const database = await createDatabase();
+  const conn = await connectionFor(database);
+  await conn.query('CREATE TABLE exam_record (id INT PRIMARY KEY, status VARCHAR(16) NOT NULL)');
+  await conn.execute("INSERT INTO exam_record (id, status) VALUES (1, 'in_progress')");
+  await assert.rejects(() => inspectMigrations({ connection: conn, database }), /active exam|in.progress/i);
+  await assert.rejects(() => applyMigrations({ connection: conn, database }), /active exam|in.progress/i);
+  const [[registry]] = await conn.query(`SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${REGISTRY_TABLE}'`);
+  assert.equal(Number(registry.count), 0);
+  await conn.end();
+});
+
+test('ended exam records do not block registry bootstrap', async () => {
+  const database = await createDatabase();
+  const conn = await connectionFor(database);
+  await conn.query('CREATE TABLE exam_record (id INT PRIMARY KEY, status VARCHAR(16) NOT NULL)');
+  await conn.execute("INSERT INTO exam_record (id, status) VALUES (1, 'submitted')");
+  await applyMigrations({ connection: conn, database });
+  const [[registry]] = await conn.query(`SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${REGISTRY_TABLE}'`);
+  assert.equal(Number(registry.count), 1);
+  await conn.end();
+});
+
+test('legacy registry without progress is upgraded before normal step bookkeeping', async () => {
+  const database = await createDatabase();
+  const conn = await connectionFor(database);
+  const base = await migration();
+  await conn.query(`CREATE TABLE \`${migrationTable}\` (migration_id VARCHAR(128) PRIMARY KEY, checksum CHAR(64) NOT NULL, status VARCHAR(16) NOT NULL, started_at DATETIME(3) NULL, applied_at DATETIME(3) NULL, attempts INT NOT NULL DEFAULT 0, error_message TEXT NULL)`);
+  await conn.execute(`INSERT INTO \`${migrationTable}\` (migration_id, checksum, status, attempts) VALUES (?, ?, 'applied', 1)`, [base.id, base.checksum]);
+  await applyMigrations({ connection: conn, database });
+  const [[column]] = await conn.query(`SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${migrationTable}' AND COLUMN_NAME = 'progress'`);
+  assert.equal(column.DATA_TYPE, 'json');
+  const [[row]] = await conn.query(`SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = ?`, [base.id]);
+  assert.equal(row.status, 'applied');
+  assert.deepEqual(row.progress, ['create_registry', 'add_progress']);
+  await conn.end();
+});
+
 test('upgrade preserves existing rows and converges INFORMATION_SCHEMA with initialization', async () => {
-  const initDb = `${database}_init`;
-  const upgradeDb = `${database}_upgrade`;
-  await admin.query(`DROP DATABASE IF EXISTS \`${initDb}\`; DROP DATABASE IF EXISTS \`${upgradeDb}\`; CREATE DATABASE \`${initDb}\`; CREATE DATABASE \`${upgradeDb}\`;`);
+  const initDb = await createDatabase('init_' + randomBytes(3).toString('hex'));
+  const upgradeDb = await createDatabase('upgrade_' + randomBytes(3).toString('hex'));
 
   await admin.query(`${renderSchemaForDatabase(initSql, initDb)}`);
   const oldSql = initSql.replace(/\n-- ---------------------------------------------------------------------\n-- 5\. 迁移元数据[\s\S]*$/u, '\n');
@@ -81,31 +131,162 @@ test('upgrade preserves existing rows and converges INFORMATION_SCHEMA with init
   await upgrade.end();
 });
 
-test('an in-progress migration blocks a second apply', async () => {
-  const conn = await connectionFor();
-  await conn.query(`CREATE TABLE IF NOT EXISTS \`${migrationTable}\` (migration_id VARCHAR(128) PRIMARY KEY, checksum CHAR(64) NOT NULL, status VARCHAR(16) NOT NULL, started_at DATETIME(3) NULL, applied_at DATETIME(3) NULL, attempts INT NOT NULL DEFAULT 0, error_message TEXT NULL)`);
-  const checksum = getMigrationChecksum('000_migration_registry');
-  await conn.execute(`INSERT INTO \`${migrationTable}\` (migration_id, checksum, status, started_at, attempts) VALUES (?, ?, 'applying', CURRENT_TIMESTAMP(3), 1) ON DUPLICATE KEY UPDATE status='applying'`, ['000_migration_registry', checksum]);
-  await assert.rejects(() => applyMigrations({ connection: conn, database }), /in.progress|running/i);
-  await conn.end();
-});
-
-test('a failed migration resumes with the same checksum and becomes applied', async () => {
-  const conn = await connectionFor();
-  const checksum = getMigrationChecksum('000_migration_registry');
-  await conn.execute(`INSERT INTO \`${migrationTable}\` (migration_id, checksum, status, attempts, error_message) VALUES (?, ?, 'failed', 1, 'transient') ON DUPLICATE KEY UPDATE checksum=VALUES(checksum), status='failed', attempts=1`, ['000_migration_registry', checksum]);
-  await applyMigrations({ connection: conn, database });
-  const [[row]] = await conn.execute(`SELECT status, attempts, error_message FROM \`${migrationTable}\` WHERE migration_id=?`, ['000_migration_registry']);
+test('two actual connections cannot apply the same database concurrently', async () => {
+  const database = await createDatabase();
+  const first = await connectionFor(database);
+  const second = await connectionFor(database);
+  const base = await migration();
+  const fixture = fixtureMigration('001_lock_fixture', `
+-- @step create_marker
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'lock_marker') THEN 1 ELSE 0 END AS complete;
+CREATE TABLE lock_marker (id INT PRIMARY KEY);
+`);
+  let release;
+  const paused = new Promise((resolve) => { release = resolve; });
+  let reachedStep;
+  const reached = new Promise((resolve) => { reachedStep = resolve; });
+  const firstRun = applyMigrations({
+    connection: first,
+    database,
+    migrations: [base, fixture],
+    onCheckpoint: async ({ event, migrationId, stepId }) => {
+      if (event === 'before-step' && migrationId === fixture.id && stepId === 'create_marker') {
+        reachedStep();
+        await paused;
+      }
+    },
+  });
+  await reached;
+  await assert.rejects(
+    () => applyMigrations({ connection: second, database, migrations: [base, fixture] }),
+    /lock|concurrent|acquire/i,
+  );
+  release();
+  await firstRun;
+  const [[row]] = await first.query(`SELECT status FROM \`${migrationTable}\` WHERE migration_id = ?`, [fixture.id]);
   assert.equal(row.status, 'applied');
-  assert.ok(row.attempts >= 2);
-  assert.equal(row.error_message, null);
+  await first.end();
+  await second.end();
+});
+
+test('partial non-idempotent DDL resumes from persisted step progress', async () => {
+  const database = await createDatabase();
+  const conn = await connectionFor(database);
+  const base = await migration();
+  await conn.query('CREATE TABLE partial_fixture (id INT PRIMARY KEY)');
+  const fixture = fixtureMigration('001_partial_fixture', `
+-- @step add_first_marker
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'partial_fixture' AND COLUMN_NAME = 'first_marker') THEN 1 ELSE 0 END AS complete;
+ALTER TABLE partial_fixture ADD COLUMN first_marker INT NOT NULL DEFAULT 0;
+-- @step add_second_marker
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'partial_fixture' AND COLUMN_NAME = 'second_marker') THEN 1 ELSE 0 END AS complete;
+ALTER TABLE partial_fixture ADD COLUMN second_marker INT NOT NULL DEFAULT 0;
+`);
+  await assert.rejects(
+    () => applyMigrations({
+      connection: conn,
+      database,
+      migrations: [base, fixture],
+      onCheckpoint: ({ event, migrationId, stepId }) => {
+        if (event === 'before-step' && migrationId === fixture.id && stepId === 'add_second_marker') throw new Error('injected later failure');
+      },
+    }),
+    /injected later failure/,
+  );
+  const [[failed]] = await conn.query(`SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = ?`, [fixture.id]);
+  assert.equal(failed.status, 'failed');
+  assert.deepEqual(failed.progress, ['add_first_marker']);
+  await applyMigrations({ connection: conn, database, migrations: [base, fixture] });
+  const [columns] = await conn.query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'partial_fixture' ORDER BY ORDINAL_POSITION");
+  assert.deepEqual(columns.map((column) => column.COLUMN_NAME), ['id', 'first_marker', 'second_marker']);
+  const [[applied]] = await conn.query(`SELECT status, progress, attempts FROM \`${migrationTable}\` WHERE migration_id = ?`, [fixture.id]);
+  assert.equal(applied.status, 'applied');
+  assert.deepEqual(applied.progress, ['add_first_marker', 'add_second_marker']);
+  assert.ok(applied.attempts >= 2);
   await conn.end();
 });
 
-test('checksum drift is rejected before a migration is rerun', async () => {
-  const conn = await connectionFor();
-  await conn.execute(`UPDATE \`${migrationTable}\` SET checksum=? WHERE migration_id=?`, ['0'.repeat(64), '000_migration_registry']);
-  await assert.rejects(() => inspectMigrations({ connection: conn, database }), /checksum|校验/i);
+test('crash window after DDL is reconciled by the completion probe without duplicate ALTER', async () => {
+  const database = await createDatabase();
+  const conn = await connectionFor(database);
+  const base = await migration();
+  await conn.query('CREATE TABLE crash_fixture (id INT PRIMARY KEY)');
+  const fixture = fixtureMigration('001_crash_fixture', `
+-- @step add_marker
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'crash_fixture' AND COLUMN_NAME = 'marker') THEN 1 ELSE 0 END AS complete;
+ALTER TABLE crash_fixture ADD COLUMN marker INT NOT NULL DEFAULT 0;
+`);
+  let crash = true;
+  await assert.rejects(
+    () => applyMigrations({
+      connection: conn,
+      database,
+      migrations: [base, fixture],
+      onCheckpoint: ({ event, migrationId, stepId }) => {
+        if (crash && event === 'before-progress' && migrationId === fixture.id && stepId === 'add_marker') {
+          crash = false;
+          throw new Error('simulated process crash window');
+        }
+      },
+    }),
+    /crash window/,
+  );
+  await applyMigrations({ connection: conn, database, migrations: [base, fixture] });
+  const [[count]] = await conn.query("SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'crash_fixture' AND COLUMN_NAME = 'marker'");
+  assert.equal(Number(count.count), 1);
+  const [[row]] = await conn.query(`SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = ?`, [fixture.id]);
+  assert.equal(row.status, 'applied');
+  assert.deepEqual(row.progress, ['add_marker']);
+  await conn.end();
+});
+
+test('checksum conflict and malformed or multi-statement definitions reject before writes', async () => {
+  const database = await createDatabase();
+  const conn = await connectionFor(database);
+  await applyMigrations({ connection: conn, database });
+  const [[before]] = await conn.query(`SELECT status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id = '000_migration_registry'`);
+  await conn.execute(`UPDATE \`${migrationTable}\` SET checksum = ? WHERE migration_id = '000_migration_registry'`, ['0'.repeat(64)]);
+  await assert.rejects(() => applyMigrations({ connection: conn, database }), /checksum|校验/i);
+  const [[after]] = await conn.query(`SELECT status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id = '000_migration_registry'`);
+  assert.deepEqual(after, before);
+  assert.throws(() => parseMigrationText('001_unprobed', 'CREATE TABLE x (id INT);'), /step|check|probe/i);
+  assert.throws(() => parseMigrationText('001_multi', `
+-- @step one
+-- @check SELECT 1 AS complete;
+CREATE TABLE x (id INT); CREATE TABLE y (id INT);
+`), /single|multiple|statement/i);
+  await conn.end();
+});
+
+test('a probe that does not return one completion flag is rejected before registry writes', async () => {
+  const database = await createDatabase();
+  const conn = await connectionFor(database);
+  const base = await migration();
+  const invalidProbe = {
+    id: '001_invalid_probe',
+    checksum: 'a'.repeat(64),
+    steps: [{
+      id: 'invalid_probe',
+      sql: 'CREATE TABLE invalid_probe (id INT PRIMARY KEY)',
+      checkSql: 'SELECT 1 AS complete, 0 AS other',
+    }],
+  };
+  await assert.rejects(
+    () => applyMigrations({ connection: conn, database, migrations: [base, invalidProbe] }),
+    /exactly one complete flag/i,
+  );
+  const [[registry]] = await conn.query(`SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${migrationTable}'`);
+  assert.equal(Number(registry.count), 0);
+  await conn.end();
+});
+
+test('requested database must match the connection before any mutation', async () => {
+  const firstDb = await createDatabase();
+  const secondDb = await createDatabase();
+  const conn = await connectionFor(firstDb);
+  await assert.rejects(() => applyMigrations({ connection: conn, database: secondDb }), /database|connection|match/i);
+  const [[row]] = await conn.query(`SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${REGISTRY_TABLE}'`);
+  assert.equal(Number(row.count), 0);
   await conn.end();
 });
 
@@ -121,11 +302,10 @@ test('formal migration targets allow existing installs but reject system schemas
 
 test('formal CLI check is read-only and apply upgrades a non-test fixture database', async () => {
   const formalDatabase = `ruleexam_upgrade_fixture_${randomBytes(5).toString('hex')}`;
+  databases.add(formalDatabase);
   validateMigrationTarget(formalDatabase);
   await admin.query(`CREATE DATABASE \`${formalDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`);
-  const credentials = services
-    ? { DB_HOST: services.mysql.host, DB_PORT: String(services.mysql.port), DB_USERNAME: services.mysql.user, DB_PASSWORD: services.mysql.password }
-    : { DB_HOST: process.env.DB_HOST || '127.0.0.1', DB_PORT: String(process.env.DB_PORT || 3306), DB_USERNAME: process.env.DB_USERNAME || 'root', DB_PASSWORD: process.env.DB_PASSWORD || '' };
+  const credentials = { DB_HOST: services.mysql.host, DB_PORT: String(services.mysql.port), DB_USERNAME: services.mysql.user, DB_PASSWORD: services.mysql.password };
   const env = { ...process.env, ...credentials, DB_DATABASE: formalDatabase };
   try {
     const check = spawnSync(process.execPath, ['database/migrate.mjs', '--check'], { cwd: ROOT, env, encoding: 'utf8' });

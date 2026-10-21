@@ -122,7 +122,7 @@ type ImportResult = { batch_id: Id; created_ids: Id[]; committed_rows: number[] 
 
 | 脚本（`database/migrations/`） | 新增表 / 修改表 | 关键约束 |
 |---|---|---|
-| `000_migration_registry.sql` A1 | `schema_migration` | version 唯一、checksum、started/applied 状态；失败不可误记完成 |
+| `000_migration_registry.sql` A1 | `schema_migration` | migration_id 主键、checksum、applying/applied/failed 状态、progress JSON 记录已验证步骤；失败不可误记完成 |
 | `001_training_identity.sql` A2 | `training_category`、`import_batch`；`sys_user` | 类别名唯一；category_id/source 可空仅为旧用户兼容；批次含 owner/kind/hash/status/result |
 | `002_access.sql` A3 | `sys_role`、`sys_permission`、`sys_role_permission`、`sys_user_role`、`auth_session` | 权限 code 唯一；两张关联表复合唯一；sid 唯一；最高管理员保护 |
 | `003_media.sql` A4 | `media_asset`、`media_reference` | 服务端 storage_key 唯一；引用 owner_type/owner_id/asset_id 唯一 |
@@ -138,6 +138,8 @@ type ImportResult = { batch_id: Id; created_ids: Id[]; committed_rows: number[] 
 不伪造旧快照：旧结束记录 `snapshot_origin=legacy_unavailable`；旧发布卷的新开考为 `legacy_start`；新发布/开考为 `release`。已有类别/来源/难度未知保持 null，不创建“默认初级”回填。旧引用题编辑前存一份升级时当前版本并注明捕获时间，不称之为历史考试时的原版本。
 
 升级执行器 `database/migrate.mjs` 支持 `--check` 和 `--apply`，显式要求 `DB_DATABASE`；发现进行中答卷或校验和不符立即停止。MySQL DDL 不能依赖整段事务回滚：逐步查元数据、保存进度、重复执行安全、失败可续跑；只备份/恢复经过审阅的目标库，不提供默认破坏性 down 脚本。生产执行需另行授权。
+
+**A1 实施审查后的升级脚本约定：** 每份 SQL 用稳定的 `-- @step <id>` 划分步骤，每步附 `-- @check <single SELECT ... AS complete>` 只读完成探针和一条执行语句。探针先核查所需结构/数据是否完成，未完成才执行，之后再次验证才记录 `schema_migration.progress`；不能仅凭表存在就假定字段结构正确。拒绝无探针、任意多语句、切换数据库等不符合约定的脚本，不建设通用 SQL 引擎。`--apply` 在任何注册表/业务写入前取得同库命名锁，再读校验和与真实 `exam_record.status='in_progress'`；只有锁持有者可以基于元数据接续 failed 或崩溃遗留 applying。`--check` 不写注册表。命名锁只协调升级进程，不阻止仍在运行的业务服务新开考，所以正式升级必须另行授权并在停服维护窗口执行。新初始化、升级、实体及 03 册保持一致；所有后续 migration 必须遵循 A1 验收后的实际解析接口。
 
 ## 3. 测试、提交和完成规则
 

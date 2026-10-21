@@ -24,4 +24,8 @@ export class SchemaMigration {
 
   @Column({ name: 'error_message', type: 'text', nullable: true })
   errorMessage: string | null;
+
+  /** Stable step ids whose completion probes have been verified. */
+  @Column({ type: 'json', nullable: true })
+  progress: string[] | null;
 }

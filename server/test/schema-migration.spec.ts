@@ -10,7 +10,7 @@ describe('schema_migration entity contract', () => {
       .filter((item) => item.target === SchemaMigration)
       .map((item) => item.options.name || item.propertyName);
     expect(columns.sort()).toEqual([
-      'applied_at', 'attempts', 'checksum', 'error_message', 'migration_id', 'started_at', 'status',
+      'applied_at', 'attempts', 'checksum', 'error_message', 'migration_id', 'progress', 'started_at', 'status',
     ]);
   });
 });
