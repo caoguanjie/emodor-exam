@@ -7,6 +7,16 @@ import { ElMessage } from 'element-plus';
  */
 const http = axios.create({ baseURL: '/api/v1', timeout: 60000 });
 
+/** Build a same-origin URL for raw/public endpoints that are not envelope requests. */
+export function apiUrl(path: string): string {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return `/api/v1${normalized}`;
+}
+
+export function publicSiteAssetUrl(assetId: string): string {
+  return apiUrl(`/site-config/assets/${encodeURIComponent(assetId)}/content`);
+}
+
 let refreshing: Promise<boolean> | null = null;
 
 /** 以 HttpOnly refresh Cookie 静默换取新 access token（供 401 拦截与新标签页恢复会话复用） */
@@ -71,6 +81,12 @@ http.interceptors.response.use(
       if (!location.pathname.startsWith('/login')) location.href = '/login';
       return Promise.reject(err);
     }
+    if (status === 403 && config && !String(config.url).includes('/auth/profile') && !String(config.url).includes('/auth/login')) {
+      // A permission change can leave a rendered page with stale buttons until
+      // the next router navigation. Refresh the principal after the first
+      // authorization failure; the server remains the final authority.
+      try { await useAuthStore().fetchProfile(); } catch { /* keep the original 403 */ }
+    }
     const msg = body?.message || err.message || '网络异常';
     ElMessage.error(msg);
     return Promise.reject(new ApiError(code ?? status ?? 0, msg, body?.data));
@@ -97,9 +113,10 @@ export async function download(url: string, filename: string, params?: Record<st
 }
 
 /** 文件上传（multipart） */
-export async function upload(url: string, file: File, field = 'file') {
+export async function upload(url: string, file: File, field = 'file', fields: Record<string, string> = {}) {
   const form = new FormData();
   form.append(field, file);
+  Object.entries(fields).forEach(([key, value]) => form.append(key, value));
   const res = await http.post(url, form, { headers: { 'Content-Type': 'multipart/form-data' } });
   return res;
 }

@@ -1,6 +1,7 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
 @Entity('regulation')
+@Index('idx_regulation_category_id', ['categoryId'])
 export class Regulation {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
@@ -10,6 +11,10 @@ export class Regulation {
 
   @Column({ type: 'varchar', length: 32 })
   category: string;
+
+  /** Optional training classification; independent from the legacy category text. */
+  @Column({ name: 'category_id', type: 'bigint', unsigned: true, nullable: true })
+  categoryId: string | null;
 
   @Column({ type: 'varchar', length: 512, nullable: true })
   description: string | null;

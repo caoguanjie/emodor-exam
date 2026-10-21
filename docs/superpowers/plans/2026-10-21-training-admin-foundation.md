@@ -34,7 +34,7 @@
 
 **Interfaces:** Consumes 已批准设计与现有 SQL。Produces `validateTestTarget({database,sql}): {database,sql}`、`renderSchemaForDatabase(sql,database): string`、总计划 §2.1 类型与 §3 测试上下文；`migrate.mjs --check|--apply`、`run-e2e.mjs --suite smoke|all|<registered-name>`。新增 `REDIS_KEY_PREFIX`，默认空以兼容现状，测试用每次运行独立前缀。
 
-- [ ] **Step 1: 写隔离及升级契约测试。** `test-target.test.mjs` 使用 Node `assert`，有效 SQL 为真实 init.sql；`migration-contract` 建旧结构样例并检查保留数据、进行中记录阻断、失败续跑、校验和冲突以及初始化/升级后 INFORMATION_SCHEMA 一致。
+- [x] **Step 1: 写隔离及升级契约测试。** `test-target.test.mjs` 使用 Node `assert`，有效 SQL 为真实 init.sql；`migration-contract` 建旧结构样例并检查保留数据、进行中记录阻断、失败续跑、校验和冲突以及初始化/升级后 INFORMATION_SCHEMA 一致。
   ```js
   assert.throws(() => validateTestTarget({ database: 'ruleexam', sql }));
   const target = validateTestTarget({ database: 'ruleexam_test_training', sql });
@@ -42,19 +42,21 @@
   assert.doesNotMatch(target.sql, /USE `ruleexam`/);
   assert.throws(() => validateTestTarget({ database: 'ruleexam_test_training', sql: sql + '\nUSE `other_db`;' }));
   ```
-- [ ] **Step 2: 红灯。** `node --test tests/test-target.test.mjs`，预期缺少保护模块/断言失败；此步不得启动旧的删库脚本。
-- [ ] **Step 3: 先修文档并定义共同类型。** 去除固定 12 表限制；明确受控图片阅卷不等于改最终总分、新培训考试不强制阅读、双端仍延期。将总计划字段/状态/API 命名纳入 03—06 册，旧业务盘点文档保持证据性质；不扩展设计默认业务范围。
-- [ ] **Step 4: 实现保护器、升级器与测试上下文。** 只改 SQL 中已识别的 CREATE DATABASE/USE，发现额外库切换即拒绝；种子和 API 共用验证后的目标。测试存储/日志/AI 配置用 `mkdtemp` 独立目录，Redis 前缀隔离（含 Lua/扫描）；禁止 FLUSHDB。支持 API 重启且保留同一测试数据、密钥与上传目录。suite 名称白名单映射独立文件，不能拼任意命令。schema 升级元数据检查与可续跑规则按总计划 §2.2。
-- [ ] **Step 5: 绿灯。** `node --test tests/test-target.test.mjs`；隔离确认后 `DB_DATABASE=ruleexam_test_training node --test tests/migration-contract.test.mjs` 和 `DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite smoke`。预期全部通过，开发库及其存储未被访问/修改；另运行 `cd server && npm run build && npm test`。应用 API 基线已有失败则记录并解决本任务造成的失败，不吞掉失败继续。
-- [ ] **Step 6: 本地提交。** 审核 A1 明确文件/改动块后 `git commit -m "test: isolate training integration database and define contracts"`。
+- [x] **Step 2: 红灯。** `node --test tests/test-target.test.mjs`，预期缺少保护模块/断言失败；此步不得启动旧的删库脚本。
+- [x] **Step 3: 先修文档并定义共同类型。** 去除固定 12 表限制；明确受控图片阅卷不等于改最终总分、新培训考试不强制阅读、双端仍延期。将总计划字段/状态/API 命名纳入 03—06 册，旧业务盘点文档保持证据性质；不扩展设计默认业务范围。
+- [x] **Step 4: 实现保护器、升级器与测试上下文。** 只改 SQL 中已识别的 CREATE DATABASE/USE，发现额外库切换即拒绝；种子和 API 共用验证后的目标。测试存储/日志/AI 配置用 `mkdtemp` 独立目录，Redis 前缀隔离（含 Lua/扫描）；禁止 FLUSHDB。支持 API 重启且保留同一测试数据、密钥与上传目录。suite 名称白名单映射独立文件，不能拼任意命令。schema 升级元数据检查与可续跑规则按总计划 §2.2。
+- [x] **Step 5: 绿灯。** `node --test tests/test-target.test.mjs`；隔离确认后 `DB_DATABASE=ruleexam_test_training node --test tests/migration-contract.test.mjs` 和 `DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite smoke`。预期全部通过，开发库及其存储未被访问/修改；另运行 `cd server && npm run build && npm test`。应用 API 基线已有失败则记录并解决本任务造成的失败，不吞掉失败继续。
+- [x] **Step 6: 本地提交。** 审核 A1 明确文件/改动块后 `git commit -m "test: isolate training integration database and define contracts"`。
+
+**A1 验收记录（2026-10-21）：** 最终代码候选 `2e53d56` 的基础组合测试 39/39 通过，旧 smoke 94/94、server 26 项与构建、web 类型检查与构建通过；独立审查遗留项均关闭。未提供外部 DB_PASSWORD，实际数据库测试使用运行期随机口令的 `--ephemeral` 自有 MySQL/Redis，不读取 `.env` 或连接开发库。范围及证据见 [A1 基础验收](../../../review/2026-10-21-training-a1-foundation.md)。A2 以后仍待实施。
 
 ### Task A2: 类别、学员来源与可恢复导入
 
-**Files:** Modify `server/src/entities/sys-user.entity.ts`、`server/src/modules/users/users.service.ts`、`users.controller.ts`、`user-import.service.ts`（后两项同目录）、`web/src/views/admin/Users.vue`。Create `server/src/modules/training/category.service.ts`、`category.controller.ts`（同目录）、`server/src/modules/imports/import-batch.service.ts`、`web/src/views/admin/TrainingCategories.vue`、`web/src/components/ImportPreview.vue`；`001_training_identity.sql` 与总计划对应实体。Test `server/test/training-identity.spec.ts`、`tests/training-identity.mjs`。
+**Files:** Modify `server/src/entities/sys-user.entity.ts`、`server/src/modules/users/users.service.ts`、`users.controller.ts`（同目录）、`web/src/views/admin/Users.vue`。Reuse `server/src/modules/users/user-import.service.ts` unchanged for legacy six-column partial-success import; new preview/confirm uses the new batch service. Create `server/src/modules/training/category.service.ts`、`category.controller.ts`（同目录）、`server/src/modules/imports/import-batch.service.ts`、`web/src/views/admin/TrainingCategories.vue`、`web/src/components/ImportPreview.vue`；`001_training_identity.sql` 与总计划对应实体。Test `server/test/training-identity.spec.ts`、`tests/training-identity.mjs`。
 
 **Interfaces:** Consumes A1 `Id/LearnerSource/ImportPreview/ImportResult`。Produces `CategoryService.assertActive(id:Id):Promise<void>`、`UsersService.trainingProfile(userId:Id):Promise<{categoryId:Id|null;source:LearnerSource|null;active:boolean}>`；`ImportBatchService.preview(ownerId:Id,kind:'students'|'questions',rows:unknown[]):Promise<ImportPreview>`、`commit(ownerId:Id,batchId:Id,rowNumbers:number[]):Promise<ImportResult>`，解析/行校验由所属业务注入，不让通用服务依赖 AI。
 
-- [ ] **Step 1: 写类别/来源/导入测试。** suite 注册名 `training-identity`。夹具在本文件创建旧用户、两类新用户、有效/非法/重名行，调用 API 收集下列结果。
+- [x] **Step 1: 写类别/来源/导入测试。** suite 注册名 `training-identity`。夹具在本文件创建旧用户、两类新用户、有效/非法/重名行，调用 API 收集下列结果。
   ```js
   assert.equal(legacy.data.source, null);
   assert.equal(missingSource.status, 400);
@@ -63,11 +65,11 @@
   assert.deepEqual(retry.data.created_ids, first.data.created_ids);
   assert.equal(deleteReferencedCategory.status, 409);
   ```
-- [ ] **Step 2: 红灯。** `cd server && npm test -- test/training-identity.spec.ts`；预期 trainingProfile/批次契约不存在或来源校验失败。
-- [ ] **Step 3: 实现身份 CRUD 和批次事务。** `/admin/training-categories` 与 `/admin/students` 查询/新增/更新/停用/重置密码；原 `/admin/users` 保留。新增学员 category/source 必填；模板列与预检查一致；表单支持来源、类别筛选及整批默认值。批次以 owner+id 校验，确认时固定所选合法行，重试同批返回原结果，换行集合冲突返回 409；题库导入 B4 复用此事实。保留密码校验/停用吊销，不回显口令；类别被引用不能硬删除。
-- [ ] **Step 4: 接通 PC 和本人资料契约。** Users 页面支持学员 CRUD、模板下载、预览确认/失败行重导；增加 `/me/profile` GET/PATCH，只允许姓名、联系方式、A4 之后的头像 ID；提交 source/category/role 返回 400，不静默接受。头像待 A4 接入，不阻断本任务非媒体 CRUD。分页空态、失败恢复与表单校验均落地。
-- [ ] **Step 5: 绿灯。** 同单测命令及 `DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite training-identity`；`cd web && npx vue-tsc --noEmit && npm run build`。PC 验收：新建两类学员、来源筛选、错误行预览、重复确认、禁用后旧 token 被拒。记录结果。
-- [ ] **Step 6: 本地提交。** `git commit -m "feat: manage training categories and learner provenance"`，仅暂存 A2 明确文件/共享集成块。
+- [x] **Step 2: 红灯。** `cd server && npm test -- test/training-identity.spec.ts`；预期 trainingProfile/批次契约不存在或来源校验失败。
+- [x] **Step 3: 实现身份 CRUD 和批次事务。** `/admin/training-categories` 与 `/admin/students` 查询/新增/更新/停用/重置密码；原 `/users` 保留。新增学员 category/source 必填；模板列与预检查一致；表单支持来源、类别筛选及整批默认值。批次以 owner+id 校验，确认时固定所选合法行，重试同批返回原结果，换行集合冲突返回 409；题库导入 B4 复用此事实。保留密码校验/停用吊销，不回显口令；类别被引用不能硬删除。
+- [x] **Step 4: 接通 PC 和本人资料契约。** Users 页面支持学员 CRUD、模板下载、预览确认/失败行重导；增加 `/me/profile` GET/PATCH，只允许姓名、联系方式、A4 之后的头像 ID；提交 source/category/role 返回 400，不静默接受。头像待 A4 接入，不阻断本任务非媒体 CRUD。分页空态、失败恢复与表单校验均落地。
+- [x] **Step 5: 绿灯。** 同单测命令及 `DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite training-identity`；`cd web && npx vue-tsc --noEmit && npm run build`。PC 验收：新建两类学员、来源筛选、错误行预览、重复确认、禁用后旧 token 被拒。记录结果。
+- [x] **Step 6: 本地提交。** `git commit -m "feat: manage training categories and learner provenance"`，仅暂存 A2 明确文件/共享集成块。
 
 ### Task A3: 验证码、会话与可配置管理权限
 
@@ -75,7 +77,7 @@
 
 **Interfaces:** Consumes A1、现有 AuthUser/Redis 吊销。Produces `AccessService.assertAllowed(userId:Id,code:string):Promise<void>`、`permissions(userId:Id):Promise<string[]>`、`SessionService.revoke(sessionId:Id,actorId:Id):Promise<void>`；新增 `/auth/captcha`，沿用 `/auth/login|refresh|profile|password|logout`；`/admin/roles`、`/admin/administrators`、`/admin/sessions`。权限目录是服务端注册的 `<resource>:read|write|publish|review|export` 白名单，不允许配置任意代码授予新能力。
 
-- [ ] **Step 1: 写越权/吊销测试。** suite `training-access`；用临时管理员、学员和受限管理员，测试正常与伪造入口、同秒吊销、refresh 轮换与重复使用。
+- [x] **Step 1: 写越权/吊销测试。** suite `training-access`；用临时管理员、学员和受限管理员，测试正常与伪造入口、同秒吊销、refresh 轮换与重复使用。
   ```js
   assert.equal(adminWithoutCaptcha.status, 400);
   assert.equal(employeeLegacyLogin.status, 200);
@@ -84,11 +86,11 @@
   assert.equal(employeeWithInstitutionSource.status, 403);
   assert.equal(removeLastSuperAdmin.status, 409);
   ```
-- [ ] **Step 2: 红灯。** `cd server && npm test -- test/access.spec.ts`，预期权限服务缺失/撤权未被检查。
-- [ ] **Step 3: 实现权限与登录兼容。** 登录由服务端识别管理员账号，所有入口均校验其验证码，不信客户端 platform；员工旧登录不额外强制验证码。验证码一次消费、120 秒过期、刷新废弃前个，登录与发码限流；测试可从隔离 Redis 读取夹具答案，生产绝不提供绕过端点。业务角色多选、系统角色身份保留；权限 guard 与旧 RolesGuard 协调，不因旧枚举拦住已授权新管理员，也不放宽员工访问。权限变更立即失效缓存；最高管理员不可删除/停用/清空其保护权限。
-- [ ] **Step 4: 实现会话与 PC 权限页。** JWT 增加 sid，access/refresh 绑定同会话；强制下线与停用对该会话/用户立即生效，同秒令牌也不能漏过。旧无 sid 令牌继续原到期/封禁规则，用户级吊销必须覆盖它。PC 登录密码遮蔽、验证码刷新，管理员/角色权限树/在线会话页面联动真实 API；登录次数/IP、最后登录成功时间写入，不记失败为成功。公开资料不返 hash、验证码或密钥。
-- [ ] **Step 5: 绿灯。** 同单测；`DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite training-access`；前端类型/构建。PC 用两个独立登录会话验证受限菜单/按钮、直调 API 拒绝、撤权立即生效、强制下线、取消操作不写入。
-- [ ] **Step 6: 本地提交。** `git commit -m "feat: add configurable admin permissions and session controls"`。
+- [x] **Step 2: 红灯。** `cd server && npm test -- test/access.spec.ts`，预期权限服务缺失/撤权未被检查。
+- [x] **Step 3: 实现权限与登录兼容。** 登录由服务端识别管理员账号，所有入口均校验其验证码，不信客户端 platform；员工旧登录不额外强制验证码。验证码一次消费、120 秒过期、刷新废弃前个，登录与发码限流；测试可从隔离 Redis 读取夹具答案，生产绝不提供绕过端点。业务角色多选、系统角色身份保留；权限 guard 与旧 RolesGuard 协调，不因旧枚举拦住已授权新管理员，也不放宽员工访问。权限变更立即失效缓存；最高管理员不可删除/停用/清空其保护权限。
+- [x] **Step 4: 实现会话与 PC 权限页。** JWT 增加 sid，access/refresh 绑定同会话；强制下线与停用对该会话/用户立即生效，同秒令牌也不能漏过。旧无 sid 令牌继续原到期/封禁规则，用户级吊销必须覆盖它。PC 登录密码遮蔽、验证码刷新，管理员/角色权限树/在线会话页面联动真实 API；登录次数/IP、最后登录成功时间写入，不记失败为成功。公开资料不返 hash、验证码或密钥。
+- [x] **Step 5: 绿灯。** 同单测；`DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite training-access`；前端类型/构建。PC 用两个独立登录会话验证受限菜单/按钮、直调 API 拒绝、撤权立即生效、强制下线、取消操作不写入。
+- [x] **Step 6: 本地提交。** `git commit -m "feat: add configurable admin permissions and session controls"`。
 
 ### Task A4: 统一受控媒体与上传组件
 

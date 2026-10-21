@@ -4,6 +4,8 @@ import { ParsePipelineService } from './modules/regulations/parse-pipeline.servi
 import { LearningSessionService } from './modules/learning/learning-session.service';
 import { ExamService } from './modules/exams/exam.service';
 import { StatisticsService } from './modules/statistics/statistics.service';
+import { MediaService } from './modules/media/media.service';
+import { VideoSessionService } from './modules/video-learning/video-session.service';
 
 /**
  * 定时任务编排（02 册 2.2 横切能力，06 册 4.3 双触发）：
@@ -23,6 +25,8 @@ export class TasksService {
     private readonly learningService: LearningSessionService,
     private readonly parsePipeline: ParsePipelineService,
     private readonly statistics: StatisticsService,
+    private readonly media: MediaService,
+    private readonly videoLearning: VideoSessionService,
   ) {}
 
   /** 触发器一（主）：超时自动交卷，每 30 秒（06 册 4.3） */
@@ -49,6 +53,12 @@ export class TasksService {
       await this.learningService.sweepStalledSessions();
     } catch (e: any) {
       this.logger.warn(`学习会话兜底失败: ${e?.message}`);
+    }
+    try {
+      const n = await this.videoLearning.sweepStalledSessions();
+      if (n > 0) this.logger.log(`视频学习会话回收：${n} 条`);
+    } catch (e: any) {
+      this.logger.warn(`视频学习会话回收失败: ${e?.message}`);
     } finally {
       this.learningSweepRunning = false;
     }
@@ -70,5 +80,16 @@ export class TasksService {
     try {
       await this.statistics.invalidateAllStatistics();
     } catch { /* ignore */ }
+  }
+
+  /** 媒体孤儿延迟清理：锁定资源后二次检查引用，不能删除已绑定文件。 */
+  @Interval(3_600_000)
+  async sweepMediaOrphans() {
+    try {
+      const removed = await this.media.cleanupOrphans();
+      if (removed > 0) this.logger.log(`媒体孤儿清理：${removed} 条`);
+    } catch (e: any) {
+      this.logger.warn(`媒体孤儿清理失败: ${e?.message}`);
+    }
   }
 }

@@ -23,11 +23,13 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
+import { postAuthPath } from '../router/access';
 import brandLogo from '../assets/brand-logo.png';
 
 const router = useRouter();
+const route = useRoute();
 const auth = useAuthStore();
 const oldPwd = ref('');
 const newPwd = ref('');
@@ -38,7 +40,7 @@ async function onChange() {
   loading.value = true;
   try {
     await auth.changePassword(oldPwd.value, newPwd.value);
-    router.push('/my/regulations');
+    router.push(postAuthPath(auth.isAdmin, route.query.redirect));
   } finally {
     loading.value = false;
   }

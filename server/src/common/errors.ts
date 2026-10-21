@@ -35,9 +35,22 @@ export const Errors = {
   examInProgress: (msg = '已有进行中的考试') => new BizError(40904, 409, msg),
   submitConflict: (msg = '交卷冲突，考试已结束') => new BizError(40905, 409, msg),
   sessionConflict: (msg = '学习会话冲突') => new BizError(40906, 409, msg),
+  lastSuperAdmin: () => new BizError(40912, 409, '至少保留一名启用的超级管理员'),
   paperQuestionsLocked: () => new BizError(40907, 409, '题目组成不可变更'),
-  questionInUse: () => new BizError(40908, 409, '题目正在考试中使用，禁止编辑'),
+  questionInUse: (msg = '题目正在考试中使用，禁止编辑') => new BizError(40908, 409, msg),
   aiNotConfigured: () => new BizError(40909, 409, 'AI 服务未配置或配置不完整'),
+  categoryInactive: (msg = '培训类别不存在或已停用') => new BizError(40910, 409, msg),
+  importBatchConflict: (msg = '导入批次已确认，不能更换行集合') => new BizError(40911, 409, msg),
+  mediaReferenced: (msg = '媒体仍被业务引用，不能删除') => new BizError(40913, 409, msg),
+  systemReferenced: (msg = '系统配置仍被引用，不能删除') => new BizError(40920, 409, msg),
+  courseConflict: (msg = '课程状态冲突') => new BizError(40930, 409, msg),
+  questionVersionConflict: (msg = '题目版本已变化，请刷新后重试') => new BizError(40940, 409, msg),
+  videoSessionConflict: (msg = '视频学习会话已结束或被替换') => new BizError(40950, 409, msg),
+  videoUnavailable: (msg = '课程或视频版本当前不可学习') => new BizError(40951, 409, msg),
+  paperReleaseConflict: (msg = '试卷发布状态已变化，请刷新后重试') => new BizError(40970, 409, msg),
+  paperPoolInsufficient: (deficits: unknown, msg = '候选题池容量不足') => new BizError(40971, 409, msg, { deficits }),
+  paperRuleInvalid: (msg = '试卷规则不合法', data?: unknown) => new BizError(40972, 409, msg, data),
+  mediaRangeInvalid: (msg = '媒体 Range 无效') => new BizError(41601, 416, msg),
   fileFormat: (msg = '文件格式不支持') => new BizError(42201, 422, msg),
   fileTooLarge: (msg = '文件超过大小上限') => new BizError(42202, 422, msg),
   publishCheckFailed: (msg = '发布校验未通过') => new BizError(42203, 422, msg),
@@ -60,9 +73,9 @@ export type Role = (typeof RoleEnum)[keyof typeof RoleEnum];
 export const RegulationStatus = { DRAFT: 'draft', PUBLISHED: 'published', ARCHIVED: 'archived' } as const;
 export const ParseStatus = { PENDING: 'pending', PARSED: 'parsed', FAILED: 'failed' } as const;
 export const FileType = { PDF: 'pdf', DOCX: 'docx' } as const;
-export const QuestionType = { SINGLE: 'single', MULTIPLE: 'multiple' } as const;
+export const QuestionType = { SINGLE: 'single', MULTIPLE: 'multiple', JUDGMENT: 'judgment', IMAGE: 'image' } as const;
 export const QuestionStatus = { PENDING: 'pending', APPROVED: 'approved', REJECTED: 'rejected' } as const;
-export const QuestionSource = { AI: 'ai', MANUAL: 'manual' } as const;
+export const QuestionSource = { AI: 'ai', MANUAL: 'manual', IMPORT: 'import' } as const;
 export const PaperStatus = { DRAFT: 'draft', PUBLISHED: 'published', ARCHIVED: 'archived' } as const;
 export const ExamStatus = {
   IN_PROGRESS: 'in_progress',

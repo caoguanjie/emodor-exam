@@ -9,11 +9,21 @@ export class AppConfig {
   env: string;
   port: number;
   db: TypeOrmModuleOptions;
-  redis: { host: string; port: number; password?: string; enabled: boolean };
+  redis: { host: string; port: number; password?: string; enabled: boolean; keyPrefix: string };
   jwt: { secret: string; expiresIn: string; refreshExpiresDays: number; priorSecret?: string };
   examShuffleSecret: string;
   appEncryptionKey?: string;
   upload: { dir: string; maxUploadSizeMb: number; maxImportSizeMb: number; maxImportRows: number };
+  media: {
+    videoMaxBytes: number;
+    imageMaxBytes: number;
+    imageMaxPixels: number;
+    probeTimeoutMs: number;
+    ffprobePath: string;
+    ffmpegPath: string;
+    allowedImageTypes: string[];
+    allowedVideoTypes: string[];
+  };
   corsOrigins: string[];
   dataDir: string;
   logDir: string;
@@ -55,6 +65,28 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
   return Math.min(max, Math.max(min, value));
 }
 
+function mediaEnvInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  if (!/^(0|[1-9]\d*)$/.test(raw)) {
+    throw new Error(`环境变量 ${name} 必须是整数`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`环境变量 ${name} 超出支持范围`);
+  }
+  return value;
+}
+
+function positiveEnvInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  if (!/^[1-9]\d*$/.test(raw)) throw new Error(`环境变量 ${name} 必须是正整数`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) throw new Error(`环境变量 ${name} 超出支持范围`);
+  return value;
+}
+
 export function loadConfig(): AppConfig {
   const env = process.env.NODE_ENV || 'development';
   const isProd = env === 'production';
@@ -62,6 +94,7 @@ export function loadConfig(): AppConfig {
   if (!process.env.TZ) process.env.TZ = tz;
 
   const dbPassword = process.env.DB_PASSWORD ?? '';
+  const dbPoolSize = positiveEnvInt('DB_POOL_SIZE', 20);
   return {
     env,
     port: Number(process.env.PORT || 3000),
@@ -77,14 +110,16 @@ export function loadConfig(): AppConfig {
       entities: [__dirname + '/../entities/*.entity.js'],
       synchronize: false, // 表结构以 database/init.sql 为唯一权威（03 册）
       logging: false,
-      poolSize: 20,
-      extra: { connectionLimit: 20 },
+      poolSize: dbPoolSize,
+      extra: { connectionLimit: dbPoolSize },
     } as TypeOrmModuleOptions,
     redis: {
       host: process.env.REDIS_HOST || '127.0.0.1',
       port: Number(process.env.REDIS_PORT || 6379),
       password: process.env.REDIS_PASSWORD || undefined,
       enabled: process.env.REDIS_ENABLED !== 'false',
+      // 默认空字符串保持历史键名；测试运行由 harness 注入一次性前缀隔离。
+      keyPrefix: (process.env.REDIS_KEY_PREFIX || '').trim(),
     },
     jwt: {
       secret: req('JWT_SECRET', isProd) || randKey(),
@@ -99,6 +134,18 @@ export function loadConfig(): AppConfig {
       maxUploadSizeMb: Number(process.env.MAX_UPLOAD_SIZE || 50),
       maxImportSizeMb: 5,
       maxImportRows: 1000,
+    },
+    media: {
+      // Media overrides reject malformed/unsupported values. The upload transport
+      // uses max(image, video); deploy/check-media-limits.mjs enforces the nginx +1 MiB margin.
+      videoMaxBytes: mediaEnvInt('MEDIA_VIDEO_MAX_BYTES', 512 * 1024 * 1024, 1, 512 * 1024 * 1024),
+      imageMaxBytes: mediaEnvInt('MEDIA_IMAGE_MAX_BYTES', 10 * 1024 * 1024, 1, 100 * 1024 * 1024),
+      imageMaxPixels: mediaEnvInt('MEDIA_IMAGE_MAX_PIXELS', 25_000_000, 1, 100_000_000),
+      probeTimeoutMs: mediaEnvInt('MEDIA_PROBE_TIMEOUT_MS', 30_000, 1_000, 120_000),
+      ffprobePath: process.env.FFPROBE_PATH || 'ffprobe',
+      ffmpegPath: process.env.FFMPEG_PATH || 'ffmpeg',
+      allowedImageTypes: ['image/jpeg', 'image/png', 'image/webp'],
+      allowedVideoTypes: ['video/mp4'],
     },
     dataDir: process.env.DATA_DIR || './data',
     logDir: process.env.LOG_DIR || './data/logs',

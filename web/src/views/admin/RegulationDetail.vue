@@ -8,14 +8,26 @@
         <el-tag :type="statusType(reg.status)" size="small">{{ statusLabel(reg.status) }}</el-tag>
       </div>
       <div style="flex:1" />
-      <el-button v-if="reg.status !== 'archived'" type="success" @click="onPublish">发布制度</el-button>
-      <el-button v-if="reg.status !== 'archived'" type="warning" plain @click="onArchive">归档</el-button>
+      <el-button v-if="reg.status !== 'archived' && auth.can('regulations:publish')" type="success" @click="onPublish">发布制度</el-button>
+      <el-button v-if="reg.status !== 'archived' && auth.can('regulations:write')" type="warning" plain @click="onArchive">归档</el-button>
     </div>
 
     <el-tabs>
+      <el-tab-pane label="基本信息">
+        <el-form label-width="140px" style="max-width:560px; margin-top:12px">
+          <el-form-item label="旧制度分类"><el-input :model-value="reg.category" disabled /></el-form-item>
+          <el-form-item label="培训类别">
+            <el-select v-if="auth.can('regulations:write')" v-model="categoryId" clearable filterable style="width:100%">
+              <el-option v-for="item in categoryOptions" :key="item.id" :label="item.name" :value="item.id" />
+            </el-select>
+            <span v-else>{{ categoryId ? `类别 ID ${categoryId}` : '未关联' }}</span>
+          </el-form-item>
+          <el-form-item v-if="auth.can('regulations:write')"><el-button type="primary" :loading="categorySaving" :disabled="categorySaving" @click="saveCategory">保存培训类别</el-button></el-form-item>
+        </el-form>
+      </el-tab-pane>
       <el-tab-pane label="制度版本">
         <div class="toolbar">
-          <el-upload :show-file-list="false" accept=".pdf,.docx" :auto-upload="false" :on-change="onUploadChange">
+          <el-upload v-if="auth.can('regulations:write')" :show-file-list="false" accept=".pdf,.docx" :auto-upload="false" :on-change="onUploadChange">
             <el-button type="primary">上传制度文件（PDF / DOCX ≤ 50MB）</el-button>
           </el-upload>
           <span style="color:#909399; font-size:13px">版本 append-only；解析为异步，状态实时轮询</span>
@@ -36,7 +48,7 @@
           <el-table-column label="当前生效" width="110">
             <template #default="{ row }">
               <el-tag v-if="row.is_current" type="success">生效中</el-tag>
-              <el-button v-else-if="row.parse_status === 'parsed' && reg.status !== 'archived'" text size="small" type="primary" @click="switchVersion(row)">设为生效</el-button>
+              <el-button v-else-if="row.parse_status === 'parsed' && reg.status !== 'archived' && auth.can('regulations:write')" text size="small" type="primary" @click="switchVersion(row)">设为生效</el-button>
             </template>
           </el-table-column>
           <el-table-column label="上传时间" min-width="150">
@@ -45,7 +57,7 @@
           <el-table-column label="操作" width="150" fixed="right">
             <template #default="{ row }">
               <el-button text size="small" @click="preview(row)">预览</el-button>
-              <el-button v-if="row.parse_status === 'failed'" text size="small" type="warning" @click="retryParse(row)">重新解析</el-button>
+              <el-button v-if="row.parse_status === 'failed' && auth.can('regulations:write')" text size="small" type="warning" @click="retryParse(row)">重新解析</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -55,28 +67,28 @@
         <el-form label-width="160px" style="max-width:520px; margin-top:12px">
           <el-form-item label="规定有效学习时长（分钟）">
             <!-- key 随每次 load 递增：el-input-number 在程序化更新场景下内部显示可能不回同步，重挂载保证显示=数据 -->
-            <el-input-number :key="configKey" v-model="config.required_minutes" :min="1" :max="600" />
+            <el-input-number :key="configKey" v-model="config.required_minutes" :min="1" :max="600" :disabled="!auth.can('regulations:write')" />
           </el-form-item>
           <el-form-item label="滚动分段数">
             <el-input-number :key="configKey + 1" v-model="config.scroll_segments" :min="10" :max="10" disabled />
             <span style="color:#909399; font-size:12px; margin-left:8px">本期固定 10 段（配置项前向保留）</span>
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" @click="saveConfig">保存学习要求</el-button>
+            <el-button v-if="auth.can('regulations:write')" type="primary" :loading="configSaving" :disabled="configSaving" @click="saveConfig">保存学习要求</el-button>
           </el-form-item>
         </el-form>
       </el-tab-pane>
 
       <el-tab-pane label="发布范围">
-        <el-radio-group v-model="scope.is_all">
+        <el-radio-group v-model="scope.is_all" :disabled="!auth.can('regulations:write')">
           <el-radio :value="true">面向全员</el-radio>
           <el-radio :value="false">按部门圈定（含子部门）</el-radio>
         </el-radio-group>
         <div v-if="!scope.is_all" style="margin-top:14px; max-width:420px">
-          <el-tree ref="scopeTreeRef" :data="deptTree" show-checkbox node-key="id" default-expand-all
-            :props="{ label: 'name' }" />
+          <el-tree ref="scopeTreeRef" :data="deptTree" show-checkbox node-key="id" default-expand-all :disabled="!auth.can('regulations:write')"
+            :props="{ label: 'name' }" @check="onScopeCheck" />
         </div>
-        <el-button type="primary" style="margin-top:14px" @click="saveScope">保存发布范围</el-button>
+        <el-button v-if="auth.can('regulations:write')" type="primary" :loading="scopeSaving" :disabled="scopeSaving || !scopeReady" style="margin-top:14px" @click="saveScope">保存发布范围</el-button>
       </el-tab-pane>
 
       <el-tab-pane label="内容预览">
@@ -91,16 +103,19 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import type { UploadFile } from 'element-plus';
 import http, { upload } from '../../api/http';
 import { formatDateTime } from '../../utils/format';
+import { useAuthStore } from '../../stores/auth';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 
 const route = useRoute();
 const regId = String(route.params.id);
+const auth = useAuthStore();
 
 const reg = ref<any>(null);
 const versions = ref<any[]>([]);
@@ -111,6 +126,109 @@ const scope = reactive<{ is_all: boolean; departmentIds: string[] }>({ is_all: f
 const previewHtml = ref('');
 const previewVisible = ref(false);
 const scopeTreeRef = ref();
+const categoryOptions = ref<Array<{ id: string; name: string }>>([]);
+const categoryId = ref<string | null>(null);
+const categoryBaseline = ref<string | null>(null);
+const configBaseline = ref({ required_minutes: 10, scroll_segments: 10 });
+const scopeBaseline = ref<{ is_all: boolean; departmentIds: string[] }>({ is_all: false, departmentIds: [] });
+const categoryDirty = ref(false);
+const configDirty = ref(false);
+const scopeDirty = ref(false);
+const categorySaving = ref(false);
+const configSaving = ref(false);
+const scopeSaving = ref(false);
+const scopeReady = ref(false);
+
+function normalizeDepartmentIds(values: unknown[]): string[] {
+  return [...new Set(values.map(String))].sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+}
+
+function treeCheckedDepartmentIds(values: unknown[], nodes: any[]): string[] {
+  const requested = new Set(normalizeDepartmentIds(values));
+  const checked: string[] = [];
+  const visit = (node: any, ancestorChecked: boolean): boolean => {
+    const id = String(node.id);
+    const children = Array.isArray(node.children) ? node.children : [];
+    const inherited = ancestorChecked || requested.has(id);
+    const childrenChecked = children.map((child: any) => visit(child, inherited));
+    const isChecked = inherited || (childrenChecked.length > 0 && childrenChecked.every(Boolean));
+    if (isChecked) checked.push(id);
+    return isChecked;
+  };
+  for (const node of nodes) visit(node, false);
+  return normalizeDepartmentIds(checked);
+}
+
+function categorySnapshot(): string | null {
+  return categoryId.value || null;
+}
+
+function configSnapshot() {
+  return { required_minutes: Number(config.required_minutes), scroll_segments: Number(config.scroll_segments) };
+}
+
+function scopeSnapshot() {
+  return {
+    is_all: !!scope.is_all,
+    departmentIds: scope.is_all ? [] : normalizeDepartmentIds(scope.departmentIds),
+  };
+}
+
+function syncCategoryDirty() {
+  categoryDirty.value = categorySnapshot() !== categoryBaseline.value;
+}
+
+function syncConfigDirty() {
+  configDirty.value = JSON.stringify(configSnapshot()) !== JSON.stringify(configBaseline.value);
+}
+
+function syncScopeDirty() {
+  scopeDirty.value = JSON.stringify(scopeSnapshot()) !== JSON.stringify(scopeBaseline.value);
+}
+
+function setCategoryBaseline(value = categorySnapshot()) {
+  categoryBaseline.value = value;
+  syncCategoryDirty();
+}
+
+function setConfigBaseline(value = configSnapshot()) {
+  configBaseline.value = { ...value };
+  syncConfigDirty();
+}
+
+function setScopeBaseline(value = scopeSnapshot()) {
+  scopeBaseline.value = { is_all: value.is_all, departmentIds: [...value.departmentIds] };
+  syncScopeDirty();
+}
+
+function restoreCategoryBaseline() {
+  categoryId.value = categoryBaseline.value;
+  syncCategoryDirty();
+}
+
+function restoreConfigBaseline() {
+  Object.assign(config, configBaseline.value);
+  configKey.value += 1;
+  syncConfigDirty();
+}
+
+function restoreScopeBaseline() {
+  scope.is_all = scopeBaseline.value.is_all;
+  scope.departmentIds = [...scopeBaseline.value.departmentIds];
+  syncScopeDirty();
+  void nextTick(() => (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds));
+}
+
+useUnsavedChanges(categoryDirty, { onDiscard: restoreCategoryBaseline });
+useUnsavedChanges(configDirty, { onDiscard: restoreConfigBaseline });
+useUnsavedChanges(scopeDirty, { onDiscard: restoreScopeBaseline });
+
+watch(categoryId, syncCategoryDirty, { flush: 'sync' });
+watch(config, syncConfigDirty, { deep: true, flush: 'sync' });
+watch(scope, syncScopeDirty, { deep: true, flush: 'sync' });
+watch(() => scope.is_all, (isAll) => {
+  if (!isAll) void nextTick(() => (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds));
+});
 
 function statusLabel(s: string) {
   return ({ draft: '草稿', published: '已发布', archived: '已归档' } as any)[s] || s;
@@ -120,19 +238,72 @@ function statusType(s: string) {
 }
 
 async function load() {
+  scopeReady.value = false;
   reg.value = await http.get(`/regulations/${regId}`);
+  categoryId.value = reg.value.category_id ? String(reg.value.category_id) : null;
   config.required_minutes = reg.value.required_minutes;
   config.scroll_segments = reg.value.scroll_segments;
   configKey.value++; // 强制 el-input-number 重挂载，显示与数据保持一致
   // 发布范围回显（详情接口含 scope：is_all / department_ids）
-  scope.is_all = !!reg.value.scope?.is_all;
-  scope.departmentIds = (reg.value.scope?.department_ids || []).map(String);
-  versions.value = await http.get(`/regulations/${regId}/versions`) as any;
+  const serverScope = {
+    is_all: !!reg.value.scope?.is_all,
+    departmentIds: reg.value.scope?.is_all ? [] : normalizeDepartmentIds(reg.value.scope?.department_ids || []),
+  };
+  scope.is_all = serverScope.is_all;
+  scope.departmentIds = [...serverScope.departmentIds];
+  // 在首次异步等待前建立服务端基线，避免加载中的数据回显被误判成用户草稿。
+  setCategoryBaseline();
+  setConfigBaseline();
+  setScopeBaseline(serverScope);
+  await loadVersions();
   const tree: any = await http.get('/departments/tree');
   deptTree.value = tree.list;
-  nextTick(() => {
+  const normalizedServerScope = {
+    is_all: serverScope.is_all,
+    departmentIds: serverScope.is_all ? [] : treeCheckedDepartmentIds(serverScope.departmentIds, deptTree.value),
+  };
+  await nextTick();
+  if (!scope.is_all) {
     (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds);
-  });
+    scope.departmentIds = currentScopeDepartmentIds();
+  }
+  setScopeBaseline(normalizedServerScope);
+  scopeReady.value = true;
+}
+
+async function loadVersions() {
+  versions.value = await http.get(`/regulations/${regId}/versions`) as any;
+}
+
+function currentScopeDepartmentIds(): string[] {
+  if (scope.is_all) return [];
+  const tree = scopeTreeRef.value as any;
+  if (!tree) return normalizeDepartmentIds(scope.departmentIds);
+  return normalizeDepartmentIds(tree.getCheckedKeys?.() || []);
+}
+
+function onScopeCheck(_data: unknown, state: { checkedKeys?: unknown[] }) {
+  scope.departmentIds = normalizeDepartmentIds(state.checkedKeys || []);
+}
+
+async function loadCategoryOptions() {
+  if (!auth.can('regulations:write')) return;
+  const result: any = await http.get('/regulations/category-options', { params: { page: 1, page_size: 100 } });
+  categoryOptions.value = result.items || [];
+}
+
+async function saveCategory() {
+  if (categorySaving.value) return;
+  const submitted = categorySnapshot();
+  categorySaving.value = true;
+  try {
+    await http.put(`/regulations/${regId}`, { category_id: submitted });
+    if (reg.value) reg.value.category_id = submitted;
+    setCategoryBaseline(submitted);
+    ElMessage.success(submitted ? '培训类别已保存' : '已清除培训类别关联');
+  } finally {
+    categorySaving.value = false;
+  }
 }
 
 async function handleUpload(file: File) {
@@ -166,7 +337,7 @@ async function pollVersions(versionId: number) {
 async function switchVersion(row: any) {
   await http.put(`/regulations/${regId}/current-version`, { version_id: String(row.id) });
   ElMessage.success(`已切换生效版本至 v${row.version_no}`);
-  await load();
+  await loadVersions();
 }
 
 async function retryParse(row: any) {
@@ -176,31 +347,55 @@ async function retryParse(row: any) {
 }
 
 async function saveConfig() {
+  if (configSaving.value) return;
   // el-input-number 聚焦期间不改写 model（显示与实际值会短暂脱节），保存前先失焦提交
   (document.activeElement as HTMLElement | null)?.blur?.();
-  await http.put(`/regulations/${regId}/learning-config`, { ...config });
-  ElMessage.success('学习要求已保存（已达标员工不回退）');
-  await load();
+  const submitted = configSnapshot();
+  configSaving.value = true;
+  try {
+    await http.put(`/regulations/${regId}/learning-config`, { ...submitted });
+    if (reg.value) {
+      reg.value.required_minutes = submitted.required_minutes;
+      reg.value.scroll_segments = submitted.scroll_segments;
+    }
+    setConfigBaseline(submitted);
+    ElMessage.success('学习要求已保存（已达标员工不回退）');
+  } finally {
+    configSaving.value = false;
+  }
 }
 
 async function saveScope() {
-  const checked = scope.is_all ? [] : scopeTreeRef.value.getCheckedKeys().concat(scopeTreeRef.value.getHalfCheckedKeys());
-  await http.put(`/regulations/${regId}/scope`, { is_all: scope.is_all, department_ids: checked });
-  ElMessage.success('发布范围已保存');
+  if (!scopeReady.value) {
+    ElMessage.warning('发布范围尚未加载完成，请稍后再试');
+    return;
+  }
+  if (scopeSaving.value) return;
+  scope.departmentIds = currentScopeDepartmentIds();
+  const submitted = scopeSnapshot();
+  scopeSaving.value = true;
+  try {
+    await http.put(`/regulations/${regId}/scope`, { is_all: submitted.is_all, department_ids: submitted.departmentIds });
+    if (reg.value) reg.value.scope = { is_all: submitted.is_all, department_ids: [...submitted.departmentIds] };
+    setScopeBaseline(submitted);
+    ElMessage.success('发布范围已保存');
+  } finally {
+    scopeSaving.value = false;
+  }
 }
 
 async function onPublish() {
   await ElMessageBox.confirm('发布前置：存在已解析的生效版本且已配置发布范围。确认发布？', '发布制度', { type: 'warning' });
   await http.post(`/regulations/${regId}/publish`);
+  if (reg.value) reg.value.status = 'published';
   ElMessage.success('发布成功，范围内员工已可见');
-  await load();
 }
 
 async function onArchive() {
   await ElMessageBox.confirm('归档后员工端不可见、不可再学习与考试，历史数据保留并计入统计。确认归档？', '归档', { type: 'warning' });
   await http.post(`/regulations/${regId}/archive`);
+  if (reg.value) reg.value.status = 'archived';
   ElMessage.success('已归档');
-  await load();
 }
 
 async function preview(row?: any) {
@@ -221,12 +416,9 @@ async function preview(row?: any) {
 }
 
 onMounted(async () => {
+  await loadCategoryOptions();
   await load();
   await preview();
-  // 树渲染后回显已圈定部门（仅勾选自身节点，父级由半选态呈现）
-  nextTick(() => {
-    (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds);
-  });
 });
 
 onBeforeUnmount(() => {

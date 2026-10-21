@@ -27,6 +27,11 @@ export class RolesGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest();
     const user = req.user as { role: string } | undefined;
     if (!user || !roleHas(user.role, required)) {
+      const path = String(req.originalUrl || req.url || '').split('?')[0].replace(/^\/api\/v1/, '');
+      const finePermissionAuthorized = req.permission_authorized === true
+        && path !== '/users' && !path.startsWith('/users/')
+        && path !== '/departments' && !path.startsWith('/departments/');
+      if (finePermissionAuthorized) return true;
       // FR-ORG-05：越权访问统一 40301（04 册 5.2）
       throw Errors.forbidden();
     }

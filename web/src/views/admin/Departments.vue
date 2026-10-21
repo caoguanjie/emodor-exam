@@ -6,7 +6,7 @@
       <p class="desc">部门是发布范围圈定与统计维度的组织基础</p>
     </div>
     <div class="toolbar">
-      <el-button type="primary" @click="openCreate(null)">新建根级部门</el-button>
+      <el-button v-if="auth.can('departments:write')" type="primary" @click="openCreate(null)">新建根级部门</el-button>
       <span style="color:#909399; font-size:13px">停用部门保留为历史统计维度，删除受引用约束</span>
     </div>
     <el-tree :data="tree" node-key="id" default-expand-all :expand-on-click-node="false">
@@ -18,17 +18,19 @@
             <el-tag v-else-if="data.id === '1'" size="small">根</el-tag>
           </span>
           <span class="node-actions">
-            <el-button text size="small" type="primary" @click="openCreate(data)">添加子部门</el-button>
-            <el-button text size="small" @click="openEdit(data)">编辑</el-button>
-            <el-button text size="small" type="warning" @click="openMove(data)">移动</el-button>
-            <el-button v-if="data.status === 0" text size="small" type="success" @click="onEnable(data)">启用</el-button>
-            <el-button text size="small" type="danger" @click="onDelete(data)">删除</el-button>
+            <template v-if="auth.can('departments:write')">
+              <el-button text size="small" type="primary" @click="openCreate(data)">添加子部门</el-button>
+              <el-button text size="small" @click="openEdit(data)">编辑</el-button>
+              <el-button text size="small" type="warning" @click="openMove(data)">移动</el-button>
+              <el-button v-if="data.status === 0" text size="small" type="success" @click="onEnable(data)">启用</el-button>
+              <el-button text size="small" type="danger" @click="onDelete(data)">删除</el-button>
+            </template>
           </span>
         </div>
       </template>
     </el-tree>
 
-    <el-dialog v-model="dialog" :title="form.id ? '编辑部门' : '新建部门'" width="420px">
+    <el-dialog v-model="dialog" :title="form.id ? '编辑部门' : '新建部门'" width="420px" :before-close="beforeDialogClose">
       <el-form label-width="90px">
         <el-form-item label="上级部门"><el-input :value="form.parentName || '（根部门）'" disabled /></el-form-item>
         <el-form-item label="名称"><el-input v-model="form.name" maxlength="64" /></el-form-item>
@@ -38,22 +40,59 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" @click="onSave">保存</el-button>
+        <el-button @click="closeDialog">取消</el-button>
+        <el-button v-if="auth.can('departments:write')" type="primary" @click="onSave">保存</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
+import { useAuthStore } from '../../stores/auth';
 
+const auth = useAuthStore();
 const tree = ref<any[]>([]);
 const dialog = ref(false);
 const form = reactive<any>({ id: null, parentId: null, parentName: '', name: '', sort: 0 });
 const moveTree = ref<any[]>([]);
+const dirty = ref(false);
+const formBaseline = ref('');
+
+function serializeForm() { return JSON.stringify(form); }
+function replaceForm(value: any) {
+  Object.keys(form).forEach((key) => delete form[key]);
+  Object.assign(form, value);
+}
+function beginDraft(value: any) {
+  replaceForm(value);
+  formBaseline.value = serializeForm();
+  dirty.value = false;
+  dialog.value = true;
+}
+function discardDraft() {
+  replaceForm(formBaseline.value ? JSON.parse(formBaseline.value) : {});
+  dirty.value = false;
+  dialog.value = false;
+}
+
+const unsaved = useUnsavedChanges(dirty, { onDiscard: discardDraft });
+watch(() => serializeForm(), () => {
+  dirty.value = dialog.value && serializeForm() !== formBaseline.value;
+}, { flush: 'sync' });
+
+async function closeDialog() {
+  if (await unsaved.confirmDiscard()) dialog.value = false;
+}
+async function beforeDialogClose(done: () => void) {
+  if (await unsaved.confirmDiscard()) {
+    dialog.value = false;
+    done();
+  }
+}
 
 function toTreeData(nodes: any[]): any[] {
   return nodes.map((n) => ({ value: n.id, label: n.name, children: n.children?.length ? toTreeData(n.children) : undefined }));
@@ -75,18 +114,15 @@ function findNode(nodes: any[], id: string): any {
 }
 
 function openCreate(parent: any) {
-  Object.assign(form, { id: null, parentId: parent?.id ?? null, parentName: parent?.name ?? '', name: '', sort: 0 });
-  dialog.value = true;
+  beginDraft({ id: null, parentId: parent?.id ?? null, parentName: parent?.name ?? '', name: '', sort: 0 });
 }
 
 function openEdit(node: any) {
-  Object.assign(form, { id: node.id, parentId: node.parent_id, parentName: '', name: node.name, sort: node.sort });
-  dialog.value = true;
+  beginDraft({ id: node.id, parentId: node.parent_id, parentName: '', name: node.name, sort: node.sort });
 }
 
 function openMove(node: any) {
-  Object.assign(form, { id: node.id, parentId: node.parent_id, parentName: '', name: node.name, sort: node.sort });
-  dialog.value = true;
+  beginDraft({ id: node.id, parentId: node.parent_id, parentName: '', name: node.name, sort: node.sort });
 }
 
 async function onSave() {
@@ -99,6 +135,8 @@ async function onSave() {
     await http.post('/departments', { parent_id: form.parentId || null, name: form.name, sort: form.sort });
   }
   ElMessage.success('已保存');
+  formBaseline.value = serializeForm();
+  unsaved.markClean();
   dialog.value = false;
   await load();
 }

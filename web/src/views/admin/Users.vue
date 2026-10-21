@@ -1,5 +1,85 @@
 <template>
   <div class="page-card">
+    <template v-if="isStudentPage">
+      <div class="page-head">
+        <div class="eyebrow">管理台</div>
+        <h2>学员管理</h2>
+        <p class="desc">维护培训学员的类别与来源；来源只影响后续组卷策略，不改变权限。</p>
+      </div>
+      <div class="toolbar">
+        <el-input v-model="studentQuery.keyword" placeholder="用户名 / 姓名 / 工号" style="width:210px" clearable @keyup.enter="loadStudents" />
+        <el-select v-model="studentQuery.category_id" clearable placeholder="全部类别" style="width:180px" @change="loadStudents">
+          <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
+        </el-select>
+        <el-select v-model="studentQuery.source" clearable placeholder="全部来源" style="width:150px" @change="loadStudents">
+          <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
+        </el-select>
+        <el-button type="primary" @click="loadStudents">查询</el-button>
+        <div style="flex:1" />
+        <el-select v-if="auth.can('students:write')" v-model="studentImportDefaults.source" clearable placeholder="导入默认来源" style="width:150px">
+          <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
+        </el-select>
+        <el-select v-if="auth.can('students:write')" v-model="studentImportDefaults.category_id" clearable placeholder="导入默认类别" style="width:170px">
+          <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
+        </el-select>
+        <el-button v-if="auth.can('students:write')" @click="downloadStudentTemplate">下载导入模板</el-button>
+        <el-upload v-if="auth.can('students:write')" :show-file-list="false" accept=".xlsx" :before-upload="onStudentImport">
+          <el-button type="success">预览导入</el-button>
+        </el-upload>
+        <el-button v-if="auth.can('students:write')" type="primary" @click="openStudentCreate">新增学员</el-button>
+      </div>
+      <el-table v-loading="studentLoading" :data="students">
+        <el-table-column prop="username" label="用户名" width="130" />
+        <el-table-column prop="real_name" label="姓名" width="110" />
+        <el-table-column prop="employee_no" label="工号" width="110" />
+        <el-table-column label="来源" width="90"><template #default="{ row }">{{ sourceLabel(row.source) }}</template></el-table-column>
+        <el-table-column label="培训类别" min-width="150"><template #default="{ row }">{{ categoryName(row.category_id) }}</template></el-table-column>
+        <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag></template></el-table-column>
+        <el-table-column v-if="auth.can('students:write')" label="操作" width="250" fixed="right">
+          <template #default="{ row }">
+            <el-button text type="primary" @click="openStudentEdit(row)">编辑</el-button>
+            <el-button text :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStudentStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
+            <el-button text type="danger" @click="resetStudentPassword(row)">重置密码</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!studentLoading && students.length === 0" description="暂无学员" />
+      <el-pagination v-model:current-page="studentQuery.page" style="margin-top:16px; justify-content:flex-end" layout="total, prev, pager, next" :total="studentTotal" :page-size="studentQuery.page_size" @current-change="loadStudents" />
+
+      <el-dialog v-model="studentDialog" :title="studentForm.id ? '编辑学员' : '新增学员'" width="500px" destroy-on-close :before-close="beforeStudentDialogClose">
+        <el-form label-width="88px" :disabled="studentSaveBusy">
+          <el-form-item label="用户名"><el-input v-model="studentForm.username" :disabled="!!studentForm.id" maxlength="64" /></el-form-item>
+          <el-form-item label="姓名"><el-input v-model="studentForm.real_name" maxlength="64" /></el-form-item>
+          <el-form-item label="工号"><el-input v-model="studentForm.employee_no" maxlength="32" /></el-form-item>
+          <el-form-item label="来源"><el-select v-model="studentForm.source" style="width:100%"><el-option label="本机构" value="institution" /><el-option label="外来" value="external" /></el-select></el-form-item>
+          <el-form-item label="培训类别"><el-select v-model="studentForm.category_id" style="width:100%"><el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" /></el-select></el-form-item>
+          <el-form-item label="部门"><el-tree-select v-model="studentForm.department_id" :data="deptTree" check-strictly clearable style="width:100%" /></el-form-item>
+          <el-form-item v-if="!studentForm.id" label="初始密码"><el-input v-model="studentForm.password" show-password placeholder="≥8 位（字母+数字）" /></el-form-item>
+          <el-form-item label="手机号"><el-input v-model="studentForm.phone" maxlength="20" /></el-form-item>
+          <el-form-item label="邮箱"><el-input v-model="studentForm.email" maxlength="128" /></el-form-item>
+          <el-form-item v-if="studentForm.id && auth.can('students:write')" label="头像">
+            <MediaUpload v-model="studentForm.avatar_id" purpose="avatar" :owner-id="String(studentForm.id)" :disabled="studentForm.status === 0 || studentSaveBusy" @update:model-value="onStudentAvatarChange" />
+            <el-alert
+              v-if="studentAvatarSync.message"
+              :title="studentAvatarSync.message"
+              :type="studentAvatarSync.status === 'confirmed' ? 'success' : studentAvatarSync.status === 'unknown' ? 'warning' : 'info'"
+              :closable="false"
+              show-icon
+            >
+              <template #default>
+                <el-button v-if="studentAvatarSync.status === 'unknown'" link type="primary" :disabled="studentSaveBusy" @click="queryStudentAvatarState">查询头像状态</el-button>
+              </template>
+            </el-alert>
+          </el-form-item>
+        </el-form>
+        <template #footer><el-button @click="cancelStudentDialog">取消</el-button><el-button v-if="auth.can('students:write')" type="primary" :loading="studentSaveBusy" :disabled="studentSaveBusy" @click="saveStudent">保存</el-button></template>
+      </el-dialog>
+
+      <el-dialog v-model="previewVisible" title="导入预览" width="650px">
+        <ImportPreview v-if="studentPreview" :preview="studentPreview" @confirm="commitStudentImport" @retry="previewVisible = false" />
+      </el-dialog>
+    </template>
+    <template v-else>
     <div class="page-head">
       <div class="eyebrow">管理台</div>
       <h2>员工管理</h2>
@@ -15,11 +95,11 @@
       </el-select>
       <el-button type="primary" @click="load">查询</el-button>
       <div style="flex:1" />
-      <el-button @click="downloadTemplate">下载导入模板</el-button>
-      <el-upload :show-file-list="false" accept=".xlsx" :before-upload="onImport" :auto-upload="false" :on-change="onImport">
+      <el-button v-if="auth.can('students:write')" @click="downloadTemplate">下载导入模板</el-button>
+      <el-upload v-if="auth.can('students:write')" :show-file-list="false" accept=".xlsx" :before-upload="onImport" :auto-upload="false" :on-change="onImport">
         <el-button type="success">Excel 批量导入</el-button>
       </el-upload>
-      <el-button type="primary" @click="openCreate">新增员工</el-button>
+      <el-button v-if="auth.can('students:write')" type="primary" @click="openCreate">新增员工</el-button>
     </div>
 
     <el-table v-loading="loading" :data="list">
@@ -42,18 +122,20 @@
       </el-table-column>
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
-          <el-button text size="small" type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button text size="small" :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStatus(row)">
-            {{ row.status === 1 ? '停用' : '启用' }}
-          </el-button>
-          <el-button text size="small" type="danger" @click="openReset(row)">重置密码</el-button>
+          <template v-if="auth.can('students:write')">
+            <el-button text size="small" type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button text size="small" :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStatus(row)">
+              {{ row.status === 1 ? '停用' : '启用' }}
+            </el-button>
+            <el-button text size="small" type="danger" @click="openReset(row)">重置密码</el-button>
+          </template>
         </template>
       </el-table-column>
     </el-table>
     <el-pagination style="margin-top:16px; justify-content:flex-end" layout="total, prev, pager, next" :total="total"
       :page-size="query.page_size" v-model:current-page="query.page" @current-change="load" />
 
-    <el-dialog v-model="dialog" :title="form.id ? '编辑员工' : '新增员工'" width="480px">
+    <el-dialog v-model="dialog" :title="form.id ? '编辑员工' : '新增员工'" width="480px" :before-close="beforeEmployeeDialogClose">
       <el-form label-width="90px">
         <el-form-item label="用户名"><el-input v-model="form.username" :disabled="!!form.id" maxlength="64" /></el-form-item>
         <el-form-item label="姓名"><el-input v-model="form.real_name" maxlength="64" /></el-form-item>
@@ -75,8 +157,8 @@
         <el-form-item label="邮箱"><el-input v-model="form.email" maxlength="128" /></el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" @click="onSave">保存</el-button>
+        <el-button @click="closeEmployeeDialog">取消</el-button>
+        <el-button v-if="auth.can('students:write')" type="primary" @click="onSave">保存</el-button>
       </template>
     </el-dialog>
 
@@ -91,17 +173,37 @@
         </template>
       </el-result>
     </el-dialog>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { UploadFile } from 'element-plus';
 import http, { download, upload } from '../../api/http';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
+import { useAuthStore } from '../../stores/auth';
 import { formatDateTime } from '../../utils/format';
+import ImportPreview from '../../components/ImportPreview.vue';
+import MediaUpload from '../../components/MediaUpload.vue';
+import type { ImportPreview as ImportPreviewData } from '../../api/training-types';
+import {
+  isStudentSaveIdentityCurrent,
+  normalizeAvatarId,
+  reconcileStudentAvatar,
+  runStudentSaveWorkflow,
+  type AvatarReconcileResult,
+  type AvatarSyncStatus,
+  type StudentSaveContext,
+} from '../../utils/avatar-save-state';
+
+const route = useRoute();
+const isStudentPage = computed(() => route.path === '/admin/students');
 
 const list = ref<any[]>([]);
+const auth = useAuthStore();
 const total = ref(0);
 const loading = ref(false);
 const deptTree = ref<any[]>([]);
@@ -111,6 +213,126 @@ const form = reactive<any>({});
 const query = reactive<any>({ page: 1, page_size: 20, keyword: '', department_id: null, role: '' });
 const importResult = ref<any>(null);
 const importResultVisible = ref(false);
+const students = ref<any[]>([]);
+const studentTotal = ref(0);
+const studentLoading = ref(false);
+const categories = ref<any[]>([]);
+const studentDialog = ref(false);
+const studentForm = reactive<any>({});
+const studentAvatarOriginalId = ref<string | null>(null);
+const studentAvatarWritePending = ref(false);
+const studentAvatarSync = reactive<{ status: AvatarSyncStatus; message: string }>({ status: 'idle', message: '' });
+const studentAvatarDialogVersion = ref(0);
+const studentSaveInFlightKey = ref<string | null>(null);
+const studentSaveBusy = computed(() => studentSaveInFlightKey.value !== null);
+const studentQuery = reactive<any>({ page: 1, page_size: 20, keyword: '', category_id: '', source: '' });
+const studentImportDefaults = reactive<{ source: string; category_id: string }>({ source: '', category_id: '' });
+const studentPreview = ref<ImportPreviewData | null>(null);
+const previewVisible = ref(false);
+const employeeDirty = ref(false);
+const employeeBaseline = ref('{}');
+const studentDirty = ref(false);
+interface StudentDraftBaseline {
+  form: Record<string, unknown>;
+  avatarOriginalId: string | null;
+  avatarWritePending: boolean;
+  avatarSync: { status: AvatarSyncStatus; message: string };
+}
+const studentBaseline = ref<StudentDraftBaseline>({
+  form: {},
+  avatarOriginalId: null,
+  avatarWritePending: false,
+  avatarSync: { status: 'idle', message: '' },
+});
+
+function cloneDraft<T>(value: T): T { return JSON.parse(JSON.stringify(value)); }
+function replaceReactive(target: Record<string, unknown>, value: Record<string, unknown>) {
+  Object.keys(target).forEach((key) => delete target[key]);
+  Object.assign(target, value);
+}
+function captureEmployeeBaseline() {
+  employeeBaseline.value = JSON.stringify(form);
+  employeeDirty.value = false;
+}
+function beginEmployeeDraft(value: Record<string, unknown>) {
+  replaceReactive(form, value);
+  captureEmployeeBaseline();
+  dialog.value = true;
+}
+function discardEmployeeDraft() {
+  replaceReactive(form, JSON.parse(employeeBaseline.value));
+  employeeDirty.value = false;
+  dialog.value = false;
+}
+function captureStudentBaseline() {
+  studentBaseline.value = {
+    form: cloneDraft(studentForm),
+    avatarOriginalId: studentAvatarOriginalId.value,
+    avatarWritePending: studentAvatarWritePending.value,
+    avatarSync: { ...studentAvatarSync },
+  };
+  studentDirty.value = false;
+}
+function discardStudentDraft() {
+  studentAvatarDialogVersion.value += 1;
+  replaceReactive(studentForm, cloneDraft(studentBaseline.value.form));
+  studentAvatarOriginalId.value = studentBaseline.value.avatarOriginalId;
+  studentAvatarWritePending.value = studentBaseline.value.avatarWritePending;
+  Object.assign(studentAvatarSync, studentBaseline.value.avatarSync);
+  studentDirty.value = false;
+  studentDialog.value = false;
+}
+function rebaseStudentAvatar(confirmedId: string | null) {
+  if (!studentDialog.value) return;
+  studentBaseline.value = {
+    ...studentBaseline.value,
+    form: { ...studentBaseline.value.form, avatar_id: confirmedId },
+    avatarOriginalId: confirmedId,
+    avatarWritePending: false,
+    avatarSync: { status: 'idle', message: '' },
+  };
+}
+
+const employeeUnsaved = useUnsavedChanges(employeeDirty, { onDiscard: discardEmployeeDraft });
+const studentUnsaved = useUnsavedChanges(studentDirty, { onDiscard: discardStudentDraft });
+watch(() => JSON.stringify(form), () => {
+  employeeDirty.value = dialog.value && JSON.stringify(form) !== employeeBaseline.value;
+}, { flush: 'sync' });
+watch([() => JSON.stringify(studentForm), studentAvatarWritePending], () => {
+  const baseline = studentBaseline.value;
+  studentDirty.value = studentDialog.value && (
+    JSON.stringify(studentForm) !== JSON.stringify(baseline.form)
+    || studentAvatarWritePending.value !== baseline.avatarWritePending
+  );
+}, { flush: 'sync' });
+
+async function closeEmployeeDialog() {
+  if (await employeeUnsaved.confirmDiscard()) dialog.value = false;
+}
+async function beforeEmployeeDialogClose(done: () => void) {
+  if (await employeeUnsaved.confirmDiscard()) {
+    dialog.value = false;
+    done();
+  }
+}
+
+function closeCleanStudentDialog() {
+  studentAvatarDialogVersion.value += 1;
+  studentDialog.value = false;
+  studentAvatarOriginalId.value = null;
+  resetStudentAvatarState();
+  studentUnsaved.markClean();
+}
+
+async function cancelStudentDialog() {
+  if (!await studentUnsaved.confirmDiscard()) return;
+  if (studentDialog.value) closeCleanStudentDialog();
+}
+async function beforeStudentDialogClose(done: () => void) {
+  if (!await studentUnsaved.confirmDiscard()) return;
+  if (studentDialog.value) closeCleanStudentDialog();
+  done();
+}
 
 function roleLabel(r: string) {
   return ({ super_admin: '超级管理员', regulation_admin: '制度管理员', employee: '员工' } as any)[r] || r;
@@ -118,6 +340,8 @@ function roleLabel(r: string) {
 function deptName(id: number | null) {
   return deptRows.value.find((d) => String(d.id) === String(id))?.name || '—';
 }
+function sourceLabel(source: string | null) { return source === 'institution' ? '本机构' : source === 'external' ? '外来' : '未设置'; }
+function categoryName(id: string | null) { return categories.value.find((item) => String(item.id) === String(id))?.name || '未设置'; }
 
 function flatten(nodes: any[], out: any[] = [], path = ''): any[] {
   for (const n of nodes) {
@@ -145,24 +369,228 @@ async function loadDepts() {
   deptRows.value = flatten(d.list);
 }
 
+async function loadCategories() {
+  const data: any = await http.get('/admin/training-categories', { params: { page: 1, page_size: 100, status: 1 } });
+  categories.value = data.items || [];
+}
+
+async function loadStudents() {
+  studentLoading.value = true;
+  try {
+    const params = Object.fromEntries(
+      Object.entries(studentQuery).filter(([, value]) => value !== '' && value !== null && value !== undefined),
+    );
+    const data: any = await http.get('/admin/students', { params });
+    students.value = data.items || [];
+    studentTotal.value = data.total || 0;
+  } finally { studentLoading.value = false; }
+}
+
 function toTree(nodes: any[]): any[] {
   return nodes.map((n) => ({ value: n.id, label: n.name, children: n.children?.length ? toTree(n.children) : undefined }));
 }
 
+function resetStudentAvatarState() {
+  studentAvatarWritePending.value = false;
+  studentAvatarSync.status = 'idle';
+  studentAvatarSync.message = '';
+}
+
+function setStudentAvatarSync(result: AvatarReconcileResult) {
+  studentAvatarSync.status = result.outcome === 'applied' ? 'confirmed' : result.outcome;
+  studentAvatarSync.message = result.message;
+  if (result.outcome === 'applied') {
+    rebaseStudentAvatar(result.confirmedId);
+    studentAvatarOriginalId.value = result.confirmedId;
+    studentAvatarWritePending.value = false;
+  } else if (result.outcome === 'not_applied') {
+    // The server has confirmed the current id, while the staged desired id is
+    // retained in studentForm.avatar_id for an explicit save retry.
+    rebaseStudentAvatar(result.confirmedId);
+    studentAvatarOriginalId.value = result.confirmedId;
+    studentAvatarWritePending.value = true;
+  } else {
+    // Do not replace the last known id: the current server value is unknown.
+    // Keeping the pending flag forces a later explicit query/save decision.
+    studentAvatarWritePending.value = true;
+  }
+}
+
+function currentStudentSaveContext(): StudentSaveContext | null {
+  if (!studentDialog.value) return null;
+  return {
+    dialogVersion: studentAvatarDialogVersion.value,
+    studentId: studentForm.id ? String(studentForm.id) : null,
+    desiredId: studentForm.id ? normalizeAvatarId(studentForm.avatar_id) : null,
+    ordinary: {
+      username: studentForm.username,
+      password: studentForm.password,
+      real_name: studentForm.real_name,
+      employee_no: studentForm.employee_no,
+      source: studentForm.source,
+      category_id: studentForm.category_id,
+      department_id: studentForm.department_id,
+      phone: studentForm.phone,
+      email: studentForm.email,
+    },
+  };
+}
+
+async function reconcileStudentAvatarState(context: StudentSaveContext, closeOnApplied = false): Promise<AvatarReconcileResult['outcome'] | 'stale'> {
+  if (!context.studentId) return 'stale';
+  const result = await reconcileStudentAvatar(
+    context.studentId,
+    context.desiredId,
+    (path) => http.get(path),
+  );
+  if (!isStudentSaveIdentityCurrent(context, currentStudentSaveContext())) return 'stale';
+  setStudentAvatarSync(result);
+  if (result.outcome === 'applied') {
+    ElMessage.success('头像已通过状态查询确认更新');
+    if (closeOnApplied) {
+      studentAvatarDialogVersion.value += 1;
+      studentDialog.value = false;
+      resetStudentAvatarState();
+      await loadStudents();
+    }
+    return result.outcome;
+  }
+  ElMessage.warning(result.message);
+  await loadStudents();
+  return result.outcome;
+}
+
+function openStudentCreate() {
+  studentAvatarDialogVersion.value += 1;
+  Object.keys(studentForm).forEach((key) => delete studentForm[key]);
+  studentAvatarOriginalId.value = null;
+  resetStudentAvatarState();
+  Object.assign(studentForm, { source: 'institution', category_id: categories.value[0]?.id || '', department_id: '' });
+  captureStudentBaseline();
+  studentDialog.value = true;
+}
+function openStudentEdit(row: any) {
+  studentAvatarDialogVersion.value += 1;
+  Object.keys(studentForm).forEach((key) => delete studentForm[key]);
+  Object.assign(studentForm, row, { department_id: row.department_id || '', category_id: row.category_id || '', employee_no: row.employee_no || '' });
+  studentAvatarOriginalId.value = row.avatar_id ? String(row.avatar_id) : null;
+  resetStudentAvatarState();
+  captureStudentBaseline();
+  studentDialog.value = true;
+}
+
+function onStudentAvatarChange(assetId: string | null) {
+  // Uploading creates an unbound asset. Keep the id in the dialog only; the
+  // final bind is performed by updateStudentAvatar after the user saves.
+  // Cancelling therefore never mutates the managed student row.
+  if (!studentForm.id) return;
+  studentForm.avatar_id = assetId;
+  studentAvatarWritePending.value = true;
+  studentAvatarSync.status = 'pending';
+  studentAvatarSync.message = assetId ? '头像已暂存，点击保存后绑定' : '头像清除已暂存，点击保存后生效';
+}
+
+async function queryStudentAvatarState() {
+  const context = currentStudentSaveContext();
+  if (context) await reconcileStudentAvatarState(context, false);
+}
+
+async function saveStudent() {
+  if (!studentForm.username || !studentForm.real_name || !studentForm.source || !studentForm.category_id || (!studentForm.id && !studentForm.password)) {
+    ElMessage.warning('请填写用户名、姓名、来源、培训类别和密码'); return;
+  }
+  const context = currentStudentSaveContext();
+  if (!context) return;
+  const operationKey = `${context.dialogVersion}:${context.studentId || 'new'}`;
+  if (studentSaveInFlightKey.value === operationKey) {
+    ElMessage.warning('保存正在进行，请稍候');
+    return;
+  }
+  studentSaveInFlightKey.value = operationKey;
+  try {
+    const avatarChanged = context.studentId !== null
+      && (context.desiredId !== studentAvatarOriginalId.value || studentAvatarWritePending.value);
+    const result = await runStudentSaveWorkflow(
+      studentAvatarSync.status,
+      context,
+      {
+        avatarChanged,
+        read: (path) => http.get(path),
+        currentContext: currentStudentSaveContext,
+        writeOrdinary: async (draft) => {
+          if (context.studentId) {
+            await http.put(`/admin/students/${context.studentId}`, {
+              real_name: draft.real_name,
+              employee_no: draft.employee_no,
+              source: draft.source,
+              category_id: draft.category_id,
+              department_id: draft.department_id,
+              phone: draft.phone,
+              email: draft.email,
+            });
+          } else {
+            await http.post('/admin/students', draft);
+          }
+        },
+        writeAvatar: async (desiredId) => {
+          if (context.studentId) await http.put(`/admin/students/${context.studentId}/avatar`, { avatar_id: desiredId });
+        },
+      },
+    );
+    if (result.outcome === 'stale') return;
+    if (result.avatarResult) setStudentAvatarSync(result.avatarResult);
+    if (result.outcome === 'blocked') {
+      ElMessage.warning(result.avatarResult?.message || '头像绑定未完成，请查询状态后重试');
+      await loadStudents();
+      return;
+    }
+    if (context.studentId) studentAvatarOriginalId.value = context.desiredId;
+    ElMessage.success('已保存');
+    studentUnsaved.markClean();
+    studentAvatarDialogVersion.value += 1;
+    studentDialog.value = false;
+    studentAvatarOriginalId.value = null;
+    resetStudentAvatarState();
+    await loadStudents();
+  } finally {
+    if (studentSaveInFlightKey.value === operationKey) studentSaveInFlightKey.value = null;
+  }
+}
+async function toggleStudentStatus(row: any) {
+  await ElMessageBox.confirm(row.status === 1 ? '停用后该学员旧令牌立即失效，确认停用？' : '确认启用该学员？', '确认', { type: 'warning' });
+  await http.put(`/admin/students/${row.id}/status`, { status: row.status === 1 ? 0 : 1 }); await loadStudents();
+}
+async function resetStudentPassword(row: any) {
+  const { value } = await ElMessageBox.prompt(`为「${row.real_name}」设置新的初始密码`, '重置密码', { inputType: 'password', inputPattern: /^(?=.*[A-Za-z])(?=.*\d).{8,}$/, inputErrorMessage: '至少 8 位，且同时包含字母与数字' });
+  await http.put(`/admin/students/${row.id}/password`, { password: value }); ElMessage.success('已重置');
+}
+function downloadStudentTemplate() { download('/admin/students/import-template', '学员导入模板.xlsx'); }
+async function onStudentImport(file: UploadFile | File) {
+  const raw = (file as UploadFile).raw || file;
+  if (!(raw instanceof File)) return false;
+  const defaults = Object.fromEntries(Object.entries(studentImportDefaults).filter(([, value]) => value));
+  const data: any = await upload('/admin/students/import-preview', raw as File, 'file', { defaults: JSON.stringify(defaults) });
+  studentPreview.value = data; previewVisible.value = true;
+  return false;
+}
+async function commitStudentImport(rows: number[]) {
+  if (!studentPreview.value) return;
+  const result: any = await http.post(`/admin/students/import-batches/${studentPreview.value.batch_id}/commit`, { row_numbers: rows });
+  ElMessage.success(`成功导入 ${result.created_ids?.length || 0} 名学员`);
+  previewVisible.value = false; studentPreview.value = null; await loadStudents();
+}
+
 function openCreate() {
-  Object.keys(form).forEach((k) => delete form[k]);
-  Object.assign(form, { role: 'employee' });
-  dialog.value = true;
+  beginEmployeeDraft({ role: 'employee' });
 }
 
 function openEdit(row: any) {
-  Object.keys(form).forEach((k) => delete form[k]);
-  Object.assign(form, row, {
+  beginEmployeeDraft({
+    ...row,
     employee_no: row.employee_no || '',
     // 列表返回的 department_id 是 number，DTO 按字符串校验，树选择器取值也是字符串
     department_id: row.department_id === null || row.department_id === undefined ? '' : String(row.department_id),
   });
-  dialog.value = true;
 }
 
 async function onSave() {
@@ -172,6 +600,8 @@ async function onSave() {
     await http.post('/users', form);
   }
   ElMessage.success('已保存');
+  captureEmployeeBaseline();
+  employeeUnsaved.markClean();
   dialog.value = false;
   await load();
 }
@@ -211,6 +641,7 @@ async function onImport(file: UploadFile) {
 
 onMounted(async () => {
   await loadDepts();
-  await load();
+  if (isStudentPage.value) { await loadCategories(); await loadStudents(); }
+  else await load();
 });
 </script>

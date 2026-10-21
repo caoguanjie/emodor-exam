@@ -14,7 +14,7 @@
       </el-select>
       <el-button type="primary" @click="load">查询</el-button>
       <div style="flex:1" />
-      <el-button type="primary" @click="dialog = true">新建制度</el-button>
+      <el-button v-if="auth.can('regulations:write')" type="primary" @click="dialog = true">新建制度</el-button>
     </div>
 
     <el-table v-loading="loading" :data="list">
@@ -48,7 +48,7 @@
       </el-form>
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" @click="onCreate">创建（草稿）</el-button>
+        <el-button v-if="auth.can('regulations:write')" type="primary" @click="onCreate">创建（草稿）</el-button>
       </template>
     </el-dialog>
   </div>
@@ -59,7 +59,9 @@ import { onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import http from '../../api/http';
 import { formatDateTime } from '../../utils/format';
+import { useAuthStore } from '../../stores/auth';
 
+const auth = useAuthStore();
 const list = ref<any[]>([]);
 const total = ref(0);
 const loading = ref(false);

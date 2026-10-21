@@ -6,6 +6,7 @@ import { RegulationVersion } from '../../entities/regulation-version.entity';
 import { Errors, RegulationStatus } from '../../common/errors';
 import { RegulationScopeService } from './regulation-scope.service';
 import { ParsePipelineService } from './parse-pipeline.service';
+import { CategoryService } from '../training/category.service';
 import { AuditService } from '../../common/audit.service';
 
 /**
@@ -21,6 +22,7 @@ export class RegulationService {
     private readonly parsePipeline: ParsePipelineService,
     private readonly audit: AuditService,
     private readonly dataSource: DataSource,
+    private readonly categories: CategoryService,
   ) {}
 
   sanitize(r: Regulation) {
@@ -28,6 +30,7 @@ export class RegulationService {
       id: Number(r.id),
       title: r.title,
       category: r.category,
+      category_id: r.categoryId ? String(r.categoryId) : null,
       description: r.description,
       status: r.status,
       current_version_id: r.currentVersionId ? Number(r.currentVersionId) : null,
@@ -63,16 +66,20 @@ export class RegulationService {
     };
   }
 
-  async create(input: { title: string; category: string; description?: string | null }, actor: { id: number; name: string }, ip: string | null) {
-    const r = await this.regRepo.save(
-      this.regRepo.create({
+  async create(input: { title: string; category: string; category_id?: string | null; description?: string | null }, actor: { id: number; name: string }, ip: string | null) {
+    const categoryId = this.trainingCategoryId(input.category_id);
+    const r = await this.dataSource.transaction(async (manager) => {
+      if (categoryId) await this.categories.lockActive(manager, categoryId);
+      const repo = manager.getRepository(Regulation);
+      return repo.save(repo.create({
         title: input.title,
         category: input.category,
+        categoryId,
         description: input.description || null,
         status: RegulationStatus.DRAFT,
         createdBy: String(actor.id),
-      }),
-    );
+      }));
+    });
     this.audit.log({
       actor_id: actor.id, actor_name: actor.name, action: 'regulation.create', object_type: 'regulation',
       object_id: r.id, detail: { title: input.title }, result: 'success', source_ip: ip,
@@ -80,18 +87,33 @@ export class RegulationService {
     return this.sanitize(r);
   }
 
-  async update(id: string, patch: { title?: string; category?: string; description?: string | null }, actor: { id: number; name: string }, ip: string | null) {
-    const r = await this.regRepo.findOne({ where: { id } });
-    if (!r) throw Errors.notFound('制度不存在');
-    if (patch.title !== undefined) r.title = patch.title;
-    if (patch.category !== undefined) r.category = patch.category;
-    if (patch.description !== undefined) r.description = patch.description;
-    await this.regRepo.save(r);
+  async update(id: string, patch: { title?: string; category?: string; category_id?: string | null; description?: string | null }, actor: { id: number; name: string }, ip: string | null) {
+    const requestedCategoryId = this.trainingCategoryId(patch.category_id);
+    const r = await this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(Regulation);
+      const row = await repo.findOne({ where: { id: String(id) }, lock: { mode: 'pessimistic_write' } });
+      if (!row) throw Errors.notFound('制度不存在');
+      if (patch.category_id !== undefined && String(requestedCategoryId || '') !== String(row.categoryId || '')) {
+        if (requestedCategoryId) await this.categories.lockActive(manager, requestedCategoryId);
+        row.categoryId = requestedCategoryId;
+      }
+      if (patch.title !== undefined) row.title = patch.title;
+      if (patch.category !== undefined) row.category = patch.category;
+      if (patch.description !== undefined) row.description = patch.description;
+      return repo.save(row);
+    });
     this.audit.log({
       actor_id: actor.id, actor_name: actor.name, action: 'regulation.update', object_type: 'regulation',
       object_id: id, detail: patch as any, result: 'success', source_ip: ip,
     });
     return this.sanitize(r);
+  }
+
+  private trainingCategoryId(value: string | null | undefined): string | null {
+    if (value === undefined || value === null) return null;
+    const id = String(value);
+    if (!/^[1-9]\d*$/.test(id)) throw Errors.param('category_id 必须是字符串 ID 或 null');
+    return id;
   }
 
   /** 学习要求配置（FR-REG-05）：required_minutes ≥ 1；scroll_segments 本期仅接受 10 */

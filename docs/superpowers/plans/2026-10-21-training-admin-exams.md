@@ -168,7 +168,7 @@
 **Interfaces:** Consumes A1—C6 全部 API、数据库脚本、PC 页面与报告；Produces 有明确实际结果的验收清单、升级运行说明、独立审查记录和下一期 H5 API 接口清单。不创建 H5 工程。
 
 - [ ] **Step 1: 写组合用例并记录实际结果。** 临时管理员→两类学员→课程视频→制度解析→AI待审→人工审核→手动/文件补题→双难度发布→两人开考→草稿重启恢复→一人主动一人超时→图片批改→监控→统计/导出。使用 `assert.equal(finalScore, expectedScore)`、`assert.deepEqual(exportedRows, reportRows)` 和在考敏感字段递归断言；尚未串通时记录首个业务断言失败并修复，不得删掉失败场景让它变绿；各增量已集成而直接通过时如实记录，不人为制造失败。
-- [ ] **Step 2: 运行比例合适的自动验证。** `cd server && npm run build && npm test`；`cd web && npx vue-tsc --noEmit && npm run build`；`node --test tests/test-target.test.mjs`；隔离库 `DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite all`（包含 smoke 及 training-full-flow）。`DB_DATABASE=ruleexam_test_training node --test tests/migration-contract.test.mjs` 验全新初始化/旧结构升级一致；均须实际通过，日志无凭据。不运行生产升级。
+- [ ] **Step 2: 运行比例合适的自动验证。** `cd server && npm run build && npm test`；`cd web && npx vue-tsc --noEmit && npm run build`；`node --test tests/test-target.test.mjs`；隔离运行 `node tests/run-e2e.mjs --ephemeral --suite all`（包含 smoke 及 training-full-flow；每个 suite 独立实例与随机凭据）。`DB_DATABASE=ruleexam_test_training node --test tests/migration-contract.test.mjs` 验全新初始化/旧结构升级一致；均须实际通过，日志无凭据。不运行生产升级。
 - [ ] **Step 3: 完成 PC 操作验收与升级预检演练。** 覆盖所有新增菜单、权限按钮/对应 API、失败/取消/恢复路径及两个会话监控；旧员工固定卷学习到考试完整走通。升级演练有旧数据保留、进行中阻断、失败续跑和备份恢复说明；执行只在独立测试库。H5 体验、真实 AI 提供商、部署大文件上限未经运行的部分明确列待验证，不能被构建结果替代。
 - [ ] **Step 4: 独立审查并解决阻断问题。** 按 astra reviewer 当前作用域配置派发可复核候选 diff、设计/计划及测试证据；重点审事务与权限、快照所有读取入口、空值/统计口径、文件归属和升级安全。根逐项裁决并只补跑受影响验证；必要检查通过即停止扩大范围。
 - [ ] **Step 5: 更新交付证据并本地提交。** 清单逐项记实际执行命令、结果、PC证据位置和未覆盖范围；只有实际完成项打勾。核对 git diff 无其他任务改动被覆盖后 `git commit -m "test: verify training admin end-to-end acceptance"`；不 push、不生产部署。最后报告 PC/后端完成程度与下一期 H5 仍未实施。

@@ -4,7 +4,8 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Request, Response } from 'express';
 import { Readable } from 'node:stream';
-import { IsArray, IsInt, IsOptional, IsString, MaxLength, Min, MinLength, ArrayMinSize } from 'class-validator';
+import { IsArray, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { RegulationService } from './regulation.service';
 import { RegulationVersionService } from './regulation-version.service';
 import { RegulationScopeService } from './regulation-scope.service';
@@ -14,20 +15,25 @@ import { Roles, roleHas } from '../../common/guards/roles.guard';
 import { SkipEnvelope } from '../../common/response.interceptor';
 import { Errors, RoleEnum } from '../../common/errors';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
-import { DtoValidationPipe } from '../../common/dto-validation.pipe';
+import { DtoValidationPipe, StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { SysUser } from '../../entities/sys-user.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { AccessService } from '../access/access.service';
+import { CategoryService } from '../training/category.service';
+import { Permissions } from '../../common/decorators/permissions.decorator';
 
 class CreateRegulationDto {
   @IsString() @MinLength(1) @MaxLength(128) title!: string;
   @IsString() @MinLength(1) @MaxLength(32) category!: string;
+  @IsOptional() @ValidateIf((_object, value) => value !== null) @IsString() @Matches(/^[1-9]\d*$/) category_id?: string | null;
   @IsOptional() @IsString() @MaxLength(512) description?: string;
 }
 
 class UpdateRegulationDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(128) title?: string;
   @IsOptional() @IsString() @MinLength(1) @MaxLength(32) category?: string;
+  @IsOptional() @ValidateIf((_object, value) => value !== null) @IsString() @Matches(/^[1-9]\d*$/) category_id?: string | null;
   @IsOptional() @IsString() @MaxLength(512) description?: string;
 }
 
@@ -46,6 +52,20 @@ class CurrentVersionDto {
   @IsString() version_id!: string;
 }
 
+const QueryNumber = () => Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)));
+
+class RegulationCategoryOptionsDto {
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(1_000_000) page?: number;
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
+  @IsOptional() @IsString() @MaxLength(128) keyword?: string;
+}
+
+function assertOptionQueryKeys(value: unknown): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw Errors.param('类别选项查询必须是对象');
+  const unknown = Object.keys(value).filter((key) => !['page', 'page_size', 'keyword'].includes(key));
+  if (unknown.length) throw Errors.param(`类别选项查询包含不支持的字段：${unknown.join(',')}`);
+}
+
 const REG_ADMIN = [RoleEnum.SUPER_ADMIN, RoleEnum.REGULATION_ADMIN] as const;
 
 /** /regulations 制度文件管理模块（04 册 3.4：15 个管理侧接口 + content 员工侧） */
@@ -58,14 +78,23 @@ export class RegulationsController {
     private readonly content: ContentService,
     private readonly parsePipeline: ParsePipelineService,
     @InjectRepository(SysUser) private readonly userRepo: Repository<SysUser>,
+    private readonly access: AccessService,
+    private readonly categories: CategoryService,
   ) {}
 
   private async withDepartment(user: AuthUser): Promise<{ id: number; role: string; departmentId: string | null }> {
-    if (user.role !== RoleEnum.EMPLOYEE) {
+    const permissions = await this.access.permissions(user.id);
+    const canReadAsAdmin = user.role === RoleEnum.SUPER_ADMIN
+      || (user.role === RoleEnum.REGULATION_ADMIN && permissions.includes('regulations:read'));
+    if (canReadAsAdmin) {
       return { id: user.id, role: user.role, departmentId: null };
     }
     const u = await this.userRepo.findOne({ where: { id: String(user.id) } });
-    return { id: user.id, role: user.role, departmentId: u?.departmentId ?? null };
+    // A regulation_admin with explicit business roles cleared is still a
+    // legacy system identity, but it must not retain the unrestricted content
+    // data scope. ContentService uses employee semantics for this path so the
+    // published scope is enforced from the current account/department state.
+    return { id: user.id, role: RoleEnum.EMPLOYEE, departmentId: u?.departmentId ?? null };
   }
 
   // ---- 3.4.1 管理侧（制度管理角色）----
@@ -74,6 +103,18 @@ export class RegulationsController {
   @Roles(...REG_ADMIN)
   list(@Query() query: any) {
     return this.regulations.list(query);
+  }
+
+  @Get('category-options')
+  @Roles(...REG_ADMIN)
+  @Permissions('regulations:write')
+  async categoryOptions(
+    @Query(new StrictDtoValidationPipe(['page', 'page_size', 'keyword'])) query: RegulationCategoryOptionsDto,
+    @Req() req: Request,
+  ) {
+    assertOptionQueryKeys(req.query);
+    const page = await this.categories.list({ ...query, status: 1 });
+    return { ...page, items: page.items.map((item) => ({ id: String(item.id), name: item.name })) };
   }
 
   @Get(':id')
@@ -175,9 +216,19 @@ export class RegulationsController {
 
   @Get(':id/preview')
   @Roles(...REG_ADMIN)
-  preview(@Param('id') id: string, @Query('versionId') versionId: string | undefined, @CurrentUser() user: AuthUser) {
+  async preview(@Param('id') id: string, @Query('versionId') versionId: string | undefined, @CurrentUser() user: AuthUser) {
     // 管理端预览：跳过 status=published 校验、仅角色校验（FR-REG-03 验收④）
-    return this.content.readingContent(id, { id: user.id, role: user.role, departmentId: null }, true, versionId);
+    // A custom employee identity with regulations:read is a delegated
+    // management principal for this route, not a learner whose department
+    // scope should hide an unpublished/out-of-scope preview.
+    const permissions = await this.access.permissions(user.id);
+    const canPreview = user.role === RoleEnum.SUPER_ADMIN || permissions.includes('regulations:read');
+    return this.content.readingContent(
+      id,
+      { id: user.id, role: canPreview ? RoleEnum.REGULATION_ADMIN : RoleEnum.EMPLOYEE, departmentId: null },
+      true,
+      versionId,
+    );
   }
 
   // ---- 3.4.2 员工侧（限发布范围内的本人）----

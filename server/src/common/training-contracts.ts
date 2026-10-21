@@ -1,0 +1,261 @@
+/**
+ * Cross-module training/exam contracts (A1 baseline).
+ * HTTP fields remain snake_case; services may adapt them to camelCase at the
+ * boundary. IDs stay strings so BIGINT values never pass through Number.
+ */
+export type Id = string;
+export type LearnerSource = 'institution' | 'external';
+export type Difficulty = 'easy' | 'medium' | 'hard';
+export type ExamDifficulty = Difficulty | 'mixed' | 'unknown';
+export type QuestionType = 'single' | 'multiple' | 'judgment' | 'image';
+
+export interface Page<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export type CourseStatus = 'draft' | 'published' | 'offline';
+
+export interface CourseSummary {
+  id: Id;
+  title: string;
+  category_id: Id;
+  cover_asset_id: Id | null;
+  status: CourseStatus;
+  required_lesson_count: number;
+}
+
+export interface PoolRule {
+  type: QuestionType;
+  count: number;
+  scoreCents: number;
+}
+
+export interface RuleSnapshot {
+  totalCents: 10000;
+  passCents: number;
+  durationMinutes: number;
+  maxAttempts: number;
+  partialCreditRatio: number;
+  rules: PoolRule[];
+}
+
+export interface AnswerInput {
+  item_id: Id;
+  selected?: number[];
+  asset_ids?: Id[];
+}
+
+export interface DraftInput {
+  revision: number;
+  answers: AnswerInput[];
+}
+
+export interface DraftAck {
+  revision: number;
+  saved_at: string;
+  answered_count: number;
+}
+
+export type GradeState = 'not_submitted' | 'pending_manual' | 'finalized';
+export type SubmissionMethod = 'manual' | 'timeout';
+
+export interface ImportPreview {
+  batch_id: Id;
+  valid_rows: number[];
+  errors: Array<{ row: number; message: string }>;
+  duplicates: number[];
+}
+
+export interface ImportResult {
+  batch_id: Id;
+  created_ids: Id[];
+  committed_rows: number[];
+}
+
+export interface QuestionOption {
+  key: string;
+  text: string;
+}
+
+export interface AttemptQuestion {
+  item_id: Id;
+  type: QuestionType;
+  stem: string;
+  options: QuestionOption[];
+  score: number;
+}
+
+export interface AttemptView {
+  record_id: Id;
+  paper_id: Id;
+  release_id: Id | null;
+  source: LearnerSource | null;
+  category_id: Id | null;
+  difficulty: ExamDifficulty;
+  deadline_at: string;
+  server_now: string;
+  draft_revision: number;
+  questions: AttemptQuestion[];
+  answers: AnswerInput[];
+}
+
+export interface FinalResultItem extends AttemptQuestion {
+  answer: AnswerInput | null;
+  correct_answer: number[] | null;
+  analysis: string | null;
+  rubric: string | null;
+  gained_score: number | null;
+  comment: string | null;
+  grading_version: number;
+}
+
+export interface FinalResult {
+  record_id: Id;
+  grading_state: GradeState;
+  grading_revision: number;
+  submission_method: SubmissionMethod | null;
+  legacy: boolean;
+  submitted_at: string;
+  graded_at: string | null;
+  score: number | null;
+  passed: boolean | null;
+  correct_rate: number | null;
+  items: FinalResultItem[];
+}
+
+export interface ExamHistoryItem {
+  record_id: Id;
+  paper_id: Id;
+  paper_title: string | null;
+  attempt_no: number;
+  status: string;
+  grading_state: GradeState;
+  submission_method: SubmissionMethod | null;
+  legacy: boolean;
+  source: LearnerSource | null;
+  difficulty: ExamDifficulty;
+  score: number | null;
+  started_at: string;
+  submitted_at: string | null;
+  graded_at: string | null;
+}
+
+export interface WrongItem extends FinalResultItem {
+  record_id: Id;
+  submitted_at: string;
+}
+
+export interface GradingQueueItem {
+  record_id: Id;
+  paper_id: Id;
+  paper_title: string;
+  user_id: Id;
+  user_name: string;
+  source: LearnerSource | null;
+  grading_state: GradeState;
+  submitted_at: string;
+  graded_at: string | null;
+  score: number | null;
+  pending_items: number;
+  graded_items: number;
+  image_items: number;
+}
+
+export interface StatsFilter {
+  paperId: Id;
+  categoryId?: Id;
+  source?: LearnerSource;
+  difficulty?: ExamDifficulty;
+  page: number;
+  pageSize: number;
+}
+
+export interface ScoreDistributionBucket {
+  lower: number;
+  upper: number;
+  count: number;
+}
+
+export interface ScoreGroup {
+  difficulty: ExamDifficulty;
+  finalized_users: number;
+  average_score: number | null;
+  pass_rate: number | null;
+  distribution: ScoreDistributionBucket[];
+}
+
+export interface TrainingCourseCompletion {
+  eligible_users: number;
+  required_lessons: number;
+  completed_users: number;
+  completion_rate: number | null;
+}
+
+export type TrainingUncompletedReason = 'learning_incomplete' | 'not_started' | 'pending_manual' | 'not_passed';
+
+export interface TrainingExamSummary {
+  release_id: Id | null;
+  eligible_count: number;
+  eligible_started_count: number;
+  historical_started_count: number;
+  historical_only_started_count: number;
+  submitted_attempts: number;
+  submitted_users: number;
+  pending_attempts: number;
+  pending_users: number;
+  finalized_users: number;
+  participation_rate: number | null;
+  score_groups: ScoreGroup[];
+  difficulty_composition: Array<{ difficulty: ExamDifficulty; users: number }>;
+  course_completion: TrainingCourseCompletion;
+  uncompleted_reasons: Array<{ reason: TrainingUncompletedReason; users: number }>;
+  as_of: string;
+}
+
+export interface RankRow {
+  rank: number;
+  user_id: Id;
+  name: string;
+  source: LearnerSource | null;
+  difficulty: ExamDifficulty;
+  score: number;
+  duration_seconds: number;
+  record_id: Id;
+}
+
+export interface TrainingStatisticsOptions {
+  papers: Array<{ id: Id; title: string; category_id: Id | null; status: string }>;
+  categories: Array<{ id: Id; name: string }>;
+}
+
+export interface AdminDashboard {
+  as_of: string;
+  timezone: 'Asia/Shanghai';
+  metrics: {
+    learner_count?: number;
+    question_count?: number;
+    paper_count?: number;
+    pending_grading_count?: number;
+  };
+  exam_trend?: Array<{ date: string; count: number }>;
+}
+
+export const TRAINING_DEFAULTS = Object.freeze({
+  totalCents: 10000,
+  passCents: 6000,
+  durationMinutes: 30,
+  maxAttempts: 3,
+  partialCreditRatio: 0.5,
+  pageSize: 20,
+  maxPageSize: 100,
+  imageAssetsPerItem: 9,
+  monitoringPollSeconds: 5,
+  monitoringStaleSeconds: 90,
+  videoHeartbeatSeconds: 30,
+  videoHeartbeatCapSeconds: 45,
+  videoPositionToleranceSeconds: 2,
+  videoCompletionPercent: 95,
+});

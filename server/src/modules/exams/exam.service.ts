@@ -18,8 +18,10 @@ import { GradingService } from './grading.service';
 import { RegulationScopeService } from '../regulations/regulation-scope.service';
 import { StatisticsService } from '../statistics/statistics.service';
 import { ScrollCoverageUtil } from '../../entities/learning-record.entity';
+import { LegacyExamAdapter } from './legacy-exam-adapter';
+import { AnswerDraftService } from './answer-draft.service';
+import { SubmissionService } from './submission.service';
 
-const START_LOCK_TTL = 10; // exam:lock:start:{user_id}:{paper_id} TTL 10 秒
 const SUBMIT_LOCK_TTL = 30; // exam:lock:submit:{record_id} TTL = 判分 P99 × 3（07 册 3.2.4）
 const SWITCH_DEBOUNCE_SECONDS = 1; // 服务端 1 秒窗口二次去抖（05 册 6.4.4）
 const SWITCH_WARN_THRESHOLD = 3; // >3 前端全屏警告
@@ -51,10 +53,19 @@ export class ExamService {
     private readonly statistics: StatisticsService,
     private readonly config: AppConfig,
     private readonly dataSource: DataSource,
+    private readonly legacyAdapter: LegacyExamAdapter,
+    private readonly answerDrafts: AnswerDraftService,
+    private readonly submissions: SubmissionService,
   ) {}
 
   private deadlineKey(recordId: string | number) {
     return `exam:deadline:${recordId}`;
+  }
+
+  private assertLegacyRecordRoute(record: ExamRecord) {
+    if (record.assignmentId && !record.regulationId) {
+      throw Errors.contentInvisible('培训考试请使用本人考试接口');
+    }
   }
 
   private answerKey(recordId: string | number) {
@@ -104,6 +115,7 @@ export class ExamService {
     const validRegs = new Set(learningRecords.filter((lr) => lr.isValid === 1).map((lr) => lr.regulationId));
     const result: Record<string, unknown>[] = [];
     for (const p of papers) {
+      if (!p.regulationId || p.businessScope === 'training') continue;
       const reg = regMap.get(p.regulationId);
       if (!reg) continue;
       const records = recordsByPaper.get(p.id) || [];
@@ -130,14 +142,16 @@ export class ExamService {
   async myRecords(userId: number, query: { page?: number; page_size?: number }) {
     const page = Math.max(1, Number(query.page || 1));
     const pageSize = Math.min(100, Math.max(1, Number(query.page_size || 20)));
-    const qb = this.recordRepo.createQueryBuilder('er').where('er.user_id = :uid', { uid: String(userId) });
+    const qb = this.recordRepo.createQueryBuilder('er')
+      .innerJoin(ExamPaper, 'legacy_paper', 'legacy_paper.id = er.paper_id AND legacy_paper.business_scope = :scope', { scope: 'regulation' })
+      .where('er.user_id = :uid', { uid: String(userId) });
     qb.orderBy('er.id', 'DESC');
     const total = await qb.getCount();
     const rows = await qb.skip((page - 1) * pageSize).take(pageSize).getMany();
     const paperIds = Array.from(new Set(rows.map((r) => r.paperId)));
     const papers = paperIds.length ? await this.paperRepo.find({ where: { id: In(paperIds) } }) : [];
     const paperMap = new Map(papers.map((p) => [p.id, p]));
-    const regIds = Array.from(new Set(rows.map((r) => r.regulationId)));
+    const regIds = Array.from(new Set(rows.map((r) => r.regulationId).filter((id): id is string => Boolean(id))));
     const regs = regIds.length ? await this.regRepo.find({ where: { id: In(regIds) } }) : [];
     const regMap = new Map(regs.map((r) => [r.id, r]));
     return {
@@ -145,8 +159,8 @@ export class ExamService {
         id: Number(r.id),
         paper_id: Number(r.paperId),
         paper_title: paperMap.get(r.paperId)?.title,
-        regulation_id: Number(r.regulationId),
-        regulation_title: regMap.get(r.regulationId)?.title,
+        regulation_id: r.regulationId === null ? null : Number(r.regulationId),
+        regulation_title: r.regulationId === null ? undefined : regMap.get(r.regulationId)?.title,
         attempt_no: r.attemptNo,
         status: r.status,
         score: r.score === null ? null : Number(r.score),
@@ -162,12 +176,24 @@ export class ExamService {
 
   // ================= 开考 =================
 
-  /** 乱序试卷视图（下发不含 answer / analysis，06 册 4.1） */
-  private async buildPaperView(record: ExamRecord, paper: ExamPaper) {
-    const pqs = await this.pqRepo.find({ where: { paperId: paper.id }, order: { sort: 'ASC', id: 'ASC' } });
+  private async loadLegacyPaperQuestions(paperId: string) {
+    const pqs = await this.pqRepo.find({ where: { paperId }, order: { sort: 'ASC', id: 'ASC' } });
     const qIds = pqs.map((pq) => pq.questionId);
     const questions = qIds.length ? await this.questionRepo.find({ where: { id: In(qIds) } }) : [];
     const qMap = new Map(questions.map((q) => [q.id, q]));
+    if (qIds.some((questionId) => !qMap.has(questionId))) throw Errors.param('固定试卷包含不存在的题目');
+    for (const questionId of qIds) {
+      const question = qMap.get(questionId)!;
+      if (question.type !== 'single' && question.type !== 'multiple') {
+        throw Errors.param('legacy 固定试卷仅支持单选题和多选题，暂不能开考判断题或图片题');
+      }
+    }
+    return { pqs, qMap };
+  }
+
+  /** 乱序试卷视图（下发不含 answer / analysis，06 册 4.1） */
+  private async buildPaperView(record: ExamRecord, paper: ExamPaper) {
+    const { pqs, qMap } = await this.loadLegacyPaperQuestions(String(paper.id));
     const seed = this.shuffle.deriveSeed(record.id);
     const ordered = this.shuffle.shuffleQuestionOrder(pqs, seed);
     return ordered.map((pq) => {
@@ -188,103 +214,14 @@ export class ExamService {
     return Math.max(0, Math.floor((deadline - Date.now()) / 1000));
   }
 
-  /** 开考（POST /exams/papers/{id}/start）：五步资格校验链（05 册 6.4.1） */
+  /** Legacy fixed-client start delegates to C2's atomic snapshot flow. */
   async start(paperId: string, userId: number) {
-    const user = await this.userContext(userId);
-    const isAdmin = user.role === 'super_admin' || user.role === 'regulation_admin';
-
-    const paper = await this.paperRepo.findOne({ where: { id: paperId } });
+    const paper = await this.paperRepo.findOne({ where: { id: String(paperId) } });
     if (!paper) throw Errors.notFound('试卷不存在');
-    // ① 制度 published（+ 范围校验）
-    const regulation = await this.regRepo.findOne({ where: { id: paper.regulationId } });
-    if (!regulation || regulation.status !== RegulationStatus.PUBLISHED) {
-      throw Errors.contentInvisible('制度未发布或已归档');
+    if (paper.businessScope === 'training' || !paper.regulationId) {
+      throw Errors.contentInvisible('培训考试请使用本人考试接口');
     }
-    if (!isAdmin && !(await this.scopeService.isUserInScope(regulation.id, { id: userId, role: user.role, departmentId: user.departmentId }))) {
-      throw Errors.contentInvisible('不在该制度的发布范围内');
-    }
-    // ② 试卷 published（暂无已发布试卷 → 暂未开考，UC-05 A2）
-    if (paper.status !== PaperStatus.PUBLISHED) throw Errors.contentInvisible('暂未开考');
-
-    // ③ learning_record.is_valid = 1（考试资格，未达标附差距信息 40901）
-    const learning = await this.learningRepo.findOne({ where: { userId: String(userId), regulationId: regulation.id } });
-    if (!learning || learning.isValid !== 1) {
-      const coverage = learning ? ScrollCoverageUtil.normalize(learning.scrollCoverage, regulation.scrollSegments) : ScrollCoverageUtil.empty(regulation.scrollSegments);
-      const totalSeconds = learning?.totalSeconds ?? 0;
-      const requiredSeconds = regulation.requiredMinutes * 60;
-      throw Errors.notEligible('未完成有效学习，暂无考试资格', {
-        gap: {
-          time_gap_seconds: Math.max(0, requiredSeconds - totalSeconds),
-          bottom_segment_covered: ScrollCoverageUtil.bottomCovered(coverage),
-        },
-      });
-    }
-    // ④ attempt_no ≤ max_attempts 且前次终态 ≠ passed（补考语义：failed/timeout 方可再考，防刷分）
-    const existing = await this.recordRepo.find({ where: { paperId: paper.id, userId: String(userId) } });
-    const attemptNo = existing.length + 1;
-    if (attemptNo > paper.maxAttempts) throw Errors.attemptsExhausted();
-    if (existing.some((r) => r.status === ExamStatus.PASSED)) throw Errors.alreadyPassed();
-
-    // ⑤ 无并发 in_progress（库查优先：已有进行中记录直接返回该记录，断网重进场景 04 册 1.5）
-    const inProgress = existing.find((r) => r.status === ExamStatus.IN_PROGRESS);
-    if (inProgress) {
-      if (new Date(inProgress.deadlineAt).getTime() <= Date.now()) {
-        // 已超时的 in_progress：交给超时任务处理，此处提示稍后重试
-        throw Errors.examInProgress('存在进行中的考试，系统正在自动交卷，请稍后刷新');
-      }
-      return this.startResponse(inProgress, paper);
-    }
-    const locked = await this.redis.setNx(`exam:lock:start:${userId}:${paper.id}`, '1', START_LOCK_TTL);
-    if (!locked) throw Errors.examInProgress();
-
-    try {
-      // 敏感操作实时回查在职状态（07 册 2.1.4 降级路径 / 04 册 1.3）
-      const fresh = await this.userRepo.findOne({ where: { id: String(userId) } });
-      if (!fresh || fresh.status !== 1) throw Errors.accountDisabled();
-
-      const now = new Date();
-      const deadline = new Date(now.getTime() + paper.durationMinutes * 60 * 1000);
-      let record: ExamRecord;
-      try {
-        record = await this.dataSource.transaction(async (m) => {
-          const repo = m.getRepository(ExamRecord);
-          // uk_paper_user_attempt 兜底并发开考：existing/attempt_no 在锁外读取，锁外快照可能过期（撞键时下方兜底）
-          const entity = repo.create({
-            paperId: paper.id,
-            regulationId: paper.regulationId, // regulation_id 冗余快照（03 册 3.4.4）
-            userId: String(userId),
-            attemptNo,
-            status: ExamStatus.IN_PROGRESS,
-            startedAt: now,
-            deadlineAt: deadline, // 截止时刻快照，此后不变（防限时调整误判在考记录）
-            switchCount: 0,
-          });
-          return repo.save(entity);
-        });
-      } catch (e: any) {
-        if (String(e?.code) !== 'ER_DUP_ENTRY') throw e;
-        // 撞唯一键 = 他方并发插入已提交：重读最新记录回放「断网重进」幂等路径（04 册 1.5）
-        const latest = await this.recordRepo.find({ where: { paperId: paper.id, userId: String(userId) } });
-        const inProgressNow = latest.find((r) => r.status === ExamStatus.IN_PROGRESS);
-        if (inProgressNow && new Date(inProgressNow.deadlineAt).getTime() > Date.now()) {
-          return this.startResponse(inProgressNow, paper);
-        }
-        throw Errors.examInProgress();
-      }
-
-      // Redis 计时键：值与 TTL 均由 deadline_at 派生（AD-04 / 03 册 3.4.4）
-      const ttlSeconds = Math.max(1, Math.floor((deadline.getTime() - now.getTime()) / 1000));
-      await this.redis.set(this.deadlineKey(record.id), String(deadline.getTime()), ttlSeconds + 60);
-      await this.redis.set(this.switchKey(record.id), '0', ttlSeconds + 24 * 3600);
-
-      this.audit.log({
-        actor_id: userId, actor_name: user.username, action: 'exam.start', object_type: 'exam_record',
-        object_id: record.id, detail: { paper_id: Number(paper.id), attempt_no: attemptNo }, result: 'success', source_ip: null,
-      });
-      return await this.startResponse(record, paper);
-    } finally {
-      await this.redis.del(`exam:lock:start:${userId}:${paper.id}`);
-    }
+    return this.legacyAdapter.start(String(paperId), String(userId));
   }
 
   private async startResponse(record: ExamRecord, paper: ExamPaper) {
@@ -312,8 +249,7 @@ export class ExamService {
     const record = await this.recordRepo.findOne({ where: { id: recordId } });
     if (!record) throw Errors.notFound('考试记录不存在');
     if (Number(record.userId) !== userId) throw Errors.dataForbidden();
-    const paper = await this.paperRepo.findOne({ where: { id: record.paperId } });
-    if (!paper) throw Errors.notFound('试卷不存在');
+    this.assertLegacyRecordRoute(record);
     if (record.status !== ExamStatus.IN_PROGRESS) {
       // 已终态：返回成绩摘要，前端路由至结果页
       return {
@@ -323,6 +259,9 @@ export class ExamService {
         finished: true,
       };
     }
+    if (record.assignmentId) return this.legacyAdapter.recover(String(recordId), String(userId));
+    const paper = await this.paperRepo.findOne({ where: { id: record.paperId } });
+    if (!paper) throw Errors.notFound('试卷不存在');
     return this.startResponse(record, paper);
   }
 
@@ -345,6 +284,7 @@ export class ExamService {
     const record = await this.recordRepo.findOne({ where: { id: recordId } });
     if (!record) throw Errors.notFound('考试记录不存在');
     if (Number(record.userId) !== userId) throw Errors.dataForbidden();
+    this.assertLegacyRecordRoute(record);
     const now = Date.now();
     if (record.status !== ExamStatus.IN_PROGRESS) {
       throw Errors.submitConflict('考试已结束');
@@ -354,6 +294,22 @@ export class ExamService {
       await this.autoSubmit(record);
       throw Errors.submitConflict('考试已超时，系统已自动交卷');
     }
+    const persistedAnswers = record.assignmentId && record.regulationId
+      ? await this.legacyAdapter.answersToItems(String(record.id), answers)
+      : answers;
+    if (record.assignmentId) {
+      if (persistedAnswers.length) {
+        await this.answerDrafts.patchLegacy(String(userId), String(record.id), persistedAnswers.map((answer) => ({
+          item_id: String(answer.question_id), selected: answer.selected,
+        })));
+      }
+      const heartbeat = await this.submissions.heartbeat(String(userId), String(record.id));
+      return {
+        server_time: heartbeat.server_time,
+        remaining_seconds: heartbeat.remaining_seconds,
+        deadline_at: record.deadlineAt,
+      };
+    }
     // 5 秒去抖窗口：仅拦截异常高频风暴（作答暂存为幂等覆盖写，重复到达无副作用）；
     // 30 秒正常节拍由前端定时器保证，学习心跳同理以远小于节拍的窗口判定「异常高频」（04 册 6.2）
     const lastBeat = await this.redis.get(`exam:beat:${recordId}`);
@@ -362,7 +318,7 @@ export class ExamService {
     }
     await this.redis.set(`exam:beat:${recordId}`, String(now), 300);
     // 作答暂存（呈现位置，交卷时服务端还原；每题覆盖写幂等）
-    for (const a of answers || []) {
+    for (const a of persistedAnswers || []) {
       await this.redis.hset(this.answerKey(recordId), String(a.question_id), JSON.stringify((a.selected || []).map(Number)));
     }
     const deadline = new Date(record.deadlineAt).getTime();
@@ -378,9 +334,23 @@ export class ExamService {
     const record = await this.recordRepo.findOne({ where: { id: recordId } });
     if (!record) throw Errors.notFound('考试记录不存在');
     if (Number(record.userId) !== userId) throw Errors.dataForbidden();
+    this.assertLegacyRecordRoute(record);
     if (record.status !== ExamStatus.IN_PROGRESS) {
       const switchCount = record.switchCount;
       return { switch_count: switchCount, warning: switchCount > SWITCH_WARN_THRESHOLD, risk_flag: switchCount >= SWITCH_RISK_THRESHOLD };
+    }
+    if (record.assignmentId) {
+      const result = await this.submissions.reportSwitch(String(userId), String(record.id));
+      const count = Number(result.switch_count);
+      const warning = count > SWITCH_WARN_THRESHOLD;
+      const riskFlag = count >= SWITCH_RISK_THRESHOLD;
+      if (riskFlag) {
+        this.audit.log({
+          actor_id: userId, actor_name: '', action: 'exam.switch.risk', object_type: 'exam_record',
+          object_id: recordId, detail: { switch_count: count }, result: 'success', source_ip: null,
+        });
+      }
+      return { switch_count: count, warning, risk_flag: riskFlag };
     }
     // 1 秒窗口去抖：窗口内的重复上报合并计 1 次（防事件风暴与伪造 flooding）
     const debounced = await this.redis.setNx(`exam:switch:deb:${recordId}`, '1', SWITCH_DEBOUNCE_SECONDS);
@@ -408,6 +378,22 @@ export class ExamService {
     const record = await this.recordRepo.findOne({ where: { id: recordId } });
     if (!record) throw Errors.notFound('考试记录不存在');
     if (Number(record.userId) !== userId) throw Errors.dataForbidden();
+    this.assertLegacyRecordRoute(record);
+
+    if (record.assignmentId) {
+      // A completed C2 attempt is an idempotent replay regardless of the retry
+      // body. Do not remap stale client answers before returning its first result.
+      if (record.status !== ExamStatus.IN_PROGRESS) {
+        return this.legacyAdapter.submitResult(record);
+      }
+      const mapped = await this.legacyAdapter.answersToItems(String(record.id), answers);
+      await this.submissions.submitLegacy(String(userId), String(record.id), mapped.map((answer) => ({
+        item_id: String(answer.question_id), selected: answer.selected,
+      })));
+      const completed = await this.recordRepo.findOne({ where: { id: String(record.id) } });
+      if (!completed) throw Errors.notFound('考试记录不存在');
+      return this.legacyAdapter.submitResult(completed);
+    }
 
     // 幂等：终态记录重复交卷直接返回首次评分结果（04 册 1.5）
     if (record.status !== ExamStatus.IN_PROGRESS) {
@@ -415,6 +401,9 @@ export class ExamService {
     }
     const now = Date.now();
     const isTimeout = new Date(record.deadlineAt).getTime() <= now;
+    const submittedAnswers = record.assignmentId && record.regulationId
+      ? await this.legacyAdapter.answersToItems(String(record.id), answers)
+      : answers;
 
     // Redis 防重锁：并发重复交卷仅首个请求进入判分
     const locked = await this.redis.setNx(`exam:lock:submit:${recordId}`, '1', SUBMIT_LOCK_TTL);
@@ -439,7 +428,7 @@ export class ExamService {
       }
       // 超时口径（07 册 3.2.4）：deadline 已过则忽略请求体增量，仅以截止时刻的 Redis 暂存判分（与 autoSubmit 一致）
       if (!isTimeout) {
-        for (const a of answers || []) {
+        for (const a of submittedAnswers || []) {
           merged.set(String(a.question_id), (a.selected || []).map(Number));
         }
       }
@@ -532,6 +521,7 @@ export class ExamService {
   }
 
   private async submitResultView(record: ExamRecord) {
+    if (record.assignmentId) return this.legacyAdapter.submitResult(record);
     const paper = await this.paperRepo.findOne({ where: { id: record.paperId } });
     // 取最高分口径（C-06）：同一试卷多次作答取最高分
     const finished = await this.recordRepo.find({ where: { paperId: record.paperId, userId: record.userId } });
@@ -558,6 +548,8 @@ export class ExamService {
   async result(recordId: string, userId: number, userRole: string) {
     const record = await this.recordRepo.findOne({ where: { id: recordId } });
     if (!record) throw Errors.notFound('考试记录不存在');
+    this.assertLegacyRecordRoute(record);
+    if (record.assignmentId) return this.legacyAdapter.result(String(recordId), String(userId), userRole);
     const isOwner = Number(record.userId) === userId;
     const isAdmin = userRole === 'super_admin' || userRole === 'regulation_admin';
     if (!isOwner && !isAdmin) throw Errors.dataForbidden();
@@ -631,6 +623,10 @@ export class ExamService {
 
   /** 单条超时交卷：与主动交卷同一评分路径，status=timeout、按当前已答内容评分（FR-EXM-03） */
   private async autoSubmit(record: ExamRecord) {
+    if (record.assignmentId) {
+      await this.submissions.timeout(String(record.id));
+      return;
+    }
     const locked = await this.redis.setNx(`exam:lock:submit:${record.id}`, '1', SUBMIT_LOCK_TTL);
     if (!locked) return; // 主动交卷进行中，先到者生效（幂等，06 册 4.3）
     try {

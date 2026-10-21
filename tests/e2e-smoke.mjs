@@ -8,17 +8,21 @@
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const JSZip = require('jszip');
 const mysql = require('mysql2/promise');
+const IS_MAIN = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
+const Redis = require('ioredis');
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:3000/api/v1';
 // 测试夹具口令运行期生成（安全约束：测试代码不落可用凭据字面量）
 const TEST_INIT_PW = 'Ip' + randomBytes(6).toString('hex');
 
 const ADMIN_INITIAL = process.env.ADMIN_INITIAL_PASSWORD;
-if (!ADMIN_INITIAL) {
+if (IS_MAIN && !ADMIN_INITIAL) {
   console.error('缺少 ADMIN_INITIAL_PASSWORD 环境变量（运行期注入，不落源码）');
   process.exit(1);
 }
@@ -38,7 +42,26 @@ function check(name, cond, extra = '') {
 }
 
 // ---------- 极简 Mock AI 服务（OpenAI 兼容 /chat/completions） ----------
-const MOCK_PORT = 9101;
+function parseMockAiPort(rawPort, mode) {
+  if (rawPort === undefined || rawPort === '') return 9101;
+  if (!/^[0-9]{1,5}$/.test(rawPort)) {
+    throw new Error('MOCK_AI_PORT 必须是 1024-65535 的十进制端口');
+  }
+  if (rawPort === '0') {
+    if (mode !== 'ephemeral') throw new Error('MOCK_AI_PORT=0 仅允许内部 ephemeral runner 模式');
+    return 0;
+  }
+  const port = Number(rawPort);
+  if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) {
+    throw new Error('MOCK_AI_PORT 必须是 1024-65535 的十进制端口');
+  }
+  return port;
+}
+
+// Standalone invocation keeps the historical 9101 default. The ephemeral
+// runner injects the explicit internal auto-port mode, so the server asks the
+// kernel for its actual bound port instead of relying on a racy free-port probe.
+let mockPort = parseMockAiPort(process.env.MOCK_AI_PORT, process.env.MOCK_AI_PORT_MODE);
 const MOCK_QUESTIONS = buildMockQuestions();
 
 function buildMockQuestions() {
@@ -77,7 +100,7 @@ function buildMockQuestions() {
   return [...singles, ...multiples];
 }
 
-function startMockAi() {
+export function startMockAi(port = mockPort) {
   const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url.endsWith('/chat/completions')) {
       let body = '';
@@ -94,9 +117,16 @@ function startMockAi() {
           res.end(JSON.stringify({ choices: [{ message: { content: 'OK' } }] }));
           return;
         }
-        // 单题重新生成：只要求 1 题
+        // Respect the requested distribution so a one-question task does not
+        // silently receive the historical 10+5 fixture batch.
+        const singleCount = prompt.match(/(\d+)\s*道单选题/)?.[1];
+        const multipleCount = prompt.match(/(\d+)\s*道多选题/)?.[1];
         const wantOne = prompt.includes('重新命制 1 道');
-        const list = wantOne ? [MOCK_QUESTIONS[0]] : MOCK_QUESTIONS;
+        const singles = MOCK_QUESTIONS.filter((question) => question.type === 'single');
+        const multiples = MOCK_QUESTIONS.filter((question) => question.type === 'multiple');
+        const list = singleCount !== undefined || multipleCount !== undefined
+          ? [...singles.slice(0, Number(singleCount || 0)), ...multiples.slice(0, Number(multipleCount || 0))]
+          : (wantOne ? [MOCK_QUESTIONS[0]] : MOCK_QUESTIONS);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(list) } }] }));
       });
@@ -105,7 +135,20 @@ function startMockAi() {
     res.writeHead(404);
     res.end();
   });
-  return new Promise((resolve) => server.listen(MOCK_PORT, '127.0.0.1', () => resolve(server)));
+  return new Promise((resolve, reject) => {
+    const onError = (error) => reject(error);
+    server.once('error', onError);
+    server.listen(port, '127.0.0.1', () => {
+      server.removeListener('error', onError);
+      const address = server.address();
+      if (!address || typeof address === 'string' || !Number.isInteger(address.port)) {
+        server.close(() => reject(new Error('Mock AI 未返回有效监听端口')));
+        return;
+      }
+      mockPort = address.port;
+      resolve(server);
+    });
+  });
 }
 
 // ---------- HTTP 帮助函数 ----------
@@ -126,6 +169,31 @@ async function api(method, path, { token, body, raw } = {}) {
     json = null;
   }
   return { status: res.status, json, text, headers: res.headers };
+}
+
+// 管理员登录必须走真实验证码链路。测试只读取本次 runner 注入的隔离 Redis
+// 前缀中的答案，不改变生产 API，也不把答案写入日志。
+async function adminCaptchaLogin(username, password) {
+  const issued = await api('POST', '/auth/captcha');
+  if (issued.status !== 200 || !issued.json?.data?.captcha_id) {
+    throw new Error(`管理员验证码签发失败：${issued.status}`);
+  }
+  const redis = new Redis({
+    host: process.env.REDIS_HOST || '127.0.0.1',
+    port: Number(process.env.REDIS_PORT || 6379),
+    password: process.env.REDIS_PASSWORD || undefined,
+    lazyConnect: false,
+  });
+  try {
+    const prefix = process.env.REDIS_KEY_PREFIX || '';
+    const answer = await redis.get(`${prefix}auth:captcha:${issued.json.data.captcha_id}`);
+    if (!answer) throw new Error('管理员验证码夹具答案不存在于本次隔离 Redis');
+    return api('POST', '/auth/login', {
+      body: { username, password, captcha_id: issued.json.data.captcha_id, captcha_code: answer },
+    });
+  } finally {
+    await redis.quit();
+  }
 }
 
 function sleep(ms) {
@@ -210,9 +278,9 @@ async function main() {
 
   console.log('\n== 1. 认证（FR-ORG-01 / 07 册 2.2.3 首登强制改密） ==');
   {
-    const bad = await api('POST', '/auth/login', { body: { username: 'admin', password: 'wrong-password-x' } });
+    const bad = await adminCaptchaLogin('admin', 'wrong-password-x');
     check('错误口令 → 40104（不泄露区别）', bad.status === 401 && bad.json?.code === 40104);
-    const r = await api('POST', '/auth/login', { body: { username: 'admin', password: ADMIN_INITIAL } });
+    const r = await adminCaptchaLogin('admin', ADMIN_INITIAL);
     check('首登成功且 force_change_password=true', r.status === 200 && r.json?.data?.force_change_password === true, JSON.stringify(r.json?.code));
     const restrictedToken = r.json?.data?.access_token;
     const blocked = await api('GET', '/regulations', { token: restrictedToken });
@@ -224,7 +292,7 @@ async function main() {
     const ch = await api('PUT', '/auth/password', { token: restrictedToken, body: { old_password: ADMIN_INITIAL, new_password: newPw } });
     check('修改密码成功并签发完整令牌', ch.status === 200 && !!ch.json?.data?.access_token, JSON.stringify(ch.json));
     state.tokens.admin = ch.json?.data?.access_token;
-    const again = await api('POST', '/auth/login', { body: { username: 'admin', password: newPw } });
+    const again = await adminCaptchaLogin('admin', newPw);
     check('新口令重新登录成功且不再强制改密', again.json?.data?.force_change_password === false);
     state.tokens.admin = again.json?.data?.access_token;
     const oldTokenCheck = await api('GET', '/auth/profile', { token: restrictedToken });
@@ -298,10 +366,10 @@ async function main() {
     const rbac = await api('POST', '/regulations', { token: state.tokens.emp, body: { title: 'x', category: 'x' } });
     check('employee 创建制度被拒（40301）', rbac.status === 403 && rbac.json?.code === 40301);
     // regulation_admin 调员工管理接口 → 40301（FR-ORG-05 验收②）
-    let ar = await api('POST', '/auth/login', { body: { username: 'regadmin', password: TEST_INIT_PW } });
+    let ar = await adminCaptchaLogin('regadmin', TEST_INIT_PW);
     const adminNewPw = 'Vb5' + Math.random().toString(16).slice(2, 12);
     await api('PUT', '/auth/password', { token: ar.json?.data?.access_token, body: { old_password: TEST_INIT_PW, new_password: adminNewPw } });
-    ar = await api('POST', '/auth/login', { body: { username: 'regadmin', password: adminNewPw } });
+    ar = await adminCaptchaLogin('regadmin', adminNewPw);
     state.tokens.regadmin = ar.json?.data?.access_token;
     const denied = await api('GET', '/users', { token: state.tokens.regadmin });
     check('regulation_admin 调员工管理被拒（40301）', denied.status === 403 && denied.json?.code === 40301);
@@ -336,7 +404,7 @@ async function main() {
       impJson?.data?.success_count === 2 && impJson?.data?.fail_count === 1 && impJson.data.failures[0].reason.includes('工号在文件内重复'),
       JSON.stringify(impJson?.data));
     // 导入成功的员工可登录（首登强制改密）
-    const impLogin = await api('POST', '/auth/login', { body: { username: 'impuser1', password: TEST_INIT_PW } });
+    const impLogin = await adminCaptchaLogin('impuser1', TEST_INIT_PW);
     check('导入成功的员工可直接登录（进入强制改密流程）', impLogin.json?.data?.force_change_password === true, JSON.stringify(impLogin.json?.code));
   }
 
@@ -468,11 +536,24 @@ async function main() {
   console.log('\n== 4. AI 配置与出题（FR-AIQ-01~03） ==');
   let questionIds = [];
   {
+    const category = await api('POST', '/admin/training-categories', {
+      token: state.tokens.admin,
+      body: { name: `legacy smoke 题库类别 ${Date.now()}` },
+    });
+    const trainingCategoryId = String(category.json?.data?.id || '');
+    check('创建 legacy smoke 合法题库类别', category.status === 200 && /^\d+$/.test(trainingCategoryId), JSON.stringify(category.json));
     const deny = await api('GET', '/ai/config', { token: state.tokens.regadmin });
-    check('regulation_admin 读 AI 配置被拒（40301，super_admin 专属）', deny.status === 403);
+    check('regulation_admin 读 AI 配置被拒（40301，缺少 ai_config:read）', deny.status === 403);
+    const denyWrite = await api('PUT', '/ai/config', {
+      token: state.tokens.regadmin,
+      body: { base_url: 'http://127.0.0.1:9/v1', api_key: 'legacy-config-denied', model: 'legacy-denied' },
+    });
+    check('regulation_admin 写 AI 配置被拒（40301，缺少 ai_config:write）', denyWrite.status === 403);
+    const denyTest = await api('POST', '/ai/config/test', { token: state.tokens.regadmin });
+    check('regulation_admin 测试 AI 配置被拒（40301，缺少 ai_config:write）', denyTest.status === 403);
     const save = await api('PUT', '/ai/config', {
       token: state.tokens.admin,
-      body: { base_url: `http://127.0.0.1:${MOCK_PORT}/v1`, api_key: 'sk-mock-not-a-real-key', model: 'mock-model' },
+      body: { base_url: `http://127.0.0.1:${mockPort}/v1`, api_key: 'sk-mock-not-a-real-key', model: 'mock-model' },
     });
     check('保存 AI 配置（api_key 掩码回显）', save.status === 200 && /sk-\*\*\*\*/.test(save.json?.data?.api_key_masked || ''), JSON.stringify(save.json?.data));
     const test = await api('POST', '/ai/config/test', { token: state.tokens.admin });
@@ -480,12 +561,18 @@ async function main() {
 
     const badSum = await api('POST', '/ai/generate-questions', {
       token: state.tokens.regadmin,
-      body: { regulation_id: regId, question_count_single: 10, question_count_multiple: 5, score_single: 5, score_multiple: 8 },
+      body: {
+        regulation_id: regId, category_id: trainingCategoryId, difficulty: 'medium',
+        question_count_single: 10, question_count_multiple: 5, score_single: 5, score_multiple: 8,
+      },
     });
     check('分值合计 ≠ 100 被拦截（40001）', badSum.json?.code === 40001);
     const gen = await api('POST', '/ai/generate-questions', {
       token: state.tokens.regadmin,
-      body: { regulation_id: regId, question_count_single: 10, question_count_multiple: 5, score_single: 6, score_multiple: 8 },
+      body: {
+        regulation_id: regId, category_id: trainingCategoryId, difficulty: 'medium',
+        question_count_single: 10, question_count_multiple: 5, score_single: 6, score_multiple: 8,
+      },
     });
     check('发起出题（异步任务受理，回显分值策略）', gen.status === 200 && !!gen.json?.data?.task_id && gen.json.data.score_single === 6, JSON.stringify(gen.json));
     const taskId = gen.json?.data?.task_id;
@@ -504,8 +591,11 @@ async function main() {
 
     // 逐题审核通过（FR-AIQ-03）
     let approved = 0;
-    for (const qid of questionIds) {
-      const r = await api('PUT', `/ai/questions/${qid}/review`, { token: state.tokens.regadmin, body: { status: 'approved' } });
+    for (const question of completed?.questions || []) {
+      const r = await api('PUT', `/ai/questions/${question.id}/review`, {
+        token: state.tokens.regadmin,
+        body: { expected_version_id: String(question.current_version_id), status: 'approved' },
+      });
       if (r.json?.data?.status === 'approved') approved++;
     }
     check('15 题全部审核通过（approved）', approved === 15, `approved=${approved}`);
@@ -689,7 +779,7 @@ async function main() {
     const preview = await api('GET', `/regulations/${regId}/preview`, { token: state.tokens.regadmin });
     check('管理端预览（docx content_html，跳过发布态校验）', preview.json?.data?.file_type === 'docx' && !!preview.json?.data?.content_html);
     const fs = await import('node:fs');
-    const logDir = new URL('../server/data/logs/audit/', import.meta.url).pathname;
+    const logDir = process.env.LOG_DIR ? join(process.env.LOG_DIR, 'audit') : new URL('../server/data/logs/audit/', import.meta.url).pathname;
     const files = fs.existsSync(logDir) ? fs.readdirSync(logDir) : [];
     check('审计日志文件生成（JSON 行）', files.some((f) => f.startsWith('audit-')), JSON.stringify(files));
   }
@@ -704,7 +794,9 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error('冒烟测试异常终止：', e);
-  process.exit(1);
-});
+if (IS_MAIN) {
+  main().catch((e) => {
+    console.error('冒烟测试异常终止：', e);
+    process.exit(1);
+  });
+}

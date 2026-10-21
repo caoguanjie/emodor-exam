@@ -32,3 +32,25 @@ export class DtoValidationPipe implements PipeTransform {
     throw new BadRequestException({ fields });
   }
 }
+
+/**
+ * Strict variant for new contracts: unknown request keys are errors instead of
+ * being silently stripped by class-validator's whitelist mode.
+ */
+export class StrictDtoValidationPipe extends DtoValidationPipe {
+  constructor(private readonly allowedKeys: readonly string[]) {
+    super();
+  }
+
+  async transform(value: any, metadata: ArgumentMetadata) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const allowed = new Set(this.allowedKeys);
+      const unknown = Object.keys(value).filter((key) => !allowed.has(key));
+      if (unknown.length) {
+        const fields = Object.fromEntries(unknown.map((key) => [key, ['不支持的字段']]));
+        throw new BadRequestException({ fields });
+      }
+    }
+    return super.transform(value, metadata);
+  }
+}

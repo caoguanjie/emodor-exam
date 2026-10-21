@@ -17,8 +17,16 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private client: Redis | null = null;
   private mem = new Map<string, MemEntry>();
   private available = false;
+  private readonly keyPrefix: string;
 
-  constructor(private readonly config: AppConfig) {}
+  constructor(private readonly config: AppConfig) {
+    this.keyPrefix = config.redis.keyPrefix || '';
+  }
+
+  /** 应用级前缀同时覆盖 Redis 命令、SCAN 匹配和进程内兜底键。 */
+  private scopedKey(key: string): string {
+    return `${this.keyPrefix}${key}`;
+  }
 
   async onModuleInit() {
     if (!this.config.redis.enabled) return;
@@ -75,66 +83,100 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   async get(key: string): Promise<string | null> {
+    const scoped = this.scopedKey(key);
     return this.withFallback(
-      () => this.client!.get(key),
-      () => this.memGet(key)?.value ?? null,
+      () => this.client!.get(scoped),
+      () => this.memGet(scoped)?.value ?? null,
     );
   }
 
   async set(key: string, value: string, ttlSeconds?: number): Promise<void> {
+    const scoped = this.scopedKey(key);
     return this.withFallback(
       async () => {
-        if (ttlSeconds) await this.client!.set(key, value, 'EX', ttlSeconds);
-        else await this.client!.set(key, value);
+        if (ttlSeconds) await this.client!.set(scoped, value, 'EX', ttlSeconds);
+        else await this.client!.set(scoped, value);
       },
       () => {
-        this.mem.set(key, { value, expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : null });
+        this.mem.set(scoped, { value, expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : null });
       },
     );
   }
 
   async del(...keys: string[]): Promise<void> {
+    const scoped = keys.map((key) => this.scopedKey(key));
     return this.withFallback(
       async () => {
-        await this.client!.del(...keys);
+        await this.client!.del(...scoped);
       },
       () => {
-        for (const k of keys) this.mem.delete(k);
+        for (const k of scoped) this.mem.delete(k);
+      },
+    );
+  }
+
+  /** 原子读取并删除一次性凭据（验证码/轮换票据）。 */
+  async getAndDelete(key: string): Promise<string | null> {
+    const scoped = this.scopedKey(key);
+    return this.withFallback(
+      async () => {
+        const client = this.client! as Redis & { getdel?: (key: string) => Promise<string | null> };
+        if (typeof client.getdel === 'function') {
+          try {
+            return await client.getdel(scoped);
+          } catch {
+            // Redis < 6.2 exposes no GETDEL; use an equivalent Lua operation
+            // rather than a racy GET followed by DEL.
+          }
+        }
+        return client.eval(
+          'local value = redis.call("GET", KEYS[1]); if value then redis.call("DEL", KEYS[1]); end; return value;',
+          1,
+          scoped,
+        ) as unknown as Promise<string | null>;
+      },
+      () => {
+        const value = this.memGet(scoped)?.value ?? null;
+        this.mem.delete(scoped);
+        return value;
       },
     );
   }
 
   async exists(key: string): Promise<boolean> {
+    const scoped = this.scopedKey(key);
     return this.withFallback(
-      () => this.client!.exists(key).then((n) => n > 0),
-      () => this.memGet(key) !== undefined,
+      () => this.client!.exists(scoped).then((n) => n > 0),
+      () => this.memGet(scoped) !== undefined,
     );
   }
 
   /** SET key value NX EX ttl —— 防重复提交锁（04 册 1.5 / 05 册 AD-04） */
   async setNx(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const scoped = this.scopedKey(key);
     return this.withFallback(
-      () => this.client!.set(key, value, 'EX', ttlSeconds, 'NX').then((r) => r === 'OK'),
+      () => this.client!.set(scoped, value, 'EX', ttlSeconds, 'NX').then((r) => r === 'OK'),
       () => {
-        if (this.memGet(key) !== undefined) return false;
-        this.mem.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
+        if (this.memGet(scoped) !== undefined) return false;
+        this.mem.set(scoped, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
         return true;
       },
     );
   }
 
   async incr(key: string, ttlSeconds?: number): Promise<number> {
+    const scoped = this.scopedKey(key);
     return this.withFallback(
       async () => {
-        const n = await this.client!.incr(key);
-        if (ttlSeconds && n === 1) await this.client!.expire(key, ttlSeconds);
+        const n = await this.client!.incr(scoped);
+        if (ttlSeconds && n === 1) await this.client!.expire(scoped, ttlSeconds);
         return n;
       },
       () => {
-        const cur = Number(this.memGet(key)?.value ?? 0) + 1;
-        const prev = this.mem.get(key);
+        const cur = Number(this.memGet(scoped)?.value ?? 0) + 1;
+        const prev = this.mem.get(scoped);
         const expiresAt = ttlSeconds && !prev ? Date.now() + ttlSeconds * 1000 : prev?.expiresAt ?? null;
-        this.mem.set(key, { value: String(cur), expiresAt });
+        this.mem.set(scoped, { value: String(cur), expiresAt });
         return cur;
       },
     );
@@ -146,9 +188,23 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.set(`auth:blacklist:${jti}`, '1', ttlSeconds);
   }
 
+  /** 原子领取 refresh JTI；同一枚 refresh 并发只能有一个请求继续签发。 */
+  async claimRefreshJti(jti: string, ttlSeconds: number): Promise<boolean> {
+    return this.setNx(`auth:refresh:claim:${jti}`, '1', ttlSeconds);
+  }
+
   /** 登出吊销：EXISTS auth:blacklist:{jti}（jti 已由调用方白名单校验） */
   async isTokenBlacklisted(jti: string): Promise<boolean> {
     return this.exists(`auth:blacklist:${jti}`);
+  }
+
+  /** 会话强制下线标记，TTL 与 refresh 生命周期相同。 */
+  async revokeSession(sessionId: string, ttlSeconds: number): Promise<void> {
+    await this.set(`auth:session:revoked:${sessionId}`, '1', ttlSeconds);
+  }
+
+  async isSessionRevoked(sessionId: string): Promise<boolean> {
+    return this.exists(`auth:session:revoked:${sessionId}`);
   }
 
   /** 用户级封禁时刻：GET auth:block:{user_id}（值 = 封禁时刻秒级时间戳） */
@@ -172,10 +228,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
   /** 锁定键剩余秒数（40106 message 含剩余秒数，04 册 5.2） */
   async getLoginFailTtl(username: string): Promise<number> {
+    const scoped = this.scopedKey(`auth:fail:${username}`);
     return this.withFallback(
-      () => this.client!.ttl(`auth:fail:${username}`),
+      () => this.client!.ttl(scoped),
       () => {
-        const e = this.mem.get(`auth:fail:${username}`);
+        const e = this.mem.get(scoped);
         if (!e || e.expiresAt === null) return -1;
         return Math.max(0, Math.ceil((e.expiresAt - Date.now()) / 1000));
       },
@@ -188,60 +245,65 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
   // ---- Hash（学习会话累计 learn:session:{id}，03 册 6.3）----
   async hset(key: string, field: string, value: string): Promise<void> {
+    const scoped = this.scopedKey(key);
     return this.withFallback(
-      () => this.client!.hset(key, field, value).then(() => undefined),
+      () => this.client!.hset(scoped, field, value).then(() => undefined),
       () => {
-        const e = this.memGet(key);
+        const e = this.memGet(scoped);
         const obj: Record<string, string> = e ? JSON.parse(e.value) : {};
         obj[field] = value;
-        this.mem.set(key, { value: JSON.stringify(obj), expiresAt: e?.expiresAt ?? null });
+        this.mem.set(scoped, { value: JSON.stringify(obj), expiresAt: e?.expiresAt ?? null });
       },
     );
   }
 
   async hsetAll(key: string, data: Record<string, string>, ttlSeconds?: number): Promise<void> {
+    const scoped = this.scopedKey(key);
     return this.withFallback(
       async () => {
-        await this.client!.hset(key, data);
-        if (ttlSeconds) await this.client!.expire(key, ttlSeconds);
+        await this.client!.hset(scoped, data);
+        if (ttlSeconds) await this.client!.expire(scoped, ttlSeconds);
       },
       () => {
-        const e = this.memGet(key);
+        const e = this.memGet(scoped);
         const obj: Record<string, string> = e ? JSON.parse(e.value) : {};
         Object.assign(obj, data);
-        this.mem.set(key, { value: JSON.stringify(obj), expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : e?.expiresAt ?? null });
+        this.mem.set(scoped, { value: JSON.stringify(obj), expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : e?.expiresAt ?? null });
       },
     );
   }
 
   async hgetall(key: string): Promise<Record<string, string>> {
+    const scoped = this.scopedKey(key);
     return this.withFallback(
-      () => this.client!.hgetall(key),
+      () => this.client!.hgetall(scoped),
       () => {
-        const e = this.memGet(key);
+        const e = this.memGet(scoped);
         return e ? JSON.parse(e.value) : {};
       },
     );
   }
 
   async hdel(key: string, ...fields: string[]): Promise<void> {
+    const scoped = this.scopedKey(key);
     return this.withFallback(
-      () => this.client!.hdel(key, ...fields).then(() => undefined),
+      () => this.client!.hdel(scoped, ...fields).then(() => undefined),
       () => {
-        const e = this.memGet(key);
+        const e = this.memGet(scoped);
         if (!e) return;
         const obj: Record<string, string> = JSON.parse(e.value);
         for (const f of fields) delete obj[f];
-        this.mem.set(key, { value: JSON.stringify(obj), expiresAt: e.expiresAt });
+        this.mem.set(scoped, { value: JSON.stringify(obj), expiresAt: e.expiresAt });
       },
     );
   }
 
   async expire(key: string, ttlSeconds: number): Promise<void> {
+    const scoped = this.scopedKey(key);
     return this.withFallback(
-      () => this.client!.expire(key, ttlSeconds).then(() => undefined),
+      () => this.client!.expire(scoped, ttlSeconds).then(() => undefined),
       () => {
-        const e = this.mem.get(key);
+        const e = this.mem.get(scoped);
         if (e) e.expiresAt = Date.now() + ttlSeconds * 1000;
       },
     );
@@ -249,17 +311,18 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
   /** 按前缀批量删除（统计缓存失效，05 册 7.4.4：SCAN 而非 KEYS） */
   async delByPrefix(prefix: string): Promise<void> {
+    const scopedPrefix = this.scopedKey(prefix);
     return this.withFallback(
       async () => {
         let cursor = '0';
         do {
-          const [next, keys] = await this.client!.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', 200);
+          const [next, keys] = await this.client!.scan(cursor, 'MATCH', `${scopedPrefix}*`, 'COUNT', 200);
           cursor = next;
           if (keys.length) await this.client!.del(...keys);
         } while (cursor !== '0');
       },
       () => {
-        for (const k of Array.from(this.mem.keys())) if (k.startsWith(prefix)) this.mem.delete(k);
+        for (const k of Array.from(this.mem.keys())) if (k.startsWith(scopedPrefix)) this.mem.delete(k);
       },
     );
   }

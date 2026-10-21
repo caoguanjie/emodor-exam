@@ -1,10 +1,14 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { Request } from 'express';
 import { AppConfig } from '../../config/configuration';
 import { Errors } from '../errors';
 import { RedisService } from '../redis.service';
+import { SessionService } from '../../modules/auth/session.service';
+import { SysUser } from '../../entities/sys-user.entity';
 import { AuthUser } from '../decorators/current-user.decorator';
 import { PUBLIC_KEY } from './public.decorator';
 
@@ -28,6 +32,8 @@ export class JwtAuthGuard implements CanActivate {
     private readonly reflector: Reflector,
     private readonly redis: RedisService,
     private readonly config: AppConfig,
+    private readonly sessions: SessionService,
+    @InjectRepository(SysUser) private readonly userRepo: Repository<SysUser>,
   ) {}
 
   /** 验签：先主密钥后轮换过渡旧密钥（07 册 2.1.3），过期与伪造分别映射 40102/40101 */
@@ -68,6 +74,15 @@ export class JwtAuthGuard implements CanActivate {
     if (!KEY_COMPONENT_PATTERN.test(subKey)) throw Errors.unauthenticated();
     const userId = Number(subKey);
 
+    // The database is authoritative for status, system role and auth generation;
+    // token role/version fields are only compatibility hints for old tokens.
+    const currentUser = await this.userRepo.findOne({ where: { id: String(userId) } });
+    if (!currentUser) throw Errors.unauthenticated();
+    if (currentUser.status === 0) throw Errors.accountDisabled();
+    const tokenVersion = Number(payload.auth_version ?? 0);
+    const currentVersion = Number(currentUser.authVersion || 0);
+    if (!Number.isInteger(tokenVersion) || tokenVersion !== currentVersion) throw Errors.tokenRevoked();
+
     // ③ 单令牌黑名单（登出吊销，07 册 2.1.4）
     const jti = String(payload.jti ?? '');
     if (!KEY_COMPONENT_PATTERN.test(jti)) throw Errors.unauthenticated();
@@ -77,8 +92,18 @@ export class JwtAuthGuard implements CanActivate {
     const blockTs = await this.redis.getTokenBlockTs(userId);
     if (blockTs && Number(payload.iat) < Number(blockTs)) throw Errors.tokenRevoked();
 
+    // 新令牌绑定 auth_session；旧的无 sid 令牌继续走原有黑名单/用户封禁兼容路径。
+    const sid = payload.sid === undefined ? undefined : String(payload.sid);
+    if (sid !== undefined) {
+      if (!/^[a-f0-9]{48}$/.test(sid) || await this.sessions.isRevoked(sid)) throw Errors.tokenRevoked();
+      await this.sessions.touch(sid);
+    }
+
     // ⑤ 受限令牌（首次登录强制改密，07 册 2.2.3）：仅放行修改本人密码
-    if (payload.pwd_pending === true) {
+    const forcePasswordChange = currentUser.forcePasswordChange === undefined
+      ? currentUser.lastLoginAt === null
+      : Number(currentUser.forcePasswordChange) === 1;
+    if (payload.pwd_pending === true || forcePasswordChange) {
       const path = (req.baseUrl || '') + (req.route?.path || req.url || '');
       const allowed = req.method === 'PUT' && path.replace('/api/v1', '').startsWith('/auth/password');
       if (!allowed) throw Errors.forbidden('首次登录请先修改密码');
@@ -86,11 +111,13 @@ export class JwtAuthGuard implements CanActivate {
 
     req.user = {
       id: userId,
-      username: typeof payload.username === 'string' ? payload.username : '',
-      role: typeof payload.role === 'string' ? payload.role : '',
+      username: currentUser.username,
+      role: currentUser.role,
       jti: String(payload.jti ?? ''),
       iat: Number(payload.iat ?? 0),
-      pwdPending: payload.pwd_pending === true,
+      sid,
+      authVersion: currentVersion,
+      pwdPending: payload.pwd_pending === true || forcePasswordChange,
     };
     return true;
   }

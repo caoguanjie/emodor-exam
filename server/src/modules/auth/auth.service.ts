@@ -13,6 +13,9 @@ import { AuditService } from '../../common/audit.service';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { REFRESH_COOKIE, KEY_COMPONENT_PATTERN } from '../../common/guards/jwt-auth.guard';
 import { validatePasswordStrength as assertPasswordStrength } from '../../common/password-policy';
+import { CaptchaService } from './captcha.service';
+import { SessionService } from './session.service';
+import { AccessService } from '../access/access.service';
 
 const LOGIN_MAX_FAILS = 5; // username 连续失败 5 次
 const LOGIN_LOCK_SECONDS = 600; // 锁定 10 分钟
@@ -39,7 +42,7 @@ function parseExpirySeconds(expr: string): number {
 /**
  * 认证服务（05 册 2.4.1 / 07 册 2.1 - 2.2）：
  * 双令牌（access 2h / refresh 7d 轮换）、bcrypt cost=12、
- * 登录失败双计数防爆破、首次登录强制改密（last_login_at IS NULL → 受限令牌 pwd_pending）。
+ * 登录失败双计数防爆破、独立 force_password_change 强制改密与认证世代吊销。
  */
 @Injectable()
 export class AuthService {
@@ -53,21 +56,26 @@ export class AuthService {
     private readonly audit: AuditService,
     private readonly config: AppConfig,
     private readonly dataSource: DataSource,
+    private readonly captcha: CaptchaService,
+    private readonly sessions: SessionService,
+    private readonly access: AccessService,
   ) {
     this.accessTtl = parseExpirySeconds(this.config.jwt.expiresIn);
     this.refreshTtlDays = this.config.jwt.refreshExpiresDays;
   }
 
-  private sign(user: { id: number; username: string; role: string }, type: 'access' | 'refresh', opts?: { pwdPending?: boolean }) {
+  private sign(user: { id: number; username: string; role: string; authVersion?: number }, type: 'access' | 'refresh', opts?: { pwdPending?: boolean; sid?: string }) {
     const ttl = type === 'access' ? this.accessTtl : this.refreshTtlDays * 86400;
     const payload: Record<string, unknown> = {
       sub: String(user.id),
       username: user.username,
       role: user.role,
+      auth_version: Number(user.authVersion || 0),
       type,
       jti: randomBytes(16).toString('hex'),
     };
     if (opts?.pwdPending) payload.pwd_pending = true;
+    if (opts?.sid) payload.sid = opts.sid;
     return this.jwt.sign(payload, { expiresIn: ttl });
   }
 
@@ -86,7 +94,19 @@ export class AuthService {
     assertPasswordStrength(password, user, '新密码');
   }
 
-  async login(username: string, password: string, ip: string | null, req: Request, res: Response) {
+  private passwordChangeRequired(user: SysUser): boolean {
+    // A1 rows are backfilled by 002_access; retain the NULL fallback for
+    // a short compatibility window when a legacy entity is read during rollout.
+    return user.forcePasswordChange === undefined
+      ? user.lastLoginAt === null
+      : Number(user.forcePasswordChange) === 1;
+  }
+
+  private authVersion(user: SysUser): number {
+    return Number.isInteger(Number(user.authVersion)) ? Number(user.authVersion) : 0;
+  }
+
+  async login(username: string, password: string, ip: string | null, req: Request, res: Response, captchaId?: string, captchaCode?: string) {
     // source_ip 维度限流：10 次/分钟（04 册 6.2；Redis 故障时进程内兜底计数由 RedisService 承担）
     const ipKey = `auth:ip:${ip || 'unknown'}`;
     const ipCount = await this.redis.incr(ipKey, 60);
@@ -99,47 +119,79 @@ export class AuthService {
       throw Errors.accountLocked(ttl > 0 ? ttl : LOGIN_LOCK_SECONDS);
     }
 
-    // 凭据校验：用户不存在与密码错误同一错误码 40104（不泄露区别，FR-ORG-01 验收②）
-    const user = await this.userRepo.findOne({ where: { username } });
-    const ok = user ? await bcrypt.compare(password, user.passwordHash) : false;
-    if (!user || !ok) {
-      const fails = await this.redis.incrLoginFail(username, LOGIN_LOCK_SECONDS);
-      this.audit.log({
-        actor_id: user ? Number(user.id) : null, actor_name: username, action: 'auth.login',
-        object_type: 'sys_user', object_id: user?.id ?? null, detail: { reason: 'bad_credentials' },
-        result: 'failure', source_ip: ip,
+    // Credentials, the authoritative admin classification, login facts and
+    // durable session creation share one locked transaction. This prevents a
+    // concurrent reset/role assignment from minting a token from stale state,
+    // and a failed session insert from committing a false successful login.
+    let failedUserId: number | null = null;
+    let loginResult!: { user: SysUser; session: Awaited<ReturnType<SessionService['create']>>; firstLogin: boolean };
+    try {
+      loginResult = await this.dataSource.transaction(async (manager) => {
+        const repo = manager.getRepository(SysUser);
+        const current = await repo.createQueryBuilder('u')
+          .setLock('pessimistic_write')
+          .where('u.username = :username', { username })
+          .getOne();
+        failedUserId = current ? Number(current.id) : null;
+
+        // Do not consult the Redis permission cache before deciding whether a
+        // captcha is mandatory. The manager-scoped read is authoritative and
+        // observes the same locked user generation as this login.
+        const effectivePermissions = current
+          ? await this.access.permissions(current.id, { manager })
+          : [];
+        const isAdminAccount = Boolean(current && (current.role !== 'employee' || effectivePermissions.length > 0));
+        if (isAdminAccount && (!captchaId || !captchaCode || !(await this.captcha.verify(captchaId, captchaCode)))) {
+          throw Errors.param('验证码错误');
+        }
+
+        const ok = current ? await bcrypt.compare(password, current.passwordHash) : false;
+        if (!current || !ok) throw Errors.badCredentials();
+        if (current.status === 0) {
+          this.audit.log({
+            actor_id: Number(current.id), actor_name: username, action: 'auth.login', object_type: 'sys_user',
+            object_id: current.id, detail: { reason: 'disabled' }, result: 'failure', source_ip: ip,
+          });
+          throw Errors.accountDisabled();
+        }
+
+        current.loginCount = Number(current.loginCount || 0) + 1;
+        current.lastLoginAt = new Date();
+        current.lastLoginIp = ip;
+        const saved = await repo.save(current);
+        const session = await this.sessions.create(saved.id, ip, req.get('user-agent') || null, manager);
+        return { user: saved, session, firstLogin: this.passwordChangeRequired(saved) };
       });
-      if (fails >= LOGIN_MAX_FAILS) throw Errors.accountLocked(LOGIN_LOCK_SECONDS);
-      throw Errors.badCredentials();
-    }
-    if (user.status === 0) {
-      this.audit.log({
-        actor_id: Number(user.id), actor_name: username, action: 'auth.login', object_type: 'sys_user',
-        object_id: user.id, detail: { reason: 'disabled' }, result: 'failure', source_ip: ip,
-      });
-      throw Errors.accountDisabled();
+    } catch (error: any) {
+      if (Number(error?.code) === 40104) {
+        const fails = await this.redis.incrLoginFail(username, LOGIN_LOCK_SECONDS);
+        this.audit.log({
+          actor_id: failedUserId, actor_name: username, action: 'auth.login',
+          object_type: 'sys_user', object_id: failedUserId, detail: { reason: 'bad_credentials' },
+          result: 'failure', source_ip: ip,
+        });
+        if (fails >= LOGIN_MAX_FAILS) throw Errors.accountLocked(LOGIN_LOCK_SECONDS);
+      }
+      throw error;
     }
 
     await this.redis.clearLoginFail(username);
-    const firstLogin = user.lastLoginAt === null;
-    const core = { id: Number(user.id), username: user.username, role: user.role };
-    const access = this.sign(core, 'access', { pwdPending: firstLogin });
-    const refresh = this.sign(core, 'refresh');
+    const loggedInUser = loginResult.user;
+    const session = loginResult.session;
+    const firstLogin = loginResult.firstLogin;
+    const core = { id: Number(loggedInUser.id), username: loggedInUser.username, role: loggedInUser.role, authVersion: this.authVersion(loggedInUser) };
+    const access = this.sign(core, 'access', { pwdPending: firstLogin, sid: session.sid });
+    const refresh = this.sign(core, 'refresh', { sid: session.sid });
     this.setRefreshCookie(res, refresh);
-
-    // 首次登录（受限令牌阶段）不写 last_login_at（07 册 2.2.3，防绕过强制改密）
-    if (!firstLogin) {
-      await this.userRepo.update(user.id, { lastLoginAt: new Date() });
-    }
     this.audit.log({
-      actor_id: Number(user.id), actor_name: username, action: 'auth.login', object_type: 'sys_user',
-      object_id: user.id, detail: { first_login: firstLogin }, result: 'success', source_ip: ip,
+      actor_id: Number(loggedInUser.id), actor_name: username, action: 'auth.login', object_type: 'sys_user',
+      object_id: loggedInUser.id, detail: { first_login: firstLogin }, result: 'success', source_ip: ip,
     });
     return {
       access_token: access,
       expires_in: this.accessTtl,
       force_change_password: firstLogin,
-      user: this.sanitize(user),
+      user: { ...this.sanitize(loggedInUser), permissions: await this.access.permissions(loggedInUser.id) },
     };
   }
 
@@ -156,58 +208,83 @@ export class AuthService {
     const refreshJti = String(payload.jti ?? '');
     if (!KEY_COMPONENT_PATTERN.test(refreshJti)) throw Errors.refreshTokenInvalid();
     if (await this.redis.isTokenBlacklisted(refreshJti)) throw Errors.tokenRevoked();
+    const sid = typeof payload.sid === 'string' ? payload.sid : undefined;
+    if (sid && (!/^[a-f0-9]{48}$/.test(sid) || await this.sessions.isRevoked(sid))) throw Errors.tokenRevoked();
     const userId = Number(payload.sub);
     const user = await this.userRepo.findOne({ where: { id: String(userId) } });
     if (!user || user.status === 0) throw Errors.refreshTokenInvalid();
+    if (Number(payload.auth_version ?? 0) !== this.authVersion(user)) throw Errors.tokenRevoked();
     // 用户级封禁同样适用于 refresh 轮换路径（07 册 2.1.4）
     const blockTs = await this.redis.getTokenBlockTs(userId);
     if (blockTs && Number(payload.iat) < Number(blockTs)) throw Errors.tokenRevoked();
 
-    const core = { id: Number(user.id), username: user.username, role: user.role };
-    const firstLogin = user.lastLoginAt === null;
-    const access = this.sign(core, 'access', { pwdPending: firstLogin });
-    const newRefresh = this.sign(core, 'refresh'); // 轮换签发新 refresh，旧 refresh 到期自然失效
+    const core = { id: Number(user.id), username: user.username, role: user.role, authVersion: this.authVersion(user) };
+    const firstLogin = this.passwordChangeRequired(user);
+    const refreshRemaining = Math.max(1, this.refreshTtlDays * 86400 - (Math.floor(Date.now() / 1000) - Number(payload.iat || 0)));
+    // Claim before minting either successor. This closes the GET/SET race in
+    // which two simultaneous refresh requests both passed the blacklist read.
+    if (!await this.redis.claimRefreshJti(refreshJti, refreshRemaining)) throw Errors.tokenRevoked();
+    const session = sid ? { sid } : await this.sessions.create(user.id, ip, null);
+    if (sid) await this.sessions.touch(sid, true);
+    const access = this.sign(core, 'access', { pwdPending: firstLogin, sid: session.sid });
+    const newRefresh = this.sign(core, 'refresh', { sid: session.sid });
+    // 轮换必须废弃前一个 refresh，不能等到自然过期。
+    await this.redis.blacklistJti(refreshJti, refreshRemaining);
     this.setRefreshCookie(res, newRefresh);
-    if (!firstLogin) {
-      await this.userRepo.update(user.id, { lastLoginAt: new Date() });
-    }
     return { access_token: access, expires_in: this.accessTtl, force_change_password: firstLogin };
   }
 
   async profile(userId: number) {
     const user = await this.userRepo.findOne({ where: { id: String(userId) } });
     if (!user) throw Errors.notFound();
-    return this.sanitize(user);
+    return { ...this.sanitize(user), permissions: await this.access.permissions(user.id) };
   }
 
   /** 修改本人密码（FR-ORG-06）：校验原密码；成功后同事务写 last_login_at、写封禁键、签发完整令牌 */
-  async changePassword(userId: number, oldPassword: string, newPassword: string, ip: string | null, res: Response) {
-    const user = await this.userRepo.findOne({ where: { id: String(userId) } });
-    if (!user) throw Errors.notFound();
-    const ok = await bcrypt.compare(oldPassword, user.passwordHash);
-    if (!ok) throw Errors.param('原密码错误');
-    this.validatePasswordStrength(newPassword, user);
-
-    const hash = await bcrypt.hash(newPassword, 12);
-    // 同一事务：覆写哈希 + 收口 last_login_at（首次登录强制改密的收口点，07 册 2.2.3）
-    await this.dataSource.transaction(async (m) => {
+  async changePassword(userId: number, oldPassword: string, newPassword: string, ip: string | null, res: Response, currentUser?: AuthUser, refreshToken?: string, req?: Request) {
+    // 同一事务：覆写哈希、清除独立强制改密标志、递增认证世代、吊销
+    // durable sessions，并创建新会话；提交后才写 Redis 快速吊销标记。
+    const changed = await this.dataSource.transaction(async (m) => {
       const repo = m.getRepository(SysUser);
-      const u = await repo.findOne({ where: { id: String(userId) } });
+      const u = await repo.createQueryBuilder('u')
+        .setLock('pessimistic_write')
+        .where('u.id = :userId', { userId: String(userId) })
+        .getOne();
       if (!u) throw Errors.notFound();
+      const ok = await bcrypt.compare(oldPassword, u.passwordHash);
+      if (!ok) throw Errors.param('原密码错误');
+      this.validatePasswordStrength(newPassword, u);
+      const hash = await bcrypt.hash(newPassword, 12);
       u.passwordHash = hash;
-      if (u.lastLoginAt === null) u.lastLoginAt = new Date();
+      u.forcePasswordChange = 0;
+      u.authVersion = this.authVersion(u) + 1;
+      const oldSids = await this.sessions.invalidateUser(m, userId);
+      const session = await this.sessions.create(userId, ip, req?.get('user-agent') || null, m);
       await repo.save(u);
+      return { user: u, oldSids, session };
     });
+    await this.sessions.markRevoked(changed.oldSids);
     // 写用户级封禁键：iat 早于封禁时刻的旧令牌（access 与 refresh）全部失效（07 册 2.1.4）
     await this.redis.setUserBlock(userId, Math.floor(Date.now() / 1000), this.refreshTtlDays * 86400);
-
-    const core = { id: userId, username: user.username, role: user.role };
-    const access = this.sign(core, 'access');
-    const refresh = this.sign(core, 'refresh');
+    if (currentUser?.jti && KEY_COMPONENT_PATTERN.test(currentUser.jti)) {
+      await this.redis.blacklistJti(currentUser.jti, Math.max(1, this.accessTtl - (Math.floor(Date.now() / 1000) - currentUser.iat)));
+    }
+    if (refreshToken) {
+      try {
+        const oldRefresh: any = this.jwt.verify(refreshToken);
+        if (oldRefresh?.type === 'refresh' && KEY_COMPONENT_PATTERN.test(String(oldRefresh.jti || ''))) {
+          const remain = Math.max(1, this.refreshTtlDays * 86400 - (Math.floor(Date.now() / 1000) - Number(oldRefresh.iat || 0)));
+          await this.redis.blacklistJti(String(oldRefresh.jti), remain);
+        }
+      } catch { /* 无效旧 Cookie 不影响已完成的密码更新 */ }
+    }
+    const core = { id: userId, username: changed.user.username, role: changed.user.role, authVersion: this.authVersion(changed.user) };
+    const access = this.sign(core, 'access', { sid: changed.session.sid });
+    const refresh = this.sign(core, 'refresh', { sid: changed.session.sid });
     this.setRefreshCookie(res, refresh);
     this.audit.log({
-      actor_id: userId, actor_name: user.username, action: 'auth.password.change', object_type: 'sys_user',
-      object_id: user.id, detail: {}, result: 'success', source_ip: ip,
+      actor_id: userId, actor_name: changed.user.username, action: 'auth.password.change', object_type: 'sys_user',
+      object_id: changed.user.id, detail: {}, result: 'success', source_ip: ip,
     });
     return { access_token: access, expires_in: this.accessTtl };
   }
@@ -232,6 +309,7 @@ export class AuthService {
         }
       } catch { /* Cookie 中无有效 refresh：忽略 */ }
     }
+    if (user.sid) await this.sessions.revokeBySid(user.sid, user.id);
     this.audit.log({
       actor_id: user.id, actor_name: user.username, action: 'auth.logout', object_type: 'sys_user',
       object_id: user.id, detail: {}, result: 'success', source_ip: ip,
@@ -252,7 +330,11 @@ export class AuthService {
       phone: user.phone,
       email: user.email,
       status: user.status,
+      auth_version: this.authVersion(user),
+      force_password_change: this.passwordChangeRequired(user),
+      login_count: Number(user.loginCount || 0),
       last_login_at: user.lastLoginAt,
+      last_login_ip: user.lastLoginIp,
       created_at: user.createdAt,
     };
   }

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { randomBytes } from 'node:crypto';
 import { Question } from '../../entities/question.entity';
 import { Regulation } from '../../entities/regulation.entity';
@@ -14,6 +14,10 @@ import { AppConfig } from '../../config/configuration';
 import { Errors } from '../../common/errors';
 import { RedisService } from '../../common/redis.service';
 import { AuditService } from '../../common/audit.service';
+import type { Difficulty } from '../../common/training-contracts';
+import { CategoryService } from '../training/category.service';
+import { QuestionVersionService } from '../questions/question-version.service';
+import { questionDifficultyContract, questionJsonContract } from '../questions/question-prompt';
 
 export interface ParsedQuestion {
   type: string;
@@ -21,6 +25,22 @@ export interface ParsedQuestion {
   options: { key: string; text: string }[];
   answer: number[];
   analysis: string;
+}
+
+interface GeneratedQuestion extends ParsedQuestion {
+  sourcePageGroup?: number;
+  sourcePageStart?: number;
+  sourcePageEnd?: number;
+}
+
+interface GenerationResult {
+  valid: ParsedQuestion[];
+  invalidCount: number;
+  failed: boolean;
+  reason?: string;
+  sourcePageGroup?: number;
+  sourcePageStart?: number;
+  sourcePageEnd?: number;
 }
 
 interface GenerationBlock {
@@ -52,7 +72,8 @@ export class QuestionGenerationService {
     private readonly redis: RedisService,
     private readonly config: AppConfig,
     private readonly audit: AuditService,
-    private readonly dataSource: DataSource,
+    private readonly categories: CategoryService,
+    private readonly versions: QuestionVersionService,
   ) {}
 
   private taskKey(taskId: string) {
@@ -71,14 +92,16 @@ export class QuestionGenerationService {
   /** 发起校验（04 册 3.5）：配置完整 / 生效版本 parsed 且 text_content 非空 / 分值合计 = 100 */
   async start(input: {
     regulationId: string;
+    categoryId: string;
+    difficulty: Difficulty;
     questionCountSingle: number;
     questionCountMultiple: number;
     scoreSingle: number;
     scoreMultiple: number;
     actor: { id: number; name: string };
   }) {
-    const configured = await this.aiConfig.isConfigured();
-    if (!configured) throw Errors.aiNotConfigured();
+    if (!['easy', 'medium', 'hard'].includes(input.difficulty)) throw Errors.param('难度非法（easy / medium / hard）');
+    await this.categories.assertActive(input.categoryId);
 
     const regulation = await this.regRepo.findOne({ where: { id: input.regulationId } });
     if (!regulation) throw Errors.notFound('制度不存在');
@@ -100,6 +123,9 @@ export class QuestionGenerationService {
       throw Errors.param(`分值参数合计须等于 100.00，当前为 ${total.toFixed(2)}（差距 ${(100 - total).toFixed(2)}）`);
     }
 
+    const configured = await this.aiConfig.isConfigured();
+    if (!configured) throw Errors.aiNotConfigured();
+
     // 同制度同时仅一个运行中任务（04 册 6.2 限流约定）：先落任务记录再 SETNX 原子抢互斥键，
     // 防 check-then-set 并发穿透双跑；未抢到即回滚自建记录
     const now = new Date();
@@ -110,6 +136,8 @@ export class QuestionGenerationService {
     const taskPayload = {
       task_id: taskId,
       regulation_id: Number(input.regulationId),
+      category_id: String(input.categoryId),
+      difficulty: input.difficulty,
       status: 'queued',
       created_at: now.toISOString(),
       question_count_single: cs,
@@ -143,6 +171,8 @@ export class QuestionGenerationService {
       task_id: taskId,
       status: 'running',
       estimated_seconds: 120,
+      category_id: String(input.categoryId),
+      difficulty: input.difficulty,
       question_count_single: cs,
       question_count_multiple: cm,
       score_single: ss,
@@ -151,16 +181,13 @@ export class QuestionGenerationService {
   }
 
   /** 系统提示词模板（05 册 4.4.3，score 不纳入 AI 输出） */
-  private systemPrompt(existingStems: string[]): string {
+  private systemPrompt(existingStems: string[], difficulty: Difficulty): string {
     const sample = existingStems.slice(-50).join('\n- ');
     return `你是企业制度考核命题专家。请根据提供的制度文本或制度页面图片，编写用于考核员工对企业制度理解程度的考试题目。
 
 输出要求：
-1. 仅输出一个 JSON 数组作为全部输出内容，不要输出任何解释、前后缀或 markdown 代码块标记。
-2. 数组每个元素的 JSON 结构为：
-   {"type": "single 或 multiple", "stem": "题干", "options": [{"key": "A", "text": "选项文本"}, {"key": "B", "text": "选项文本"}, {"key": "C", "text": "选项文本"}, {"key": "D", "text": "选项文本"}], "answer": [正确选项的下标数组], "analysis": "答案解析"}
-3. 题型规则：type = single 的题目，answer 必须恰好包含 1 个元素；type = multiple 的题目，answer 必须包含 2 ~ 3 个元素，且为升序、不重复的下标。
-4. 每道题 options 恰好 4 个选项；answer 中的每个下标必须在 0 ~ 3 范围内。
+${questionJsonContract('batch')}
+${questionDifficultyContract(difficulty)}
 5. 题目必须严格依据给定的制度文本命制，不得编造文本中不存在的内容；每题答案必须唯一正确（single）或组合唯一正确（multiple）。
 6. 干扰项应具有合理迷惑性但明确错误；解析须说明正确答案的依据（引用制度原文要点）。
 7. 不得与【已有题目清单】中任何题干重复或高度相似。
@@ -248,8 +275,9 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
       if (!options || options.length !== 4 || options.some((o: any) => !o || typeof o.text !== 'string' || !o.text.trim())) { invalid++; continue; }
       if (!answer || !answer.every((n: any) => Number.isInteger(n) && n >= 0 && n <= 3)) { invalid++; continue; }
       const sorted = Array.from(answer as number[]).sort((a, b) => a - b);
+      if (new Set(sorted).size !== sorted.length) { invalid++; continue; }
       if (type === 'single' && sorted.length !== 1) { invalid++; continue; }
-      if (type === 'multiple' && sorted.length < 2) { invalid++; continue; }
+      if (type === 'multiple' && (sorted.length < 2 || sorted.length > 3)) { invalid++; continue; }
       valid.push({
         type,
         stem,
@@ -280,7 +308,7 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
     taskId: string,
     regulation: Regulation,
     version: RegulationVersion,
-    input: { questionCountSingle: number; questionCountMultiple: number; scoreSingle: number; scoreMultiple: number; actor: { id: number; name: string } },
+    input: { categoryId: string; difficulty: Difficulty; questionCountSingle: number; questionCountMultiple: number; scoreSingle: number; scoreMultiple: number; actor: { id: number; name: string } },
   ) {
     // 整体兜底：任何未预期异常都必须落到 failed 并释放互斥键，
     // 否则该制度会以「任务执行中」429 锁死直至 24h TTL（04 册 6.2 / AD-03 状态机）
@@ -306,7 +334,7 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
     taskId: string,
     regulation: Regulation,
     version: RegulationVersion,
-    input: { questionCountSingle: number; questionCountMultiple: number; scoreSingle: number; scoreMultiple: number; actor: { id: number; name: string } },
+    input: { categoryId: string; difficulty: Difficulty; questionCountSingle: number; questionCountMultiple: number; scoreSingle: number; scoreMultiple: number; actor: { id: number; name: string } },
   ) {
     await this.setTask(taskId, { ...(await this.getTask(taskId) || {}), status: 'running' });
     const text = version.textContent || '';
@@ -323,7 +351,7 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
       : this.chunkText(text);
     const plan = this.allocateCounts(chunks, input.questionCountSingle, input.questionCountMultiple);
 
-    const results: { valid: ParsedQuestion[]; invalidCount: number; failed: boolean; reason?: string }[] = new Array(chunks.length);
+    const results: GenerationResult[] = new Array(chunks.length);
     try {
       let cursor = 0;
       const concurrency = Math.min(this.config.ai.blockConcurrency, chunks.length);
@@ -337,7 +365,7 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
           const block: GenerationBlock = vision
             ? { pages: await vision.renderGroup(index) }
             : { text: chunks[index] };
-          results[index] = await this.generateBlock(regulation, version, index, chunks.length, block, plan[index], existing);
+          results[index] = await this.generateBlock(regulation, version, index, chunks.length, block, plan[index], existing, input.difficulty);
         }
       });
       await Promise.all(workers);
@@ -345,8 +373,8 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
       await vision?.cleanup();
     }
 
-    const successful = results.filter((r): r is { valid: ParsedQuestion[]; invalidCount: number; failed: boolean; reason?: string } => !!r && !r.failed);
-    const validQuestions: ParsedQuestion[] = [];
+    const successful = results.filter((r): r is GenerationResult => !!r && !r.failed);
+    const validQuestions: GeneratedQuestion[] = [];
     const seen = new Set(existing);
     const dedupDropped = { count: 0 };
     for (const r of successful) {
@@ -357,7 +385,12 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
           continue;
         }
         seen.add(norm);
-        validQuestions.push(q);
+        validQuestions.push({
+          ...q,
+          sourcePageGroup: r.sourcePageGroup,
+          sourcePageStart: r.sourcePageStart,
+          sourcePageEnd: r.sourcePageEnd,
+        });
       }
     }
     const failedBlocks = results
@@ -377,32 +410,30 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
       return;
     }
 
-    // 单事务批量落库：source=ai、status=pending、score 按分值模板写入（05 册 4.4.4 步骤 6）
-    const saved = await this.dataSource.transaction(async (m) => {
-      const repo = m.getRepository(Question);
-      const entities = validQuestions.map((q) =>
-        repo.create({
-          regulationId: String(regulation.id),
-          versionId: String(version.id),
-          type: q.type,
-          stem: q.stem,
-          options: q.options,
-          answer: q.answer,
-          analysis: q.analysis,
-          score: String(q.type === 'single' ? input.scoreSingle : input.scoreMultiple),
-          status: 'pending',
-          source: 'ai',
-          createdBy: String(input.actor.id),
-        }),
-      );
-      return repo.save(entities);
-    });
+    // 类别/难度来自请求而非模型输出；统一版本服务在一个事务内创建 identity + revision 1。
+    const saved = await this.versions.createMany(validQuestions.map((q) => ({
+      categoryId: input.categoryId,
+      difficulty: input.difficulty,
+      type: q.type as 'single' | 'multiple',
+      stem: q.stem,
+      options: q.options,
+      answer: q.answer,
+      analysis: q.analysis,
+      rubric: null,
+      scoreCents: Math.round((q.type === 'single' ? input.scoreSingle : input.scoreMultiple) * 100),
+      regulationId: String(regulation.id),
+      regulationVersionId: String(version.id),
+      source: 'ai',
+      sourcePageGroup: q.sourcePageGroup,
+      sourcePageStart: q.sourcePageStart,
+      sourcePageEnd: q.sourcePageEnd,
+    })), String(input.actor.id));
 
     await this.setTask(taskId, {
       ...(await this.getTask(taskId) || {}),
       status: 'completed',
       completed_at: new Date().toISOString(),
-      question_ids: saved.map((q) => Number(q.id)),
+      question_ids: saved.map((q) => Number(q.questionId)),
       stats: {
         blocks_total: chunks.length,
         blocks_failed: failedBlocks.length,
@@ -414,7 +445,7 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
     await this.redis.del(`ai:task:active:${regulation.id}`);
     this.audit.log({
       actor_id: input.actor.id, actor_name: input.actor.name, action: 'ai.generate', object_type: 'regulation',
-      object_id: regulation.id, detail: { task_id: taskId, generated: saved.length }, result: 'success', source_ip: null,
+      object_id: regulation.id, detail: { task_id: taskId, category_id: input.categoryId, difficulty: input.difficulty, generated: saved.length }, result: 'success', source_ip: null,
     });
   }
 
@@ -426,8 +457,9 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
     block: GenerationBlock,
     plan: { single: number; multiple: number },
     existing: Set<string>,
-  ): Promise<{ valid: ParsedQuestion[]; invalidCount: number; failed: boolean; reason?: string }> {
-    const attempt = async (retry: number): Promise<{ valid: ParsedQuestion[]; invalidCount: number; failed: boolean; reason?: string }> => {
+    difficulty: Difficulty,
+  ): Promise<GenerationResult> {
+    const attempt = async (retry: number): Promise<GenerationResult> => {
       try {
         const hasImages = Boolean(block.pages?.images.length);
         const source = hasImages
@@ -450,7 +482,7 @@ ${block.text || ''}
 
 请生成 ${plan.single} 道单选题（type=single）与 ${plan.multiple} 道多选题（type=multiple），合计 ${plan.single + plan.multiple} 题。`;
         const raw = await this.gateway.chat([
-          { role: 'system', content: this.systemPrompt(Array.from(existing).slice(-50)) },
+          { role: 'system', content: this.systemPrompt(Array.from(existing).slice(-50), difficulty) },
           { role: 'user', content },
         ]);
         const parsed = this.parseQuestions(raw);
@@ -462,7 +494,15 @@ ${block.text || ''}
             return { valid: [], invalidCount: parsed.invalidCount, failed: true, reason: '生成结果答案分布异常（全部集中于同一选项），已丢弃，请重新发起' };
           }
         }
-        return { ...parsed, failed: false };
+        return {
+          ...parsed,
+          failed: false,
+          ...(hasImages ? {
+            sourcePageGroup: index,
+            sourcePageStart: block.pages!.startPage,
+            sourcePageEnd: block.pages!.endPage,
+          } : {}),
+        };
       } catch (e: any) {
         // 块级失败块级重试 ≤ 2 次（05 册 4.4.2），不拖累其他块
         if (retry < 2) return attempt(retry + 1);
@@ -479,6 +519,8 @@ ${block.text || ''}
       task_id: task.task_id,
       status: task.status,
       created_at: task.created_at,
+        category_id: task.category_id,
+        difficulty: task.difficulty,
     };
     if (task.status === 'completed') {
       base.question_ids = task.question_ids;
@@ -502,13 +544,19 @@ ${block.text || ''}
   private questionView(q: Question) {
     return {
       id: Number(q.id),
-      regulation_id: Number(q.regulationId),
-      version_id: Number(q.versionId),
+        regulation_id: q.regulationId === null ? null : Number(q.regulationId),
+        version_id: q.versionId === null ? null : Number(q.versionId),
+        question_id: String(q.id),
+        current_version_id: q.currentVersionId ? String(q.currentVersionId) : null,
+        category_id: q.categoryId ? String(q.categoryId) : null,
+        difficulty: q.difficulty,
+        concept_id: q.conceptId ? String(q.conceptId) : null,
       type: q.type,
       stem: q.stem,
       options: q.options,
       answer: q.answer,
       analysis: q.analysis,
+        rubric: q.rubric,
       score: Number(q.score),
       status: q.status,
       source: q.source,

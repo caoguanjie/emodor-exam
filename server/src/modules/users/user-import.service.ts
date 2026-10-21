@@ -178,7 +178,11 @@ export class UserImportService {
         departmentId: (r as any).deptId || null,
         role: r.role,
         status: 1,
+        forcePasswordChange: 1,
+        loginCount: 0,
         lastLoginAt: null,
+        lastLoginIp: null,
+        rolesConfigured: 0,
       });
 
     let successCount = 0;

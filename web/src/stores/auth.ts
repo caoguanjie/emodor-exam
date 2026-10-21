@@ -8,6 +8,11 @@ export interface AuthUser {
   employee_no: string | null;
   department_id: number | null;
   role: 'super_admin' | 'regulation_admin' | 'employee';
+  permissions?: string[];
+  force_password_change?: boolean;
+  login_count?: number;
+  last_login_at?: string | null;
+  last_login_ip?: string | null;
 }
 
 /** 会话状态（双令牌：access 内存持有，refresh 经 HttpOnly Cookie） */
@@ -19,8 +24,9 @@ export const useAuthStore = defineStore('auth', {
   }),
   getters: {
     isLoggedIn: (s) => !!s.accessToken,
-    isAdmin: (s) => !!s.user && (s.user.role === 'super_admin' || s.user.role === 'regulation_admin'),
+    isAdmin: (s) => !!s.user && (s.user.role === 'super_admin' || s.user.role === 'regulation_admin' || (s.user.permissions?.length || 0) > 0),
     isSuperAdmin: (s) => !!s.user && s.user.role === 'super_admin',
+    can: (s) => (code: string) => s.user?.role === 'super_admin' || !!s.user?.permissions?.includes(code),
   },
   actions: {
     setAccessToken(token: string) {
@@ -31,8 +37,11 @@ export const useAuthStore = defineStore('auth', {
       this.needChangePassword = v;
       sessionStorage.setItem('re_pwd_pending', v ? '1' : '0');
     },
-    async login(username: string, password: string) {
-      const d: any = await http.post('/auth/login', { username, password });
+    async login(username: string, password: string, captchaId?: string, captchaCode?: string) {
+      const body: Record<string, string> = { username, password };
+      if (captchaId) body.captcha_id = captchaId;
+      if (captchaCode) body.captcha_code = captchaCode;
+      const d: any = await http.post('/auth/login', body);
       this.setAccessToken(d.access_token);
       this.user = d.user;
       this.setPwdPending(!!d.force_change_password);

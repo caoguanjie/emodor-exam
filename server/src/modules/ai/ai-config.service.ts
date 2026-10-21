@@ -15,7 +15,7 @@ export interface AiConfigValue {
 
 /**
  * AI 配置服务（05 册 4.4.1 / 07 册 4.2.2）：
- * 环境变量为初始兜底；super_admin 界面配置为权威副本 —— AES-256-GCM 加密后
+ * 环境变量为初始兜底；具备 ai_config:write 的管理端配置为权威副本 —— AES-256-GCM 加密后
  * 存应用数据目录配置文件（不落 MySQL 业务表，A-05 不引入第 13 张表）；
  * Redis 仅作读缓存 ai:config:cache（TTL 10 分钟，可再生）；
  * api_key 界面仅掩码回显（sk-****xxxx），明文不进日志。

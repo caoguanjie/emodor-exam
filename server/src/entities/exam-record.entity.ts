@@ -1,19 +1,48 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import type { ExamDifficulty, GradeState, LearnerSource, RuleSnapshot, SubmissionMethod } from '../common/training-contracts';
 
 @Entity('exam_record')
+@Index('uk_paper_user_attempt', ['paperId', 'userId', 'attemptNo'], { unique: true })
+@Index('uk_assignment_attempt', ['assignmentId', 'attemptNo'], { unique: true })
+@Index('uk_active_assignment', ['activeAssignmentId'], { unique: true })
 export class ExamRecord {
-  @PrimaryGeneratedColumn({ type: 'bigint' })
+  @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })
   id: string;
 
-  @Column({ name: 'paper_id', type: 'bigint' })
+  @Column({ name: 'paper_id', type: 'bigint', unsigned: true })
   paperId: string;
 
   /** 制度冗余快照（开考时随 paper 写入、不再变更，03 册 3.4.4） */
-  @Column({ name: 'regulation_id', type: 'bigint' })
-  regulationId: string;
+  @Column({ name: 'regulation_id', type: 'bigint', unsigned: true, nullable: true })
+  regulationId: string | null;
 
-  @Column({ name: 'user_id', type: 'bigint' })
+  @Column({ name: 'user_id', type: 'bigint', unsigned: true })
   userId: string;
+
+  @Column({ name: 'assignment_id', type: 'bigint', unsigned: true, nullable: true })
+  assignmentId: string | null;
+
+  /** Equals assignment_id only while this row is active; NULL in every terminal state. */
+  @Column({ name: 'active_assignment_id', type: 'bigint', unsigned: true, nullable: true })
+  activeAssignmentId: string | null;
+
+  @Column({ name: 'release_id', type: 'bigint', unsigned: true, nullable: true })
+  releaseId: string | null;
+
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  source: LearnerSource | null;
+
+  @Column({ name: 'category_id', type: 'bigint', unsigned: true, nullable: true })
+  categoryId: string | null;
+
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  difficulty: ExamDifficulty | null;
+
+  @Column({ name: 'rule_snapshot', type: 'json', nullable: true })
+  ruleSnapshot: RuleSnapshot | null;
+
+  @Column({ name: 'snapshot_origin', type: 'varchar', length: 32, default: 'legacy_unavailable' })
+  snapshotOrigin: 'release' | 'legacy_start' | 'legacy_unavailable';
 
   @Column({ name: 'attempt_no', type: 'int', default: 1 })
   attemptNo: number;
@@ -34,6 +63,33 @@ export class ExamRecord {
 
   @Column({ name: 'submitted_at', type: 'datetime', precision: 3, nullable: true })
   submittedAt: Date | null;
+
+  @Column({ name: 'draft_revision', type: 'int', unsigned: true, default: 0 })
+  draftRevision: number;
+
+  @Column({ name: 'draft_payload_hash', type: 'char', length: 64, nullable: true })
+  draftPayloadHash: string | null;
+
+  @Column({ name: 'draft_saved_at', type: 'datetime', precision: 3, nullable: true })
+  draftSavedAt: Date | null;
+
+  @Column({ name: 'last_heartbeat_at', type: 'datetime', precision: 3, nullable: true })
+  lastHeartbeatAt: Date | null;
+
+  @Column({ name: 'device_summary', type: 'varchar', length: 255, nullable: true })
+  deviceSummary: string | null;
+
+  @Column({ name: 'submission_method', type: 'varchar', length: 16, nullable: true })
+  submissionMethod: SubmissionMethod | null;
+
+  @Column({ name: 'grading_state', type: 'varchar', length: 32, default: 'not_submitted' })
+  gradingState: GradeState;
+
+  @Column({ name: 'grading_revision', type: 'int', unsigned: true, default: 0 })
+  gradingRevision: number;
+
+  @Column({ name: 'graded_at', type: 'datetime', precision: 3, nullable: true })
+  gradedAt: Date | null;
 
   @Column({ name: 'switch_count', type: 'int', default: 0 })
   switchCount: number;
