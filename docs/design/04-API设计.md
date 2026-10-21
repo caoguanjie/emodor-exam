@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-21）**：本册 legacy 接口及 A2—A5、B1—B4、C1/C2 均以实际 controller/entity/migration/service 为准。C2 已新增 `/me/exams`、`/me/exams/{id}/start`、`/me/exam-records/{id}`，冻结个人来源、类别、难度、规则、题单与显示映射；旧 `/exams` 固定客户端经适配器继续完成 start→heartbeat/recover→submit/result，但 training 卷不进入旧可考列表。持久草稿、图片答案与统一 finalizer 仍属 C3。源码登记不代表开发库/生产库已升级，后端证据也不替代独立 H5/PC 业务验收。
+> **状态边界（2026-10-22）**：本册 legacy 接口及 A2—A5、B1—B4、C1—C3 均以实际 controller/entity/migration/service 为准。C3 在 C2 个人快照上新增 `/me/exam-records/{id}` 的持久草稿、心跳、切屏、图片上传、统一交卷与结果读取；旧 `/exams` 固定客户端继续保持原形状，但 assignment 分支已桥接持久答案与同一 finalizer。training 卷仍不进入旧可考列表。人工阅卷写接口属于 C4，源码登记不代表开发库/生产库已升级，后端证据也不替代独立 H5/PC 业务验收。
 
 ---
 
@@ -15,7 +15,7 @@
 | 项 | 约定 |
 |---|---|
 | 基础 URL | `/api/v1`（由 nginx 反向代理至 NestJS 应用） |
-| 协议风格 | REST：资源名词复数、动作用 HTTP 方法表达（GET 查询 / POST 创建与动作 / PUT 修改 / DELETE 删除）。PUT 用于资源状态字段的部分修改（非全量替换）；非幂等动作（retry、archive 等）一律使用 POST |
+| 协议风格 | REST：资源名词复数、动作用 HTTP 方法表达（GET 查询 / POST 创建与动作 / PUT 修改 / DELETE 删除）。多数 legacy PUT 为字段修改；C3 `PUT .../draft` 明确定义为带 revision 的全量替换。非幂等动作（retry、archive 等）一律使用 POST |
 | 请求格式 | `application/json`；文件上传为 `multipart/form-data`；Excel 导出响应为二进制流（`Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`） |
 | 认证方式 | `Authorization: Bearer <access_token>`（JWT 双令牌，见 1.3） |
 | 时间格式 | ISO 8601（`2026-09-12T14:30:00.000+08:00`）；纯秒数字段（如 `total_seconds`）为整型 |
@@ -80,6 +80,8 @@
 |---|---|
 | C2 开考 `POST /me/exams/{id}/start` 与旧固定入口 | `sys_user → exam_assignment → exam_record → 新开时 exam_paper` 数据库锁及唯一键裁决；Redis start 锁不参与正确性。有效 active 返回同一记录，过期 active 返回 40904 等待事务外 sweeper |
 | 交卷 `POST /exams/records/{id}/submit` | 三层幂等（05 册 6.4.5）：状态前置校验 + Redis 提交锁 + 事务内终态判定；重复调用返回首次评分结果 |
+| C3 草稿 `PUT /me/exam-records/{id}/draft` | 只接受 `current+1`；当前 revision+同一规范化 payload 返回原 ACK（含截止后重放），当前 revision 异 payload或其他版本返回 40905 |
+| C3 交卷 `POST /me/exam-records/{id}/submit` | `sys_user → exam_record` 行锁；可选最后一版草稿与 finalizer 同事务，超时忽略新 body；主动/定时并发后到者返回首次 `FinalResult`，不重复缓存失效与审计 |
 | 会话开始 `POST /learning/sessions/start` | 单活跃会话约束（后开者胜）：同 user + regulation 已有活跃会话时，旧会话被结束落库并返回新会话（05 册 5.4.1） |
 | 学习心跳 | 天然幂等：以服务端时钟差结算，重复/乱序心跳不虚增时长（45 秒封顶，05 册 5.4.2） |
 | 视频会话开始 `POST /me/video-sessions` | 短事务持 `sys_user` 行锁做范围/活动重查；旧 reading 在释放事务连接后按原算法收口并最多重试 3 次，最终事务关闭旧 video 后再取新锚点；`active_user_id` 可空唯一索引兜底 |
@@ -91,11 +93,11 @@
 |---|---|---|
 | `/auth`、`/users`、`/departments`、`/regulations`、`/ai`、`/learning`、旧 `/exams`、旧 `/statistics` | 当前 legacy 契约 | 旧制度阅读资格、旧固定卷字段与自动客观评分保持兼容；下发不含答案/解析，refresh 走 HttpOnly Cookie，DTO/统一信封不变 |
 | `/admin/training-categories`、`/admin/students`、`/admin/questions`、`/me`、`/admin`、`/media`、`/site-config`、B1 课程/视频内容版本、B2 视频会话/进度、B3 四题型题库版本与 C1 `/admin/papers` | 当前增量契约（A2—A5/B1—B4/C1） | 新接口使用字符串 ID 与 `Page.items`；B2 课程完成与制度阅读分开；B4 复用 A2 批次归属/幂等语义与 B3 同事务版本写入；C1 只冻结发布规则/候选版本，不冒充 C2 个人题单 |
-| 个人题单与原子开考 | 当前增量契约（C2） | `/me/exams*` 使用字符串 ID、本人所有权与不可变快照；在考不下发 answer/analysis/rubric |
-| 持久草稿、图片答案/阅卷、监控、培训统计 | 计划契约（C3—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后才补精确契约 |
+| 个人题单、持久答案与统一终结 | 当前增量契约（C2/C3） | `/me/exams*` 使用字符串 ID、本人所有权与不可变快照；在考不下发 answer/analysis/rubric；C3 的草稿、图片答案、主动/超时 finalizer 与结果合同见 3.7.1 |
+| 人工阅卷、监控、培训统计 | 计划契约（C4—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后才补精确契约 |
 | 旧固定卷 vs 新培训考试开考 | 两条口径并存 | 旧固定卷继续检查 `learning_record.is_valid`；新培训考试默认关闭学习门槛，但仍检查发布、类别/来源、权限、次数、身份状态和服务端 deadline |
 
-目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 客观题自动判分/图片题待阅 → 受控逐题评分 → 服务端汇总 → 最终结果只读。C1/C2 已落发布快照、个人归属、每次题单与显示映射；持久草稿、主动提交、图片答案及统一 finalizer 仍由 C3/C4 接续。旧 `/exams` 只为制度固定客户端保留兼容形状，training 记录不能借该入口提交。
+目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 客观题自动判分/图片题待阅 → 受控逐题评分 → 服务端汇总 → 最终结果只读。C1—C3 已落发布快照、个人归属、题单/显示映射、确认稿与统一 finalizer；C4 接续人工阅卷。旧 `/exams` 只为制度固定客户端保留兼容形状，training 记录不能借该入口提交。
 
 ---
 
@@ -110,7 +112,7 @@
 | /admin/training-categories | 1. 组织权限模块（A2） | 6 | 培训类别分页、详情、增改、启停、引用保护删除 |
 | /admin/students | 1. 组织权限模块（A2/A4） | 11 | 学员分页、CRUD、头像、启停、重置密码、xlsx 模板/预检/批次确认 |
 | /admin/questions | 3. AI 出题模块（B4） | 4 | Excel/TXT 同版模板、预检、批次状态与 owner 幂等确认 |
-| /me | 1. 组织权限模块（A2/A4）及 4. 学习行为管控模块（B1） | 3 | 本人资料查询/修改；首页组合公开站点配置与本人可见课程分页 |
+| /me | 1. 组织权限模块、4. 学习行为管控及 5. 考试评分模块 | 12 | 本人资料/首页，以及 C2/C3 考试列表、开考、恢复、草稿、答案图片、心跳、切屏、交卷、结果；课程/视频另列子前缀 |
 | /media | 1. 组织权限模块（A4） | 5 | 受控上传、限制查询、状态/Range 读取、引用保护删除 |
 | /admin | 1. 组织权限模块（A3/A5） | 24 | A3 权限/角色/管理员/会话 10 个；A5 菜单/字典/站点配置/审计 14 个 |
 | /site-config | 1. 组织权限模块（A5） | 2 | 严格公开 Logo/轮播白名单；仅当前配置的品牌图片内容流 |
@@ -231,7 +233,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 方法 | 路径 | 权限 | 请求与响应 |
 |---|---|---|---|
 | GET | `/media/limits` | 登录 | 返回 `video_max_bytes`（默认 536870912，服务端/网关硬上限一致）、`image_max_bytes`（默认 10485760）、`image_max_pixels`（默认 25000000）、`probe_timeout_ms`（默认 30000）及允许类型；不返回路径/密钥 |
-| POST | `/media/upload` | 登录；非头像用途需 `media:write` | multipart `file` + `purpose`（avatar/course_cover/video/question/branding），可选头像 `owner_id`；公开 DTO 不接受 `answer`，返回 40001。内部 `MediaService` 保留 image-only `answer` 能力，只有未来 C3 专用路由可在校验题单归属和截止时间后调用。成功 `data={asset_id,status,duration_ms}`（A1 新接口 ID 均为字符串），视频实际探测后才为 ready |
+| POST | `/media/upload` | 登录；非头像用途需 `media:write` | multipart `file` + `purpose`（avatar/course_cover/video/question/branding），可选头像 `owner_id`；公开 DTO 不接受 `answer`，返回 40001。内部 `MediaService` 的 image-only `answer` 只由 C3 `/me/exam-records/{id}/answer-images` 在校验题单归属和截止时间后调用。成功 `data={asset_id,status,duration_ms}`（A1 新接口 ID 均为字符串），视频实际探测后才为 ready |
 | GET | `/media/{id}` | 资源拥有者/已注册 owner authorizer | 查询 `asset_id/purpose/media_kind/mime_type/size_bytes/status/duration_ms`；公开 status 仅为 `processing/ready/failed`，内部 `deleting` 按 40401 不存在处理 |
 | GET | `/media/{id}/content` | 资源拥有者/已注册 owner authorizer | 私有流，支持单一 `Range: bytes=start-end`，命中返回 206 与 `Content-Range`；无效或不可满足 Range 返回 41601/HTTP 416；文件流跳过统一信封 |
 | DELETE | `/media/{id}` | 资源拥有者 | 有任何 `media_reference` 时返回 40913；无引用后先落内部 `deleting` 再删除物理文件，失败保留行供重试并返回 50004/HTTP 503，成功或文件已不存在才删数据库行 |
@@ -510,29 +512,45 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 **POST /exams/papers/{id}/start**：资格语义仍是制度 published → 试卷 published → `is_valid = 1` → 次数/已通过检查 → 无并发 active。C2 实际原子顺序为 `sys_user` 写锁（并校验启用）→ `exam_assignment` → 本人该卷全部 `exam_record` → 新开时 `exam_paper`；数据库唯一键是权威并发防线，不依赖旧 Redis start 锁。通过后同事务创建 assignment、`exam_record`、`exam_record_question` 与题干/选项媒体引用；返回旧数字字段时把内部 item ID 映射回真实冻结 source question ID，且**不含 answer 与 analysis**。
 
-**POST /exams/records/{id}/heartbeat**：body 含 `answers[]`（question_id + 呈现位置选择，Redis 暂存，超时自动交卷的评分输入）；响应返回 `remaining_seconds`（`deadline − 服务端当前时刻`，前端每 30 秒校准，不信任本地时钟，05 册 6.4.3）。
+**POST /exams/records/{id}/heartbeat**：body 含 `answers[]`（source question_id + 呈现位置选择）。有 C2 assignment 的记录先按同一 record 映射为 item_id，再把 partial patch 合并进数据库确认稿；遗漏题目不清空。真正升级前无 assignment 的进行中记录继续使用 Redis 暂存。响应返回 `remaining_seconds`（`deadline − 服务端当前时刻`，前端每 30 秒校准，不信任本地时钟）。
 
-**POST /exams/records/{id}/switch**：切屏事件即时上报（不等心跳周期）；服务端 Redis INCR + 1 秒窗口去抖（05 册 6.4.4）；交卷时一次性写回 `exam_record.switch_count`。
+**POST /exams/records/{id}/switch**：切屏事件即时上报（不等心跳周期）。所有 assignment 入口在本人/账号/记录状态校验后复用 1 秒 Redis 去抖，并在事务内递增 `exam_record.switch_count`；旧无 assignment 路径保持 Redis INCR + 交卷写回。
 
-**POST /exams/records/{id}/submit**：body 含 `answers[]`；服务端用同 seed 重算乱序映射，把呈现位置还原为题目原始选项下标后落库 `exam_answer` 并评分（05 册 6.4.2 判分语义）；超时自动交卷（定时任务，非 API）走同一评分路径，`status = timeout`、未答题目不得分。
+**POST /exams/records/{id}/submit**：旧 body 仍含 `answers[]`。有 assignment 的记录把 source question_id 映射为本次 item_id，合并持久确认稿并调用 C3 finalizer；终态重试先返回旧形状结果，不受重试 body 影响。旧无 assignment 记录保持原 Redis/评分路径。旧结果中的 `options/answer/selected` 均为原始选项域，010 不改既有 selected/score。
 
 **GET /exams/records/{id}/result**：`status` / `score` / `switch_count` / 逐题明细（stem / selected（已还原原始下标）/ is_correct / gained_score / answer / analysis）——解析仅在交卷后的成绩回看中下发。
 
-### 3.7.1 C2 本人个人题单 /me（权限：本人，字符串 ID）
+### 3.7.1 C2/C3 本人考试 /me（权限：本人，字符串 ID）
 
 | # | 方法 | 路径 | 说明 |
 |---|---|---|---|
 | 1 | GET | /me/exams | 当前类别已发布 training 卷 + 本人已有 assignment 分页列表 |
 | 2 | POST | /me/exams/{id}/start | 原子首次开考、补考或有效 active 恢复 |
 | 3 | GET | /me/exam-records/{id} | 本人按 record_id 恢复有效在考题单 |
+| 4 | PUT | /me/exam-records/{id}/draft | 全量替换并确认一版持久草稿 |
+| 5 | POST | /me/exam-records/{id}/answer-images | 图片题答案专用上传（multipart） |
+| 6 | POST | /me/exam-records/{id}/heartbeat | 服务端时间/设备摘要/草稿版本心跳 |
+| 7 | POST | /me/exam-records/{id}/switch | 切屏上报，1 秒去抖后持久计数 |
+| 8 | POST | /me/exam-records/{id}/submit | 可选保存最后草稿并统一幂等终结 |
+| 9 | GET | /me/exam-records/{id}/result | 本人读取已交卷结果与交卷后解析 |
 
 `POST /me/exams/{id}/start` 的首次新开要求账号启用、试卷 published、启用培训类别、用户 category/source 必填且类别与 release 匹配。random 卷按 `institution → easy`、`external → hard` 抽取；fixed 卷按冻结题单得出单一难度或 `mixed`。首次同事务冻结 `release_id/source/category_id/difficulty/rule_snapshot/snapshot_origin`，补考沿用 assignment，不按用户新资料或题库当前内容重算。升级前旧 `exam_record` 同样计入 `max_attempts`，默认总次数 3 次（含首次）。
 
 恢复顺序刻意早于试卷状态和用户当前 category/source 检查：有效 active 即使试卷已撤回也返回同一 record、deadline、题序和选项序；账号停用仍拒绝。服务端 `deadline_at` 已过时返回 40904，不在持有用户锁的 start 事务内嵌套终结；30 秒 timeout sweeper 在事务外读取冻结规则/题单完成客观收口并清空 `active_assignment_id`。收口后再开按冻结最大次数裁决。
 
-成功响应 `AttemptView` 固定含 `record_id/paper_id/release_id/source/category_id/difficulty/deadline_at/server_now/draft_revision/questions/answers`。`questions[]` 只含 `item_id/type/stem/options/score`，`item_id` 是新答题主键；在考响应任何层级都不得出现 `answer/analysis/rubric`。C2 的 `answers` 仅兼容旧 Redis 暂存且 `draft_revision=0`；持久确认稿、图片附件与主动 training finalizer 属 C3，当前 training 记录调用旧 `/exams/records/*` 执行入口返回 40402。
+成功响应 `AttemptView` 固定含 `record_id/paper_id/release_id/source/category_id/difficulty/deadline_at/server_now/draft_revision/questions/answers`。`questions[]` 只含 `item_id/type/stem/options/score`，`item_id` 是新答题主键；在考响应任何层级都不得出现标准 `answer/analysis/rubric`。record、items、确认答案在同一 `REPEATABLE READ` 事务快照中读取，避免把旧 revision 与新答案混合。`answers[].selected` 是显示域；数据库 `exam_answer.selected` 是原始域，保存只映射一次、恢复时逆映射一次。
 
 个人题图使用 `media_reference(owner_type=exam_record_question, owner_id=item_id)`，与题单创建同事务绑定。本人只可读取精确出现在该 item 冻结 `stem/options[].text` 的 `purpose=question` 资源；answer/analysis/rubric 图片不绑定、不授权，也不授予任何题库管理权限。
+
+`DraftInput` 为 `{revision, answers[]}`；每个答案是 `{item_id, selected?}` 或图片题 `{item_id, asset_ids?}`。`answers` 是完整替换集，单选/判断最多一个显示下标，多选下标去重且不越界，客观题不得带附件，图片题不得带 selected，单题最多确认 9 个资源。成功返回 `DraftAck={revision,saved_at,answered_count}`。只接受 `current+1`；同 revision、同规范化 payload 重试返回首次 ACK 且不刷新 `saved_at`，这一确认回放优先于 deadline 拒绝。当前 revision 的不同 payload、旧/跳号 revision、截止后的新写入均返回 40905。
+
+`POST .../answer-images` 只接受 multipart 的 `item_id` 与单个 `file`。它是 `purpose=answer` 的唯一 HTTP 上传入口；通用 `/media/upload` 不接受 answer。上传后再次按 `sys_user → exam_record` 锁序校验账号、本次记录、exact 图片 item 与 deadline，再建立独立 `exam_answer_item` 引用。同一人的另一 attempt 附件也不能借用。上传成功只表示上下文归属，不构成确认答案；第 10 张可上传，但把 10 个 asset_id 放进一次草稿保存会返回 40001。探测后发现记录过期/终态时回收未绑定上传；finalizer 释放本 record 未进入确认稿的其余引用，物理文件沿用 A4 孤儿回收。
+
+`POST .../heartbeat` body 可选 `{device_summary}`，响应 `{server_time,remaining_seconds,deadline_at,draft_revision}`。5 秒窗口只抑制 `last_heartbeat_at` 的高频推进，不丢答案事实。`POST .../switch` 返回 `{switch_count}`；权限/状态校验后按 1 秒 Redis key 去抖，再持久递增。
+
+`POST .../submit` body 可省略，或完整复用 `DraftInput`。未过期时最后草稿与 finalizer 同事务；已过期时忽略新 body，只按此前确认稿以 timeout 终结。主动、心跳/切屏发现超时和定时 sweeper 都锁同一 record、复用同一 finalizer；新终结提交后才失效制度统计缓存并写一次 `exam.submit` 审计，终态重试只返回首次结果。
+
+`FinalResult` 固定含 `record_id/grading_state/grading_revision/submission_method/legacy/submitted_at/graded_at/score/passed/correct_rate/items`。`items[]` 含安全题面、本人 `answer`、显示域 `correct_answer`、`analysis/rubric/gained_score/comment/grading_version`。客观题即时 finalized；有已确认图片答案时 pending_manual，`graded_at/score/passed/correct_rate` 为 NULL。C3 新结果 `submission_method=manual|timeout、legacy=false`；C2 历史终态只按可证明状态/分数投影，`submission_method/graded_at=NULL、legacy=true`，不得猜成 manual。
 
 ### 3.8 统计模块 /statistics（权限：制度管理）
 
@@ -911,6 +929,73 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 }
 ```
 
+### 4.7.1 C3 确认草稿与结果（字符串 ID）
+
+`PUT /api/v1/me/exam-records/9001/draft` 请求：
+
+```json
+{
+  "revision": 3,
+  "answers": [
+    { "item_id": "9101", "selected": [0] },
+    { "item_id": "9104", "asset_ids": ["7801", "7802"] }
+  ]
+}
+```
+
+确认响应：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "revision": 3,
+    "saved_at": "2026-10-22T01:30:15.123Z",
+    "answered_count": 2
+  }
+}
+```
+
+`POST /api/v1/me/exam-records/9001/submit` 可不带 body，或携带同一 `DraftInput` 作为最后确认稿。客观题即时结果示例（`items` 仅节选一题，真实响应包含冻结题单全部项）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "record_id": "9001",
+    "grading_state": "finalized",
+    "grading_revision": 0,
+    "submission_method": "manual",
+    "legacy": false,
+    "submitted_at": "2026-10-22T01:31:00.000Z",
+    "graded_at": "2026-10-22T01:31:00.000Z",
+    "score": 62.5,
+    "passed": true,
+    "correct_rate": 0.5,
+    "items": [
+      {
+        "item_id": "9101",
+        "type": "single",
+        "stem": "示例题干",
+        "options": [{ "key": "B", "text": "乙" }, { "key": "A", "text": "甲" }],
+        "score": 25,
+        "answer": { "item_id": "9101", "selected": [0] },
+        "correct_answer": [0],
+        "analysis": "示例解析",
+        "rubric": null,
+        "gained_score": 25,
+        "comment": null,
+        "grading_version": 0
+      }
+    ]
+  }
+}
+```
+
+若确认稿含图片答案，`grading_state="pending_manual"`，且 `graded_at/score/passed/correct_rate` 均为 NULL；`items[].answer.asset_ids` 保留已确认资源。C2 历史结果的 `submission_method/graded_at` 可为 NULL，并以 `legacy=true` 明示元数据遗留。
+
 ### 4.8 单项制度统计概览 GET /api/v1/statistics/regulations/12/overview
 
 响应（成功）：
@@ -965,7 +1050,7 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 
 | code | HTTP | message（示例） | 触发场景 |
 |---|---|---|---|
-| 40001 | 400 | 参数错误 | 请求体/查询参数校验失败；旧固定客户端提交的 source question_id 不属于本人本次冻结题单也返回此码 |
+| 40001 | 400 | 参数错误 | 请求体/查询参数校验失败；旧固定客户端 source question_id 不属于本次题单、题型/下标非法、图片题一次保存超过 9 张也返回此码 |
 | 40101 | 401 | 未认证或令牌无效 | 缺失 Bearer 令牌 / 验签失败 |
 | 40102 | 401 | 令牌已过期 | access token 过期（客户端应刷新） |
 | 40103 | 401 | 刷新令牌无效 | refresh 缺失/过期/类型不符 |
@@ -974,14 +1059,14 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 | 40106 | 429 | 账号临时锁定，请 N 秒后重试 | username 连续失败 5 次锁定 10 分钟（message 含剩余秒数，07 册 2.2.2） |
 | 40107 | 401 | 令牌已被吊销 | token.iat 早于 auth:block:{user_id} 封禁时刻（改密/重置密码/停用后旧令牌，07 册 2.1.4） |
 | 40301 | 403 | 无权限访问该资源 | 角色不匹配（如 employee 调管理接口） |
-| 40302 | 403 | 无权访问该数据 | 数据范围越界（如读取他人学习记录） |
+| 40302 | 403 | 无权访问该数据 | 数据范围越界（如读取他人学习记录，或 answer 附件的 owner/上传者/exact record-item 引用不匹配） |
 | 40401 | 404 | 资源不存在 | 路径资源（制度/试卷/记录等）不存在 |
 | 40402 | 404 | 制度内容不可见 | 阅读内容不可见；training 卷调用旧 `/exams` 开考/记录执行入口也返回此码 |
 | 40901 | 409 | 未完成有效学习，暂无考试资格 | **legacy 制度固定卷**开考校验③失败；data 附差距（时间缺口/底部段未覆盖）。新培训考试默认不使用该错误作为学习门槛 |
 | 40902 | 409 | 补考次数已用尽 | 开考校验④失败（attempt_no > max_attempts） |
 | 40903 | 409 | 已通过该考试，无需再次作答 | 开考校验④：前次终态 = passed |
 | 40904 | 409 | 已有进行中的考试 | active 尚有效时幂等恢复；active 已过 deadline 时提示等待 timeout sweeper，不能绕过计次创建新记录 |
-| 40905 | 409 | 交卷失败：考试已结束 | 交卷时记录已终态（重复交卷幂等场景直接返回首次结果，此码用于状态冲突） |
+| 40905 | 409 | 交卷失败：考试已结束 | 草稿版本/payload 冲突、deadline 后新写入、在考读取结果等状态冲突；终态 submit 本身直接返回首次结果 |
 | 40906 | 409 | 学习会话冲突 | 心跳/暂停到达时会话已被新会话取代或已收口（单活跃约束；已收口语义为「会话已结束，请重新开始学习」，前端应刷新 session_id） |
 | 40907 | 409 | 题目组成不可变更 | 修改已发布试卷的 paper_question |
 | 40908 | 409 | 题目正在考试中使用，禁止编辑 | 题目被 in_progress 考试记录引用时修改 stem/options/answer/type（仅允许 analysis，05 册 4.4.6） |
@@ -1049,8 +1134,10 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 | POST /learning/heartbeat/pause、resume | 同一 session_id 每分钟最多 60 次；重复 pause / 重复 resume 幂等（第二次直接返回当前状态，不重复结算） | 事件驱动端点不适用 30 秒节拍窗口——丢弃 pause/resume 会破坏失焦语义（resume 被丢弃 → 下拍 diff 含整段失焦时间、pause 被丢弃 → 失焦期间照常计费，虚增最多 45 秒/次，故单独限流） |
 | POST /me/video-sessions/{id}/heartbeat | 客户端默认 30 秒；序号必须递增，单次最多确认 45 秒 | DB session→record 行锁；重放/乱序返回当前进度，暂停/缓冲/后台零累计，跳播不写覆盖 |
 | POST /exams/records/{id}/heartbeat | 30 秒节拍窗口限流 | 作答暂存幂等（覆盖写） |
-| POST /exams/records/{id}/switch | 1 秒去抖窗口 | Redis INCR + 窗口合并（前端 500ms 事件合并后上报，服务端 1 秒二次去抖，05 册 6.4.4） |
+| POST /exams/records/{id}/switch、POST /me/exam-records/{id}/switch | 1 秒去抖窗口 | 权限/状态校验后共用 Redis 窗口；assignment 记录在事务内持久递增，旧无 assignment 路径保持 Redis INCR |
 | POST /exams/records/{id}/submit | 幂等：重复交卷返回首次结果 | 三层幂等（05 册 6.4.5） |
+| PUT /me/exam-records/{id}/draft | revision 单调且 payload 哈希一致 | current+1 写入；当前 revision 同 payload 回放原 ACK，异 payload/旧版/跳号拒绝 |
+| POST /me/exam-records/{id}/submit | 主动/超时/并发统一幂等 | user→record 或 timeout-only record 行锁；同事务可选保存+终结，终态返回首次 FinalResult |
 | POST /regulations/{id}/versions | 并发上传同一制度串行化（版本号唯一） | 事务 + uk_regulation_version |
 | POST /admin/courses/{id}/publish | 上架与下架后重上架均重新校验类别和必学视频；发布中间态不对学员可见 | 课程行悲观锁 + 同事务 readiness 校验 |
 | POST /admin/courses/{id}/lessons/{lessonId}/versions | 同一课时版本号顺序追加，旧行不修改 | 课程/课时行悲观锁 + uk_lesson_version_number |
@@ -1061,9 +1148,9 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 ### 6.3 传输与敏感信息
 
 - 生产环境经 nginx TLS 终止提供 HTTPS（07 册 4.1）；密码仅在登录/改密报文中出现，存储一律 bcrypt。
-- 响应体永不返回 `password_hash`或明文 `api_key`。在考 payload 及 C1 普通预览不返回 `answer/analysis/rubric`；C1 答案版是单独授权的管理接口，不与学员下发契约共用。
+- 响应体永不返回 `password_hash`或明文 `api_key`。在考 payload 及 C1 普通预览不返回标准 `answer/analysis/rubric`；C1 答案版是单独授权的管理接口，不与学员下发契约共用。只有 C3 终态结果可向本人下发冻结标准答案与解析。
 - `trace_id`：50001 错误响应 `data.trace_id` 供日志排查。
-- B3 题库管理预览可读取答案、解析与 rubric，但富文本图片只存 media id 并经 Bearer 鉴权内容接口换取 Blob URL，不暴露私有存储路径或任意外链图片。未来新培训在考 payload 不返回 `answer`、`analysis` 或 rubric；图片答案/阅卷仍由 C3/C4 落地。
+- B3 题库管理预览可读取答案、解析与 rubric，但富文本图片只存 media id 并经 Bearer 鉴权内容接口换取 Blob URL，不暴露私有存储路径或任意外链图片。新培训在考 payload 不返回标准答案、解析或 rubric；C3 只向本人开放 answer 图片的私有读取与结果回看，人工阅卷仍由 C4 落地。
 
 ---
 
@@ -1071,8 +1158,8 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 
 | 校验项 | 结果 |
 |---|---|
-| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；B2 新增 `/me/video-sessions`、本人 `/me/video-records` 与课程 progress，B4 新增 `/admin/questions`，C1 新增 `/admin/papers`，C2 新增 `/me/exams*`，均不冒充独立 H5 或 C3 主动提交/持久草稿 |
-| 当前表名/字段名（snake_case）与 03 册 | 一致（含两张视频学习表、两张版本题库表、C1 `exam_paper/paper_question` 兼容列、`paper_release/paper_release_question` 与 HTTP 层 snake_case 预览规则）；B4 不新增表 |
+| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；B2 新增 `/me/video-sessions`、本人 `/me/video-records` 与课程 progress，B4 新增 `/admin/questions`，C1 新增 `/admin/papers`，C2/C3 新增 `/me/exams*` 的个人题单、持久草稿、图片与统一提交 |
+| 当前表名/字段名（snake_case）与 03 册 | 一致（含 C1 发布快照、C2 个人题单及 C3 `exam_record/exam_answer` 持久作答字段）；B4 不新增表 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
 | 心跳/失焦/乱序/超时/切屏行为与 05 册 | 一致（5.4.2/5.4.3/6.4.1~6.4.5 逐条对应） |
 | 统计口径与 05 册 7.4.1 | 一致（七项指标逐字对齐） |
