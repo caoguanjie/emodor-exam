@@ -41,23 +41,26 @@ import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 type MenuType = 'directory' | 'menu' | 'button';
 interface MenuRow { id:string; parent_id:string|null; name:string; type:MenuType; route_path:string|null; permission_code:string|null; icon:string|null; sort:number; status:number; children:MenuRow[] }
 interface TreeOption { value:string; label:string; children?:TreeOption[] }
+interface MenuForm { id:string; parent_id:string|null; name:string; type:MenuType; route_path:string|null; permission_code:string|null; icon:string|null; sort:number; status:number }
 const routeOptions = ['/admin/departments','/admin/users','/admin/students','/admin/training-categories','/admin/regulations','/admin/questions','/admin/papers','/admin/statistics','/admin/ai-config','/admin/administrators','/admin/roles','/admin/sessions','/admin/system/menus','/admin/system/dictionaries','/admin/system/site-settings','/admin/system/audit-logs'];
 const typeLabel: Record<MenuType,string> = { directory:'目录', menu:'菜单', button:'按钮' };
 const auth = useAuthStore();
 const canWrite = computed(() => auth.can('system_settings:write'));
 const rows = ref<MenuRow[]>([]); const loading = ref(false); const saving = ref(false); const error = ref(''); const dialogVisible = ref(false); const dirty = ref(false);
 const permissionOptions = ref<{code:string;name:string}[]>([]);
-const form = reactive({ id:'', parent_id:null as string|null, name:'', type:'menu' as MenuType, route_path:null as string|null, permission_code:null as string|null, icon:null as string|null, sort:0, status:1 });
-const unsaved = useUnsavedChanges(dirty);
-watch(form, () => { if (dialogVisible.value) dirty.value = true; }, { deep:true });
+const form = reactive<MenuForm>({ id:'', parent_id:null, name:'', type:'menu', route_path:null, permission_code:null, icon:null, sort:0, status:1 });
+let formBaseline:MenuForm={...form};
+const unsaved = useUnsavedChanges(dirty,{onDiscard:discardForm});
+watch(form, () => { if (dialogVisible.value) dirty.value=JSON.stringify(form)!==JSON.stringify(formBaseline); }, { deep:true });
 
 const parentOptions = computed<TreeOption[]>(() => {
   const convert = (items:MenuRow[]):TreeOption[] => items.filter((item) => item.type !== 'button' && item.id !== form.id).map((item) => ({ value:item.id, label:item.name, children:convert(item.children || []) }));
   return convert(rows.value);
 });
 
-async function load() { loading.value=true; error.value=''; try { rows.value = await http.get('/admin/menus') as MenuRow[]; try { permissionOptions.value = await http.get('/admin/permissions') as any; } catch { permissionOptions.value=[]; } } catch (e:any) { error.value=e?.message || '菜单加载失败'; } finally { loading.value=false; } }
-function reset(row?:MenuRow) { Object.assign(form, row ? { ...row, children:undefined } : { id:'',parent_id:null,name:'',type:'menu',route_path:null,permission_code:null,icon:null,sort:0,status:1 }); dirty.value=false; }
+async function load() { loading.value=true; error.value=''; try { rows.value = await http.get('/admin/menus') as MenuRow[]; if(canWrite.value){try { permissionOptions.value = await http.get('/admin/menus/permission-options') as {code:string;name:string}[]; } catch { permissionOptions.value=[]; }}else{permissionOptions.value=[];} } catch (e:any) { error.value=e?.message || '菜单加载失败'; } finally { loading.value=false; } }
+function reset(row?:MenuRow) { formBaseline=row?{id:row.id,parent_id:row.parent_id,name:row.name,type:row.type,route_path:row.route_path,permission_code:row.permission_code,icon:row.icon,sort:row.sort,status:row.status}:{id:'',parent_id:null,name:'',type:'menu',route_path:null,permission_code:null,icon:null,sort:0,status:1};Object.assign(form,formBaseline);dirty.value=false; }
+function discardForm(){dialogVisible.value=false;Object.assign(form,formBaseline);dirty.value=false}
 function openCreate(){ reset(); dialogVisible.value=true; dirty.value=false; }
 function openEdit(row:MenuRow){ reset(row); dialogVisible.value=true; dirty.value=false; }
 async function beforeDialogClose(done:()=>void){ if(await unsaved.confirmDiscard()){ dialogVisible.value=false; done(); } }

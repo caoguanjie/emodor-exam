@@ -1,10 +1,24 @@
-import { onBeforeUnmount, onMounted, type Ref } from 'vue';
+import { onBeforeUnmount, onMounted, watch, type Ref } from 'vue';
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router';
 import { ElMessageBox } from 'element-plus';
 
-const dirtyByRoute = new Map<string, Ref<boolean>>();
+export interface UnsavedChangesOptions {
+  /** Restore the last persisted baseline. The callback owns resetting dirty. */
+  onDiscard?: () => void | Promise<void>;
+  /** A moving route key is useful for shell-level sources such as the profile dialog. */
+  routeKey?: Ref<string>;
+}
 
-async function confirmDiscard(): Promise<boolean> {
+interface DirtySource {
+  token: symbol;
+  dirty: Ref<boolean>;
+  onDiscard?: () => void | Promise<void>;
+  approvedThisTurn: boolean;
+}
+
+const dirtyByRoute = new Map<string, Map<symbol, DirtySource>>();
+
+async function requestDiscard(): Promise<boolean> {
   try {
     await ElMessageBox.confirm('当前页面有未保存内容，确定离开并放弃修改吗？', '未保存提醒', {
       type: 'warning', confirmButtonText: '放弃修改', cancelButtonText: '继续编辑',
@@ -15,30 +29,65 @@ async function confirmDiscard(): Promise<boolean> {
   }
 }
 
-/** Tabs and router guards share the same dirty registry and confirmation. */
-export async function confirmUnsavedChanges(routeKey: string): Promise<boolean> {
-  const dirty = dirtyByRoute.get(routeKey);
-  if (!dirty?.value) return true;
-  const confirmed = await confirmDiscard();
-  if (confirmed) dirty.value = false;
-  return confirmed;
+function registerSource(routeKey: string, source: DirtySource): void {
+  const sources = dirtyByRoute.get(routeKey) || new Map<symbol, DirtySource>();
+  sources.set(source.token, source);
+  dirtyByRoute.set(routeKey, sources);
 }
 
-/** Confirm a bulk tab action once, then mark every affected route clean. */
-export async function confirmUnsavedRoutes(routeKeys: string[]): Promise<boolean> {
-  const dirtyRoutes = [...new Set(routeKeys)].filter((key) => dirtyByRoute.get(key)?.value);
-  if (!dirtyRoutes.length) return true;
-  if (!await confirmDiscard()) return false;
-  for (const key of dirtyRoutes) {
-    const dirty = dirtyByRoute.get(key);
-    if (dirty) dirty.value = false;
+function unregisterSource(routeKey: string, source: DirtySource): void {
+  const sources = dirtyByRoute.get(routeKey);
+  if (!sources) return;
+  sources.delete(source.token);
+  if (!sources.size) dirtyByRoute.delete(routeKey);
+}
+
+function routeSources(routeKeys: string[]): DirtySource[] {
+  const result = new Map<symbol, DirtySource>();
+  for (const key of new Set(routeKeys)) {
+    for (const source of dirtyByRoute.get(key)?.values() || []) result.set(source.token, source);
   }
+  return [...result.values()];
+}
+
+async function confirmSources(sources: DirtySource[]): Promise<boolean> {
+  const dirtySources = sources.filter((source) => source.dirty.value && !source.approvedThisTurn);
+  if (!dirtySources.length) return true;
+  if (!await requestDiscard()) return false;
+
+  for (const source of dirtySources) source.approvedThisTurn = true;
+  setTimeout(() => {
+    for (const source of dirtySources) source.approvedThisTurn = false;
+  }, 0);
+  for (const source of dirtySources) await source.onDiscard?.();
   return true;
 }
 
-export function useUnsavedChanges(dirty: Ref<boolean>) {
+/** Confirm all dirty sources currently registered for one route. */
+export async function confirmUnsavedChanges(routeKey: string): Promise<boolean> {
+  return confirmSources(routeSources([routeKey]));
+}
+
+/** Confirm a bulk tab action once, then discard every affected source. */
+export async function confirmUnsavedRoutes(routeKeys: string[]): Promise<boolean> {
+  return confirmSources(routeSources(routeKeys));
+}
+
+/** Logout destroys every cached tab, so it must cover every mounted dirty source first. */
+export async function confirmAllUnsavedChanges(): Promise<boolean> {
+  return confirmSources([...dirtyByRoute.values()].flatMap((sources) => [...sources.values()]));
+}
+
+export function useUnsavedChanges(dirty: Ref<boolean>, options: UnsavedChangesOptions = {}) {
   const route = useRoute();
-  const routeKey = route.fullPath;
+  const source: DirtySource = {
+    token: Symbol('unsaved-source'),
+    dirty,
+    onDiscard: options.onDiscard,
+    approvedThisTurn: false,
+  };
+  let registeredRouteKey = options.routeKey?.value || route.fullPath;
+  let stopRouteKeyWatch: (() => void) | undefined;
   const beforeUnload = (event: BeforeUnloadEvent) => {
     if (!dirty.value) return;
     event.preventDefault();
@@ -46,20 +95,30 @@ export function useUnsavedChanges(dirty: Ref<boolean>) {
   };
 
   onMounted(() => {
-    dirtyByRoute.set(routeKey, dirty);
+    registerSource(registeredRouteKey, source);
+    if (options.routeKey) {
+      stopRouteKeyWatch = watch(options.routeKey, (nextKey) => {
+        if (nextKey === registeredRouteKey) return;
+        unregisterSource(registeredRouteKey, source);
+        registeredRouteKey = nextKey;
+        registerSource(registeredRouteKey, source);
+      }, { flush: 'sync' });
+    }
     window.addEventListener('beforeunload', beforeUnload);
   });
   onBeforeUnmount(() => {
-    if (dirtyByRoute.get(routeKey) === dirty) dirtyByRoute.delete(routeKey);
+    stopRouteKeyWatch?.();
+    unregisterSource(registeredRouteKey, source);
     window.removeEventListener('beforeunload', beforeUnload);
   });
-  onBeforeRouteLeave(async () => confirmUnsavedChanges(routeKey));
+  onBeforeRouteLeave(async () => confirmUnsavedChanges(registeredRouteKey));
   onBeforeRouteUpdate(async (to) => (
-    to.fullPath === routeKey ? true : confirmUnsavedChanges(routeKey)
+    to.fullPath === registeredRouteKey ? true : confirmUnsavedChanges(registeredRouteKey)
   ));
 
   return {
     markClean: () => { dirty.value = false; },
-    confirmDiscard: () => confirmUnsavedChanges(routeKey),
+    /** Local dialog cancellation confirms only this caller, not sibling dirty forms. */
+    confirmDiscard: () => confirmSources([source]),
   };
 }

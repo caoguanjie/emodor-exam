@@ -106,7 +106,7 @@
 | /admin/students | 1. 组织权限模块（A2/A4） | 11 | 学员分页、CRUD、头像、启停、重置密码、xlsx 模板/预检/批次确认 |
 | /me | 1. 组织权限模块（A2/A4） | 2 | 本人资料查询与姓名/联系方式/头像修改 |
 | /media | 1. 组织权限模块（A4） | 5 | 受控上传、限制查询、状态/Range 读取、引用保护删除 |
-| /admin | 1. 组织权限模块（A3/A5） | 23 | A3 权限/角色/管理员/会话 10 个；A5 菜单/字典/站点配置/审计 13 个 |
+| /admin | 1. 组织权限模块（A3/A5） | 24 | A3 权限/角色/管理员/会话 10 个；A5 菜单/字典/站点配置/审计 14 个 |
 | /site-config | 1. 组织权限模块（A5） | 2 | 严格公开 Logo/轮播白名单；仅当前配置的品牌图片内容流 |
 | /departments | 1. 组织权限模块 | 6 | 部门树、CRUD、层级调整与启停 |
 | /regulations | 2. 制度文件管理模块 | 17 | 制度 CRUD、版本上传与历史回看、管理端预览、范围与学习要求配置、发布、阅读内容 |
@@ -116,7 +116,7 @@
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**合计 126 个接口（125 个业务接口 + 1 个健康检查，含 A2—A5 增量；私有媒体与公开品牌内容流不包统一信封）。**
+**合计 127 个接口（126 个业务接口 + 1 个健康检查，含 A2—A5 增量；私有媒体与公开品牌内容流不包统一信封）。**
 
 ---
 
@@ -255,6 +255,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 |---|---|---|---|
 | GET | `/admin/menus/navigation` | 登录 | 返回当前账号有效权限过滤后的启用导航树；不下发任意组件或脚本 |
 | GET | `/admin/menus` | `system_settings:read` | 完整目录/菜单/按钮树（含停用项） |
+| GET | `/admin/menus/permission-options` | `system_settings:write` | 菜单编辑专用已注册权限选项 `{code,name}[]`；不因此授予 `/admin/permissions` 或 `roles:*` |
 | GET | `/admin/menus/{id}` | `system_settings:read` | 菜单节点详情 |
 | POST | `/admin/menus` | `system_settings:write` | 新建节点 |
 | PUT | `/admin/menus/{id}` | `system_settings:write` | 更新节点；父链循环校验与写入同一事务 |
@@ -269,7 +270,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | GET | `/site-config` | 公开 | 严格返回 `{logo_asset_id,banners}` 两个键 |
 | GET | `/site-config/assets/{id}/content` | 公开 | 仅当 ID 仍在当前 Logo/轮播白名单、有 `site_config` 引用且资源为 ready branding image 时返回原始流；其他 ID 统一 40401，支持单 Range |
 
-菜单写入 DTO 固定为 `parent_id? / name / type / route_path? / permission_code? / icon? / sort / status`。`type=directory` 不得带路由或权限；`type=menu` 的 `route_path` 必须在前端注册管理路由集中；`type=button` 不得带路由且必须使用服务端注册权限。默认 Questions 导航不在数据库层先限制 `questions:read`，前端注册路由精确以 `questions:read OR questions:write` 判定；这不改变各 API 守卫的单接口权限。
+菜单写入 DTO 固定为 `parent_id? / name / type / route_path? / permission_code? / icon? / sort / status`。`type=directory` 不得带路由或权限；`type=menu` 的 `route_path` 必须在前端注册管理路由集中；`type=button` 不得带路由且必须使用服务端注册权限。新增、修改、删除先锁定初始化保证且业务不可删除的 `site_setting.logo_asset_id` 实存行，再在同一事务重读菜单树关系；因此空树双创建可依次成功，互挂父级、建子与删父、建子与父节点改按钮只会提交合法一侧。互斥行缺失时返回 50004/HTTP 503，不自动修复、不把数据库死锁当业务冲突。默认 Questions 导航不在数据库层先限制 `questions:read`，前端注册路由精确以 `questions:read OR questions:write` 判定；这不改变各 API 守卫的单接口权限。
 
 字典写入 DTO 固定为 `type/code/label/sort/status/remark?`，`(type,code)` 唯一。服务端固定 type 是 `learner_source/difficulty/question_type/regulation_status/paper_status/question_status/exam_status`；这些项只是显示镜像，不能借 CRUD 改变来源映射、题型、状态或考试规则。
 
@@ -287,7 +288,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 `logo_asset_id` 可为 null，`banners` 必须为数组、最多 3 项、`asset_id` 不得重复，服务端按 `sort + asset_id` 稳定排序。`GET /site-config` 不会序列化整张设置表，任何 AI 配置、密钥或未白名单 setting 都不得进入响应。
 
-审计查询只打开 `LOG_DIR/audit/audit-YYYY-MM-DD.log` 普通文件，拒绝路径越界与符号链接；忽略损坏旧行而不返回原文。写入、文件失败后的 stderr 降级、查询输出三条路径都对 password/token/cookie/api_key/credential 等敏感字段递归脱敏，但保留 action/result/reason 诊断信息。
+审计查询只打开 `LOG_DIR/audit/audit-YYYY-MM-DD.log` 普通文件，拒绝路径越界与符号链接；忽略损坏旧行而不返回原文。审计目录尚未产生时可返回空页；目录存在但类型非法、不可读、读取中变化或目标日志文件发生 EACCES/其他 I/O 错误时返回 50004/HTTP 503，不用空页或部分页伪装成功。写入、文件失败后的 stderr 降级、查询输出三条路径都对 password/token/authorization/cookie/api_key/credential 等敏感字段递归脱敏；字符串若是 JSON 则解析后递归清洗，非 JSON 的 `key=value`/`key:value` 会清除完整值（含空格），同时保留 action/result/reason 等非敏感诊断信息。
 
 ### 3.3 部门管理 /departments（权限：管理）
 
@@ -820,7 +821,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 50001 | 500 | 服务器内部错误 | 未分类异常（附 trace_id 供日志追踪） |
 | 50002 | 502 | AI 服务调用失败 | 大模型超时/重试后仍失败（任务置 failed，可重新发起） |
 | 50003 | 500 | 文件解析失败 | 解析流水线异常（parse_status = failed，可重试） |
-| 50004 | 503 | 服务暂不可用 | MySQL/Redis 故障、媒体探测工具缺失/不可执行，或媒体物理删除失败等待重试；响应不暴露本地路径 |
+| 50004 | 503 | 服务暂不可用 | MySQL/Redis 故障、媒体探测工具缺失/不可执行、媒体物理删除失败等待重试、菜单稳定互斥行缺失，或审计存储真实读取失败；响应不暴露本地路径 |
 | 50005 | 502 | AI 连通性测试失败 | POST /ai/config/test 以已保存配置发起测试未通过（message 为脱敏错误摘要） |
 
 ---

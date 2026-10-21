@@ -9,6 +9,14 @@ import { AppConfig } from '../../config/configuration';
 const AUDIT_FILE = /^audit-(\d{4}-\d{2}-\d{2})\.log$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
+function isMissing(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+function auditStorageUnavailable(): never {
+  throw Errors.serviceUnavailable('审计日志读取失败');
+}
+
 function auditId(value: unknown): string | number | null {
   return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)) ? value : null;
 }
@@ -62,15 +70,25 @@ export class AuditQueryService {
     }
 
     const root = resolve(this.config.logDir, 'audit');
+    let rootStat;
+    try {
+      rootStat = await lstat(root);
+    } catch (error) {
+      // A new installation legitimately has no audit directory until the first
+      // write. Every other storage failure must remain observable to callers;
+      // returning an empty page would falsely assert that no audit events exist.
+      if (isMissing(error)) return { items: [], total: 0, page, page_size: pageSize };
+      auditStorageUnavailable();
+    }
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) auditStorageUnavailable();
     let entries;
     try {
-      const rootStat = await lstat(root);
-      if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-        return { items: [], total: 0, page, page_size: pageSize };
-      }
       entries = await readdir(root, { withFileTypes: true });
+    } catch {
+      // Once the root was observed, even ENOENT means storage changed during
+      // the read and must not be presented as an authoritative empty result.
+      auditStorageUnavailable();
     }
-    catch { return { items: [], total: 0, page, page_size: pageSize }; }
 
     const rows: AuditEntry[] = [];
     for (const entry of entries) {
@@ -87,12 +105,15 @@ export class AuditQueryService {
         // O_NOFOLLOW keeps a local symlink swap from turning the audit reader
         // into an arbitrary file reader after readdir reported a regular file.
         handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-        if (!(await handle.stat()).isFile()) continue;
+        if (!(await handle.stat()).isFile()) auditStorageUnavailable();
         content = await handle.readFile('utf8');
+        await handle.close();
+        handle = undefined;
       } catch {
-        continue;
-      } finally {
+        // Best-effort close is cleanup only. The externally visible result is a
+        // safe 503, never a partial page that conceals an unreadable audit file.
         await handle?.close().catch(() => undefined);
+        auditStorageUnavailable();
       }
       for (const line of content.split('\n')) {
         if (!line.trim()) continue;

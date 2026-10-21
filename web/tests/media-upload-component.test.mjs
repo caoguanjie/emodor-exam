@@ -181,7 +181,7 @@ before(async () => {
   vite = await createServer({
     root: webRoot,
     configFile: resolve(webRoot, 'vite.config.ts'),
-    server: { middlewareMode: true },
+    server: { middlewareMode: true, hmr: false, ws: false },
     appType: 'custom',
     plugins: [testPlugin()],
   });

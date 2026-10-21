@@ -16,11 +16,23 @@ export interface AuditEntry {
 }
 
 const SENSITIVE_KEY = /(?:pass(?:word)?|pwd|secret|token|authorization|cookie|api[_-]?key|credential)/i;
+const TEXT_ASSIGNMENT = /(^|[\s{,;&])(["']?)([A-Za-z_][A-Za-z0-9_-]*)\2(\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|.*?)(?=\s+(?:["']?[A-Za-z_][A-Za-z0-9_-]*["']?)\s*[=:]|[,;&}\]\r\n]|$)/gim;
 
 function redactText(value: string): string {
+  try {
+    // Legacy callers sometimes embedded a whole JSON payload in a string-valued
+    // detail field. Parse it and reuse the object sanitizer so sensitive keys do
+    // not bypass redaction merely because they were stringified once more.
+    return JSON.stringify(redactAuditValue(JSON.parse(value)));
+  } catch {
+    // Ordinary diagnostic text is handled below.
+  }
   return value
     .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
-    .replace(/((?:pass(?:word)?|pwd|secret|token|api[_-]?key)\s*["']?\s*[=:]\s*["']?)[^"'\\\s,;&}]+/gi, '$1[REDACTED]');
+    .replace(TEXT_ASSIGNMENT, (matched, prefix: string, quote: string, key: string, separator: string) => {
+      if (!SENSITIVE_KEY.test(key)) return matched;
+      return `${prefix}${quote}${key}${quote}${separator}[REDACTED]`;
+    });
 }
 
 /**

@@ -157,6 +157,22 @@ export class SystemService {
     }
   }
 
+  /**
+   * Every menu-tree mutation takes the same real-row mutex before reading any
+   * tree state. `logo_asset_id` is created by database initialization and has
+   * no business deletion endpoint; site-setting writes already lock it first,
+   * so both workflows share one lock order. A missing invariant fails closed
+   * instead of falling back to a compatible empty-range gap lock.
+   */
+  private async lockMenuStructure(manager: EntityManager): Promise<Repository<SysMenu>> {
+    const mutex = await manager.getRepository(SiteSetting).findOne({
+      where: { key: 'logo_asset_id' },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!mutex) throw Errors.serviceUnavailable('菜单结构锁不可用');
+    return manager.getRepository(SysMenu);
+  }
+
   private normalizeMenu(input: MenuInput) {
     assertMenuDefinition(input);
     return {
@@ -194,6 +210,10 @@ export class SystemService {
     return this.menuTree({ permissions: await this.access.permissions(userId), includeButtons: false, activeOnly: true });
   }
 
+  async permissionOptions() {
+    return this.access.catalog();
+  }
+
   async menuDetail(id: string) {
     const row = await this.menuRepo.findOne({ where: { id: decimalId(id)! } });
     if (!row) throw Errors.notFound('菜单不存在');
@@ -204,7 +224,7 @@ export class SystemService {
     const normalized = this.normalizeMenu(input);
     try {
       const saved = await this.dataSource.transaction(async (manager) => {
-        const repo = manager.getRepository(SysMenu);
+        const repo = await this.lockMenuStructure(manager);
         await this.assertParent(repo, null, normalized.parentId);
         return repo.save(repo.create(normalized));
       });
@@ -221,7 +241,7 @@ export class SystemService {
     const normalized = this.normalizeMenu(input);
     try {
       const saved = await this.dataSource.transaction(async (manager) => {
-        const repo = manager.getRepository(SysMenu);
+        const repo = await this.lockMenuStructure(manager);
         const row = await repo.findOne({ where: { id: menuId }, lock: { mode: 'pessimistic_write' } });
         if (!row) throw Errors.notFound('菜单不存在');
         await this.assertParent(repo, menuId, normalized.parentId);
@@ -243,7 +263,7 @@ export class SystemService {
     const menuId = decimalId(id)!;
     try {
       await this.dataSource.transaction(async (manager) => {
-        const repo = manager.getRepository(SysMenu);
+        const repo = await this.lockMenuStructure(manager);
         const row = await repo.findOne({ where: { id: menuId }, lock: { mode: 'pessimistic_write' } });
         if (!row) throw Errors.notFound('菜单不存在');
         if (await repo.count({ where: { parentId: menuId } })) throw Errors.systemReferenced('菜单仍有子项，不能删除');

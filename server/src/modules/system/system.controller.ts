@@ -96,6 +96,12 @@ export class SystemController {
     return this.system.menuTree({ includeButtons: true });
   }
 
+  @Get('menus/permission-options')
+  @Permissions('system_settings:write')
+  permissionOptions() {
+    return this.system.permissionOptions();
+  }
+
   @Get('menus/:id')
   @Permissions('system_settings:read')
   menu(@Param('id') id: string) {

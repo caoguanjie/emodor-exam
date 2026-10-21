@@ -13,13 +13,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'; import { ElMessage } from 'element-plus'; import http, { publicSiteAssetUrl } from '../../api/http'; import MediaUpload from '../../components/MediaUpload.vue'; import { useAuthStore } from '../../stores/auth'; import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 interface Banner{asset_id:string|null;sort:number;key:string} interface SiteConfig{logo_asset_id:string|null;banners:{asset_id:string;sort:number}[]}
-const auth=useAuthStore(); const canWrite=computed(()=>auth.can('system_settings:write')); const loading=ref(false); const saving=ref(false); const error=ref(''); const dirty=ref(false); const saved=reactive<SiteConfig>({logo_asset_id:null,banners:[]}); const form=reactive<{logo_asset_id:string|null;banners:Banner[]}>({logo_asset_id:null,banners:[]}); const unsaved=useUnsavedChanges(dirty); let applying=false;
+const auth=useAuthStore(); const canWrite=computed(()=>auth.can('system_settings:write')); const loading=ref(false); const saving=ref(false); const error=ref(''); const dirty=ref(false); const saved=reactive<SiteConfig>({logo_asset_id:null,banners:[]}); const form=reactive<{logo_asset_id:string|null;banners:Banner[]}>({logo_asset_id:null,banners:[]}); const unsaved=useUnsavedChanges(dirty,{onDiscard:restoreSaved}); let applying=false;
 watch(form,()=>{if(!applying)dirty.value=JSON.stringify(payload())!==JSON.stringify(saved)},{deep:true});
 function payload():SiteConfig{return{logo_asset_id:form.logo_asset_id||null,banners:form.banners.filter((item):item is Banner&{asset_id:string}=>!!item.asset_id).map(item=>({asset_id:item.asset_id,sort:item.sort})).sort((a,b)=>a.sort-b.sort)}}
 function apply(value:SiteConfig){applying=true;Object.assign(saved,{logo_asset_id:value.logo_asset_id||null,banners:[...(value.banners||[])]});form.logo_asset_id=saved.logo_asset_id;form.banners=saved.banners.map((item,index)=>({...item,key:`${item.asset_id}-${index}`}));dirty.value=false;queueMicrotask(()=>{applying=false})}
+function restoreSaved(){apply({logo_asset_id:saved.logo_asset_id,banners:[...saved.banners]})}
 async function load(){loading.value=true;error.value='';try{apply(await http.get('/admin/site-settings') as SiteConfig)}catch(e:any){error.value=e?.message||'网站配置加载失败'}finally{loading.value=false}}
 function addBanner(){if(form.banners.length<3)form.banners.push({asset_id:null,sort:(form.banners.at(-1)?.sort||0)+10,key:`new-${Date.now()}-${form.banners.length}`})} function removeBanner(index:number){form.banners.splice(index,1)}
-async function reset(){if(!await unsaved.confirmDiscard())return;apply(saved)}
+async function reset(){await unsaved.confirmDiscard()}
 async function save(){const next=payload();if(form.banners.some(item=>!item.asset_id)){ElMessage.warning('请完成每个轮播图上传，或移除空白项');return} saving.value=true;try{const result=await http.put('/admin/site-settings',next) as SiteConfig;apply(result);ElMessage.success('网站配置已发布')}finally{saving.value=false}}
 void load();
 </script>

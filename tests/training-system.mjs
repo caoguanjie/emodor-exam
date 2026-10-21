@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { proveMenuStructureSerialization } from './support/system-menu-concurrency-checks.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
@@ -18,26 +19,31 @@ async function captchaAnswer(ctx, captchaId) {
   finally { await redis.quit(); }
 }
 
-async function loginAdmin(ctx) {
-  const headers = { 'X-Forwarded-For': '198.51.100.251' };
+async function loginUser(ctx, username, password, label) {
+  const sequence = (loginUser.sequence = (loginUser.sequence || 250) + 1);
+  const headers = { 'X-Forwarded-For': `198.51.100.${sequence}` };
   const issued = await ctx.request(null, 'POST', '/auth/captcha', undefined, headers);
-  assert(issued.status === 200 && issued.data?.captcha_id, 'A5 admin captcha failed');
+  assert(issued.status === 200 && issued.data?.captcha_id, `${label} captcha failed`);
   const answer = await captchaAnswer(ctx, issued.data.captcha_id);
   const actor = {};
   const login = await ctx.request(actor, 'POST', '/auth/login', {
-    username: 'admin', password: ctx.adminPassword,
+    username, password,
     captcha_id: issued.data.captcha_id, captcha_code: answer,
   }, headers);
-  assert(login.status === 200, `A5 admin login failed: ${login.status}`);
+  assert(login.status === 200, `${label} login failed: ${login.status}`);
   actor.accessToken = login.data.access_token;
   if (!login.data.force_change_password) return actor;
-  const nextPassword = `A5z${randomBytes(12).toString('hex')}`;
+  const nextPassword = `Q${randomBytes(16).toString('hex')}Z9`;
   const changed = await ctx.request(actor, 'PUT', '/auth/password', {
-    old_password: ctx.adminPassword, new_password: nextPassword,
+    old_password: password, new_password: nextPassword,
   });
-  assert(changed.status === 200 && changed.data?.access_token, 'A5 initial password change failed');
+  assert(changed.status === 200 && changed.data?.access_token, `${label} initial password change failed`);
   actor.accessToken = changed.data.access_token;
   return actor;
+}
+
+async function loginAdmin(ctx) {
+  return loginUser(ctx, 'admin', ctx.adminPassword, 'A5 admin');
 }
 
 function pngFixture() {
@@ -69,7 +75,51 @@ export async function run(ctx) {
   assert(initialPublic.status === 200, `public site config failed: ${initialPublic.status}`);
   assert(JSON.stringify(Object.keys(initialPublic.data).sort()) === JSON.stringify(['banners', 'logo_asset_id']), 'public site config leaked keys');
 
+  const concurrencyEvidence = await proveMenuStructureSerialization(ctx);
+  console.log(`[training-system] menu serialization ${JSON.stringify(concurrencyEvidence)}`);
+
   const admin = await loginAdmin(ctx);
+  const writerRole = await ctx.request(admin, 'POST', '/admin/roles', {
+    code: `a5_menu_writer_${randomBytes(4).toString('hex')}`,
+    name: 'A5 菜单维护员',
+    permissions: ['system_settings:write'],
+  });
+  assert(writerRole.status === 200 && writerRole.data?.id, `menu writer role create failed: ${writerRole.status}`);
+  const writerUsername = `a5_menu_writer_${randomBytes(4).toString('hex')}`;
+  const writerPassword = `Q${randomBytes(16).toString('hex')}Z9`;
+  const writerUser = await ctx.request(admin, 'POST', '/users', {
+    username: writerUsername,
+    password: writerPassword,
+    real_name: 'A5 菜单维护员',
+    role: 'employee',
+  });
+  assert(writerUser.status === 200 && writerUser.data?.id, `menu writer user create failed: ${writerUser.status}`);
+  const writerAssigned = await ctx.request(admin, 'PUT', `/admin/administrators/${writerUser.data.id}/roles`, {
+    role_ids: [String(writerRole.data.id)],
+  });
+  assert(writerAssigned.status === 200, `menu writer role assignment failed: ${writerAssigned.status}`);
+  const writer = await loginUser(ctx, writerUsername, writerPassword, 'A5 menu writer');
+  const rolesCatalogDenied = await ctx.request(writer, 'GET', '/admin/permissions');
+  assert(rolesCatalogDenied.status === 403, `menu writer unexpectedly received roles catalog: ${rolesCatalogDenied.status}`);
+  const permissionOptions = await ctx.request(writer, 'GET', '/admin/menus/permission-options');
+  assert(permissionOptions.status === 200 && Array.isArray(permissionOptions.data), `menu permission options failed: ${permissionOptions.status}`);
+  assert(permissionOptions.data.length > 0 && permissionOptions.data.every((item) => (
+    Object.keys(item).sort().join(',') === 'code,name'
+    && typeof item.code === 'string'
+    && typeof item.name === 'string'
+  )), 'menu permission options shape is not {code,name}[]');
+  assert(permissionOptions.data.some((item) => item.code === 'system_settings:write'), 'menu permission options omitted registered system_settings:write');
+  const writerMenu = await ctx.request(writer, 'POST', '/admin/menus', {
+    name: 'A5 写权限菜单', type: 'menu', parent_id: null,
+    route_path: '/admin/system/menus', permission_code: 'system_settings:write', icon: 'Menu', sort: 890, status: 1,
+  });
+  assert(writerMenu.status === 200 && writerMenu.data?.id, `write-only menu create failed: ${writerMenu.status}`);
+  const writerButton = await ctx.request(writer, 'POST', '/admin/menus', {
+    name: 'A5 写权限按钮', type: 'button', parent_id: String(writerMenu.data.id),
+    route_path: null, permission_code: 'system_settings:write', icon: null, sort: 1, status: 1,
+  });
+  assert(writerButton.status === 200 && writerButton.data?.id, `write-only menu button create failed: ${writerButton.status}`);
+
   const directory = await ctx.request(admin, 'POST', '/admin/menus', {
     name: 'A5 测试目录', type: 'directory', parent_id: null,
     route_path: null, permission_code: null, icon: 'Setting', sort: 900, status: 1,

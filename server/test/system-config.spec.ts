@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { AuditService } from '../src/common/audit.service';
@@ -11,6 +11,8 @@ import {
   normalizeSiteConfig,
 } from '../src/modules/system/system.service';
 import { MediaService } from '../src/modules/media/media.service';
+import { SiteSetting } from '../src/entities/site-setting.entity';
+import { SysMenu } from '../src/entities/sys-menu.entity';
 import { QUESTION_ROUTE_PERMISSIONS, routeAccessAllowed } from '../../web/src/router/access';
 import { invalidateTabCache, tabCacheKey } from '../../web/src/stores/tab-cache';
 
@@ -32,6 +34,8 @@ describe('A5 audit redaction and bounded query', () => {
 
   it('redacts nested credentials in the normal JSONL write', async () => {
     const secret = 'A5-normal-secret-9327';
+    const cookieSecret = 'sid=A5-normal-cookie-1927';
+    const spacedSecret = 'A5 normal password with spaces';
     const audit = new AuditService(config(root));
     audit.log({
       actor_id: 7,
@@ -43,6 +47,9 @@ describe('A5 audit redaction and bounded query', () => {
         password: secret,
         nested: { api_key: secret },
         encoded: `{"password":"${secret}"}`,
+        legacy_blob_a: JSON.stringify({ cookie: cookieSecret }),
+        legacy_blob_b: JSON.stringify({ password: spacedSecret }),
+        legacy_line: `cookie="${cookieSecret}"; note=diagnostic`,
         kept: 'diagnostic',
       },
       result: 'success',
@@ -52,18 +59,25 @@ describe('A5 audit redaction and bounded query', () => {
     const day = new Date().toISOString().slice(0, 10);
     const line = await readFile(join(root, 'audit', `audit-${day}.log`), 'utf8');
     expect(line).not.toContain(secret);
+    expect(line).not.toContain(cookieSecret);
+    expect(line).not.toContain(spacedSecret);
     expect(line).toContain('system.settings.update');
     expect(line).toContain('diagnostic');
     expect(JSON.parse(line).detail).toEqual({
       password: '[REDACTED]',
       nested: { api_key: '[REDACTED]' },
       encoded: '{"password":"[REDACTED]"}',
+      legacy_blob_a: '{"cookie":"[REDACTED]"}',
+      legacy_blob_b: '{"password":"[REDACTED]"}',
+      legacy_line: 'cookie=[REDACTED]; note=diagnostic',
       kept: 'diagnostic',
     });
   });
 
   it('redacts credentials in fallback output while preserving the failed action', () => {
     const secret = 'A5-fallback-secret-8441';
+    const cookieSecret = 'sid=A5-fallback-cookie-7441';
+    const spacedSecret = 'A5 fallback password with spaces';
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const audit = new AuditService(config('/dev/null/not-a-directory'));
     audit.log({
@@ -72,19 +86,29 @@ describe('A5 audit redaction and bounded query', () => {
       action: 'auth.login',
       object_type: 'sys_user',
       object_id: null,
-      detail: { old_password: secret, reason: 'bad_credentials' },
+      detail: {
+        old_password: secret,
+        legacy_blob_a: JSON.stringify({ cookie: cookieSecret }),
+        legacy_blob_b: JSON.stringify({ password: spacedSecret }),
+        legacy_line: `authorization="Bearer ${spacedSecret}"; note=bad_credentials`,
+        reason: 'bad_credentials',
+      },
       result: 'failure',
       source_ip: null,
     });
 
     const rendered = JSON.stringify(error.mock.calls);
     expect(rendered).not.toContain(secret);
+    expect(rendered).not.toContain(cookieSecret);
+    expect(rendered).not.toContain(spacedSecret);
     expect(rendered).toContain('auth.login');
     expect(rendered).toContain('bad_credentials');
   });
 
   it('queries only regular audit files inside the configured root and filters again on output', async () => {
     const secret = 'legacy-unredacted-password';
+    const cookieSecret = 'sid=legacy-unredacted-cookie';
+    const spacedSecret = 'legacy password with spaces';
     const auditDir = join(root, 'audit');
     const audit = new AuditService(config(root));
     audit.log({
@@ -100,7 +124,12 @@ describe('A5 audit redaction and bounded query', () => {
     await writeFile(join(auditDir, 'audit-2026-10-20.log'), JSON.stringify({
       ts: '2026-10-20T08:00:00.000Z', actor_id: 9, actor_name: 'tester',
       action: 'auth.password.change', object_type: 'sys_user', object_id: '9',
-      detail: { password: secret }, result: 'failure', source_ip: null,
+      detail: {
+        password: secret,
+        legacy_blob_a: JSON.stringify({ cookie: cookieSecret }),
+        legacy_blob_b: JSON.stringify({ password: spacedSecret }),
+        legacy_line: `credential="${spacedSecret}"; note=diagnostic`,
+      }, result: 'failure', source_ip: null,
       unexpected_legacy_payload: secret,
     }) + '\n', 'utf8');
     await writeFile(join(auditDir, 'not-an-audit.log'), secret, 'utf8');
@@ -122,8 +151,43 @@ describe('A5 audit redaction and bounded query', () => {
     expect(page).toMatchObject({ total: 1, page: 1, page_size: 20 });
     expect(page.items).toHaveLength(1);
     expect(JSON.stringify(page)).not.toContain(secret);
+    expect(JSON.stringify(page)).not.toContain(cookieSecret);
+    expect(JSON.stringify(page)).not.toContain(spacedSecret);
     expect(JSON.stringify(page)).not.toContain(linkedSecret);
-    expect(page.items[0].detail).toEqual({ password: '[REDACTED]' });
+    expect(page.items[0].detail).toEqual({
+      password: '[REDACTED]',
+      legacy_blob_a: '{"cookie":"[REDACTED]"}',
+      legacy_blob_b: '{"password":"[REDACTED]"}',
+      legacy_line: 'credential=[REDACTED]; note=diagnostic',
+    });
+  });
+
+  it('returns an empty first page only when the audit directory does not exist yet', async () => {
+    const page = await new AuditQueryService(config(join(root, 'fresh-install'))).list({ page: 1, page_size: 20 });
+    expect(page).toEqual({ items: [], total: 0, page: 1, page_size: 20 });
+  });
+
+  it('surfaces an invalid audit storage root as a safe service-unavailable error', async () => {
+    const configuredRoot = join(root, 'invalid-root');
+    await mkdir(configuredRoot);
+    await writeFile(join(configuredRoot, 'audit'), 'not-a-directory', 'utf8');
+
+    await expect(new AuditQueryService(config(configuredRoot)).list({ page: 1, page_size: 20 }))
+      .rejects.toMatchObject({ code: 50004, httpStatus: 503, message: '审计日志读取失败' });
+  });
+
+  it('surfaces an unreadable audit file instead of returning a partial success page', async () => {
+    const auditDir = join(root, 'unreadable-file', 'audit');
+    await mkdir(auditDir, { recursive: true });
+    const file = join(auditDir, 'audit-2026-10-21.log');
+    await writeFile(file, '{"ts":"2026-10-21T08:00:00.000Z"}\n', 'utf8');
+    await chmod(file, 0o000);
+    try {
+      await expect(new AuditQueryService(config(join(root, 'unreadable-file'))).list({ page: 1, page_size: 20 }))
+        .rejects.toMatchObject({ code: 50004, httpStatus: 503, message: '审计日志读取失败' });
+    } finally {
+      await chmod(file, 0o600);
+    }
   });
 
   it('does not follow a symlink used as the audit root directory', async () => {
@@ -138,8 +202,8 @@ describe('A5 audit redaction and bounded query', () => {
     }) + '\n', 'utf8');
     await symlink(outsideAudit, join(configuredRoot, 'audit'));
 
-    const page = await new AuditQueryService(config(configuredRoot)).list({ page: 1, page_size: 20 });
-    expect(page).toEqual({ items: [], total: 0, page: 1, page_size: 20 });
+    await expect(new AuditQueryService(config(configuredRoot)).list({ page: 1, page_size: 20 }))
+      .rejects.toMatchObject({ code: 50004, httpStatus: 503, message: '审计日志读取失败' });
   });
 });
 
@@ -252,5 +316,56 @@ describe('A5 system configuration safety contracts', () => {
       banners: [{ asset_id: '32', sort: 1 }, { asset_id: '33', sort: 2 }],
     });
     expect(JSON.stringify(result)).not.toContain('private-key');
+  });
+
+  it('reuses the registered permission catalog for menu permission options', async () => {
+    const options = [
+      { code: 'system_settings:read', name: '读取系统配置' },
+      { code: 'system_settings:write', name: '维护系统配置' },
+    ];
+    const access = { catalog: vi.fn().mockResolvedValue(options) };
+    const media = { registerOwnerPolicy() {} };
+    const service = new SystemService(
+      {} as any, {} as any, {} as any, {} as any, {} as any,
+      {} as any, media as any, access as any, {} as any,
+    );
+
+    await expect(service.permissionOptions()).resolves.toEqual(options);
+    expect(access.catalog).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed before touching the menu tree when the seeded mutex row is missing', async () => {
+    const menuTransactionRepo = {
+      create: vi.fn((value) => value),
+      save: vi.fn(async (value) => ({ id: '91', ...value })),
+    };
+    const settingTransactionRepo = { findOne: vi.fn().mockResolvedValue(null) };
+    const manager = {
+      getRepository: vi.fn((entity) => entity === SiteSetting ? settingTransactionRepo : menuTransactionRepo),
+    };
+    const dataSource = { transaction: vi.fn(async (work) => work(manager)) };
+    const media = { registerOwnerPolicy() {} };
+    const service = new SystemService(
+      {} as any, {} as any, {} as any, {} as any, {} as any,
+      dataSource as any, media as any, {} as any, { log() {} } as any,
+    );
+
+    await expect(service.createMenu({
+      parent_id: null,
+      name: '缺失互斥行',
+      type: 'directory',
+      route_path: null,
+      permission_code: null,
+      icon: null,
+      sort: 1,
+      status: 1,
+    }, { id: '1', name: 'admin' }, null)).rejects.toMatchObject({
+      code: 50004,
+      httpStatus: 503,
+      message: '菜单结构锁不可用',
+    });
+    expect(manager.getRepository).toHaveBeenNthCalledWith(1, SiteSetting);
+    expect(manager.getRepository).not.toHaveBeenCalledWith(SysMenu);
+    expect(menuTransactionRepo.save).not.toHaveBeenCalled();
   });
 });

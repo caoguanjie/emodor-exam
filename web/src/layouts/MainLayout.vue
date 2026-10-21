@@ -41,10 +41,11 @@
         <el-dropdown @command="onTabCommand"><el-button text><el-icon><MoreFilled /></el-icon></el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="refresh">刷新当前</el-dropdown-item><el-dropdown-item command="others">关闭其它</el-dropdown-item><el-dropdown-item command="all">关闭全部</el-dropdown-item></el-dropdown-menu></template></el-dropdown>
       </div>
       <el-main class="main">
-        <router-view v-slot="{ Component }">
+        <router-view v-slot="{ Component, route: viewRoute }">
           <KeepAlive :max="20">
-            <component :is="Component" :key="tabCacheKey(route.fullPath, cacheVersions)" class="page-enter" />
+            <component v-if="viewRoute.meta.cache" :is="Component" :key="tabCacheKey(viewRoute.fullPath, cacheVersions)" class="page-enter" />
           </KeepAlive>
+          <component v-if="!viewRoute.meta.cache" :is="Component" :key="tabCacheKey(viewRoute.fullPath, cacheVersions)" class="page-enter" />
         </router-view>
       </el-main>
     </el-container>
@@ -73,7 +74,7 @@ import {
 } from '@element-plus/icons-vue';
 import http, { publicSiteAssetUrl } from '../api/http';
 import MediaUpload from '../components/MediaUpload.vue';
-import { confirmUnsavedChanges } from '../composables/useUnsavedChanges';
+import { confirmAllUnsavedChanges, confirmUnsavedChanges, useUnsavedChanges } from '../composables/useUnsavedChanges';
 import { useAuthStore } from '../stores/auth';
 import { useTabsStore } from '../stores/tabs';
 import { invalidateTabCache, tabCacheKey, type TabCacheVersions } from '../stores/tab-cache';
@@ -84,8 +85,12 @@ interface NavigationNode { id:string; name:string; type:'directory'|'menu'|'butt
 interface NavigationItem { name:string; path:string; icon:string|null }
 interface NavigationGroup { name:string; items:NavigationItem[] }
 interface SiteConfig { logo_asset_id:string|null; banners:{asset_id:string;sort:number}[] }
+interface ProfileData { real_name:string; phone:string; email:string; avatar_id:string|null; source:string|null; category_id:string|null }
 const route=useRoute(); const router=useRouter(); const auth=useAuthStore(); const tabs=useTabsStore(); const cacheVersions=reactive<TabCacheVersions>({}); const adminGroups=ref<NavigationGroup[]>([]); const siteConfig=reactive<SiteConfig>({logo_asset_id:null,banners:[]});
-const profileVisible=ref(false);const profileLoading=ref(false);const profileSaving=ref(false);const profileDirty=ref(false);let applyingProfile=false;const profile=reactive({real_name:'',phone:'',email:'',avatar_id:null as string|null,source:null as string|null,category_id:null as string|null});
+const profileVisible=ref(false);const profileLoading=ref(false);const profileSaving=ref(false);const profileDirty=ref(false);let applyingProfile=false;const profile=reactive<ProfileData>({real_name:'',phone:'',email:'',avatar_id:null,source:null,category_id:null});
+let profileBaseline:ProfileData={...profile};
+const profileRouteKey=computed(()=>route.fullPath);
+const profileUnsaved=useUnsavedChanges(profileDirty,{routeKey:profileRouteKey,onDiscard:discardProfile});
 
 const iconMap:Record<string,Component>={AlarmClock,CollectionTag,Cpu,DataAnalysis,Document,DocumentChecked,EditPen,Grid,Menu:MenuIcon,Medal,Monitor,Notebook,OfficeBuilding,Picture,Reading,Setting,SetUp,Tickets,User,UserFilled};
 const iconFor=(name:string|null)=>name?iconMap[name]||Setting:null;
@@ -104,11 +109,14 @@ watch(profile,()=>{if(profileVisible.value&&!applyingProfile)profileDirty.value=
 
 async function closeTab(path:string){const active=route.fullPath===path;const result=await tabs.close(path);if(!result.closed)return;if(active)await router.push(result.nextPath||'/my/regulations');invalidateTabCache(cacheVersions,[path])}
 async function onTabCommand(command:string){if(command==='refresh'){if(await confirmUnsavedChanges(route.fullPath))invalidateTabCache(cacheVersions,[route.fullPath])}else if(command==='others'){const removed=tabs.tabs.filter(tab=>tab.path!==route.fullPath).map(tab=>tab.path);if(await tabs.closeOthers(route.fullPath))invalidateTabCache(cacheVersions,removed)}else if(command==='all'){const removed=tabs.tabs.map(tab=>tab.path);if(await tabs.closeAll()){await router.push('/my/regulations');invalidateTabCache(cacheVersions,removed)}}}
-async function confirmProfileDiscard(){if(!profileDirty.value)return true;try{await ElMessageBox.confirm('本人资料有未保存修改，确定放弃吗？','未保存提醒',{type:'warning',confirmButtonText:'放弃修改',cancelButtonText:'继续编辑'});profileDirty.value=false;return true}catch{return false}}
+function normalizeProfile(value:any):ProfileData{return{real_name:value.real_name||'',phone:value.phone||'',email:value.email||'',avatar_id:value.avatar_id?String(value.avatar_id):null,source:value.source||null,category_id:value.category_id?String(value.category_id):null}}
+function applyProfile(value:any){applyingProfile=true;const normalized=normalizeProfile(value);Object.assign(profile,normalized);profileBaseline={...normalized};profileDirty.value=false;queueMicrotask(()=>{applyingProfile=false})}
+function discardProfile(){applyingProfile=true;Object.assign(profile,profileBaseline);profileDirty.value=false;profileVisible.value=false;queueMicrotask(()=>{applyingProfile=false})}
+async function confirmProfileDiscard(){return profileUnsaved.confirmDiscard()}
 async function beforeProfileClose(done:()=>void){if(await confirmProfileDiscard()){profileVisible.value=false;done()}} async function closeProfile(){if(await confirmProfileDiscard())profileVisible.value=false}
-async function openProfile(){profileVisible.value=true;profileLoading.value=true;try{const value:any=await http.get('/me/profile');applyingProfile=true;Object.assign(profile,{real_name:value.real_name||'',phone:value.phone||'',email:value.email||'',avatar_id:value.avatar_id?String(value.avatar_id):null,source:value.source||null,category_id:value.category_id?String(value.category_id):null});profileDirty.value=false;queueMicrotask(()=>{applyingProfile=false})}finally{profileLoading.value=false}}
-async function saveProfile(){profileSaving.value=true;try{await http.patch('/me/profile',{real_name:profile.real_name,phone:profile.phone||null,email:profile.email||null,avatar_id:profile.avatar_id});profileDirty.value=false;profileVisible.value=false;await auth.fetchProfile();ElMessage.success('本人资料已保存')}finally{profileSaving.value=false}}
-async function onLogout(){try{await ElMessageBox.confirm('确定退出当前账号吗？','退出登录',{type:'warning'});await auth.logout();tabs.reset();await router.push('/login')}catch{/* cancelled */}}
+async function openProfile(){profileVisible.value=true;profileLoading.value=true;try{applyProfile(await http.get('/me/profile'))}finally{profileLoading.value=false}}
+async function saveProfile(){profileSaving.value=true;try{await http.patch('/me/profile',{real_name:profile.real_name,phone:profile.phone||null,email:profile.email||null,avatar_id:profile.avatar_id});profileBaseline={...profile};profileDirty.value=false;profileVisible.value=false;await auth.fetchProfile();ElMessage.success('本人资料已保存')}finally{profileSaving.value=false}}
+async function onLogout(){try{await ElMessageBox.confirm('确定退出当前账号吗？','退出登录',{type:'warning'})}catch{return}if(!await confirmAllUnsavedChanges())return;await auth.logout();tabs.reset();await router.push('/login')}
 function onUserCommand(command:string){if(command==='profile')void openProfile();else if(command==='password')void router.push('/change-password');else if(command==='logout')void onLogout()}
 
 onMounted(()=>{void loadNavigation();void loadSiteConfig()});
