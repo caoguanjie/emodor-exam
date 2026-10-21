@@ -1,0 +1,29 @@
+# 工具会话临时状态
+.mimosa/
+.trae/
+.codex/
+
+# 系统文件
+.DS_Store
+
+# 环境配置（敏感值一律运行期注入，不提交仓库——02 册 5.3 配置管理原则）
+.env
+server/.env
+web/.env
+
+# 依赖与构建产物
+node_modules/
+server/dist/
+web/dist/
+web/.vite/
+tests/mysql-data/
+
+# 运行期数据（上传文件 / 加密配置 / 日志）
+server/data/
+
+# GUI 测试截图（一次性本地证据，报告在 review/；不进仓库）
+gui-test-screenshots/
+
+# 本地存储分析产物（不属于项目源码）
+storage-analysis-report.html
+storage-analysis.json

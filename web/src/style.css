@@ -1,0 +1,210 @@
+/* =====================================================================
+ * 海珠区安全教育培训中心设计体系「公文藏蓝 · 印章朱红」
+ * 设计令牌：制度/合规语境 —— 深藏蓝承载权威，靛蓝为操作主色，
+ * 朱砂红仅作印章式点缀（品牌标识/通过印章/关键警示），正文保持冷静灰阶。
+ * ===================================================================== */
+:root {
+  /* ---- 色板 ---- */
+  --re-ink: #14203d;          /* 公文藏蓝：侧栏/页头深色 */
+  --re-ink-2: #1c2c55;        /* 藏蓝悬浮层 */
+  --re-ink-3: #24386b;        /* 藏蓝高光 */
+  --re-primary: #3056d3;      /* 靛蓝主色：操作/链接/选中 */
+  --re-primary-deep: #2645ad;
+  --re-seal: #c2402a;         /* 印章朱红：签名元素专用 */
+  --re-success: #2e9e6b;
+  --re-warning: #d97706;
+  --re-danger: #d92d20;
+  --re-bg: #f4f6fa;           /* 云灰画布 */
+  --re-surface: #ffffff;
+  --re-border: #e5e9f2;
+  --re-border-strong: #d3dae8;
+  --re-text: #1f2329;
+  --re-text-2: #51565f;
+  --re-text-3: #8a919c;
+
+  /* ---- 字体 ---- */
+  --re-font: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'HarmonyOS Sans SC',
+    'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --re-font-display: 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+  --re-mono: 'SF Mono', 'SFMono-Regular', Menlo, 'JetBrains Mono', 'Cascadia Code', Consolas, ui-monospace, monospace;
+
+  /* ---- 几何 ---- */
+  --re-radius: 10px;
+  --re-radius-sm: 8px;
+  --re-shadow-card: 0 1px 2px rgba(20, 32, 61, 0.04), 0 2px 8px rgba(20, 32, 61, 0.04);
+  --re-shadow-pop: 0 4px 12px rgba(20, 32, 61, 0.1), 0 12px 32px rgba(20, 32, 61, 0.1);
+
+  /* ---- Element Plus 主题映射 ---- */
+  --el-color-primary: var(--re-primary);
+  --el-color-primary-dark-2: var(--re-primary-deep);
+  --el-color-primary-light-3: #6d87e0;
+  --el-color-primary-light-5: #97a9ea;
+  --el-color-primary-light-7: #c2cdf3;
+  --el-color-primary-light-8: #dae1f8;
+  --el-color-primary-light-9: #edf0fc;
+  --el-color-success: var(--re-success);
+  --el-color-success-light-9: #e9f6f0;
+  --el-color-warning: var(--re-warning);
+  --el-color-warning-light-9: #fdf3e7;
+  --el-color-danger: var(--re-danger);
+  --el-color-danger-light-9: #fdeceb;
+  --el-color-error: var(--re-danger);
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-border-color: var(--re-border);
+  --el-border-color-light: var(--re-border);
+  --el-border-color-lighter: #edf0f6;
+  --el-text-color-primary: var(--re-text);
+  --el-text-color-regular: var(--re-text-2);
+  --el-text-color-secondary: var(--re-text-3);
+  --el-fill-color-light: #f6f8fb;
+  --el-fill-color-lighter: #fafbfd;
+  --el-font-family: var(--re-font);
+  --el-box-shadow-light: var(--re-shadow-card);
+  --el-box-shadow: var(--re-shadow-pop);
+}
+
+html, body, #app { height: 100%; margin: 0; }
+
+body {
+  font-family: var(--re-font);
+  font-size: 14px;
+  color: var(--re-text);
+  background:
+    radial-gradient(1200px 400px at 85% -220px, rgba(48, 86, 211, 0.07), transparent 70%),
+    radial-gradient(900px 360px at -10% -180px, rgba(194, 64, 42, 0.045), transparent 70%),
+    var(--re-bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 数字一律等宽对齐：成绩/时长/统计的仪表感 */
+.el-table, .el-statistic__number, .el-progress__text { font-variant-numeric: tabular-nums; }
+
+/* ---------- 页面容器 ---------- */
+.page-card {
+  background: var(--re-surface);
+  border: 1px solid var(--re-border);
+  border-radius: var(--re-radius);
+  padding: 24px;
+  box-shadow: var(--re-shadow-card);
+}
+.page-title { font-size: 18px; font-weight: 600; margin: 0 0 16px; letter-spacing: 0.2px; }
+.toolbar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+
+/* 页头：眉题 + 标题 + 说明（管理端统一开篇） */
+.page-head { margin-bottom: 20px; }
+.page-head .eyebrow {
+  font-size: 12px; font-weight: 600; color: var(--re-text-3);
+  letter-spacing: 2px; margin-bottom: 6px; display: flex; align-items: center; gap: 8px;
+}
+.page-head .eyebrow::before {
+  content: ''; width: 14px; height: 2px; background: var(--re-seal); border-radius: 1px;
+}
+.page-head h2 { font-size: 22px; font-weight: 600; margin: 0 0 6px; color: var(--re-text); }
+.page-head .desc { font-size: 13px; color: var(--re-text-3); margin: 0; }
+
+/* ---------- 表格 ---------- */
+.el-table {
+  --el-table-header-bg-color: #f8f9fc;
+  --el-table-header-text-color: var(--re-text-3);
+  --el-table-row-hover-bg-color: #f5f7ff;
+  --el-table-border-color: var(--re-border);
+  border-radius: var(--re-radius-sm);
+  overflow: hidden;
+}
+.el-table th.el-table__cell { font-weight: 600; font-size: 12px; letter-spacing: 0.5px; }
+.el-table .el-table__cell { padding: 10px 0; }
+
+/* ---------- 按钮 ---------- */
+.el-button { font-weight: 500; transition: all 0.18s ease; }
+.el-button--primary {
+  box-shadow: 0 1px 2px rgba(48, 86, 211, 0.28);
+}
+.el-button--primary:not(.is-disabled):hover {
+  box-shadow: 0 3px 8px rgba(48, 86, 211, 0.32);
+  transform: translateY(-1px);
+}
+.el-button--primary:not(.is-disabled):active { transform: translateY(0); }
+.el-button--primary.is-plain, .el-button--primary.is-text { box-shadow: none; }
+
+/* ---------- 标签 ---------- */
+.el-tag { border-radius: 999px; font-weight: 500; padding: 0 10px; border: none; }
+.el-tag--success { background: var(--el-color-success-light-9); color: #1d7a52; }
+.el-tag--warning { background: var(--el-color-warning-light-9); color: #b45309; }
+.el-tag--danger { background: var(--el-color-danger-light-9); color: #b42318; }
+.el-tag--info { background: #eef1f6; color: var(--re-text-2); }
+.el-tag--primary { background: var(--el-color-primary-light-9); color: var(--re-primary-deep); }
+
+/* ---------- 分页 ---------- */
+.el-pagination { --el-pagination-button-bg-color: transparent; }
+.el-pagination .el-pager li { border-radius: 8px; font-variant-numeric: tabular-nums; }
+
+/* ---------- 标签页 ---------- */
+.el-tabs__item { font-size: 14px; transition: color 0.18s ease; }
+.el-tabs__active-bar { height: 3px; border-radius: 2px; }
+
+/* ---------- 弹层 ---------- */
+.el-dialog { border-radius: 14px; box-shadow: var(--re-shadow-pop); }
+.el-dialog__header { margin-right: 0; padding-bottom: 12px; border-bottom: 1px solid var(--re-border); }
+.el-dialog__title { font-weight: 600; }
+.el-message-box { border-radius: 12px; }
+.el-popover.el-popper, .el-select-dropdown { border-radius: 10px; }
+
+/* ---------- 输入 ---------- */
+.el-input__wrapper, .el-select__wrapper, .el-textarea__inner { transition: box-shadow 0.18s ease; }
+.el-input__wrapper.is-focus, .el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--re-primary) inset, 0 0 0 3px rgba(48, 86, 211, 0.12) !important;
+}
+
+/* ---------- 描述列表 / 统计 ---------- */
+.el-statistic__head { color: var(--re-text-3); font-size: 12px; }
+.el-statistic__number { font-weight: 600; color: var(--re-text); }
+.el-descriptions__label { color: var(--re-text-3); }
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #c9d0dd; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #aab3c5; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- 焦点可见性 ---------- */
+:focus-visible { outline: 2px solid var(--re-primary); outline-offset: 2px; border-radius: 4px; }
+
+/* ---------- 通用小工具 ---------- */
+.re-mono { font-family: var(--re-mono); font-variant-numeric: tabular-nums; }
+.re-display { font-family: var(--re-font-display); }
+
+/* 印章徽标：品牌与「通过」时刻的签名元素 */
+.re-seal-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 10px; background: var(--re-seal); color: #fff;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35), 0 2px 6px rgba(194, 64, 42, 0.35);
+}
+
+/* ---------- 阅读排版 ---------- */
+.reading-container {
+  max-width: 800px; margin: 0 auto; background: var(--re-surface);
+  padding: 44px 56px; border: 1px solid var(--re-border); border-radius: var(--re-radius);
+  box-shadow: var(--re-shadow-card);
+  line-height: 2; font-size: 16px; color: #2a2f38;
+}
+.reading-container img { max-width: 100%; }
+.reading-container a { color: inherit; text-decoration: none; cursor: default; }
+.reading-container h1, .reading-container h2, .reading-container h3 {
+  color: var(--re-text); line-height: 1.5; margin: 1.6em 0 0.6em;
+}
+
+.progress-line { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--re-text-2); }
+
+/* ---------- 入场动效（尊重减弱动效偏好） ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  .page-enter { animation: page-in 0.28s ease both; }
+  @keyframes page-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}

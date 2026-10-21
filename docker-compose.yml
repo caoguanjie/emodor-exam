@@ -1,0 +1,135 @@
+# =====================================================================
+# RuleExam 制度学习及考试系统 · Docker Compose 一键部署（NFR-16）
+# 拓扑与 02 册 5.1 逐字对应：nginx + api + mysql + redis 四容器运行于
+# 自定义桥接网络 ruleexam-net；仅 nginx 对宿主机暴露 80/443；
+# mysql(3306) / redis(6379) / api(3000) 端口不映射宿主机（杜绝内网直连绕过鉴权）。
+# 数据卷：mysql_data（权威数据）+ redis_data（AOF/RDB）+ upload_files（制度文件本体）。
+#
+# 使用：cp deploy/.env.example .env（按注释生成全部敏感值）→ docker compose up -d
+# =====================================================================
+name: ruleexam
+
+services:
+  nginx:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: ruleexam-nginx
+    ports:
+      - "80:80"
+      # 生产启用 HTTPS（TLS 1.2+，证书挂载后放开）：
+      # - "443:443"
+    volumes:
+      - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      # 生产 TLS 证书：
+      # - ./deploy/tls:/etc/nginx/tls:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [ruleexam-net]
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: ruleexam-api
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      TZ: Asia/Shanghai
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_DATABASE: ${DB_DATABASE:-ruleexam}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-2h}
+      EXAM_SHUFFLE_SECRET: ${EXAM_SHUFFLE_SECRET}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      UPLOAD_DIR: /app/data/uploads
+      DATA_DIR: /app/data
+      LOG_DIR: /app/data/logs
+      # AI 服务初始兜底（super_admin 界面配置为权威，可覆写）
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+      # SSRF 白名单放行主机（逗号分隔）：默认空=拒绝内网/环回；仅本地/内网 Mock AI 联调注入
+      AI_EGRESS_ALLOW_HOSTS: ${AI_EGRESS_ALLOW_HOSTS:-}
+      AI_MULTIMODAL_ENABLED: ${AI_MULTIMODAL_ENABLED:-true}
+      AI_MULTIMODAL_TRIGGER_CHARS: ${AI_MULTIMODAL_TRIGGER_CHARS:-1000}
+      AI_MULTIMODAL_PAGES_PER_REQUEST: ${AI_MULTIMODAL_PAGES_PER_REQUEST:-4}
+      AI_MULTIMODAL_DPI: ${AI_MULTIMODAL_DPI:-144}
+      MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-50}
+      # 首次部署种子：超级管理员初始口令（运行期注入，≥8 位；首登强制改密，03 册 7.2）
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
+    volumes:
+      - upload_files:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [ruleexam-net]
+
+  mysql:
+    image: mysql:8.0
+    container_name: ruleexam-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_DATABASE:-ruleexam}
+      # 以 DB_USERNAME/DB_PASSWORD 自动创建业务账号并授权业务库（api 服务以该账号连接）
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      # 会话时区 UTC：与驱动 timezone:'Z' 一致，保证 CURRENT_TIMESTAMP 默认列与其余业务时间列同为 UTC 序列化
+      - --default-time-zone=+00:00
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks: [ruleexam-net]
+
+  redis:
+    image: redis:7-alpine
+    container_name: ruleexam-redis
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks: [ruleexam-net]
+
+networks:
+  ruleexam-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  redis_data:
+  upload_files:

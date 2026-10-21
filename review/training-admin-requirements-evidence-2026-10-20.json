@@ -1,0 +1,1204 @@
+{
+  "review_date": "2026-10-20",
+  "timezone": "Asia/Shanghai",
+  "target": "https://edu-test.emodor.com/adminpc",
+  "scope": "仅线上培训机构端与指定需求文档；未检查当前项目实现",
+  "snippet_note": "关键片段含省略和等价字段说明；原始部署资源可按 URL 与 SHA-256 复核，不将伪代码式摘要视为逐字源码。",
+  "document": {
+    "path": "docs/design/01-培训机构端需求分析.md",
+    "lines": 930,
+    "sha256": "d65f668bf2e46ccb4b9590f0b68071858db360581a7d0a45164d18836c8dac70"
+  },
+  "method": {
+    "browser": "kimi-webbridge",
+    "account": "admin",
+    "secrets_recorded": false,
+    "business_write_operations_executed": false,
+    "notes": [
+      "执行了授权登录、导航、查询展示、打开空表单和取消。",
+      "查看日志清空确认并取消，没有清空日志。",
+      "L1仅证明页面/控件可见；L2为部署网站的公开前端资源；均不证明后台写入成功。",
+      "未使用其它角色；未上传、导入、发布、撤回、删除、改密、强交或下线。"
+    ]
+  },
+  "route_registry": {
+    "asset": "index-5u6Knp2q.js",
+    "registered_count": 30,
+    "content_route_count": 27,
+    "routes": [
+      "/404",
+      "/login",
+      "/",
+      "home",
+      "question",
+      "questionImport",
+      "course",
+      "courseSection",
+      "student",
+      "testPaper",
+      "gradeInfo",
+      "questionHistory",
+      "studentQuestionHistory",
+      "studentPaperHistory",
+      "correctExam",
+      "examReport",
+      "examReportDetail",
+      "admin",
+      "role",
+      "menu",
+      "dict",
+      "dictValue",
+      "log",
+      "message",
+      "imageSetting",
+      "webSiteConfig",
+      "onLineUser",
+      "examMonitor",
+      "statistics/exam",
+      "theme"
+    ],
+    "unregistered_document_route": "/exam"
+  },
+  "pages": [
+    {
+      "evidence_key": "login_observed",
+      "url": "https://edu-test.emodor.com/adminpc/#/login",
+      "fields": [
+        {
+          "role": "textbox",
+          "label": "用户名",
+          "input_type": "text"
+        },
+        {
+          "role": "textbox",
+          "label": "密码",
+          "input_type": "password"
+        },
+        {
+          "role": "textbox",
+          "label": "验证码",
+          "input_type": "text"
+        }
+      ],
+      "buttons": [
+        "登录"
+      ],
+      "result": "使用用户提供的账号完成验证码登录，进入 #/home；不记录口令和验证码。"
+    },
+    {
+      "evidence_key": "ev_home",
+      "url": "https://edu-test.emodor.com/adminpc/#/home",
+      "column_headers": [],
+      "buttons": [],
+      "fields": [],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_category_loaded",
+      "url": "https://edu-test.emodor.com/adminpc/#/gradeInfo",
+      "column_headers": [
+        "选择所有行",
+        "培训类别名称",
+        "创建时间",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "查询",
+        "新增",
+        "修改",
+        "删除",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "textbox",
+          "label": "输入培训类别名称"
+        },
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_course",
+      "url": "https://edu-test.emodor.com/adminpc/#/course",
+      "column_headers": [
+        "课程名称",
+        "课程封面",
+        "培训类别",
+        "状态",
+        "创建时间",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "查询",
+        "新增",
+        "操作",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_student",
+      "url": "https://edu-test.emodor.com/adminpc/#/student",
+      "column_headers": [
+        "姓名",
+        "学员头像",
+        "性别",
+        "年龄",
+        "培训类别",
+        "联系电话",
+        "创建时间",
+        "账号",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "查询",
+        "新增",
+        "导入",
+        "下载模板",
+        "重置密码",
+        "修改",
+        "删除",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "textbox",
+          "label": "姓名/电话号"
+        },
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_question",
+      "url": "https://edu-test.emodor.com/adminpc/#/question",
+      "column_headers": [
+        "选择所有行",
+        "试题内容",
+        "培训类别 按 培训类别 排序",
+        "类型",
+        "创建时间 按 创建时间 排序",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "搜索",
+        "按 培训类别 排序",
+        "按 创建时间 排序",
+        "预览",
+        "修改",
+        "删除",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "textbox",
+          "label": "输入题目内容"
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_question_import",
+      "url": "https://edu-test.emodor.com/adminpc/#/questionImport",
+      "column_headers": [],
+      "buttons": [
+        "更多",
+        "下载Excel模版",
+        "下载TxT模版",
+        "导入试题"
+      ],
+      "fields": [
+        {
+          "role": "combobox",
+          "label": "培训类别:"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_paper",
+      "url": "https://edu-test.emodor.com/adminpc/#/testPaper",
+      "column_headers": [
+        "选择所有行",
+        "试卷名称",
+        "培训类别",
+        "考试时间",
+        "状态",
+        "备注",
+        "创建时间",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "查询",
+        "新增",
+        "操作",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "textbox",
+          "label": "试卷名称"
+        },
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_reports",
+      "url": "https://edu-test.emodor.com/adminpc/#/examReport",
+      "column_headers": [
+        "选择所有行",
+        "考试名称",
+        "培训类别",
+        "参考人数",
+        "平均分",
+        "总分",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "查询",
+        "成绩分析",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "textbox",
+          "label": "考试名称"
+        },
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_report_detail",
+      "url": "https://edu-test.emodor.com/adminpc/#/examReportDetail",
+      "column_headers": [
+        "排名",
+        "姓名",
+        "性别",
+        "用时  ",
+        "总得分  "
+      ],
+      "buttons": [
+        "更多"
+      ],
+      "fields": [],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_admin",
+      "url": "https://edu-test.emodor.com/adminpc/#/admin",
+      "column_headers": [
+        "账号",
+        "姓名",
+        "手机号",
+        "登录次数",
+        "登录ip",
+        "状态",
+        "最后登录时间",
+        "创建时间",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "查询",
+        "新增",
+        "重置密码",
+        "修改",
+        "删除",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "textbox",
+          "label": "用户名/手机号"
+        },
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_role",
+      "url": "https://edu-test.emodor.com/adminpc/#/role",
+      "column_headers": [
+        "选择所有行",
+        "角色名称",
+        "备注",
+        "创建时间",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "查询",
+        "新增",
+        "权限设置",
+        "修改",
+        "删除",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "textbox",
+          "label": "角色名称"
+        },
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_menu_page",
+      "url": "https://edu-test.emodor.com/adminpc/#/menu",
+      "column_headers": [
+        "名称",
+        "图标",
+        "类型",
+        "上级菜单",
+        "排序",
+        "菜单URL",
+        "权限标识",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "新增菜单",
+        "修改",
+        "删除"
+      ],
+      "fields": [],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_dict",
+      "url": "https://edu-test.emodor.com/adminpc/#/dict",
+      "column_headers": [
+        "选择所有行",
+        "描述",
+        "类型标识",
+        "排序",
+        "备注",
+        "创建时间",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "添加",
+        "编辑",
+        "删除",
+        "字典值",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_dict_values",
+      "url": "https://edu-test.emodor.com/adminpc/#/dictValue",
+      "column_headers": [
+        "选择所有行",
+        "字典值描述",
+        "字典值",
+        "排序",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "添加",
+        "编辑",
+        "删除",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_online",
+      "url": "https://edu-test.emodor.com/adminpc/#/onLineUser",
+      "column_headers": [
+        "账号",
+        "登录ip",
+        "登录地点",
+        "登录时间",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "下线",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_log",
+      "url": "https://edu-test.emodor.com/adminpc/#/log",
+      "column_headers": [
+        "操作人",
+        "请求Url",
+        "请求方式",
+        "请求时间",
+        "操作详情",
+        "平台类型",
+        "ip地址",
+        "操作时间"
+      ],
+      "buttons": [
+        "更多",
+        "查询",
+        "清空",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "combobox",
+          "label": "开始日期"
+        },
+        {
+          "role": "combobox",
+          "label": "结束日期"
+        },
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_message",
+      "url": "https://edu-test.emodor.com/adminpc/#/message",
+      "column_headers": [],
+      "buttons": [
+        "更多"
+      ],
+      "fields": [],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_images",
+      "url": "https://edu-test.emodor.com/adminpc/#/imageSetting",
+      "column_headers": [],
+      "buttons": [
+        "更多"
+      ],
+      "fields": [],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_website",
+      "url": "https://edu-test.emodor.com/adminpc/#/webSiteConfig",
+      "column_headers": [],
+      "buttons": [
+        "更多",
+        "保存"
+      ],
+      "fields": [],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_section",
+      "url": "https://edu-test.emodor.com/adminpc/#/courseSection",
+      "column_headers": [],
+      "buttons": [
+        "更多",
+        "新增新章节"
+      ],
+      "fields": [],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_question_history",
+      "url": "https://edu-test.emodor.com/adminpc/#/questionHistory",
+      "column_headers": [
+        "选择所有行",
+        "学员姓名",
+        "试题内容",
+        "试题类型",
+        "模式名称",
+        "用户答案",
+        "正确答案",
+        "是否正确",
+        "答题时间",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "查询",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "textbox",
+          "label": "学员姓名/模式名称/题目内容"
+        },
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_student_papers",
+      "url": "https://edu-test.emodor.com/adminpc/#/studentPaperHistory",
+      "column_headers": [
+        "选择所有行",
+        "试卷名称",
+        "考试时间",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_student_questions",
+      "url": "https://edu-test.emodor.com/adminpc/#/studentQuestionHistory",
+      "column_headers": [],
+      "buttons": [
+        "更多",
+        "提交并算分",
+        "减少数值",
+        "增加数值",
+        "返回上一页"
+      ],
+      "fields": [
+        {
+          "role": "spinbutton",
+          "label": "得分:"
+        },
+        {
+          "role": "textbox",
+          "label": "评语:"
+        }
+      ],
+      "dialog_titles": [],
+      "options": [
+        "是",
+        "否"
+      ]
+    },
+    {
+      "evidence_key": "ev_correct_exam",
+      "url": "https://edu-test.emodor.com/adminpc/#/correctExam",
+      "column_headers": [
+        "选择所有行",
+        "学员姓名",
+        "考试名称",
+        "总分",
+        "成绩",
+        "培训类别",
+        "考试用时",
+        "提交时间",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "textbox",
+          "label": "考试名称/学员姓名"
+        },
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_monitor",
+      "url": "https://edu-test.emodor.com/adminpc/#/examMonitor",
+      "column_headers": [
+        "姓名",
+        "答题进度",
+        "考试时间",
+        "设备",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_statistics_exam",
+      "url": "https://edu-test.emodor.com/adminpc/#/statistics/exam",
+      "column_headers": [
+        "选择所有行",
+        "考试名称",
+        "所属培训类别",
+        "参考人数",
+        "平均分",
+        "总分",
+        "操作"
+      ],
+      "buttons": [
+        "更多",
+        "上一页",
+        "下一页"
+      ],
+      "fields": [
+        {
+          "role": "textbox",
+          "label": "考试名称"
+        },
+        {
+          "role": "combobox",
+          "label": ""
+        },
+        {
+          "role": "spinbutton",
+          "label": "页"
+        }
+      ],
+      "dialog_titles": [],
+      "options": []
+    },
+    {
+      "evidence_key": "ev_theme",
+      "url": "https://edu-test.emodor.com/adminpc/#/theme",
+      "column_headers": [],
+      "buttons": [],
+      "fields": [],
+      "dialog_titles": [],
+      "options": [
+        "default",
+        "inverse",
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "evidence_key": "ev_404",
+      "url": "https://edu-test.emodor.com/adminpc/#/404",
+      "column_headers": [],
+      "buttons": [
+        "返回首页"
+      ],
+      "fields": [],
+      "dialog_titles": [],
+      "options": []
+    }
+  ],
+  "source_facts": [
+    {
+      "id": "theme",
+      "level": "L1+L2",
+      "asset": "theme-B4fAhqsN.js",
+      "observed": "#/theme 显示布局设置，导航条 default/inverse，侧边栏 light/dark",
+      "snippet": "a.updateNavbarLayoutType(l); a.updateSidebarLayoutSkin(l)",
+      "document_lines": [
+        213,
+        226
+      ]
+    },
+    {
+      "id": "legacy_statistics",
+      "level": "L1+L2",
+      "asset": "exam-CeMyO-73.js",
+      "observed": "#/statistics/exam 有独立统计列表；#/exam 不在路由注册表，本次直达无页面内容",
+      "snippet": "E.get(E.httpUrl(\"/system/exam/countExam\"),{params:{pageNumber,pageSize,testPaperInfoName,gradeInfoId}})",
+      "document_lines": [
+        165,
+        781
+      ]
+    },
+    {
+      "id": "statistics_detail_placeholder",
+      "level": "L2",
+      "asset": "exam-CeMyO-73.js",
+      "snippet": "e(I,{size:\"small\",type:\"warning\"},...) // 详情按钮没有 onClick"
+    },
+    {
+      "id": "course_state_controls",
+      "level": "L1+L2",
+      "asset": "course-CDc3xP2A.js",
+      "observed": "11 门课程本轮都为已上架；已上架菜单仅见下架。其它状态按静态条件列证据",
+      "snippet": "t.row.status!==1 // 上架、修改、删除、章节管理；t.row.status===1 // 下架",
+      "document_lines": [
+        257,
+        266
+      ]
+    },
+    {
+      "id": "chapter_controls",
+      "level": "L1+L2",
+      "asset": "course-section-BtUIb3Ue.js",
+      "observed": "新增章节弹窗只要求章节名称。静态章节头只有编辑、添加课时；未见章节删除和排序",
+      "snippet": "const l={id:o.id,courseId:C.value.id,title:e};F(l)",
+      "document_lines": [
+        275,
+        276
+      ]
+    },
+    {
+      "id": "lesson_upload",
+      "level": "L2",
+      "asset": "course-section-BtUIb3Ue.js",
+      "observed": "单个标为课件的上传器写入 videoInfo；enclosure 仅用于列表状态",
+      "snippet": "label:\"课件\"; limit:1; t.videoInfo=o.data; {title:t.title,videoInfo:t.videoInfo,freeFlag:0,videoDuration:t.videoDuration}",
+      "document_lines": [
+        277,
+        281
+      ]
+    },
+    {
+      "id": "lesson_mime",
+      "level": "L2",
+      "asset": "course-section-BtUIb3Ue.js",
+      "observed": "文案只写 MP4；前端 MIME 白名单有六类。不能据此判断后端格式支持",
+      "snippet": "[\"video/mp4\",\"video/mpeg4\",\"video/avi\",\"video/mpeg\",\"video/x-ms-wmv\",\"video/3gp\"]"
+    },
+    {
+      "id": "student_password_dialogs",
+      "level": "L1+L2",
+      "asset": "student-DbJYs22E.js",
+      "observed": "资料修改不显示密码字段；列表重置密码打开独立修改密码弹窗，包含新密码和确认密码，输入类型为 password",
+      "snippet": "n.value.id ? h(\"\",!0) : /* 密码、确认密码区域 */; \"/system/student/updatePassword\"",
+      "document_lines": [
+        294,
+        296
+      ]
+    },
+    {
+      "id": "combined_search",
+      "level": "L1",
+      "observed": "学员为姓名/电话号一个输入框；答题记录为学员姓名/模式名称/题目内容一个输入框；批改任务为考试名称/学员姓名一个输入框",
+      "document_lines": [
+        292,
+        376,
+        401
+      ]
+    },
+    {
+      "id": "answer_history_columns",
+      "level": "L1",
+      "observed": "答题记录有学员姓名、模式名称列，FR-EXM-REV-02 两列遗漏",
+      "document_lines": [
+        377
+      ]
+    },
+    {
+      "id": "review_branch",
+      "level": "L1+L2",
+      "asset": "student-question-history-DQwkPuZF.js",
+      "observed": "评分/评语只在非1/2/6题型分支；图片答案可预览；查看模式由 lookQuestionAnswerFlag 控制。无上下文直达只能确认空表单",
+      "snippet": "t.value.questionType!==1&&t.value.questionType!==2&&t.value.questionType!==6; V.value=f.value.lookQuestionAnswerFlag; min:0,max:100",
+      "document_lines": [
+        391,
+        395
+      ]
+    },
+    {
+      "id": "monitor_force_submit",
+      "level": "L2",
+      "asset": "exam-monitor-BSgfv2Qv.js",
+      "observed": "强制交卷点击仅提示未开放；未见强交请求；未见专门刷新按钮或定时刷新",
+      "snippet": "onClick:...=>e.$message.error(\"功能暂未开放，尽请期待\")",
+      "document_lines": [
+        414,
+        416
+      ]
+    },
+    {
+      "id": "paper_settings_unreachable",
+      "level": "L2",
+      "asset": "test-paper-CAie5r7_.js",
+      "observed": "高级设置组件存在；主页面状态初始为false，仅找到关闭赋值，无打开入口或选中试卷参数回填路径",
+      "snippet": "s=i(!1);function U(){s.value=!1};e(gt,{\"form-data\":P,\"show-paper-setting-flag\":s.value,onClosePaperSetting:U})",
+      "document_lines": [
+        343,
+        367
+      ]
+    },
+    {
+      "id": "paper_setting_options",
+      "level": "L2",
+      "asset": "test-paper-CAie5r7_.js",
+      "observed": "有效期限=指定开放时间/永久有效；次数=1次/不限次数；显示成绩/不显示成绩；名次开/关。注意事项为基础表单备注占位文案"
+    },
+    {
+      "id": "paper_export",
+      "level": "L2",
+      "asset": "test-paper-CAie5r7_.js",
+      "snippet": "hasPermission([\"system:testPaperInfo:export\"]); Q.value.map(o=>o.id); \"/system/testPaper/export\"; {testPaperIds:n}",
+      "observed": "导出为选择一条或多条后的共同动作。当前登录会话未显示导出按钮；文件内容与格式未验证",
+      "document_lines": [
+        339,
+        349
+      ]
+    },
+    {
+      "id": "menu_form",
+      "level": "L1+L2",
+      "asset": "menu-BS1pd-Xa.js",
+      "observed": "目录/菜单/按钮仅改变type；表单字段连续渲染，未按类型改变。表单1目录/2菜单/3按钮与列表1菜单/2按钮的静态映射不一致",
+      "snippet": "o.value.type=a",
+      "document_lines": [
+        473
+      ]
+    },
+    {
+      "id": "dictionary_integer",
+      "level": "L2",
+      "asset": "dict-value-evlvMjhB.js",
+      "observed": "明确整数校验对应字典值code，未见排序规则",
+      "snippet": "code:[{required:!0,validator:... \"请输入整数类型的字典值\" ...}]",
+      "document_lines": [
+        487
+      ]
+    },
+    {
+      "id": "log_clear",
+      "level": "L1+L2",
+      "asset": "log-CDOVisRD.js",
+      "observed": "点击清空打开确定清空所有操作日志吗确认，本轮已取消；不是清空查询条件",
+      "snippet": "confirm(\"确定清空所有操作日志吗?\"); delete(\"/system/log\")",
+      "document_lines": [
+        498,
+        500
+      ]
+    },
+    {
+      "id": "image_setting_placeholder",
+      "level": "L1+L2",
+      "asset": "image-setting-DqXflohQ.js",
+      "observed": "五个资源位均为示例上传地址；未见本站配置读写或保存按钮；预览/移除回调为空",
+      "snippet": "action:\"https://jsonplaceholder.typicode.com/posts/\"; function a(){}; function i(){}",
+      "document_lines": [
+        509,
+        515
+      ]
+    },
+    {
+      "id": "website_setting",
+      "level": "L1+L2",
+      "asset": "web-site-config-CodeHgyl.js",
+      "observed": "独立网站设置页有保存按钮和本站读写设计；Logo删除确认，轮播图删除直接splice；三张上限有return false",
+      "snippet": "GET /system/webSite; POST /system/webSite; carouselImageList.length>=3; splice(index,1)",
+      "document_lines": [
+        510
+      ]
+    },
+    {
+      "id": "message_fields_and_paging",
+      "level": "L2",
+      "asset": "message-L4O9BYxp.js",
+      "observed": "展示content/create_date，按offset/limit查询；未见标题、接收范围、已读和发布能力；total=0不渲染分页，非空仅prev,pager,next",
+      "snippet": "\"/system/message\"; p.content; p.create_date; layout:\"prev, pager, next\"",
+      "document_lines": [
+        223,
+        508,
+        757
+      ]
+    },
+    {
+      "id": "permissions",
+      "level": "L1+L2",
+      "asset": "test-paper-CAie5r7_.js",
+      "observed": "角色树展开后仅观察到菜单节点；试卷等页面源码存在按钮权限条件。配置入口不完整不等于完全没有按钮权限控制",
+      "snippet": "hasPermission([\"system:testPaperInfo:publish\"]); hasPermission([\"system:testPaperInfo:export\"])",
+      "document_lines": [
+        462,
+        464
+      ]
+    },
+    {
+      "id": "password_inputs",
+      "level": "L1",
+      "observed": "登录密码=password；学员独立重置密码两框=password；个人改密三框、管理员新增和学员新增密码框=text。未在改密或新增账号表单填写密码或保存；登录使用用户提供的凭据",
+      "document_lines": [
+        218,
+        784
+      ]
+    },
+    {
+      "id": "image_limits",
+      "level": "L2",
+      "observed": "课程封面/学员头像静态放行GIF且小于5MiB，文案为JPG/PNG。图片设置仅首资源位挂检查且无return false；网站设置图片检查也未return false，不能当作有效拦截"
+    },
+    {
+      "id": "report_time",
+      "level": "L1",
+      "observed": "同一消防专项试卷列表25分钟，成绩分析考试时间25秒；及格分60、优秀分80仅为本条数据观察，未推断全站阈值规则",
+      "document_lines": [
+        433,
+        782
+      ]
+    },
+    {
+      "id": "404",
+      "level": "L1",
+      "observed": "#/404 显示404、页面未找到、返回首页；点击返回首页进入#/home",
+      "document_lines": [
+        224
+      ]
+    },
+    {
+      "id": "rich_editor",
+      "level": "L1",
+      "observed": "题干富文本工具栏有图片、视频、音乐、附件、表格、代码、模板、草稿加载、编辑器预览/打印、插入填空等。工具可见不等于相应上传或题型已运行通过",
+      "document_lines": [
+        311
+      ]
+    }
+  ],
+  "public_asset_fingerprints": [
+    {
+      "asset": "course-section-BtUIb3Ue.js",
+      "utf8Bytes": 8286,
+      "sha256": "70660f23c00e1e9a08f2be35a54c9b014a914efe6cb11119613a2ebe16ca45b9"
+    },
+    {
+      "asset": "exam-monitor-BSgfv2Qv.js",
+      "utf8Bytes": 2672,
+      "sha256": "9888126700b33a24ebc735075631d4c77d2e3165546ca4a0a9f0f785e0e616d0"
+    },
+    {
+      "asset": "theme-B4fAhqsN.js",
+      "utf8Bytes": 1349,
+      "sha256": "7e69c41ae0db2b54f73b7408106456e4500908755abe71b06fdd5d83b81c1af3"
+    },
+    {
+      "asset": "exam-CeMyO-73.js",
+      "utf8Bytes": 3096,
+      "sha256": "9c9f40808122bffe97b43e0da07c2b71d599d282883ce0a6a9cecd630ec3279e"
+    },
+    {
+      "asset": "message-L4O9BYxp.js",
+      "utf8Bytes": 1832,
+      "sha256": "899b127098342e2a2774a58323abc9755dfe2964ebab66fe873b48be5a1af621"
+    },
+    {
+      "asset": "test-paper-CAie5r7_.js",
+      "utf8Bytes": 24821,
+      "sha256": "4f0b7b78a024b2cb188aca20e2c10763ea5ca971903aa74dea055b2d43d02798"
+    },
+    {
+      "asset": "course-CDc3xP2A.js",
+      "utf8Bytes": 10956,
+      "sha256": "b7c3f3e9d3e998283965b8dbc098abd662881db62879248ae9d818bbef0b6fd7"
+    },
+    {
+      "asset": "student-question-history-DQwkPuZF.js",
+      "utf8Bytes": 8512,
+      "sha256": "fafeb1cef6c443fc32abbc79ed4a28ed118dcebb5ce3b5e04316a18a53d68e1a"
+    },
+    {
+      "asset": "student-DbJYs22E.js",
+      "utf8Bytes": 15261,
+      "sha256": "7c357b6f076270cdf7b5b951f4a51e42d59389e3f44c780ce2e877169334cbfa"
+    },
+    {
+      "asset": "image-setting-DqXflohQ.js",
+      "utf8Bytes": 2193,
+      "sha256": "07a8da5c059acb47ec0778a423428a5cdde04e1d0816522cc9dd093f83b63b6f"
+    },
+    {
+      "asset": "web-site-config-CodeHgyl.js",
+      "utf8Bytes": 6139,
+      "sha256": "ffcc1653be4423d991c90467d4e70db326c624a055567a483317b8d48a06b173"
+    },
+    {
+      "asset": "dict-value-evlvMjhB.js",
+      "utf8Bytes": 5143,
+      "sha256": "359fcc4f7f569bf36f89006565ef32fc4a5cc358729b67adabc4766f3bca28d0"
+    },
+    {
+      "asset": "log-CDOVisRD.js",
+      "utf8Bytes": 3369,
+      "sha256": "b4078c7e0e71fa2968e53705d5e833a568703d913b71e35bae3a3b7167222d94"
+    },
+    {
+      "asset": "menu-BS1pd-Xa.js",
+      "utf8Bytes": 7502,
+      "sha256": "f55dcbefe6764857c9222381d89ff8821a1064413019500447ad0d0be41865f9"
+    }
+  ],
+  "screenshots": [
+    {
+      "path": "../gui-test-screenshots/requirements-review-20261020-theme-settled.png",
+      "description": "布局设置页面，已查看图片，无遮罩"
+    },
+    {
+      "path": "../gui-test-screenshots/requirements-review-20261020-log-confirm.png",
+      "description": "清空日志确认，已查看图片并取消"
+    }
+  ],
+  "limitations": [
+    "所有结论限于本轮部署版本、admin会话及已读取的公开前端资源。",
+    "接口异常/空数据/缺少上下文的页面未验证真实业务记录。",
+    "没有将不存在公开前端证据的后端能力推断为不存在。"
+  ]
+}

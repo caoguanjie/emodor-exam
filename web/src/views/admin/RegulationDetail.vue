@@ -1,0 +1,242 @@
+<template>
+  <div v-if="reg" class="page-card">
+    <div class="toolbar">
+      <el-button text @click="$router.push('/admin/regulations')"><el-icon><ArrowLeft /></el-icon>返回</el-button>
+      <el-divider direction="vertical" />
+      <div class="detail-head">
+        <h2 class="detail-title">{{ reg.title }}</h2>
+        <el-tag :type="statusType(reg.status)" size="small">{{ statusLabel(reg.status) }}</el-tag>
+      </div>
+      <div style="flex:1" />
+      <el-button v-if="reg.status !== 'archived'" type="success" @click="onPublish">发布制度</el-button>
+      <el-button v-if="reg.status !== 'archived'" type="warning" plain @click="onArchive">归档</el-button>
+    </div>
+
+    <el-tabs>
+      <el-tab-pane label="制度版本">
+        <div class="toolbar">
+          <el-upload :show-file-list="false" accept=".pdf,.docx" :auto-upload="false" :on-change="onUploadChange">
+            <el-button type="primary">上传制度文件（PDF / DOCX ≤ 50MB）</el-button>
+          </el-upload>
+          <span style="color:#909399; font-size:13px">版本 append-only；解析为异步，状态实时轮询</span>
+        </div>
+        <el-table :data="versions">
+          <el-table-column prop="version_no" label="版本" width="70">
+            <template #default="{ row }">v{{ row.version_no }}</template>
+          </el-table-column>
+          <el-table-column prop="file_type" label="类型" width="80" />
+          <el-table-column label="解析状态" width="110">
+            <template #default="{ row }">
+              <el-tag :type="row.parse_status === 'parsed' ? 'success' : row.parse_status === 'failed' ? 'danger' : 'info'">
+                {{ ({ parsed: '已解析', pending: '解析中', failed: '解析失败' } as any)[row.parse_status] }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="retry_count" label="重试次数" width="90" />
+          <el-table-column label="当前生效" width="110">
+            <template #default="{ row }">
+              <el-tag v-if="row.is_current" type="success">生效中</el-tag>
+              <el-button v-else-if="row.parse_status === 'parsed' && reg.status !== 'archived'" text size="small" type="primary" @click="switchVersion(row)">设为生效</el-button>
+            </template>
+          </el-table-column>
+          <el-table-column label="上传时间" min-width="150">
+            <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="150" fixed="right">
+            <template #default="{ row }">
+              <el-button text size="small" @click="preview(row)">预览</el-button>
+              <el-button v-if="row.parse_status === 'failed'" text size="small" type="warning" @click="retryParse(row)">重新解析</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <el-tab-pane label="学习要求">
+        <el-form label-width="160px" style="max-width:520px; margin-top:12px">
+          <el-form-item label="规定有效学习时长（分钟）">
+            <!-- key 随每次 load 递增：el-input-number 在程序化更新场景下内部显示可能不回同步，重挂载保证显示=数据 -->
+            <el-input-number :key="configKey" v-model="config.required_minutes" :min="1" :max="600" />
+          </el-form-item>
+          <el-form-item label="滚动分段数">
+            <el-input-number :key="configKey + 1" v-model="config.scroll_segments" :min="10" :max="10" disabled />
+            <span style="color:#909399; font-size:12px; margin-left:8px">本期固定 10 段（配置项前向保留）</span>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="saveConfig">保存学习要求</el-button>
+          </el-form-item>
+        </el-form>
+      </el-tab-pane>
+
+      <el-tab-pane label="发布范围">
+        <el-radio-group v-model="scope.is_all">
+          <el-radio :value="true">面向全员</el-radio>
+          <el-radio :value="false">按部门圈定（含子部门）</el-radio>
+        </el-radio-group>
+        <div v-if="!scope.is_all" style="margin-top:14px; max-width:420px">
+          <el-tree ref="scopeTreeRef" :data="deptTree" show-checkbox node-key="id" default-expand-all
+            :props="{ label: 'name' }" />
+        </div>
+        <el-button type="primary" style="margin-top:14px" @click="saveScope">保存发布范围</el-button>
+      </el-tab-pane>
+
+      <el-tab-pane label="内容预览">
+        <div class="reading-container" v-html="previewHtml" />
+      </el-tab-pane>
+    </el-tabs>
+
+    <el-dialog v-model="previewVisible" title="版本内容预览" width="760px">
+      <div class="reading-container" style="max-height:60vh; overflow:auto" v-html="previewHtml" />
+    </el-dialog>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { useRoute } from 'vue-router';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { ArrowLeft } from '@element-plus/icons-vue';
+import type { UploadFile } from 'element-plus';
+import http, { upload } from '../../api/http';
+import { formatDateTime } from '../../utils/format';
+
+const route = useRoute();
+const regId = String(route.params.id);
+
+const reg = ref<any>(null);
+const versions = ref<any[]>([]);
+const deptTree = ref<any[]>([]);
+const config = reactive({ required_minutes: 10, scroll_segments: 10 });
+const configKey = ref(0);
+const scope = reactive<{ is_all: boolean; departmentIds: string[] }>({ is_all: false, departmentIds: [] });
+const previewHtml = ref('');
+const previewVisible = ref(false);
+const scopeTreeRef = ref();
+
+function statusLabel(s: string) {
+  return ({ draft: '草稿', published: '已发布', archived: '已归档' } as any)[s] || s;
+}
+function statusType(s: string) {
+  return ({ draft: 'info', published: 'success', archived: 'warning' } as any)[s] || 'info';
+}
+
+async function load() {
+  reg.value = await http.get(`/regulations/${regId}`);
+  config.required_minutes = reg.value.required_minutes;
+  config.scroll_segments = reg.value.scroll_segments;
+  configKey.value++; // 强制 el-input-number 重挂载，显示与数据保持一致
+  // 发布范围回显（详情接口含 scope：is_all / department_ids）
+  scope.is_all = !!reg.value.scope?.is_all;
+  scope.departmentIds = (reg.value.scope?.department_ids || []).map(String);
+  versions.value = await http.get(`/regulations/${regId}/versions`) as any;
+  const tree: any = await http.get('/departments/tree');
+  deptTree.value = tree.list;
+  nextTick(() => {
+    (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds);
+  });
+}
+
+async function handleUpload(file: File) {
+  const res: any = await upload(`/regulations/${regId}/versions`, file);
+  if (res.duplicate_hint) ElMessage.warning(res.duplicate_hint + '（已创建新版本）');
+  else ElMessage.success('上传成功，解析中…');
+  pollVersions(res.version_id);
+  return false;
+}
+
+async function onUploadChange(file: UploadFile) {
+  if (!file.raw) return;
+  await handleUpload(file.raw);
+}
+
+let pollTimer: number | null = null;
+async function pollVersions(versionId: number) {
+  if (pollTimer) window.clearInterval(pollTimer);
+  pollTimer = window.setInterval(async () => {
+    versions.value = await http.get(`/regulations/${regId}/versions`) as any;
+    const v = versions.value.find((x: any) => x.id === versionId);
+    if (v && v.parse_status !== 'pending') {
+      if (pollTimer) window.clearInterval(pollTimer);
+      pollTimer = null;
+      if (v.parse_status === 'parsed') ElMessage.success(`v${v.version_no} 解析成功`);
+      else ElMessage.error('解析失败：可能为扫描版 PDF，请上传含可复制文本的文件');
+    }
+  }, 2000);
+}
+
+async function switchVersion(row: any) {
+  await http.put(`/regulations/${regId}/current-version`, { version_id: String(row.id) });
+  ElMessage.success(`已切换生效版本至 v${row.version_no}`);
+  await load();
+}
+
+async function retryParse(row: any) {
+  await http.post(`/regulations/${regId}/versions/${row.id}/retry`);
+  ElMessage.success('已重新入队解析');
+  pollVersions(row.id);
+}
+
+async function saveConfig() {
+  // el-input-number 聚焦期间不改写 model（显示与实际值会短暂脱节），保存前先失焦提交
+  (document.activeElement as HTMLElement | null)?.blur?.();
+  await http.put(`/regulations/${regId}/learning-config`, { ...config });
+  ElMessage.success('学习要求已保存（已达标员工不回退）');
+  await load();
+}
+
+async function saveScope() {
+  const checked = scope.is_all ? [] : scopeTreeRef.value.getCheckedKeys().concat(scopeTreeRef.value.getHalfCheckedKeys());
+  await http.put(`/regulations/${regId}/scope`, { is_all: scope.is_all, department_ids: checked });
+  ElMessage.success('发布范围已保存');
+}
+
+async function onPublish() {
+  await ElMessageBox.confirm('发布前置：存在已解析的生效版本且已配置发布范围。确认发布？', '发布制度', { type: 'warning' });
+  await http.post(`/regulations/${regId}/publish`);
+  ElMessage.success('发布成功，范围内员工已可见');
+  await load();
+}
+
+async function onArchive() {
+  await ElMessageBox.confirm('归档后员工端不可见、不可再学习与考试，历史数据保留并计入统计。确认归档？', '归档', { type: 'warning' });
+  await http.post(`/regulations/${regId}/archive`);
+  ElMessage.success('已归档');
+  await load();
+}
+
+async function preview(row?: any) {
+  const q = row ? `?versionId=${row.id}` : '';
+  try {
+    const d: any = await http.get(`/regulations/${regId}/preview${q}`);
+    previewHtml.value = d.content_html || `（该版本为 ${d.file_type?.toUpperCase()}，解析状态：${d.parse_status}）`;
+  } catch {
+    // 进入详情页时可能尚无生效版本：占位提示即可，不弹错误 toast（避免开页即报错）
+    if (row) {
+      // 手动点「预览」失败：拦截器已弹过 toast，不 rethrow（模板事件链无 catch，会产生 unhandled rejection）
+      ElMessage.error('该版本内容暂不可预览');
+      return;
+    }
+    previewHtml.value = '（暂无生效版本或内容不可见：请先在「制度版本」中上传并设置生效版本）';
+  }
+  if (row) previewVisible.value = true;
+}
+
+onMounted(async () => {
+  await load();
+  await preview();
+  // 树渲染后回显已圈定部门（仅勾选自身节点，父级由半选态呈现）
+  nextTick(() => {
+    (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds);
+  });
+});
+
+onBeforeUnmount(() => {
+  // 解析轮询仅由终态自清，离开页面时必须兜底清理
+  if (pollTimer) window.clearInterval(pollTimer);
+  pollTimer = null;
+});
+</script>
+
+<style scoped>
+.detail-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.detail-title { font-size: 18px; font-weight: 600; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
+</style>
