@@ -32,7 +32,7 @@ API 启动后监听 :3000，全局前缀 `api/v1`。本机开发用宿主 MySQL 
 ## 架构红线（改代码前必读）
 
 - 响应统一信封 `{code,message,data}`（`server/src/common/response.interceptor.ts`），错误码表见 `common/errors.ts`（40xxx/50xxx）；DTO 校验一律走 `DtoValidationPipe`。
-- 数据库**无外键**，引用完整性由应用层维护；当前 12 张业务表保持不变时，`database/init.sql`、entities 与设计分册须一致；培训融合新增/修改表还必须同步 `database/migrations/`（如已建立）并保留可续跑的迁移记录。迁移注册表的实际字段以 A1 代码实现与根集成后的源码为准，文档不得另造一套字段。
+- 数据库**无外键**，引用完整性由应用层维护；当前 12 张业务表保持不变时，`database/init.sql`、entities 与设计分册须一致；A1 `schema_migration` 元数据表的精确结构见 `docs/design/03-数据库设计.md` 1.10，代码 worker 须经根集成与 A1 验收后随包生效；培训融合新增/修改表还必须同步 `database/migrations/`（如已建立）并保留可续跑的迁移记录。文档不得另造第二套 registry 字段。
 - 学习时长全部服务端结算（30s 心跳、单次 ≤45s、失焦锚点、10 段位图、单活跃会话）；不要在前端"补"时长逻辑。
 - 考试下发 payload 不含答案与解析；乱序 seed 由 `EXAM_SHUFFLE_SECRET` HMAC 派生；最终总分不可直接修改。图片题允许在最终结算前受控逐题评分，必须经过审计、乐观版本校验并由服务端汇总；最终结算后只读。
 - 旧制度固定卷继续按有效学习双条件取得资格；新培训考试默认不以课程/制度学习完成作为开考门槛，视频课程学习与制度阅读分开，服务端计时、空白答案、反答案泄露与令牌规则不放宽。
