@@ -42,6 +42,12 @@ export interface CoursePatch {
 
 type RequiredReadiness = { requiredCount: number; missingLessonIds: string[] };
 
+export interface RequiredVideoLesson {
+  lessonId: Id;
+  versionId: Id;
+  durationMs: number;
+}
+
 @Injectable()
 export class CourseService implements OnModuleInit {
   constructor(
@@ -331,6 +337,44 @@ export class CourseService implements OnModuleInit {
       order: { sortOrder: 'ASC', id: 'DESC' },
     });
     return rows.map((course) => String(course.id));
+  }
+
+  /** Current required denominator. A supplied manager keeps scope reads inside the caller transaction. */
+  async requiredVideoLessons(
+    userId: Id,
+    courseId: Id,
+    manager?: EntityManager,
+  ): Promise<{ assigned: boolean; lessons: RequiredVideoLesson[] }> {
+    const userRepo = manager?.getRepository(SysUser) ?? this.userRepo;
+    const courseRepo = manager?.getRepository(TrainingCourse) ?? this.courseRepo;
+    const lessonRepo = manager?.getRepository(CourseLesson) ?? this.lessonRepo;
+    const versionRepo = manager?.getRepository(LessonVersion) ?? this.versionRepo;
+    const [user, course] = await Promise.all([
+      userRepo.findOne({ where: { id: String(userId) } }),
+      courseRepo.findOne({ where: { id: String(courseId) } }),
+    ]);
+    if (!course) throw Errors.notFound('课程不存在');
+    if (!this.isVisibleTo(user, course)) return { assigned: false, lessons: [] };
+
+    const lessons = (await lessonRepo.find({
+      where: { courseId: String(courseId), required: 1, lessonType: 'video' },
+      order: { sortOrder: 'ASC', id: 'ASC' },
+    })).filter((lesson) => Number(lesson.required) === 1 && lesson.lessonType === 'video');
+    const currentIds = lessons.map((lesson) => lesson.currentVersionId).filter((value): value is string => Boolean(value));
+    const versions = currentIds.length ? await versionRepo.findBy({ id: In(currentIds) }) : [];
+    const byId = new Map(versions.map((version) => [String(version.id), version]));
+    const required = lessons.map((lesson) => {
+      const version = lesson.currentVersionId ? byId.get(String(lesson.currentVersionId)) : undefined;
+      if (!version || String(version.lessonId) !== String(lesson.id) || Number(version.durationMs) <= 0) {
+        throw Errors.videoUnavailable('必学课时当前视频不可用');
+      }
+      return {
+        lessonId: String(lesson.id),
+        versionId: String(version.id),
+        durationMs: Number(version.durationMs),
+      };
+    });
+    return { assigned: true, lessons: required };
   }
 
   async learnerDetail(userId: Id, courseId: Id) {

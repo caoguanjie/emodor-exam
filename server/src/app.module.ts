@@ -42,6 +42,8 @@ import { TrainingCourse } from './entities/training-course.entity';
 import { CourseChapter } from './entities/course-chapter.entity';
 import { CourseLesson } from './entities/course-lesson.entity';
 import { LessonVersion } from './entities/lesson-version.entity';
+import { VideoLearningRecord } from './entities/video-learning-record.entity';
+import { VideoLearningSession } from './entities/video-learning-session.entity';
 import { QuestionConcept } from './entities/question-concept.entity';
 import { QuestionVersion } from './entities/question-version.entity';
 import { SysMenu } from './entities/sys-menu.entity';
@@ -91,6 +93,8 @@ import { MediaProbeService } from './modules/media/media-probe.service';
 import { CourseAdminController, LearnerHomeController, MyCoursesController } from './modules/courses/course.controller';
 import { CourseService } from './modules/courses/course.service';
 import { LessonVersionService } from './modules/courses/lesson-version.service';
+import { VideoLearningController } from './modules/video-learning/video-learning.controller';
+import { VideoSessionService } from './modules/video-learning/video-session.service';
 import { QuestionConceptService } from './modules/questions/question-concept.service';
 import { QuestionVersionService } from './modules/questions/question-version.service';
 import { SiteConfigController, SystemController } from './modules/system/system.controller';
@@ -110,6 +114,7 @@ const config = loadConfig();
       SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
       MediaAsset, MediaReference,
       TrainingCourse, CourseChapter, CourseLesson, LessonVersion,
+      VideoLearningRecord, VideoLearningSession,
       QuestionConcept, QuestionVersion,
       SysMenu, SysDictionary, SiteSetting,
       TrainingCategory, ImportBatch,
@@ -125,6 +130,7 @@ const config = loadConfig();
     StatisticsController, HealthController,
     MediaController,
     CourseAdminController, LearnerHomeController, MyCoursesController,
+    VideoLearningController,
     SystemController, SiteConfigController,
   ],
   providers: [
@@ -137,6 +143,7 @@ const config = loadConfig();
     RedisService, AuditService, TasksService,
     MediaService, MediaProbeService,
     CourseService, LessonVersionService,
+    VideoSessionService,
     QuestionConceptService, QuestionVersionService,
     SystemService, AuditQueryService,
     // 守卫链（07 册 2.3.2）：① JWT 认证 → ② 细权限映射 → ③ 兼容角色边界

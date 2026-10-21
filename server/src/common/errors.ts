@@ -45,6 +45,8 @@ export const Errors = {
   systemReferenced: (msg = '系统配置仍被引用，不能删除') => new BizError(40920, 409, msg),
   courseConflict: (msg = '课程状态冲突') => new BizError(40930, 409, msg),
   questionVersionConflict: (msg = '题目版本已变化，请刷新后重试') => new BizError(40940, 409, msg),
+  videoSessionConflict: (msg = '视频学习会话已结束或被替换') => new BizError(40950, 409, msg),
+  videoUnavailable: (msg = '课程或视频版本当前不可学习') => new BizError(40951, 409, msg),
   mediaRangeInvalid: (msg = '媒体 Range 无效') => new BizError(41601, 416, msg),
   fileFormat: (msg = '文件格式不支持') => new BizError(42201, 422, msg),
   fileTooLarge: (msg = '文件超过大小上限') => new BizError(42202, 422, msg),

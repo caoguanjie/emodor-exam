@@ -5,6 +5,7 @@ import { LearningSessionService } from './modules/learning/learning-session.serv
 import { ExamService } from './modules/exams/exam.service';
 import { StatisticsService } from './modules/statistics/statistics.service';
 import { MediaService } from './modules/media/media.service';
+import { VideoSessionService } from './modules/video-learning/video-session.service';
 
 /**
  * 定时任务编排（02 册 2.2 横切能力，06 册 4.3 双触发）：
@@ -25,6 +26,7 @@ export class TasksService {
     private readonly parsePipeline: ParsePipelineService,
     private readonly statistics: StatisticsService,
     private readonly media: MediaService,
+    private readonly videoLearning: VideoSessionService,
   ) {}
 
   /** 触发器一（主）：超时自动交卷，每 30 秒（06 册 4.3） */
@@ -51,6 +53,12 @@ export class TasksService {
       await this.learningService.sweepStalledSessions();
     } catch (e: any) {
       this.logger.warn(`学习会话兜底失败: ${e?.message}`);
+    }
+    try {
+      const n = await this.videoLearning.sweepStalledSessions();
+      if (n > 0) this.logger.log(`视频学习会话回收：${n} 条`);
+    } catch (e: any) {
+      this.logger.warn(`视频学习会话回收失败: ${e?.message}`);
     } finally {
       this.learningSweepRunning = false;
     }

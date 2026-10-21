@@ -30,6 +30,7 @@ export const SUITE_REGISTRY = Object.freeze({
   'training-media': join(ROOT, 'tests', 'training-media.mjs'),
   'training-system': join(ROOT, 'tests', 'training-system.mjs'),
   'training-courses': join(ROOT, 'tests', 'training-courses.mjs'),
+  'training-video-learning': join(ROOT, 'tests', 'training-video-learning.mjs'),
   'training-question-bank': join(ROOT, 'tests', 'training-question-bank.mjs'),
 });
 
