@@ -256,6 +256,11 @@ function walk(node, predicate, output = []) {
   return output;
 }
 
+function renderedText(node) {
+  if (!node) return '';
+  return `${node.text || ''}${(node.children || []).map(renderedText).join('')}`;
+}
+
 function deferred() {
   let resolvePromise;
   let rejectPromise;
@@ -678,6 +683,92 @@ test('a preview response arriving while PaperDetail is deactivated stays invalid
   mounted.unmount();
 });
 
+test('fix2 safely reloads training detail after repeated initial KeepAlive invalidations', async () => {
+  const first = deferredRequest('GET', '/admin/papers/paper-1');
+  const mounted = await mountCached(PaperDetail);
+  await waitFor(() => context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length === 1, 'first training detail request');
+
+  await mounted.deactivate();
+  first.resolve(trainingPaper({ title: '首次停用后的旧响应' }));
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.equal(mounted.state.paper, null);
+
+  const second = deferredRequest('GET', '/admin/papers/paper-1');
+  await mounted.activate();
+  assert.equal(context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length, 2);
+  await mounted.deactivate();
+  second.resolve(trainingPaper({ title: '第二次停用后的旧响应' }));
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.equal(mounted.state.paper, null);
+
+  const third = deferredRequest('GET', '/admin/papers/paper-1');
+  await mounted.activate();
+  assert.equal(context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length, 3);
+  third.resolve(trainingPaper({ title: '重新激活后的权威培训卷' }));
+  await waitFor(() => mounted.state.paper?.title === '重新激活后的权威培训卷', 'reloaded training detail');
+  assert.equal(mounted.state.form.title, '重新激活后的权威培训卷');
+  mounted.unmount();
+});
+
+test('fix2 safely reloads legacy detail after its initial KeepAlive request was invalidated', async () => {
+  context.route = { params: { id: 'paper-1' }, query: { scope: 'regulation' } };
+  const first = deferredRequest('GET', '/ai/papers/paper-1');
+  const mounted = await mountCached(PaperDetail);
+  await waitFor(() => context.calls.filter((call) => call.method === 'GET' && call.path === '/ai/papers/paper-1').length === 1, 'first legacy detail request');
+
+  await mounted.deactivate();
+  first.resolve(legacyPaper({ title: '停用后的旧制度卷', pass_score: 61 }));
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.equal(mounted.state.legacyPaper, null);
+
+  const authoritative = deferredRequest('GET', '/ai/papers/paper-1');
+  await mounted.activate();
+  assert.equal(context.calls.filter((call) => call.method === 'GET' && call.path === '/ai/papers/paper-1').length, 2);
+  authoritative.resolve(legacyPaper({ title: '重新激活后的权威制度卷', pass_score: 67 }));
+  await waitFor(() => mounted.state.legacyPaper?.title === '重新激活后的权威制度卷', 'reloaded legacy detail');
+  assert.equal(mounted.state.legacyStrategy.pass_score, 67);
+  mounted.unmount();
+});
+
+test('fix2 reactivation preserves a loaded unsaved training draft without another detail read', async () => {
+  const mounted = await mountCached(PaperDetail);
+  await waitFor(() => mounted.state.paper, 'loaded training detail');
+  mounted.state.form.title = '停用期间保留的培训草稿';
+  mounted.state.fixedQuestions[0].score_cents = 999;
+  await nextTick();
+  const detailReads = context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length;
+
+  await mounted.deactivate();
+  await mounted.activate();
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.equal(context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length, detailReads);
+  assert.equal(mounted.state.form.title, '停用期间保留的培训草稿');
+  assert.equal(mounted.state.fixedQuestions[0].score_cents, 999);
+  assert.equal(mounted.state.dirty, true);
+  mounted.unmount();
+});
+
+test('fix2 reactivation preserves a loaded unsaved legacy draft without another detail read', async () => {
+  context.route = { params: { id: 'paper-1' }, query: { scope: 'regulation' } };
+  context.legacyPaper = legacyPaper({ status: 'draft', release_id: null, rules_locked: false });
+  const mounted = await mountCached(PaperDetail);
+  await waitFor(() => mounted.state.legacyPaper, 'loaded legacy detail');
+  mounted.state.legacyStrategy.pass_score = 73;
+  mounted.state.legacyPaper.questions[0].score = 95;
+  mounted.state.legacyDirty = true;
+  await nextTick();
+  const detailReads = context.calls.filter((call) => call.method === 'GET' && call.path === '/ai/papers/paper-1').length;
+
+  await mounted.deactivate();
+  await mounted.activate();
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.equal(context.calls.filter((call) => call.method === 'GET' && call.path === '/ai/papers/paper-1').length, detailReads);
+  assert.equal(mounted.state.legacyStrategy.pass_score, 73);
+  assert.equal(mounted.state.legacyPaper.questions[0].score, 95);
+  assert.equal(mounted.state.legacyDirty, true);
+  mounted.unmount();
+});
+
 test('uses controlled media readiness for printing and revokes a decoding image when preview closes', async () => {
   const originalDocument = globalThis.document;
   const originalImage = globalThis.Image;
@@ -869,6 +960,31 @@ test('uses legacy release flags and ignores duplicate or stale copy completions'
   pending.resolve(legacyPaper({ id: 8, status: 'draft', release_id: null, rules_locked: false }));
   await Promise.all([first, second]);
   assert.deepEqual(context.routerPushes, []);
+});
+
+test('fix2 keeps only pre-upgrade published strategy editable while release-backed and archived strategies stay locked', async () => {
+  context.legacyPaper = legacyPaper({ status: 'published', release_id: null, rules_locked: false });
+  let mounted = await mountDetail('regulation');
+  assert.equal(mounted.state.legacyStrategyLocked, false);
+  const publishedInputs = walk(mounted.root, (node) => node.type === 'input-number');
+  assert.equal(publishedInputs.length, 5);
+  assert.ok(publishedInputs.slice(0, 4).every((node) => node.props.disabled === false));
+  assert.equal(publishedInputs[4].props.disabled, true, 'published question rows remain read-only');
+  const publishedSave = walk(mounted.root, (node) => node.type === 'button' && renderedText(node).includes('保存策略'))[0];
+  assert.equal(publishedSave.props.disabled, false);
+  mounted.unmount();
+
+  context.legacyPaper = legacyPaper({ status: 'published', release_id: 'release-7', rules_locked: true });
+  mounted = await mountDetail('regulation');
+  assert.equal(mounted.state.legacyStrategyLocked, true);
+  assert.ok(walk(mounted.root, (node) => node.type === 'input-number').slice(0, 4).every((node) => node.props.disabled === true));
+  mounted.unmount();
+
+  context.legacyPaper = legacyPaper({ status: 'archived', release_id: null, rules_locked: false });
+  mounted = await mountDetail('regulation');
+  assert.equal(mounted.state.legacyStrategyLocked, true);
+  assert.ok(walk(mounted.root, (node) => node.type === 'input-number').slice(0, 4).every((node) => node.props.disabled === true));
+  mounted.unmount();
 });
 
 test('reports a completed legacy copy after deactivation without navigating or resending it', async () => {

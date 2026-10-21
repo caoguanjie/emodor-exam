@@ -81,6 +81,10 @@ function decimalToCents(value: string | number): number {
   return cents;
 }
 
+function questionGroupKey(version: Pick<QuestionVersion, 'conceptId' | 'questionId'>): string {
+  return version.conceptId ? `concept:${version.conceptId}` : `question:${version.questionId}`;
+}
+
 function snapshotFromEntity(version: QuestionVersion): QuestionVersionSnapshot {
   if (!version.categoryId || !version.difficulty || !DIFFICULTIES.has(version.difficulty as Difficulty)) {
     throw Errors.paperReleaseConflict('题目版本缺少有效的培训类别或难度');
@@ -252,7 +256,7 @@ export class PaperReleaseService {
       if (regulationIds.size && (!version.regulationId || !regulationIds.has(String(version.regulationId)))) {
         throw Errors.paperRuleInvalid('固定题目不在试卷制度筛选范围内');
       }
-      const key = version.conceptId ? `concept:${version.conceptId}` : `question:${version.questionId}`;
+      const key = questionGroupKey(version);
       if (seen.has(key)) throw Errors.paperRuleInvalid('固定题单存在重复考点');
       seen.add(key);
       const scoreCents = decimalToCents(item.score);
@@ -294,6 +298,7 @@ export class PaperReleaseService {
 
     const pool: ReleaseQuestionSnapshot[] = [];
     const rules = new Map<string, PoolRule>();
+    const seen = new Set<string>();
     for (const item of items) {
       const version = resolved.get(String(item.questionId));
       if (!version) throw Errors.paperReleaseConflict(`题目 ${item.questionId} 当前版本不存在，请重新选题`);
@@ -303,6 +308,9 @@ export class PaperReleaseService {
       if (!paper.regulationId || String(version.regulationId || '') !== String(paper.regulationId)) {
         throw Errors.paperReleaseConflict(`题目 ${item.questionId} 与试卷制度已不一致，请重新选题`);
       }
+      const groupKey = questionGroupKey(version);
+      if (seen.has(groupKey)) throw Errors.paperRuleInvalid('固定题单存在重复考点');
+      seen.add(groupKey);
       const scoreCents = decimalToCents(item.score);
       const snapshot = { ...releaseSnapshotFromEntity(version), scoreCents };
       pool.push(snapshot);

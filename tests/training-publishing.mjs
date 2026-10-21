@@ -40,6 +40,80 @@ async function adminLogin(ctx) {
   return { actor, id: String(login.data.user.id) };
 }
 
+async function loginUser(ctx, username, password, label) {
+  const sourceIp = `198.51.100.${(loginUser.sequence = (loginUser.sequence || 220) + 1)}`;
+  const headers = { 'X-Forwarded-For': sourceIp };
+  const captcha = await ctx.request(null, 'POST', '/auth/captcha', undefined, headers);
+  assert.equal(captcha.status, 200, `${label} captcha: ${JSON.stringify(captcha)}`);
+  const actor = {};
+  const login = await ctx.request(actor, 'POST', '/auth/login', {
+    username,
+    password,
+    captcha_id: captcha.data.captcha_id,
+    captcha_code: await captchaAnswer(ctx, captcha.data.captcha_id),
+  }, headers);
+  assert.equal(login.status, 200, `${label} login: ${JSON.stringify(login)}`);
+  actor.accessToken = login.data.access_token;
+  if (!login.data.force_change_password) return { actor, password };
+  const nextPassword = randomStrongPassword(username, label);
+  const changed = await ctx.request(actor, 'PUT', '/auth/password', {
+    old_password: password,
+    new_password: nextPassword,
+  });
+  assert.equal(changed.status, 200, `${label} password change: ${JSON.stringify(changed)}`);
+  actor.accessToken = changed.data.access_token;
+  return { actor, password: nextPassword };
+}
+
+async function createPermissionReader(ctx, admin, suffix, label, permissions) {
+  const role = await ctx.request(admin.actor, 'POST', '/admin/roles', {
+    code: `c1_${label}_${suffix}`,
+    name: `C1 ${label}`,
+    permissions,
+  });
+  assert.equal(role.status, 200, `${label} role: ${JSON.stringify(role)}`);
+  const username = `c1_${label}_${suffix}`;
+  const initialPassword = randomStrongPassword(username, label);
+  const user = await ctx.request(admin.actor, 'POST', '/users', {
+    username,
+    password: initialPassword,
+    real_name: `C1 ${label}`,
+    role: 'employee',
+  });
+  assert.equal(user.status, 200, `${label} user: ${JSON.stringify(user)}`);
+  const assigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${user.data.id}/roles`, {
+    role_ids: [String(role.data.id)],
+  });
+  assert.equal(assigned.status, 200, `${label} assignment: ${JSON.stringify(assigned)}`);
+  const login = await loginUser(ctx, username, initialPassword, label);
+  return {
+    ...login,
+    id: String(user.data.id),
+    username,
+    roleId: String(role.data.id),
+  };
+}
+
+function pngFixture() {
+  return Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+}
+
+async function uploadQuestionImage(ctx, actor, filename) {
+  const boundary = `----ruleexam-c1-${randomBytes(12).toString('hex')}`;
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="purpose"\r\n\r\nquestion\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: image/png\r\n\r\n`),
+    pngFixture(),
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  const uploaded = await ctx.request(actor, 'POST', '/media/upload', body, {
+    'Content-Type': `multipart/form-data; boundary=${boundary}`,
+  });
+  assert.equal(uploaded.status, 200, `question image upload: ${JSON.stringify(uploaded)}`);
+  assert.equal(uploaded.data.status, 'ready');
+  return String(uploaded.data.asset_id);
+}
+
 function questionDraft(categoryId, type, difficulty, stem, extra = {}) {
   const objectiveOptions = [{ text: '正确选项' }, { text: '干扰选项' }, { text: '另一个选项' }];
   return {
@@ -72,6 +146,16 @@ async function createCategory(ctx, actor, name) {
   return String(response.data.id);
 }
 
+async function insertLegacyRegulationQuestion(ctx, input) {
+  const inserted = await ctx.queryTestDb(
+    'INSERT INTO question (regulation_id, version_id, category_id, difficulty, concept_id, current_version_id, type, stem, options, answer, analysis, rubric, score, status, source, created_by) VALUES (?, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+    [input.regulationId, input.categoryId, 'medium', input.conceptId, 'single', `<p>${input.stem}</p>`,
+      JSON.stringify([{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]), JSON.stringify([0]),
+      '旧题解析', '50.00', 'approved', 'manual', input.createdBy],
+  );
+  return String(inserted.insertId);
+}
+
 async function runPublishing(ctx) {
   let stage = 'admin login';
   try {
@@ -79,6 +163,104 @@ async function runPublishing(ctx) {
   const suffix = randomBytes(4).toString('hex');
   stage = 'category and base questions';
   const categoryId = await createCategory(ctx, admin.actor, `C1 发布类别 ${suffix}`);
+
+  stage = 'paper-scoped question media authorization';
+  const mediaIds = {};
+  for (const field of ['stem', 'option', 'analysis', 'rubric', 'unrelated']) {
+    mediaIds[field] = await uploadQuestionImage(ctx, admin.actor, `c1-${field}-${suffix}.png`);
+  }
+  const promptMediaQuestion = await createQuestion(ctx, admin.actor, questionDraft(
+    categoryId,
+    'single',
+    'medium',
+    `题图授权 ${suffix}`,
+    {
+      stem: `<p>题干图<img data-media-id="${mediaIds.stem}" alt="题干图"></p>`,
+      options: [
+        { text: `<p>选项图<img data-media-id="${mediaIds.option}" alt="选项图"></p>` },
+        { text: '干扰项' },
+      ],
+      answer: [0],
+      analysis: `<p>解析图<img data-media-id="${mediaIds.analysis}" alt="解析图"></p>`,
+      score: 50,
+    },
+  ));
+  const rubricMediaQuestion = await createQuestion(ctx, admin.actor, questionDraft(
+    categoryId,
+    'image',
+    'medium',
+    `图片题授权 ${suffix}`,
+    {
+      rubric: `<p>评分参考图<img data-media-id="${mediaIds.rubric}" alt="评分参考图"></p>`,
+      score: 50,
+    },
+  ));
+  await createQuestion(ctx, admin.actor, questionDraft(
+    categoryId,
+    'single',
+    'medium',
+    `未引用题图 ${suffix}`,
+    {
+      stem: `<p>未引用图<img data-media-id="${mediaIds.unrelated}" alt="未引用图"></p>`,
+    },
+  ));
+  const mediaDraft = await ctx.request(admin.actor, 'POST', '/admin/papers', {
+    title: `C1 题图字段授权 ${suffix}`, mode: 'fixed', category_id: categoryId,
+  });
+  assert.equal(mediaDraft.status, 200, JSON.stringify(mediaDraft));
+  const mediaPaperId = String(mediaDraft.data.id);
+  const mediaQuestions = await ctx.request(admin.actor, 'PUT', `/admin/papers/${mediaPaperId}/questions`, {
+    items: [
+      { question_version_id: promptMediaQuestion.versionId, score_cents: 5000 },
+      { question_version_id: rubricMediaQuestion.versionId, score_cents: 5000 },
+    ],
+  });
+  assert.equal(mediaQuestions.status, 200, JSON.stringify(mediaQuestions));
+
+  const paperReader = await createPermissionReader(ctx, admin, suffix, 'paper_reader', ['papers:read']);
+  const noPaperReader = await createPermissionReader(ctx, admin, suffix, 'no_paper_reader', ['statistics:read']);
+  const readerDraftPreview = await ctx.request(paperReader.actor, 'GET', `/admin/papers/${mediaPaperId}/preview`);
+  assert.equal(readerDraftPreview.status, 200, JSON.stringify(readerDraftPreview));
+  for (const field of ['stem', 'option']) {
+    const content = await ctx.request(paperReader.actor, 'GET', `/media/${mediaIds[field]}/content`);
+    assert.equal(content.status, 200, `papers:read draft ${field}: ${JSON.stringify(content.json)}`);
+  }
+  for (const field of ['analysis', 'rubric', 'unrelated']) {
+    const content = await ctx.request(paperReader.actor, 'GET', `/media/${mediaIds[field]}/content`);
+    assert.equal(content.status, 403, `papers:read must not read ${field}: ${JSON.stringify(content.json)}`);
+  }
+  const noPaperContent = await ctx.request(noPaperReader.actor, 'GET', `/media/${mediaIds.stem}/content`);
+  assert.equal(noPaperContent.status, 403, `identity without papers:read loaded a paper image: ${JSON.stringify(noPaperContent.json)}`);
+
+  const mediaPublished = await ctx.request(admin.actor, 'POST', `/admin/papers/${mediaPaperId}/publish`);
+  assert.equal(mediaPublished.status, 200, JSON.stringify(mediaPublished));
+  assert.match(mediaPublished.data.release_id, /^\d+$/);
+  const releasePromptContent = await ctx.request(paperReader.actor, 'GET', `/media/${mediaIds.stem}/content`);
+  assert.equal(releasePromptContent.status, 200, 'published release must retain prompt-image access');
+  const revisedMediaQuestion = await ctx.request(admin.actor, 'PUT', `/ai/questions/${promptMediaQuestion.questionId}`, {
+    expected_version_id: promptMediaQuestion.versionId,
+    stem: `<p>发布后的新题干 ${suffix}</p>`,
+  });
+  assert.equal(revisedMediaQuestion.status, 200, JSON.stringify(revisedMediaQuestion));
+  assert.equal(revisedMediaQuestion.data.status, 'pending');
+  const historicalPromptContent = await ctx.request(paperReader.actor, 'GET', `/media/${mediaIds.stem}/content`);
+  assert.equal(historicalPromptContent.status, 200, 'historical release must authorize its frozen version instead of current_version');
+
+  const grantExport = await ctx.request(admin.actor, 'PUT', `/admin/roles/${paperReader.roleId}`, {
+    permissions: ['papers:read', 'papers:export'],
+  });
+  assert.equal(grantExport.status, 200, JSON.stringify(grantExport));
+  const revokedReader = await ctx.request(paperReader.actor, 'GET', `/media/${mediaIds.stem}/content`);
+  assert.equal(revokedReader.status, 401, 'permission update must revoke the prior reader session');
+  const paperExporter = await loginUser(ctx, paperReader.username, paperReader.password, 'paper_exporter');
+  const exporterPreview = await ctx.request(paperExporter.actor, 'GET', `/admin/papers/${mediaPaperId}/preview/answers`);
+  assert.equal(exporterPreview.status, 200, JSON.stringify(exporterPreview));
+  for (const field of ['analysis', 'rubric']) {
+    const content = await ctx.request(paperExporter.actor, 'GET', `/media/${mediaIds[field]}/content`);
+    assert.equal(content.status, 200, `papers:export release ${field}: ${JSON.stringify(content.json)}`);
+  }
+  const exportedUnrelated = await ctx.request(paperExporter.actor, 'GET', `/media/${mediaIds.unrelated}/content`);
+  assert.equal(exportedUnrelated.status, 403, 'papers:export must not open an unrelated question version');
 
   const fixedQuestions = [];
   for (const type of ['single', 'multiple', 'judgment', 'image']) {
@@ -327,6 +509,93 @@ async function runPublishing(ctx) {
     [`C1 筛选制度 ${suffix}`, 'C1旧分类', categoryId, 'draft', admin.id],
   );
   const regulationId = String(regulationInsert.insertId);
+
+  stage = 'regulation duplicate-concept rollback and no-concept control';
+  const regulationConcept = await ctx.request(admin.actor, 'POST', '/ai/question-concepts', {
+    category_id: categoryId,
+    type: 'single',
+    name: `制度重复考点 ${suffix}`,
+  });
+  assert.equal(regulationConcept.status, 200, JSON.stringify(regulationConcept));
+  const duplicateConceptQuestionIds = [];
+  for (const label of ['变体一', '变体二']) {
+    duplicateConceptQuestionIds.push(await insertLegacyRegulationQuestion(ctx, {
+      regulationId,
+      categoryId,
+      conceptId: String(regulationConcept.data.id),
+      stem: `${label} ${suffix}`,
+      createdBy: admin.id,
+    }));
+  }
+  const duplicateConceptPaper = await ctx.request(admin.actor, 'POST', '/ai/papers', {
+    regulation_id: regulationId,
+    title: `C1 制度重复考点 ${suffix}`,
+  });
+  assert.equal(duplicateConceptPaper.status, 200, JSON.stringify(duplicateConceptPaper));
+  const duplicateConceptPaperId = String(duplicateConceptPaper.data.id);
+  const duplicateConceptSet = await ctx.request(admin.actor, 'PUT', `/ai/papers/${duplicateConceptPaperId}/questions`, {
+    items: duplicateConceptQuestionIds.map((questionId) => ({ question_id: Number(questionId), score: 50 })),
+  });
+  assert.equal(duplicateConceptSet.status, 200, JSON.stringify(duplicateConceptSet));
+  const duplicateConceptPublish = await ctx.request(admin.actor, 'POST', `/ai/papers/${duplicateConceptPaperId}/publish`);
+  assert.equal(duplicateConceptPublish.status, 409, JSON.stringify(duplicateConceptPublish));
+  assert.equal(duplicateConceptPublish.code, 40972);
+  assert.match(duplicateConceptPublish.json?.message, /重复考点/);
+  const [duplicatePaperState] = await ctx.queryTestDb(
+    'SELECT status FROM exam_paper WHERE id = ?',
+    [duplicateConceptPaperId],
+  );
+  const [duplicateReleaseCount] = await ctx.queryTestDb(
+    'SELECT COUNT(*) AS count FROM paper_release WHERE paper_id = ?',
+    [duplicateConceptPaperId],
+  );
+  const duplicateQuestionsAfter = await ctx.queryTestDb(
+    'SELECT id, current_version_id FROM question WHERE id IN (?, ?) ORDER BY id',
+    duplicateConceptQuestionIds,
+  );
+  const duplicateLinksAfter = await ctx.queryTestDb(
+    'SELECT question_version_id FROM paper_question WHERE paper_id = ? ORDER BY sort',
+    [duplicateConceptPaperId],
+  );
+  const [duplicateCapturedCount] = await ctx.queryTestDb(
+    'SELECT COUNT(*) AS count FROM question_version WHERE question_id IN (?, ?)',
+    duplicateConceptQuestionIds,
+  );
+  assert.equal(duplicatePaperState.status, 'draft');
+  assert.equal(Number(duplicateReleaseCount.count), 0);
+  assert.equal(duplicateQuestionsAfter.every((row) => row.current_version_id === null), true);
+  assert.equal(duplicateLinksAfter.every((row) => row.question_version_id === null), true);
+  assert.equal(Number(duplicateCapturedCount.count), 0, 'duplicate-concept rollback must remove captured legacy versions');
+
+  const noConceptQuestionIds = [];
+  for (const label of ['独立旧题一', '独立旧题二']) {
+    noConceptQuestionIds.push(await insertLegacyRegulationQuestion(ctx, {
+      regulationId,
+      categoryId,
+      conceptId: null,
+      stem: `${label} ${suffix}`,
+      createdBy: admin.id,
+    }));
+  }
+  const noConceptPaper = await ctx.request(admin.actor, 'POST', '/ai/papers', {
+    regulation_id: regulationId,
+    title: `C1 制度无考点对照 ${suffix}`,
+  });
+  assert.equal(noConceptPaper.status, 200, JSON.stringify(noConceptPaper));
+  const noConceptPaperId = String(noConceptPaper.data.id);
+  const noConceptSet = await ctx.request(admin.actor, 'PUT', `/ai/papers/${noConceptPaperId}/questions`, {
+    items: noConceptQuestionIds.map((questionId) => ({ question_id: Number(questionId), score: 50 })),
+  });
+  assert.equal(noConceptSet.status, 200, JSON.stringify(noConceptSet));
+  const noConceptPublished = await ctx.request(admin.actor, 'POST', `/ai/papers/${noConceptPaperId}/publish`);
+  assert.equal(noConceptPublished.status, 200, JSON.stringify(noConceptPublished));
+  const noConceptReleaseRows = await ctx.queryTestDb(
+    'SELECT question_id, concept_id FROM paper_release_question WHERE release_id = ? ORDER BY position',
+    [String(noConceptPublished.data.release_id)],
+  );
+  assert.deepEqual(noConceptReleaseRows.map((row) => String(row.question_id)), noConceptQuestionIds);
+  assert.equal(noConceptReleaseRows.every((row) => row.concept_id === null), true, 'no-concept legacy questions must retain real null concepts');
+
   const legacyQuestionInsert = await ctx.queryTestDb(
     'INSERT INTO question (regulation_id, version_id, category_id, difficulty, concept_id, current_version_id, type, stem, options, answer, analysis, rubric, score, status, source, created_by) VALUES (?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
     [regulationId, 'single', `<p>制度发布前题干 ${suffix}</p>`, JSON.stringify([{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]),

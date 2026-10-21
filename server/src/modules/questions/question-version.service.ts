@@ -36,6 +36,41 @@ export type QuestionVersionSnapshot = Readonly<QuestionDraft & {
 
 const QUESTION_VERSION_MEDIA_OWNER = 'question_version';
 
+type QuestionMediaFields = {
+  stem?: unknown;
+  options?: unknown;
+  analysis?: unknown;
+  rubric?: unknown;
+};
+
+function questionMediaField(fields: QuestionMediaFields, assetId: string): 'prompt' | 'answer' | null {
+  const optionTexts = Array.isArray(fields.options)
+    ? fields.options.flatMap((option) => (
+        option && typeof option === 'object' && typeof (option as { text?: unknown }).text === 'string'
+          ? [(option as { text: string }).text]
+          : []
+      ))
+    : [];
+  const promptIds = controlledQuestionMediaIds([
+    typeof fields.stem === 'string' ? fields.stem : null,
+    ...optionTexts,
+  ]);
+  if (promptIds.includes(assetId)) return 'prompt';
+  const answerIds = controlledQuestionMediaIds([
+    typeof fields.analysis === 'string' ? fields.analysis : null,
+    typeof fields.rubric === 'string' ? fields.rubric : null,
+  ]);
+  return answerIds.includes(assetId) ? 'answer' : null;
+}
+
+function releaseMediaFields(value: unknown): QuestionMediaFields | null {
+  let parsed = value;
+  if (typeof value === 'string') {
+    try { parsed = JSON.parse(value); } catch { return null; }
+  }
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as QuestionMediaFields : null;
+}
+
 @Injectable()
 export class QuestionVersionService implements OnModuleInit {
   constructor(
@@ -53,11 +88,49 @@ export class QuestionVersionService implements OnModuleInit {
   onModuleInit(): void {
     this.media.registerOwnerPolicy(QUESTION_VERSION_MEDIA_OWNER, {
       allowedPurposes: ['question'],
-      authorizeRead: async (actorId) => (await this.access.permissions(actorId)).includes('questions:read'),
+      authorizeRead: (actorId, versionId, assetId) => this.canReadQuestionVersionMedia(actorId, versionId, assetId),
       validateBinding: async (manager, _asset, businessId) => {
         const exists = await manager.getRepository(QuestionVersion).findOne({ where: { id: String(businessId) } });
         if (!exists) throw Errors.notFound('题目版本不存在');
       },
+    });
+  }
+
+  private async canReadQuestionVersionMedia(actorId: string, versionId: string, assetId?: string): Promise<boolean> {
+    const permissions = await this.access.permissions(actorId);
+    if (permissions.includes('questions:read')) return true;
+    if (!assetId || !permissions.includes('papers:read')) return false;
+    const includeAnswers = permissions.includes('papers:export');
+    const exactVersionId = String(versionId);
+    const exactAssetId = String(assetId);
+
+    const version = await this.versionRepo.findOne({ where: { id: exactVersionId } });
+    const draftField = version ? questionMediaField(version, exactAssetId) : null;
+    if (draftField === 'prompt' || (draftField === 'answer' && includeAnswers)) {
+      const draftRows = await this.dataSource.query(
+        `SELECT 1 AS readable
+         FROM paper_question pq
+         INNER JOIN exam_paper paper ON paper.id = pq.paper_id
+         WHERE pq.question_version_id = ? AND paper.mode = 'fixed' AND paper.status = 'draft'
+         LIMIT 1`,
+        [exactVersionId],
+      );
+      if (draftRows.length) return true;
+    }
+
+    const releaseRows = await this.dataSource.query(
+      `SELECT release_question.snapshot_json
+       FROM paper_release_question release_question
+       INNER JOIN paper_release release_row ON release_row.id = release_question.release_id
+       INNER JOIN exam_paper paper ON paper.id = release_row.paper_id
+       WHERE release_question.question_version_id = ?`,
+      [exactVersionId],
+    );
+    return releaseRows.some((row: { snapshot_json?: unknown }) => {
+      const fields = releaseMediaFields(row.snapshot_json);
+      if (!fields) return false;
+      const releaseField = questionMediaField(fields, exactAssetId);
+      return releaseField === 'prompt' || (releaseField === 'answer' && includeAnswers);
     });
   }
 

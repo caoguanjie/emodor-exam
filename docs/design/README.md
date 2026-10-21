@@ -113,8 +113,8 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | 滚动覆盖率 | 阅读内容按固定 10 段划分、以 JSON 位图记录的已读到位情况（learning_record.scroll_coverage）；其中底部段必须被覆盖，是「有效学习」的必要条件之一。 |
 | 考试资格 | legacy 制度固定卷仍必须完成有效学习。培训卷在 C1 配置中默认 `requires_learning=false`，但 C2 开考尚未接入；不能借此绕过 legacy guard。 |
 | 试题 | 题库稳定身份（question）与不可变 question_version。B3 支持四题型、三难度与可选考点；C1 发布冻结真实 current approved version 内容，题库后续修订不改写 release。制度卷选题/评分仍只消费 single/multiple；旧题未知类别、难度及审核事实不伪造。 |
-| 试卷 | `exam_paper.business_scope` 区分制度 `regulation` 与新 `training`。培训卷支持 fixed/random、类别、可选制度筛选、课程说明关联和 10000 整数分规则；升级后新发布的制度卷和培训卷都通过 paper_release/paper_release_question 不可变冻结，改动需复制新草稿。真正升级前 published 无 release 的制度卷保持兼容。 |
-| 试卷发布版本 | `paper_release` 冻结 RuleSnapshot、类别及关联条件；`paper_release_question` 冻结真实题目版本、考点、实际分值与完整内容。制度旧题可保留 `categoryId=null/difficulty=unknown`。撤回/归档或复制不删除、不改写源快照。 |
+| 试卷 | `exam_paper.business_scope` 区分制度 `regulation` 与新 `training`。培训卷支持 fixed/random、类别、可选制度筛选、课程说明关联和 10000 整数分规则；升级后新发布的制度卷和培训卷都通过 paper_release/paper_release_question 不可变冻结，所有新 fixed 发布按 `concept_id ?? question_id` 禁止重复考点，改动需复制新草稿。真正升级前 published 无 release 的制度卷保持兼容。 |
+| 试卷发布版本 | `paper_release` 冻结 RuleSnapshot、类别及关联条件；`paper_release_question` 冻结真实题目版本、考点、实际分值与完整内容。制度旧题可保留 `categoryId=null/difficulty=unknown`。撤回/归档或复制不删除、不改写源快照；题图读取按固定草稿/发布快照的精确版本与字段授权，不回读当前版本。 |
 | 考试记录 | 用户对某试卷的一次完整作答过程（exam_record），含第几次作答（attempt_no）、状态（in_progress / submitted / passed / failed / timeout）、得分与切屏次数（switch_count）；超时未交卷由系统自动交卷，状态记为 timeout。 |
 | 答题明细 | 考试记录内逐题的作答结果（exam_answer），含所选选项（selected）、是否正确（is_correct）与实际得分（gained_score）；判分规则见「自动评分」。 |
 | 自动评分 | 交卷后系统按固定规则评分：单选题答案唯一，答对得该题分值；多选题全对得满分、错选得 0 分、漏选按配置得部分分（默认 50%）。 |

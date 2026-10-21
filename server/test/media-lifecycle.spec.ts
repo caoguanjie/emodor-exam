@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -86,6 +86,33 @@ describe('media lifecycle contracts', () => {
     });
     const { manager } = managerFor({ id: '99', ownerId: '7', purpose: 'avatar', mediaKind: 'video', status: 'ready' });
     await expect(media.bind(manager, '99', 'user_avatar', '7')).rejects.toThrowError('avatar must be image');
+  });
+
+  it('passes the exact asset id to owner authorization while preserving two-argument policies', async () => {
+    const authorizeRead = vi.fn(async (actorId: string, businessId: string) => (
+      actorId === '8' && businessId === '701'
+    ));
+    const referenceRepo: any = {
+      find: vi.fn(async () => [{ assetId: '99', ownerType: 'question_version', ownerId: '701' }]),
+    };
+    const media = new MediaService(
+      {} as any,
+      referenceRepo,
+      {} as any,
+      { media: DEFAULT_MEDIA_LIMITS } as any,
+      {} as any,
+    );
+    media.registerOwnerPolicy('question_version', {
+      allowedPurposes: ['question'],
+      authorizeRead,
+    });
+
+    const allowed = await (media as any).canRead('8', {
+      id: '99', ownerId: '7', purpose: 'question', mediaKind: 'image', status: 'ready',
+    });
+
+    expect(allowed).toBe(true);
+    expect(authorizeRead).toHaveBeenCalledWith('8', '701', '99');
   });
 
   it('maps an unavailable probe tool to the stable 50004 service error', async () => {

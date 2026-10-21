@@ -170,6 +170,61 @@ describe('paper release fix1 transaction boundaries', () => {
     expect(link.questionVersionId).toBe('701');
     expect(paper.status).toBe('published');
   });
+
+  it('rejects regulation fixed variants that share one concept before creating a release', async () => {
+    const paper: any = {
+      id: '11', regulationId: '9', businessScope: 'regulation', mode: 'fixed', categoryId: null,
+      requiresLearning: 1, regulationIds: ['9'], courseIds: [], ruleConfig: null,
+      title: '重复考点制度卷', totalScore: '100.00', passScore: '60.00', durationMinutes: 30,
+      maxAttempts: 3, partialCreditRatio: '0.50', status: 'draft', createdBy: '3',
+    };
+    const links: any[] = [
+      { id: '31', paperId: '11', questionId: '101', questionVersionId: '701', conceptId: '81', sort: 0, score: '50.00' },
+      { id: '32', paperId: '11', questionId: '102', questionVersionId: '702', conceptId: '81', sort: 1, score: '50.00' },
+    ];
+    const versions = new Map([
+      ['101', approvedVersion({ id: '701', questionId: '101', conceptId: '81' })],
+      ['102', approvedVersion({ id: '702', questionId: '102', conceptId: '81' })],
+    ]);
+    const paperRepo = {
+      findOne: vi.fn(async () => paper),
+      save: vi.fn(async (value: any) => value),
+    };
+    const linkRepo = { find: vi.fn(async () => links), save: vi.fn(async (value: any) => value) };
+    const releaseRepo = {
+      findOne: vi.fn(async () => null),
+      create: vi.fn((value: any) => ({ ...value })),
+      save: vi.fn(async (value: any) => ({ id: '21', ...value })),
+    };
+    const releaseQuestionRepo = {
+      create: vi.fn((value: any) => ({ ...value })),
+      save: vi.fn(async (value: any) => value),
+    };
+    const manager = { getRepository(entity: unknown) {
+      if (entity === ExamPaper) return paperRepo;
+      if (entity === PaperQuestion) return linkRepo;
+      if (entity === PaperRelease) return releaseRepo;
+      if (entity === PaperReleaseQuestion) return releaseQuestionRepo;
+      throw new Error(`unexpected repository ${(entity as any)?.name}`);
+    } };
+    const service = Object.create(PaperReleaseService.prototype) as PaperReleaseService & Record<string, any>;
+    Object.assign(service, {
+      paperRepo, releaseRepo, releaseQuestionRepo,
+      dataSource: { transaction: (work: (value: any) => Promise<unknown>) => work(manager) },
+      categories: { lockActive: vi.fn() },
+      questions: {
+        currentOrCaptureForRelease: vi.fn(async (_manager: unknown, questionId: string) => versions.get(questionId)),
+      },
+      audit: { log: vi.fn() },
+    });
+
+    await expect(service.publish('11', '3'))
+      .rejects.toMatchObject({ code: 40972, message: expect.stringContaining('重复考点') });
+    expect(releaseRepo.save).not.toHaveBeenCalled();
+    expect(releaseQuestionRepo.save).not.toHaveBeenCalled();
+    expect(paperRepo.save).not.toHaveBeenCalled();
+    expect(paper.status).toBe('draft');
+  });
 });
 
 describe('release-backed legacy paper compatibility', () => {

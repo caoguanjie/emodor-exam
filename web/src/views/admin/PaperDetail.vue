@@ -169,7 +169,10 @@ const legacyCandidates = ref<any[]>([]);
 const legacyPicked = ref<any[]>([]);
 const legacyCopying = ref(false);
 const legacySum = computed(() => Math.round((legacyPaper.value?.questions || []).reduce((sum, item) => sum + Number(item.score || 0), 0) * 100) / 100);
-const legacyStrategyLocked = computed(() => !legacyPaper.value || legacyPaper.value.status !== 'draft' || legacyPaper.value.rules_locked);
+const legacyStrategyLocked = computed(() => !legacyPaper.value
+  || legacyPaper.value.status === 'archived'
+  || Boolean(legacyPaper.value.release_id)
+  || legacyPaper.value.rules_locked);
 const legacyReleaseMessage = computed(() => {
   if (legacyPaper.value?.rules_locked && legacyPaper.value.release_id) return '此制度卷已生成不可变发布快照；题目内容、实际分值和规则均已冻结。需要修改时请复制为新草稿。';
   if (legacyPaper.value?.status === 'published') return '此卷是升级前已发布且没有 release 的旧卷；保留原开考兼容，不补造历史发布快照。';
@@ -610,7 +613,20 @@ function invalidateView() {
   if (previewVisible.value) previewVisible.value = false;
   else invalidatePreview();
 }
-onActivated(() => { viewActive = true; flushCompletedCopyNotice(); });
+function reloadMissingDetail() {
+  if (viewDestroyed || !viewActive) return;
+  if (legacyMode) {
+    if (!legacyPaper.value) void loadLegacy();
+    return;
+  }
+  if (!paper.value) void loadTraining(true);
+}
+onActivated(() => {
+  const wasInactive = !viewActive;
+  viewActive = true;
+  flushCompletedCopyNotice();
+  if (wasInactive) reloadMissingDetail();
+});
 onDeactivated(() => { viewActive = false; invalidateView(); });
 onBeforeUnmount(() => { viewDestroyed = true; viewActive = false; invalidateView(); });
 onMounted(async () => { if (legacyMode) await loadLegacy(); else { await loadTraining(true); await loadTrainingOptions(); } });

@@ -230,6 +230,8 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | GET | `/media/{id}/content` | 资源拥有者/已注册 owner authorizer | 私有流，支持单一 `Range: bytes=start-end`，命中返回 206 与 `Content-Range`；无效或不可满足 Range 返回 41601/HTTP 416；文件流跳过统一信封 |
 | DELETE | `/media/{id}` | 资源拥有者 | 有任何 `media_reference` 时返回 40913；无引用后先落内部 `deleting` 再删除物理文件，失败保留行供重试并返回 50004/HTTP 503，成功或文件已不存在才删数据库行 |
 
+`question_version` owner policy 保留上传者与 `questions:read` 的既有读取。仅有 `papers:read` 的非上传者只能读取真实 fixed draft 或不可变 release 所引用精确版本中的题干/选项图片；只出现在解析/rubric 的图片还必须同时具备 `papers:export`。未引用题库版本、错误字段或仅凭任意试卷权限均返回 40302；release 历史按其 `snapshot_json` 判断，不替换为当前题目版本。
+
 管理端头像绑定 `PUT /admin/students/{id}/avatar` 只接受 `avatar_id`，在同一用户行锁事务内重复 `lockManagedStudent` 最终检查并 bind；拥有任何 `sys_user_role` 链接的员工仍不属于学员管理范围。PC 选择新头像时只把上传结果暂存在当前表单，点击“保存”后才调用既有资料更新与独立头像绑定接口；取消不绑定该上传，任一保存请求失败后以详情 GET 对账并保留重试入口，不能把上传成功误当成资料已保存。
 
 ### 3.2.5 A2 导入错误与恢复语义
@@ -444,7 +446,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 **创建/修改 DTO**：`title/mode/category_id` 为核心字段；`regulation_ids/course_ids` 是去重字符串 ID 数组；`requires_learning` 可选且默认 false；`pass_score/duration_minutes/max_attempts/partial_credit_ratio` 默认 60/30/3/0.5。随机卷 `rules=[{type,count,score_cents}]` 最多四项且题型唯一，并满足 `Σ(count×score_cents)=10000`；固定题单 `items=[{question_version_id,score_cents}]` 同样合计 10000，但按“题型 + 实际分值”派生的规则允许超过四项（如同题型五档分值）。未知 body/query 字段一律 40001。
 
-**发布硬校验**：候选只取同培训类别、当前 approved revision、题型/难度精确匹配，制度集合可选；未选制度时无制度来源的人工/导入题可入池。课程 ID 不参与题池过滤。随机卷初级与高级两池都按 `concept_id ?? question_id` 计数，任一题型容量不足返回 40971 与 deficits；固定卷可用中级、同类别跨制度题，但禁止重复考点。
+**发布硬校验**：候选只取同培训类别、当前 approved revision、题型/难度精确匹配，制度集合可选；未选制度时无制度来源的人工/导入题可入池。课程 ID 不参与题池过滤。随机卷初级与高级两池都按 `concept_id ?? question_id` 计数，任一题型容量不足返回 40971 与 deficits；所有新发布固定卷（training 与 regulation）也按同一组键禁止重复考点，无 concept 的不同 question_id 仍各自独立。失败事务不得留下 release、published 状态或旧题版本捕获。
 
 **预览契约**：共通字段为 `paper_id/release_id/mode/sample_kind/note/difficulty/rule/capacities/questions`。`rule` 使用 snake_case：`total_cents/pass_cents/duration_minutes/max_attempts/partial_credit_ratio/rules[].score_cents`。固定卷 `sample_kind=fixed_paper`、`capacities=[]`；随机卷 `sample_kind=random_example`，显示初/高两池各题型 `required/available` 及选定难度的一次样例，`note` 必须明示“样例不代表所有考生同卷”。已发布/撤回/归档均读不可变 release，不回读题库当前内容。
 
