@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2—A5、B1 课程主体、B2 视频学习、B3 四题型版本题库、B4 Excel/TXT 导题及 C1 不可变发布均以实际 controller/entity/migration/service 为准。C1 已新增独立 `/admin/papers` 培训固定/随机配置、预览、发布快照、复制、撤回/归档接口；升级后新发布的制度固定卷也写不可变 release，并在旧 `/ai/papers` 数字 ID/`list` 形状上只增 flags 与复制入口，制度门槛和单/多选限制不变。C2 个人题单及培训开考未实现，当前旧开考入口对 training 卷明确返回 40402。B2 后端/API 证据不代表独立 H5、全屏/锁屏、微信或手机弱网体验已验收；B4 原生文件选择与 C1 PC 验收仍按 root 口径单独收口。源码登记不代表开发库/生产库已升级。所有接口继续使用 `/api/v1`、`{code,message,data}`、严格 DTO/未知字段拒绝、所有权校验和 HttpOnly refresh Cookie；模板、私有媒体与公开品牌内容流例外跳过信封。
+> **状态边界（2026-10-21）**：本册 legacy 接口及 A2—A5、B1—B4、C1/C2 均以实际 controller/entity/migration/service 为准。C2 已新增 `/me/exams`、`/me/exams/{id}/start`、`/me/exam-records/{id}`，冻结个人来源、类别、难度、规则、题单与显示映射；旧 `/exams` 固定客户端经适配器继续完成 start→heartbeat/recover→submit/result，但 training 卷不进入旧可考列表。持久草稿、图片答案与统一 finalizer 仍属 C3。源码登记不代表开发库/生产库已升级，后端证据也不替代独立 H5/PC 业务验收。
 
 ---
 
@@ -78,7 +78,7 @@
 
 | 关键动作 | 幂等机制 |
 |---|---|
-| 开考 `POST /exams/papers/{id}/start` | 资格校验链第⑤步：库查 + Redis `SETNX exam:lock:start:{user_id}:{paper_id}` 开考锁；已有 in_progress 记录直接返回该记录（断网重进场景，05 册 6.4.1） |
+| C2 开考 `POST /me/exams/{id}/start` 与旧固定入口 | `sys_user → exam_assignment → exam_record → 新开时 exam_paper` 数据库锁及唯一键裁决；Redis start 锁不参与正确性。有效 active 返回同一记录，过期 active 返回 40904 等待事务外 sweeper |
 | 交卷 `POST /exams/records/{id}/submit` | 三层幂等（05 册 6.4.5）：状态前置校验 + Redis 提交锁 + 事务内终态判定；重复调用返回首次评分结果 |
 | 会话开始 `POST /learning/sessions/start` | 单活跃会话约束（后开者胜）：同 user + regulation 已有活跃会话时，旧会话被结束落库并返回新会话（05 册 5.4.1） |
 | 学习心跳 | 天然幂等：以服务端时钟差结算，重复/乱序心跳不虚增时长（45 秒封顶，05 册 5.4.2） |
@@ -91,10 +91,11 @@
 |---|---|---|
 | `/auth`、`/users`、`/departments`、`/regulations`、`/ai`、`/learning`、旧 `/exams`、旧 `/statistics` | 当前 legacy 契约 | 旧制度阅读资格、旧固定卷字段与自动客观评分保持兼容；下发不含答案/解析，refresh 走 HttpOnly Cookie，DTO/统一信封不变 |
 | `/admin/training-categories`、`/admin/students`、`/admin/questions`、`/me`、`/admin`、`/media`、`/site-config`、B1 课程/视频内容版本、B2 视频会话/进度、B3 四题型题库版本与 C1 `/admin/papers` | 当前增量契约（A2—A5/B1—B4/C1） | 新接口使用字符串 ID 与 `Page.items`；B2 课程完成与制度阅读分开；B4 复用 A2 批次归属/幂等语义与 B3 同事务版本写入；C1 只冻结发布规则/候选版本，不冒充 C2 个人题单 |
-| 个人题单、持久草稿、图片答案/阅卷、监控、培训统计 | 计划契约（C2—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后才补精确契约 |
+| 个人题单与原子开考 | 当前增量契约（C2） | `/me/exams*` 使用字符串 ID、本人所有权与不可变快照；在考不下发 answer/analysis/rubric |
+| 持久草稿、图片答案/阅卷、监控、培训统计 | 计划契约（C3—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后才补精确契约 |
 | 旧固定卷 vs 新培训考试开考 | 两条口径并存 | 旧固定卷继续检查 `learning_record.is_valid`；新培训考试默认关闭学习门槛，但仍检查发布、类别/来源、权限、次数、身份状态和服务端 deadline |
 
-目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 客观题自动判分/图片题待阅 → 受控逐题评分 → 服务端汇总 → 最终结果只读。C1 已落发布/候选版本快照；个人题单与执行字段由 C2—C4 落地后补入，不能让旧 `/exams` 响应提前承载两套不兼容语义。
+目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 客观题自动判分/图片题待阅 → 受控逐题评分 → 服务端汇总 → 最终结果只读。C1/C2 已落发布快照、个人归属、每次题单与显示映射；持久草稿、主动提交、图片答案及统一 finalizer 仍由 C3/C4 接续。旧 `/exams` 只为制度固定客户端保留兼容形状，training 记录不能借该入口提交。
 
 ---
 
@@ -455,7 +456,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 **预览契约**：共通字段为 `paper_id/release_id/mode/sample_kind/note/difficulty/rule/capacities/questions`。`rule` 使用 snake_case：`total_cents/pass_cents/duration_minutes/max_attempts/partial_credit_ratio/rules[].score_cents`。固定卷 `sample_kind=fixed_paper`、`capacities=[]`；随机卷 `sample_kind=random_example`，显示初/高两池各题型 `required/available` 及选定难度的一次样例，`note` 必须明示“样例不代表所有考生同卷”。已发布/撤回/归档均读不可变 release，不回读题库当前内容。
 
-**C1/C2 边界**：C1 不新增学员开考或个人题单 API。`POST /exams/papers/{id}/start` 暂不接受 `business_scope=training` 或空 regulation_id，返回 40402；legacy 资格守卫、固定题型限制与原响应形状保留。
+**C1/C2 边界**：C1 只负责发布；C2 新增独立 `/me/exams*` 个人题单 API。`POST /exams/papers/{id}/start` 仍不接受 `business_scope=training` 或空 regulation_id，返回 40402；旧制度固定卷经快照适配器保持数字 `question_id` 与原响应形状，资格守卫和单/多选限制不变。
 
 ### 3.5.2 题库文件导入 /admin/questions（B4，权限 `questions:write`）
 
@@ -492,7 +493,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 ### 3.7 legacy 考试模块 /exams（权限：员工，数据范围自动收口为本人）
 
-本节是旧制度固定卷接口契约：资格链包含 `learning_record.is_valid`，题目/选项按旧 `paper_question` 读取，交卷后自动客观评分。新培训考试不复用本节字段硬塞类别、来源、难度、发布/个人快照、草稿或阅卷状态；C1 发布接口已由独立 `/admin/papers` 落地，个人题单与执行接口由 C2—C4 在实际 controller/entity 后补入，默认无学习门槛但不放宽服务端期限与防泄漏规则。
+本节是旧制度固定卷接口契约：资格链继续包含 `learning_record.is_valid`，40901 继续返回时间缺口与底部段覆盖详情。C2 后所有新开考都先冻结发布快照；真正升级前 published 且无 release 的固定卷在首次新开考时捕获当时题面并标记 `legacy_start`。旧客户端仍收发真实冻结 source `question_id`，服务端入口精确映射到本次 `item_id`，未知 source ID 返回 40001；显示位置只按已持久化映射还原一次。升级前已存在且没有 assignment 的记录继续走原路径。training 记录不复用本节 recover/heartbeat/switch/submit/result，返回 40402。
 
 | # | 方法 | 路径 | 说明 |
 |---|---|---|---|
@@ -507,7 +508,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 **GET /exams/papers** 响应项含：试卷信息、关联制度、`is_eligible`（is_valid）、`attempt_used` / `max_attempts`（剩余次数）、`best_score`（已考过的最高分）、`has_passed`（已通过标记——已 passed 不再显示「开始考试」入口）。
 
-**POST /exams/papers/{id}/start**：资格校验链五步（05 册 6.4.1）：制度 published → 试卷 published → `is_valid = 1` → `attempt_no ≤ max_attempts` 且前次终态 ≠ passed → 无并发 in_progress（SETNX 开考锁）。在创建记录前还须重新读取固定卷题目，缺题或含 judgment/image 时明确拒绝，不能留下错误的 in_progress 记录。通过后创建 `exam_record`（in_progress、attempt_no 分配、regulation_id 冗余快照、**deadline_at 快照 = started_at + duration_minutes × 60 此后不变**，03 册 3.4.4）+ 写 Redis deadline（值与 TTL 由 deadline_at 派生），返回乱序题目数组——**不含 answer 与 analysis**（防偷答案）；seed = HMAC-SHA256(EXAM_SHUFFLE_SECRET, exam_record.id) 确定性乱序（EXAM_SHUFFLE_SECRET 为独立环境变量、不参与 JWT_SECRET 90 天轮换，断网重进顺序一致，05 册 6.4.2）。
+**POST /exams/papers/{id}/start**：资格语义仍是制度 published → 试卷 published → `is_valid = 1` → 次数/已通过检查 → 无并发 active。C2 实际原子顺序为 `sys_user` 写锁（并校验启用）→ `exam_assignment` → 本人该卷全部 `exam_record` → 新开时 `exam_paper`；数据库唯一键是权威并发防线，不依赖旧 Redis start 锁。通过后同事务创建 assignment、`exam_record`、`exam_record_question` 与题干/选项媒体引用；返回旧数字字段时把内部 item ID 映射回真实冻结 source question ID，且**不含 answer 与 analysis**。
 
 **POST /exams/records/{id}/heartbeat**：body 含 `answers[]`（question_id + 呈现位置选择，Redis 暂存，超时自动交卷的评分输入）；响应返回 `remaining_seconds`（`deadline − 服务端当前时刻`，前端每 30 秒校准，不信任本地时钟，05 册 6.4.3）。
 
@@ -516,6 +517,22 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 **POST /exams/records/{id}/submit**：body 含 `answers[]`；服务端用同 seed 重算乱序映射，把呈现位置还原为题目原始选项下标后落库 `exam_answer` 并评分（05 册 6.4.2 判分语义）；超时自动交卷（定时任务，非 API）走同一评分路径，`status = timeout`、未答题目不得分。
 
 **GET /exams/records/{id}/result**：`status` / `score` / `switch_count` / 逐题明细（stem / selected（已还原原始下标）/ is_correct / gained_score / answer / analysis）——解析仅在交卷后的成绩回看中下发。
+
+### 3.7.1 C2 本人个人题单 /me（权限：本人，字符串 ID）
+
+| # | 方法 | 路径 | 说明 |
+|---|---|---|---|
+| 1 | GET | /me/exams | 当前类别已发布 training 卷 + 本人已有 assignment 分页列表 |
+| 2 | POST | /me/exams/{id}/start | 原子首次开考、补考或有效 active 恢复 |
+| 3 | GET | /me/exam-records/{id} | 本人按 record_id 恢复有效在考题单 |
+
+`POST /me/exams/{id}/start` 的首次新开要求账号启用、试卷 published、启用培训类别、用户 category/source 必填且类别与 release 匹配。random 卷按 `institution → easy`、`external → hard` 抽取；fixed 卷按冻结题单得出单一难度或 `mixed`。首次同事务冻结 `release_id/source/category_id/difficulty/rule_snapshot/snapshot_origin`，补考沿用 assignment，不按用户新资料或题库当前内容重算。升级前旧 `exam_record` 同样计入 `max_attempts`，默认总次数 3 次（含首次）。
+
+恢复顺序刻意早于试卷状态和用户当前 category/source 检查：有效 active 即使试卷已撤回也返回同一 record、deadline、题序和选项序；账号停用仍拒绝。服务端 `deadline_at` 已过时返回 40904，不在持有用户锁的 start 事务内嵌套终结；30 秒 timeout sweeper 在事务外读取冻结规则/题单完成客观收口并清空 `active_assignment_id`。收口后再开按冻结最大次数裁决。
+
+成功响应 `AttemptView` 固定含 `record_id/paper_id/release_id/source/category_id/difficulty/deadline_at/server_now/draft_revision/questions/answers`。`questions[]` 只含 `item_id/type/stem/options/score`，`item_id` 是新答题主键；在考响应任何层级都不得出现 `answer/analysis/rubric`。C2 的 `answers` 仅兼容旧 Redis 暂存且 `draft_revision=0`；持久确认稿、图片附件与主动 training finalizer 属 C3，当前 training 记录调用旧 `/exams/records/*` 执行入口返回 40402。
+
+个人题图使用 `media_reference(owner_type=exam_record_question, owner_id=item_id)`，与题单创建同事务绑定。本人只可读取精确出现在该 item 冻结 `stem/options[].text` 的 `purpose=question` 资源；answer/analysis/rubric 图片不绑定、不授权，也不授予任何题库管理权限。
 
 ### 3.8 统计模块 /statistics（权限：制度管理）
 
@@ -948,7 +965,7 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 
 | code | HTTP | message（示例） | 触发场景 |
 |---|---|---|---|
-| 40001 | 400 | 参数错误 | 请求体/查询参数校验失败（附字段级原因；AI 出题分值合计 ≠ 100 亦返回此码） |
+| 40001 | 400 | 参数错误 | 请求体/查询参数校验失败；旧固定客户端提交的 source question_id 不属于本人本次冻结题单也返回此码 |
 | 40101 | 401 | 未认证或令牌无效 | 缺失 Bearer 令牌 / 验签失败 |
 | 40102 | 401 | 令牌已过期 | access token 过期（客户端应刷新） |
 | 40103 | 401 | 刷新令牌无效 | refresh 缺失/过期/类型不符 |
@@ -959,11 +976,11 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 | 40301 | 403 | 无权限访问该资源 | 角色不匹配（如 employee 调管理接口） |
 | 40302 | 403 | 无权访问该数据 | 数据范围越界（如读取他人学习记录） |
 | 40401 | 404 | 资源不存在 | 路径资源（制度/试卷/记录等）不存在 |
-| 40402 | 404 | 制度内容不可见 | 阅读内容接口：不在发布范围或未发布 |
+| 40402 | 404 | 制度内容不可见 | 阅读内容不可见；training 卷调用旧 `/exams` 开考/记录执行入口也返回此码 |
 | 40901 | 409 | 未完成有效学习，暂无考试资格 | **legacy 制度固定卷**开考校验③失败；data 附差距（时间缺口/底部段未覆盖）。新培训考试默认不使用该错误作为学习门槛 |
 | 40902 | 409 | 补考次数已用尽 | 开考校验④失败（attempt_no > max_attempts） |
 | 40903 | 409 | 已通过该考试，无需再次作答 | 开考校验④：前次终态 = passed |
-| 40904 | 409 | 已有进行中的考试 | 开考校验⑤：并发 in_progress（幂等返回现有记录的场景之外） |
+| 40904 | 409 | 已有进行中的考试 | active 尚有效时幂等恢复；active 已过 deadline 时提示等待 timeout sweeper，不能绕过计次创建新记录 |
 | 40905 | 409 | 交卷失败：考试已结束 | 交卷时记录已终态（重复交卷幂等场景直接返回首次结果，此码用于状态冲突） |
 | 40906 | 409 | 学习会话冲突 | 心跳/暂停到达时会话已被新会话取代或已收口（单活跃约束；已收口语义为「会话已结束，请重新开始学习」，前端应刷新 session_id） |
 | 40907 | 409 | 题目组成不可变更 | 修改已发布试卷的 paper_question |
@@ -1054,7 +1071,7 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 
 | 校验项 | 结果 |
 |---|---|
-| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；B2 新增 `/me/video-sessions`、本人 `/me/video-records` 与课程 progress，B4 新增 `/admin/questions`，C1 新增 `/admin/papers` 且不替换 `/ai/papers`；均不冒充独立 H5 或 C2 个人卷 |
+| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；B2 新增 `/me/video-sessions`、本人 `/me/video-records` 与课程 progress，B4 新增 `/admin/questions`，C1 新增 `/admin/papers`，C2 新增 `/me/exams*`，均不冒充独立 H5 或 C3 主动提交/持久草稿 |
 | 当前表名/字段名（snake_case）与 03 册 | 一致（含两张视频学习表、两张版本题库表、C1 `exam_paper/paper_question` 兼容列、`paper_release/paper_release_question` 与 HTTP 层 snake_case 预览规则）；B4 不新增表 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
 | 心跳/失焦/乱序/超时/切屏行为与 05 册 | 一致（5.4.2/5.4.3/6.4.1~6.4.5 逐条对应） |

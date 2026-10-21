@@ -397,11 +397,37 @@ CREATE TABLE IF NOT EXISTS `paper_release_question` (
   KEY `idx_release_question_pool` (`release_id`, `difficulty`, `type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='发布时冻结的候选题版本与实际分值';
 
+CREATE TABLE IF NOT EXISTS `exam_assignment` (
+  `id`              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `paper_id`        BIGINT UNSIGNED NOT NULL,
+  `user_id`         BIGINT UNSIGNED NOT NULL,
+  `release_id`      BIGINT UNSIGNED NULL,
+  `source`          VARCHAR(16) NULL COMMENT 'institution / external；legacy 为 NULL',
+  `category_id`     BIGINT UNSIGNED NULL,
+  `difficulty`      VARCHAR(16) NOT NULL COMMENT 'easy / medium / hard / mixed / unknown',
+  `rule_snapshot`   JSON NOT NULL,
+  `snapshot_origin` VARCHAR(32) NOT NULL COMMENT 'release / legacy_start',
+  `created_at`      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_exam_assignment_paper_user` (`paper_id`, `user_id`),
+  KEY `idx_exam_assignment_user` (`user_id`),
+  KEY `idx_exam_assignment_release` (`release_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='学员在单场考试内冻结的来源类别难度与规则';
+
 CREATE TABLE IF NOT EXISTS `exam_record` (
   `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `paper_id`      BIGINT UNSIGNED NOT NULL COMMENT '试卷',
-  `regulation_id` BIGINT UNSIGNED NOT NULL COMMENT '制度（冗余快照，服务统计）',
+  `regulation_id` BIGINT UNSIGNED NULL COMMENT '制度冗余快照；培训考试为 NULL',
   `user_id`       BIGINT UNSIGNED NOT NULL COMMENT '考生',
+  `assignment_id` BIGINT UNSIGNED NULL COMMENT 'C2 个人考试归属；legacy 记录为 NULL',
+  `active_assignment_id` BIGINT UNSIGNED NULL COMMENT '仅进行中记录等于 assignment_id，终态置 NULL',
+  `release_id`    BIGINT UNSIGNED NULL COMMENT '发布快照；legacy_start 为 NULL',
+  `source`        VARCHAR(16) NULL COMMENT '首次开考冻结的学员来源',
+  `category_id`   BIGINT UNSIGNED NULL COMMENT '首次开考冻结的培训类别',
+  `difficulty`    VARCHAR(16) NULL COMMENT 'easy / medium / hard / mixed / unknown',
+  `rule_snapshot` JSON NULL COMMENT '本场冻结的分值、时长、次数及评分规则',
+  `snapshot_origin` VARCHAR(32) NOT NULL DEFAULT 'legacy_unavailable' COMMENT 'release / legacy_start / legacy_unavailable',
   `attempt_no`    INT          NOT NULL DEFAULT 1 COMMENT '第几次作答',
   `status`        VARCHAR(16)  NOT NULL DEFAULT 'in_progress' COMMENT 'in_progress / submitted / passed / failed / timeout',
   `score`         DECIMAL(5,2) NULL COMMENT '得分；in_progress 时为 NULL',
@@ -413,11 +439,29 @@ CREATE TABLE IF NOT EXISTS `exam_record` (
   `updated_at`    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_paper_user_attempt` (`paper_id`, `user_id`, `attempt_no`),
+  UNIQUE KEY `uk_assignment_attempt` (`assignment_id`, `attempt_no`),
+  UNIQUE KEY `uk_active_assignment` (`active_assignment_id`),
   KEY `idx_user_paper_status` (`user_id`, `paper_id`, `status`),
   KEY `idx_regulation_status` (`regulation_id`, `status`),
   KEY `idx_paper_status` (`paper_id`, `status`),
-  KEY `idx_status_deadline` (`status`, `deadline_at`)
+  KEY `idx_status_deadline` (`status`, `deadline_at`),
+  KEY `idx_exam_record_release` (`release_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='考试记录';
+
+CREATE TABLE IF NOT EXISTS `exam_record_question` (
+  `id`                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `record_id`           BIGINT UNSIGNED NOT NULL,
+  `question_id`         BIGINT UNSIGNED NOT NULL COMMENT '题目身份，仅作来源追踪',
+  `question_version_id` BIGINT UNSIGNED NULL COMMENT '冻结的题目版本；遗留未知可为 NULL',
+  `type`                VARCHAR(16) NOT NULL,
+  `difficulty`          VARCHAR(16) NOT NULL COMMENT '题目自身难度，遗留未知为 unknown',
+  `score_cents`         INT UNSIGNED NOT NULL,
+  `position`            INT UNSIGNED NOT NULL COMMENT '本次题面显示顺序',
+  `display_to_original` JSON NOT NULL COMMENT '显示选项下标到原始下标的完整映射',
+  `snapshot_json`       JSON NOT NULL COMMENT '题干、选项、答案、解析、rubric 与来源版本事实',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_exam_record_question_position` (`record_id`, `position`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='每次作答冻结的个人题单与显示映射';
 
 CREATE TABLE IF NOT EXISTS `exam_answer` (
   `id`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
