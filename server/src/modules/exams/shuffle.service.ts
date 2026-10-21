@@ -7,8 +7,8 @@ import { AppConfig } from '../../config/configuration';
  * seed = HMAC-SHA256(EXAM_SHUFFLE_SECRET, exam_record.id) 确定性派生；
  * 题目序以 paper_question.sort 为基准 Fisher-Yates 洗牌；
  * 选项序 option_seed = SHA-256(seed || ":" || question_id) 前 8 字节 → splitmix64 固定实现 →
- * Fisher-Yates 拒绝采样（非取模，避免模偏差）；映射可随时重算、无需持久化。
- * PRNG 实现属判分关键路径，不得在有 in_progress 记录时变更（07 册 3.2.1）。
+ * Fisher-Yates 拒绝采样（非取模，避免模偏差）。legacy 记录可按 seed 重算；C2
+ * 个人题单必须持久化映射，避免密钥或实现调整改变已开考卷面。
  */
 @Injectable()
 export class ShuffleService {
@@ -68,6 +68,13 @@ export class ShuffleService {
   optionMapping(optionCount: number, seed: string, questionId: string | number): number[] {
     const indexes = Array.from({ length: optionCount }, (_, i) => i);
     return this.shuffle(indexes, `opt:${seed}:${questionId}`);
+  }
+
+  /** 判断题固定“正确/错误”语义顺序；其他客观题生成一次后由题单持久化。 */
+  snapshotOptionMapping(type: string, optionCount: number, seed: string, questionId: string | number): number[] {
+    return type === 'judgment'
+      ? Array.from({ length: optionCount }, (_, index) => index)
+      : this.optionMapping(optionCount, seed, questionId);
   }
 
   /** 还原：呈现位置数组（displayPos）→ 原始下标数组 */

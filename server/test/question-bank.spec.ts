@@ -868,7 +868,7 @@ describe('versioned question bank', () => {
     expect(review.audit.log).not.toHaveBeenCalled();
   });
 
-  it('rejects judgment and image questions at every legacy fixed-paper capability boundary', async () => {
+  it('rejects judgment and image questions at legacy fixed-paper editing and publish boundaries', async () => {
     const unsupported = { id: '7', regulationId: '2', type: 'judgment', status: 'approved', score: '100.00', options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }] } as any;
     const paper = { id: '3', regulationId: '2', status: 'draft', totalScore: '100.00' } as any;
     const paperService = Object.create(PaperService.prototype) as PaperService & Record<string, any>;
@@ -901,20 +901,45 @@ describe('versioned question bank', () => {
       .rejects.toThrow('固定试卷');
     await expect(paperService.publish('3', { id: 1, name: 'admin' }, null)).rejects.toThrow('固定试卷');
 
-    const examService = Object.create(ExamService.prototype) as ExamService & Record<string, any>;
-    examService.pqRepo = { find: vi.fn(async () => [{ id: '9', paperId: '3', questionId: '7', score: '100.00', sort: 0 }]) };
-    examService.questionRepo = { find: vi.fn(async () => [unsupported]) };
-    examService.userRepo = { findOne: vi.fn(async () => ({ id: '1', role: 'super_admin', status: 1 })) };
-    examService.paperRepo = { findOne: vi.fn(async () => ({ ...paper, status: 'published', maxAttempts: 3 })) };
-    examService.regRepo = { findOne: vi.fn(async () => ({ id: '2', status: 'published' })) };
-    examService.learningRepo = { findOne: vi.fn(async () => ({ isValid: 1 })) };
-    examService.dataSource = { transaction: vi.fn() };
-    examService.shuffle = {
-      deriveSeed: vi.fn(() => 'seed'), shuffleQuestionOrder: vi.fn((items: any[]) => items), shuffleOptions: vi.fn((items: any[]) => items),
+  });
+
+  it('lets the old start boundary use its frozen source without reading current question rows', async () => {
+    const response = { exam_record_id: 71, status: 'in_progress', questions: [] };
+    const service = Object.create(ExamService.prototype) as ExamService & Record<string, any>;
+    service.paperRepo = {
+      findOne: vi.fn(async () => ({
+        id: '3', regulationId: '2', businessScope: 'regulation', mode: 'fixed', status: 'published',
+      })),
     };
-    await expect(examService.start('3', 1)).rejects.toThrow('固定试卷');
-    expect(examService.learningRepo.findOne).not.toHaveBeenCalled();
-    expect(examService.dataSource.transaction).not.toHaveBeenCalled();
+    service.pqRepo = {
+      find: vi.fn(async () => { throw new Error('current paper questions must not be read'); }),
+    };
+    service.legacyAdapter = { start: vi.fn(async () => response) };
+
+    await expect(service.start('3', 1)).resolves.toEqual(response);
+  });
+
+  it.each([
+    { label: 'submitted result', status: 'passed', score: '100.00' },
+    { label: 'timeout result', status: 'timeout', score: '20.00' },
+  ])('keeps the old recover terminal summary for a frozen $label', async ({ status, score }) => {
+    const service = Object.create(ExamService.prototype) as ExamService & Record<string, any>;
+    service.recordRepo = {
+      findOne: vi.fn(async () => ({
+        id: '71', paperId: '3', regulationId: '2', userId: '9', assignmentId: '31',
+        status, score,
+      })),
+    };
+    service.legacyAdapter = {
+      recover: vi.fn(async () => { throw new Error('terminal record must not enter active recovery'); }),
+    };
+
+    await expect(service.recover('71', 9)).resolves.toEqual({
+      exam_record_id: 71,
+      status,
+      score: Number(score),
+      finished: true,
+    });
   });
 
   it('blocks changing the type of any question already referenced by a legacy paper', async () => {
