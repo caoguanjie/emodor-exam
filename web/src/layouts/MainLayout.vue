@@ -2,9 +2,9 @@
   <el-container style="height:100%">
     <el-aside width="232px" class="aside">
       <div class="logo">
-        <img class="logo-badge" :src="brandLogo" alt="EmodorRuleExam Logo" />
+        <img class="logo-badge" :src="brandLogo" alt="海珠区安全教育培训中心 Logo" />
         <div class="logo-text">
-          <span class="logo-name">EmodorRuleExam</span>
+          <span class="logo-name">海珠区安全教育培训中心</span>
           <span class="logo-sub">安全教育培训与考试平台</span>
         </div>
       </div>
@@ -90,7 +90,7 @@ async function onLogout() {
 .logo { display: flex; align-items: center; gap: 10px; padding: 20px 20px 16px; }
 .logo-badge { width: 36px; height: 36px; border-radius: 9px; object-fit: cover; flex: none; }
 .logo-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
-.logo-name { color: #fff; font-size: 13px; font-weight: 700; letter-spacing: 0; white-space: nowrap; }
+.logo-name { color: #fff; font-size: 12px; font-weight: 700; letter-spacing: -0.2px; white-space: nowrap; }
 .logo-sub { color: rgba(255, 255, 255, 0.45); font-size: 10px; transform-origin: left; transform: scale(0.96); white-space: nowrap; }
 .nav-scroll { flex: 1; }
 .nav-group {

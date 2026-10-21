@@ -2,9 +2,9 @@
   <div class="login-wrap">
     <div class="pwd-card page-enter">
       <div class="pwd-head">
-        <img class="pwd-logo" :src="brandLogo" alt="EmodorRuleExam Logo" />
+        <img class="pwd-logo" :src="brandLogo" alt="海珠区安全教育培训中心 Logo" />
         <div>
-          <div class="pwd-brand-name">EmodorRuleExam</div>
+          <div class="pwd-brand-name">海珠区安全教育培训中心</div>
           <h3>首次登录，请修改密码</h3>
           <p>初始密码须 ≥ 8 位、同时包含字母与数字，且不得包含用户名 / 工号 / 姓名的连续 3 位字符。</p>
         </div>
