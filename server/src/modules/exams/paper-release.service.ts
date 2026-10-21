@@ -1,0 +1,338 @@
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
+import { AuditService } from '../../common/audit.service';
+import { Errors } from '../../common/errors';
+import type { Difficulty, PoolRule, QuestionOption, QuestionType, RuleSnapshot } from '../../common/training-contracts';
+import { ExamPaper } from '../../entities/exam-paper.entity';
+import { PaperQuestion } from '../../entities/paper-question.entity';
+import { PaperRelease } from '../../entities/paper-release.entity';
+import { PaperReleaseQuestion } from '../../entities/paper-release-question.entity';
+import { Question } from '../../entities/question.entity';
+import { QuestionVersion } from '../../entities/question-version.entity';
+import { CategoryService } from '../training/category.service';
+import { QuestionVersionService, type QuestionVersionSnapshot } from '../questions/question-version.service';
+import { SamplingService } from './sampling.service';
+
+export type PaperBusinessScope = 'regulation' | 'training';
+export type PaperMode = 'fixed' | 'random';
+
+export interface PublishedPaper {
+  id: string;
+  paperId: string;
+  categoryId: string | null;
+  businessScope: PaperBusinessScope;
+  mode: PaperMode;
+  rule: RuleSnapshot;
+  pool: QuestionVersionSnapshot[];
+  requiresLearning: boolean;
+}
+
+const QUESTION_TYPES = new Set<QuestionType>(['single', 'multiple', 'judgment', 'image']);
+const DIFFICULTIES = new Set<Difficulty>(['easy', 'medium', 'hard']);
+
+function deepClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function decimalToCents(value: string | number): number {
+  const numeric = Number(value);
+  const cents = Math.round(numeric * 100);
+  if (!Number.isFinite(numeric) || cents <= 0 || Math.abs(numeric * 100 - cents) > 0.000001) {
+    throw Errors.paperRuleInvalid('固定题目分值必须是大于 0 的整数分');
+  }
+  return cents;
+}
+
+function snapshotFromEntity(version: QuestionVersion): QuestionVersionSnapshot {
+  if (!version.categoryId || !version.difficulty || !DIFFICULTIES.has(version.difficulty as Difficulty)) {
+    throw Errors.paperReleaseConflict('题目版本缺少有效的培训类别或难度');
+  }
+  return {
+    questionId: String(version.questionId),
+    versionId: String(version.id),
+    revision: Number(version.revision),
+    categoryId: String(version.categoryId),
+    difficulty: version.difficulty as Difficulty,
+    type: version.type as QuestionType,
+    stem: version.stem,
+    options: deepClone(version.options as QuestionOption[]),
+    answer: [...version.answer],
+    analysis: version.analysis,
+    rubric: version.rubric,
+    scoreCents: Number(version.scoreCents),
+    conceptId: version.conceptId || undefined,
+    regulationId: version.regulationId || undefined,
+    regulationVersionId: version.regulationVersionId || undefined,
+    sourcePageGroup: version.sourcePageGroup ?? undefined,
+    sourcePageStart: version.sourcePageStart ?? undefined,
+    sourcePageEnd: version.sourcePageEnd ?? undefined,
+    source: version.source as QuestionVersionSnapshot['source'],
+    approvedBy: version.approvedBy,
+    approvedAt: version.approvedAt?.toISOString() || null,
+  };
+}
+
+@Injectable()
+export class PaperReleaseService {
+  constructor(
+    @InjectRepository(ExamPaper) private readonly paperRepo: Repository<ExamPaper>,
+    @InjectRepository(PaperRelease) private readonly releaseRepo: Repository<PaperRelease>,
+    @InjectRepository(PaperReleaseQuestion) private readonly releaseQuestionRepo: Repository<PaperReleaseQuestion>,
+    private readonly dataSource: DataSource,
+    private readonly categories: CategoryService,
+    private readonly questions: QuestionVersionService,
+    private readonly sampling: SamplingService,
+    private readonly audit: AuditService,
+  ) {}
+
+  private ruleForPaper(paper: ExamPaper, rules: PoolRule[]): RuleSnapshot {
+    const rule: RuleSnapshot = {
+      totalCents: 10000,
+      passCents: Math.round(Number(paper.passScore) * 100),
+      durationMinutes: Number(paper.durationMinutes),
+      maxAttempts: Number(paper.maxAttempts),
+      partialCreditRatio: Number(paper.partialCreditRatio),
+      rules: rules.map((item) => ({ ...item })),
+    };
+    this.assertRule(rule);
+    return rule;
+  }
+
+  private assertRule(rule: RuleSnapshot): void {
+    if (rule.totalCents !== 10000) throw Errors.paperRuleInvalid('试卷总分必须为 10000 分');
+    if (!Number.isInteger(rule.passCents) || rule.passCents <= 0 || rule.passCents > 10000) {
+      throw Errors.paperRuleInvalid('及格线必须在 1—10000 分之间');
+    }
+    if (!Number.isInteger(rule.durationMinutes) || rule.durationMinutes < 1) throw Errors.paperRuleInvalid('考试时长必须是正整数');
+    if (!Number.isInteger(rule.maxAttempts) || rule.maxAttempts < 1) throw Errors.paperRuleInvalid('作答次数必须是正整数');
+    if (!Number.isFinite(rule.partialCreditRatio) || rule.partialCreditRatio < 0 || rule.partialCreditRatio > 1) {
+      throw Errors.paperRuleInvalid('多选漏选比例必须在 0—1 之间');
+    }
+    if (!rule.rules.length) throw Errors.paperRuleInvalid('试卷至少需要一项题型规则');
+    for (const item of rule.rules) {
+      if (!QUESTION_TYPES.has(item.type) || !Number.isInteger(item.count) || item.count < 1
+        || !Number.isInteger(item.scoreCents) || item.scoreCents < 1) {
+        throw Errors.paperRuleInvalid('题型、题量或分值规则不合法');
+      }
+    }
+    const total = rule.rules.reduce((sum, item) => sum + item.count * item.scoreCents, 0);
+    if (total !== 10000) throw Errors.paperRuleInvalid(`题型规则总分必须为 10000 分，当前为 ${total}`);
+  }
+
+  private async randomPool(paper: ExamPaper): Promise<{ rule: RuleSnapshot; pool: QuestionVersionSnapshot[] }> {
+    const configuredRules = paper.ruleConfig?.rules || [];
+    if (new Set(configuredRules.map((item) => item.type)).size !== configuredRules.length) {
+      throw Errors.paperRuleInvalid('随机组卷同一题型只能配置一项规则');
+    }
+    const rule = this.ruleForPaper(paper, configuredRules);
+    const pool: QuestionVersionSnapshot[] = [];
+    const regulationIds = (paper.regulationIds || []).map(String);
+    for (const difficulty of ['easy', 'hard'] as const) {
+      for (const item of rule.rules) {
+        pool.push(...await this.questions.approvedCandidates({
+          categoryId: String(paper.categoryId),
+          type: item.type,
+          difficulty,
+          ...(regulationIds.length ? { regulationIds } : {}),
+        }));
+      }
+    }
+    for (const difficulty of ['easy', 'hard'] as const) {
+      const validation = this.sampling.validatePool(pool, rule.rules, difficulty);
+      if (!validation.ok) {
+        throw Errors.paperPoolInsufficient(validation.deficits, `${difficulty === 'easy' ? '初级' : '高级'}候选题池容量不足`);
+      }
+    }
+    const scoreByType = new Map(rule.rules.map((item) => [item.type, item.scoreCents]));
+    const unique = new Map<string, QuestionVersionSnapshot>();
+    for (const item of pool) {
+      unique.set(String(item.versionId), {
+        ...deepClone(item),
+        scoreCents: scoreByType.get(item.type)!,
+      });
+    }
+    return { rule, pool: [...unique.values()] };
+  }
+
+  private async fixedPool(
+    manager: EntityManager,
+    paper: ExamPaper,
+  ): Promise<{ rule: RuleSnapshot; pool: QuestionVersionSnapshot[] }> {
+    const items = await manager.getRepository(PaperQuestion).find({
+      where: { paperId: String(paper.id) },
+      order: { sort: 'ASC', id: 'ASC' },
+    });
+    if (!items.length || items.some((item) => !item.questionVersionId)) {
+      throw Errors.paperRuleInvalid('固定组卷至少需要一道已选择的题目版本');
+    }
+    const versionIds = items.map((item) => String(item.questionVersionId));
+    const versions = await manager.getRepository(QuestionVersion).findBy({ id: In(versionIds) });
+    const versionMap = new Map(versions.map((item) => [String(item.id), item]));
+    const questionIds = versions.map((item) => String(item.questionId));
+    const questions = await manager.getRepository(Question).findBy({ id: In(questionIds) });
+    const questionMap = new Map(questions.map((item) => [String(item.id), item]));
+    const regulationIds = new Set((paper.regulationIds || []).map(String));
+    const seen = new Set<string>();
+    const pool: QuestionVersionSnapshot[] = [];
+    const rules = new Map<string, PoolRule>();
+    for (const item of items) {
+      const version = versionMap.get(String(item.questionVersionId));
+      const question = version && questionMap.get(String(version.questionId));
+      if (!version || !question || version.status !== 'approved' || String(question.currentVersionId) !== String(version.id)) {
+        throw Errors.paperReleaseConflict(`题目 ${item.questionId} 已不是当前审核通过版本`);
+      }
+      if (String(version.categoryId) !== String(paper.categoryId)) throw Errors.paperRuleInvalid('固定题目与试卷培训类别不一致');
+      if (regulationIds.size && (!version.regulationId || !regulationIds.has(String(version.regulationId)))) {
+        throw Errors.paperRuleInvalid('固定题目不在试卷制度筛选范围内');
+      }
+      const key = version.conceptId ? `concept:${version.conceptId}` : `question:${version.questionId}`;
+      if (seen.has(key)) throw Errors.paperRuleInvalid('固定题单存在重复考点');
+      seen.add(key);
+      const scoreCents = decimalToCents(item.score);
+      const snapshot = snapshotFromEntity(version);
+      pool.push({ ...snapshot, scoreCents });
+      const ruleKey = `${snapshot.type}:${scoreCents}`;
+      const existing = rules.get(ruleKey);
+      if (existing) existing.count += 1;
+      else rules.set(ruleKey, { type: snapshot.type, count: 1, scoreCents });
+    }
+    return { rule: this.ruleForPaper(paper, [...rules.values()]), pool };
+  }
+
+  async publish(paperId: string, actorId: string): Promise<{ releaseId: string }> {
+    const current = await this.paperRepo.findOne({ where: { id: String(paperId) } });
+    if (!current || current.businessScope !== 'training') throw Errors.notFound('培训试卷不存在');
+    if (current.status === 'published') {
+      const existing = await this.releaseRepo.findOne({ where: { paperId: String(paperId) }, order: { versionNo: 'DESC' } });
+      if (existing) return { releaseId: String(existing.id) };
+    }
+    if (current.status !== 'draft') throw Errors.paperReleaseConflict('只有草稿试卷可以发布');
+    if (!current.categoryId) throw Errors.paperRuleInvalid('培训试卷必须选择培训类别');
+    const result = await this.dataSource.transaction(async (manager) => {
+      // Category references use the established category -> paper lock order.
+      // C2 can then serialize start against publish/withdraw on the paper row.
+      await this.categories.lockActive(manager, String(current.categoryId));
+      const paperRepo = manager.getRepository(ExamPaper);
+      const releaseRepo = manager.getRepository(PaperRelease);
+      const releaseQuestionRepo = manager.getRepository(PaperReleaseQuestion);
+      const paper = await paperRepo.findOne({ where: { id: String(paperId) }, lock: { mode: 'pessimistic_write' } });
+      if (!paper || paper.businessScope !== 'training') throw Errors.notFound('培训试卷不存在');
+      if (paper.status === 'published') {
+        const existing = await releaseRepo.findOne({ where: { paperId: String(paperId) }, order: { versionNo: 'DESC' } });
+        if (existing) return { releaseId: String(existing.id) };
+      }
+      if (paper.status !== 'draft') throw Errors.paperReleaseConflict('只有草稿试卷可以发布');
+      if (!paper.categoryId || String(paper.categoryId) !== String(current.categoryId)) {
+        throw Errors.paperReleaseConflict('试卷培训类别已变化，请刷新后重试');
+      }
+
+      const frozen = paper.mode === 'random'
+        ? await this.randomPool(paper)
+        : paper.mode === 'fixed'
+          ? await this.fixedPool(manager, paper)
+          : (() => { throw Errors.paperRuleInvalid('未知组卷模式'); })();
+      const previous = await releaseRepo.findOne({ where: { paperId: String(paperId) }, order: { versionNo: 'DESC' } });
+      const release = await releaseRepo.save(releaseRepo.create({
+        paperId: String(paper.id),
+        versionNo: Number(previous?.versionNo || 0) + 1,
+        businessScope: 'training',
+        mode: paper.mode,
+        categoryId: String(paper.categoryId),
+        requiresLearning: Number(paper.requiresLearning || 0),
+        ruleSnapshot: deepClone(frozen.rule),
+        regulationIds: deepClone(paper.regulationIds || []),
+        courseIds: deepClone(paper.courseIds || []),
+        createdBy: String(actorId),
+      }));
+      const rows = frozen.pool.map((snapshot, position) => releaseQuestionRepo.create({
+        releaseId: String(release.id),
+        questionId: String(snapshot.questionId),
+        questionVersionId: String(snapshot.versionId),
+        conceptId: snapshot.conceptId ? String(snapshot.conceptId) : null,
+        type: snapshot.type,
+        difficulty: snapshot.difficulty,
+        scoreCents: Number(snapshot.scoreCents),
+        position,
+        snapshotJson: deepClone(snapshot),
+      }));
+      await releaseQuestionRepo.save(rows);
+      paper.status = 'published';
+      await paperRepo.save(paper);
+      return { releaseId: String(release.id) };
+    });
+    this.audit.log({
+      actor_id: Number(actorId), actor_name: String(actorId), action: 'paper.release.publish',
+      object_type: 'paper_release', object_id: result.releaseId, detail: { paper_id: String(paperId) }, result: 'success', source_ip: null,
+    });
+    return result;
+  }
+
+  async get(releaseId: string): Promise<PublishedPaper> {
+    const release = await this.releaseRepo.findOne({ where: { id: String(releaseId) } });
+    if (!release) throw Errors.notFound('试卷发布版本不存在');
+    const rows = await this.releaseQuestionRepo.find({
+      where: { releaseId: String(releaseId) },
+      order: { position: 'ASC', id: 'ASC' },
+    });
+    return {
+      id: String(release.id),
+      paperId: String(release.paperId),
+      categoryId: release.categoryId ? String(release.categoryId) : null,
+      businessScope: release.businessScope as PaperBusinessScope,
+      mode: release.mode as PaperMode,
+      rule: deepClone(release.ruleSnapshot),
+      pool: rows.map((row) => ({ ...deepClone(row.snapshotJson), scoreCents: Number(row.scoreCents) })),
+      requiresLearning: Boolean(release.requiresLearning),
+    };
+  }
+
+  async latestForPaper(paperId: string): Promise<PublishedPaper | null> {
+    const release = await this.releaseRepo.findOne({ where: { paperId: String(paperId) }, order: { versionNo: 'DESC' } });
+    return release ? this.get(String(release.id)) : null;
+  }
+
+  async preview(paperId: string, difficulty: Difficulty = 'easy') {
+    const paper = await this.paperRepo.findOne({ where: { id: String(paperId) } });
+    if (!paper || paper.businessScope !== 'training') throw Errors.notFound('培训试卷不存在');
+    let releaseId: string | null = null;
+    let rule: RuleSnapshot;
+    let pool: QuestionVersionSnapshot[];
+    const published = await this.latestForPaper(paperId);
+    if (published) {
+      releaseId = published.id;
+      rule = published.rule;
+      pool = published.pool;
+    } else if (paper.mode === 'random') {
+      ({ rule, pool } = await this.randomPool(paper));
+    } else {
+      ({ rule, pool } = await this.dataSource.transaction((manager) => this.fixedPool(manager, paper)));
+    }
+    const capacities = paper.mode === 'random'
+      ? (['easy', 'hard'] as const).flatMap((poolDifficulty) => rule.rules.map((item) => ({
+        difficulty: poolDifficulty,
+        type: item.type,
+        required: item.count,
+        available: new Set(pool.filter((candidate) => candidate.difficulty === poolDifficulty && candidate.type === item.type)
+          .map((candidate) => candidate.conceptId ? `concept:${candidate.conceptId}` : `question:${candidate.questionId}`)).size,
+      })))
+      : [];
+    if (paper.mode === 'random' && difficulty === 'medium') throw Errors.paperRuleInvalid('随机组卷只提供初级或高级样例');
+    const questions = paper.mode === 'random'
+      ? this.sampling.draw(pool, rule.rules, difficulty as Exclude<Difficulty, 'medium'>)
+      : pool;
+    return {
+      paper_id: String(paper.id),
+      release_id: releaseId,
+      mode: paper.mode as PaperMode,
+      sample_kind: paper.mode === 'random' ? 'random_example' as const : 'fixed_paper' as const,
+      note: paper.mode === 'random'
+        ? '随机预览仅为规则与样例，不代表所有考生取得同一张试卷。'
+        : '固定卷预览使用发布题单。',
+      difficulty: paper.mode === 'random' ? difficulty : null,
+      rule: deepClone(rule),
+      capacities,
+      questions: deepClone(questions),
+    };
+  }
+}

@@ -1,11 +1,26 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { ExamPaper } from '../../entities/exam-paper.entity';
 import { PaperQuestion } from '../../entities/paper-question.entity';
 import { Question } from '../../entities/question.entity';
+import { QuestionVersion } from '../../entities/question-version.entity';
+import { Regulation } from '../../entities/regulation.entity';
+import { TrainingCourse } from '../../entities/training-course.entity';
+import { PaperRelease } from '../../entities/paper-release.entity';
 import { Errors, PaperStatus, QuestionStatus } from '../../common/errors';
 import { AuditService } from '../../common/audit.service';
+import type { Difficulty, PoolRule, QuestionType, RuleSnapshot } from '../../common/training-contracts';
+import { CategoryService } from '../training/category.service';
+import { QuestionVersionService, type QuestionVersionSnapshot } from '../questions/question-version.service';
+import type { CreateTrainingPaperDto, UpdateTrainingPaperDto } from '../exams/paper.dto';
+
+type PaperActor = { id: string | number; name: string };
+type FixedQuestionInput = { question_version_id: string; score_cents: number };
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
 
 /**
  * 组卷服务（05 册 4.4.7）：试卷策略配置、选题入卷校验（approved + 同制度 + 不重复）、
@@ -18,9 +33,23 @@ export class PaperService {
     @InjectRepository(ExamPaper) private readonly paperRepo: Repository<ExamPaper>,
     @InjectRepository(PaperQuestion) private readonly pqRepo: Repository<PaperQuestion>,
     @InjectRepository(Question) private readonly questionRepo: Repository<Question>,
+    @InjectRepository(QuestionVersion) private readonly versionRepo: Repository<QuestionVersion>,
+    @InjectRepository(Regulation) private readonly regulationRepo: Repository<Regulation>,
+    @InjectRepository(TrainingCourse) private readonly courseRepo: Repository<TrainingCourse>,
+    @InjectRepository(PaperRelease) private readonly releaseRepo: Repository<PaperRelease>,
+    private readonly categories: CategoryService,
+    private readonly versions: QuestionVersionService,
     private readonly audit: AuditService,
     private readonly dataSource: DataSource,
   ) {}
+
+  private assertLegacyPaper(paper: ExamPaper): void {
+    if (paper.businessScope === 'training') throw Errors.notFound('制度专项试卷不存在');
+  }
+
+  private assertTrainingPaper(paper: ExamPaper | null): asserts paper is ExamPaper {
+    if (!paper || paper.businessScope !== 'training') throw Errors.notFound('培训试卷不存在');
+  }
 
   paperView(p: ExamPaper) {
     return {
@@ -57,6 +86,7 @@ export class PaperService {
     const page = Math.max(1, Number(query.page || 1));
     const pageSize = Math.min(100, Math.max(1, Number(query.page_size || 20)));
     const qb = this.paperRepo.createQueryBuilder('p');
+    qb.where('(p.business_scope = :legacyScope OR p.business_scope IS NULL)', { legacyScope: 'regulation' });
     if (query.regulation_id) qb.andWhere('p.regulation_id = :rid', { rid: String(query.regulation_id) });
     if (query.status) qb.andWhere('p.status = :status', { status: query.status });
     qb.orderBy('p.id', 'DESC');
@@ -68,6 +98,7 @@ export class PaperService {
   async detail(id: string) {
     const p = await this.paperRepo.findOne({ where: { id } });
     if (!p) throw Errors.notFound('试卷不存在');
+    this.assertLegacyPaper(p);
     const questions = await this.pqRepo.find({ where: { paperId: id }, order: { sort: 'ASC', id: 'ASC' } });
     const qIds = questions.map((pq) => pq.questionId);
     const qRows = qIds.length ? await this.questionRepo.find({ where: { id: In(qIds) } }) : [];
@@ -101,6 +132,13 @@ export class PaperService {
     const p = await this.paperRepo.save(
       this.paperRepo.create({
         regulationId: input.regulation_id,
+        businessScope: 'regulation',
+        mode: 'fixed',
+        categoryId: null,
+        requiresLearning: 1,
+        regulationIds: [String(input.regulation_id)],
+        courseIds: [],
+        ruleConfig: null,
         title: input.title,
         passScore: String(input.pass_score ?? 60),
         durationMinutes: input.duration_minutes ?? 30,
@@ -136,6 +174,7 @@ export class PaperService {
   async updateStrategy(id: string, patch: { title?: string; pass_score?: number; duration_minutes?: number; max_attempts?: number; partial_credit_ratio?: number }, actor: { id: number; name: string }, ip: string | null) {
     const p = await this.paperRepo.findOne({ where: { id } });
     if (!p) throw Errors.notFound('试卷不存在');
+    this.assertLegacyPaper(p);
     if (p.status === PaperStatus.ARCHIVED) throw Errors.param('已归档试卷不可修改');
     this.validateStrategy(patch);
     if (patch.title !== undefined) p.title = patch.title;
@@ -155,6 +194,7 @@ export class PaperService {
   async setQuestions(id: string, items: { question_id: number | string; score?: number }[], actor: { id: number; name: string }, ip: string | null) {
     const p = await this.paperRepo.findOne({ where: { id } });
     if (!p) throw Errors.notFound('试卷不存在');
+    this.assertLegacyPaper(p);
     if (p.status !== PaperStatus.DRAFT) throw Errors.paperQuestionsLocked();
     if (!Array.isArray(items) || !items.length) throw Errors.param('试卷至少需要 1 道题');
 
@@ -198,6 +238,7 @@ export class PaperService {
   async publish(id: string, actor: { id: number; name: string }, ip: string | null) {
     const p = await this.paperRepo.findOne({ where: { id } });
     if (!p) throw Errors.notFound('试卷不存在');
+    this.assertLegacyPaper(p);
     if (p.status === PaperStatus.PUBLISHED) return this.paperView(p);
     if (p.status === PaperStatus.ARCHIVED) throw Errors.param('已归档试卷不可发布');
     await this.assertLegacyPaperQuestions(id);
@@ -224,6 +265,7 @@ export class PaperService {
   async archive(id: string, actor: { id: number; name: string }, ip: string | null) {
     const p = await this.paperRepo.findOne({ where: { id } });
     if (!p) throw Errors.notFound('试卷不存在');
+    this.assertLegacyPaper(p);
     p.status = PaperStatus.ARCHIVED;
     await this.paperRepo.save(p);
     this.audit.log({
@@ -233,11 +275,405 @@ export class PaperService {
     return this.paperView(p);
   }
 
+  private trainingRule(
+    strategy: { passScore: string | number; durationMinutes: number; maxAttempts: number; partialCreditRatio: string | number },
+    rules: Array<{ type: QuestionType; count: number; score_cents?: number; scoreCents?: number }>,
+    requireComplete: boolean,
+    requireUniqueTypes = requireComplete,
+  ): RuleSnapshot {
+    const normalized: PoolRule[] = rules.map((item) => ({
+      type: item.type,
+      count: Number(item.count),
+      scoreCents: Number(item.score_cents ?? item.scoreCents),
+    }));
+    if (requireUniqueTypes && new Set(normalized.map((item) => item.type)).size !== normalized.length) {
+      throw Errors.paperRuleInvalid('同一题型只能配置一项随机规则');
+    }
+    for (const item of normalized) {
+      if (!['single', 'multiple', 'judgment', 'image'].includes(item.type)
+        || !Number.isInteger(item.count) || item.count < 1
+        || !Number.isInteger(item.scoreCents) || item.scoreCents < 1) {
+        throw Errors.paperRuleInvalid('题型、题量或分值规则不合法');
+      }
+    }
+    const total = normalized.reduce((sum, item) => sum + item.count * item.scoreCents, 0);
+    if (requireComplete && total !== 10000) throw Errors.paperRuleInvalid(`题型规则总分必须为 10000 分，当前为 ${total}`);
+    return {
+      totalCents: 10000,
+      passCents: Math.round(Number(strategy.passScore) * 100),
+      durationMinutes: Number(strategy.durationMinutes),
+      maxAttempts: Number(strategy.maxAttempts),
+      partialCreditRatio: Number(strategy.partialCreditRatio),
+      rules: normalized,
+    };
+  }
+
+  private trainingPaperView(paper: ExamPaper) {
+    return {
+      id: String(paper.id),
+      title: paper.title,
+      business_scope: 'training' as const,
+      mode: paper.mode as 'fixed' | 'random',
+      category_id: paper.categoryId ? String(paper.categoryId) : null,
+      requires_learning: Boolean(paper.requiresLearning),
+      regulation_ids: (paper.regulationIds || []).map(String),
+      course_ids: (paper.courseIds || []).map(String),
+      rules: (paper.ruleConfig?.rules || []).map((item) => ({
+        type: item.type, count: Number(item.count), score_cents: Number(item.scoreCents),
+      })),
+      total_score: Number(paper.totalScore),
+      pass_score: Number(paper.passScore),
+      duration_minutes: Number(paper.durationMinutes),
+      max_attempts: Number(paper.maxAttempts),
+      partial_credit_ratio: Number(paper.partialCreditRatio),
+      status: paper.status,
+      created_at: paper.createdAt,
+      updated_at: paper.updatedAt,
+    };
+  }
+
+  private async validateTrainingRelations(
+    manager: EntityManager,
+    categoryId: string,
+    regulationIds: string[],
+    courseIds: string[],
+    categoryLocked = false,
+  ): Promise<void> {
+    if (!categoryLocked) await this.categories.lockActive(manager, categoryId);
+    if (regulationIds.length) {
+      const rows = await manager.getRepository(Regulation).findBy({ id: In(regulationIds) });
+      if (rows.length !== regulationIds.length || rows.some((row) => String(row.categoryId) !== categoryId)) {
+        throw Errors.paperRuleInvalid('制度筛选项必须全部属于试卷培训类别');
+      }
+    }
+    if (courseIds.length) {
+      const rows = await manager.getRepository(TrainingCourse).findBy({ id: In(courseIds) });
+      if (rows.length !== courseIds.length || rows.some((row) => String(row.categoryId) !== categoryId)) {
+        throw Errors.paperRuleInvalid('关联课程必须全部属于试卷培训类别');
+      }
+    }
+  }
+
+  async listTraining(query: {
+    page?: number; page_size?: number; keyword?: string; category_id?: string; mode?: string; status?: string;
+  }) {
+    const page = Math.max(1, Number(query.page || 1));
+    const pageSize = Math.min(100, Math.max(1, Number(query.page_size || 20)));
+    const qb = this.paperRepo.createQueryBuilder('paper').where('paper.business_scope = :scope', { scope: 'training' });
+    if (query.keyword?.trim()) qb.andWhere('paper.title LIKE :keyword', { keyword: `%${query.keyword.trim()}%` });
+    if (query.category_id) qb.andWhere('paper.category_id = :categoryId', { categoryId: String(query.category_id) });
+    if (query.mode) qb.andWhere('paper.mode = :mode', { mode: query.mode });
+    if (query.status) qb.andWhere('paper.status = :status', { status: query.status });
+    qb.orderBy('paper.id', 'DESC');
+    const [rows, total] = await qb.skip((page - 1) * pageSize).take(pageSize).getManyAndCount();
+    return { items: rows.map((item) => this.trainingPaperView(item)), total, page, page_size: pageSize };
+  }
+
+  async trainingDetail(id: string) {
+    const paper = await this.paperRepo.findOne({ where: { id: String(id) } });
+    this.assertTrainingPaper(paper);
+    const links = await this.pqRepo.find({ where: { paperId: String(id) }, order: { sort: 'ASC', id: 'ASC' } });
+    const versionIds = links.map((item) => item.questionVersionId).filter((value): value is string => Boolean(value));
+    const versions = versionIds.length ? await this.versionRepo.findBy({ id: In(versionIds) }) : [];
+    const versionMap = new Map(versions.map((item) => [String(item.id), item]));
+    const latestRelease = await this.releaseRepo.findOne({ where: { paperId: String(id) }, order: { versionNo: 'DESC' } });
+    return {
+      ...this.trainingPaperView(paper),
+      latest_release_id: latestRelease ? String(latestRelease.id) : null,
+      sum_score_cents: links.reduce((sum, item) => sum + Math.round(Number(item.score) * 100), 0),
+      questions: links.map((item) => {
+        const version = item.questionVersionId ? versionMap.get(String(item.questionVersionId)) : undefined;
+        return {
+          paper_question_id: String(item.id),
+          question_id: String(item.questionId),
+          question_version_id: item.questionVersionId ? String(item.questionVersionId) : null,
+          sort: Number(item.sort),
+          score_cents: Math.round(Number(item.score) * 100),
+          type: version?.type || null,
+          difficulty: version?.difficulty || null,
+          concept_id: version?.conceptId ? String(version.conceptId) : null,
+          regulation_id: version?.regulationId ? String(version.regulationId) : null,
+          stem: version?.stem || '',
+          options: cloneJson(version?.options || []),
+          status: version?.status || null,
+        };
+      }),
+    };
+  }
+
+  async createTraining(input: CreateTrainingPaperDto, actor: PaperActor, ip: string | null) {
+    this.validateStrategy(input);
+    const categoryId = String(input.category_id);
+    const regulationIds = (input.regulation_ids || []).map(String);
+    const courseIds = (input.course_ids || []).map(String);
+    const paper = await this.dataSource.transaction(async (manager) => {
+      await this.validateTrainingRelations(manager, categoryId, regulationIds, courseIds);
+      const repo = manager.getRepository(ExamPaper);
+      const draft = repo.create({
+        regulationId: null,
+        businessScope: 'training',
+        mode: input.mode,
+        categoryId,
+        requiresLearning: input.requires_learning ? 1 : 0,
+        regulationIds,
+        courseIds,
+        title: input.title.trim(),
+        totalScore: '100.00',
+        passScore: String(input.pass_score ?? 60),
+        durationMinutes: input.duration_minutes ?? 30,
+        maxAttempts: input.max_attempts ?? 3,
+        partialCreditRatio: String(input.partial_credit_ratio ?? 0.5),
+        status: 'draft',
+        createdBy: String(actor.id),
+      });
+      draft.ruleConfig = this.trainingRule(draft, input.rules || [], input.mode === 'random');
+      return repo.save(draft);
+    });
+    this.audit.log({
+      actor_id: Number(actor.id), actor_name: actor.name, action: 'training_paper.create', object_type: 'exam_paper',
+      object_id: paper.id, detail: { mode: paper.mode, category_id: categoryId }, result: 'success', source_ip: ip,
+    });
+    return this.trainingPaperView(paper);
+  }
+
+  async updateTraining(id: string, patch: UpdateTrainingPaperDto, actor: PaperActor, ip: string | null) {
+    this.validateStrategy(patch);
+    const current = await this.paperRepo.findOne({ where: { id: String(id) } });
+    this.assertTrainingPaper(current);
+    if (current.status !== 'draft') throw Errors.paperReleaseConflict('发布后不可修改规则或题池，请复制为新试卷');
+    const targetCategory = String(patch.category_id ?? current.categoryId);
+    const updated = await this.dataSource.transaction(async (manager) => {
+      await this.categories.lockActive(manager, targetCategory);
+      const repo = manager.getRepository(ExamPaper);
+      const paper = await repo.findOne({ where: { id: String(id) }, lock: { mode: 'pessimistic_write' } });
+      this.assertTrainingPaper(paper);
+      if (paper.status !== 'draft') throw Errors.paperReleaseConflict('发布后不可修改规则或题池，请复制为新试卷');
+      const regulationIds = (patch.regulation_ids ?? paper.regulationIds ?? []).map(String);
+      const courseIds = (patch.course_ids ?? paper.courseIds ?? []).map(String);
+      await this.validateTrainingRelations(manager, targetCategory, regulationIds, courseIds, true);
+      const oldMode = paper.mode;
+      if (patch.title !== undefined) paper.title = patch.title.trim();
+      if (patch.mode !== undefined) paper.mode = patch.mode;
+      paper.categoryId = targetCategory;
+      if (patch.requires_learning !== undefined) paper.requiresLearning = patch.requires_learning ? 1 : 0;
+      paper.regulationIds = regulationIds;
+      paper.courseIds = courseIds;
+      if (patch.pass_score !== undefined) paper.passScore = String(patch.pass_score);
+      if (patch.duration_minutes !== undefined) paper.durationMinutes = patch.duration_minutes;
+      if (patch.max_attempts !== undefined) paper.maxAttempts = patch.max_attempts;
+      if (patch.partial_credit_ratio !== undefined) paper.partialCreditRatio = String(patch.partial_credit_ratio);
+      const ruleInput = patch.rules || (paper.ruleConfig?.rules || []).map((item) => ({ ...item }));
+      paper.ruleConfig = this.trainingRule(paper, ruleInput, paper.mode === 'random');
+      if (oldMode !== paper.mode || String(current.categoryId) !== targetCategory) {
+        await manager.getRepository(PaperQuestion).delete({ paperId: String(id) });
+      }
+      return repo.save(paper);
+    });
+    this.audit.log({
+      actor_id: Number(actor.id), actor_name: actor.name, action: 'training_paper.update', object_type: 'exam_paper',
+      object_id: String(id), detail: patch as any, result: 'success', source_ip: ip,
+    });
+    return this.trainingPaperView(updated);
+  }
+
+  async setTrainingQuestions(id: string, items: FixedQuestionInput[], actor: PaperActor, ip: string | null) {
+    if (!items.length) throw Errors.paperRuleInvalid('固定试卷至少需要一道题');
+    if (new Set(items.map((item) => String(item.question_version_id))).size !== items.length) {
+      throw Errors.paperRuleInvalid('固定题单不能重复选择同一题目版本');
+    }
+    const totalCents = items.reduce((sum, item) => sum + Number(item.score_cents), 0);
+    if (totalCents !== 10000 || items.some((item) => !Number.isInteger(item.score_cents) || item.score_cents < 1)) {
+      throw Errors.paperRuleInvalid(`固定题单总分必须为 10000 分，当前为 ${totalCents}`);
+    }
+    const current = await this.paperRepo.findOne({ where: { id: String(id) } });
+    this.assertTrainingPaper(current);
+    if (current.status !== 'draft' || current.mode !== 'fixed') throw Errors.paperReleaseConflict('只有固定组卷草稿可以修改题单');
+    const categoryId = String(current.categoryId);
+    const result = await this.dataSource.transaction(async (manager) => {
+      await this.categories.lockActive(manager, categoryId);
+      const paperRepo = manager.getRepository(ExamPaper);
+      const paper = await paperRepo.findOne({ where: { id: String(id) }, lock: { mode: 'pessimistic_write' } });
+      this.assertTrainingPaper(paper);
+      if (paper.status !== 'draft' || paper.mode !== 'fixed') throw Errors.paperReleaseConflict('只有固定组卷草稿可以修改题单');
+      const versionIds = items.map((item) => String(item.question_version_id));
+      const versions = await manager.getRepository(QuestionVersion).findBy({ id: In(versionIds) });
+      if (versions.length !== versionIds.length) throw Errors.paperRuleInvalid('固定题单包含不存在的题目版本');
+      const versionMap = new Map(versions.map((item) => [String(item.id), item]));
+      const questionIds = versions.map((item) => String(item.questionId));
+      const questions = await manager.getRepository(Question).findBy({ id: In(questionIds) });
+      const questionMap = new Map(questions.map((item) => [String(item.id), item]));
+      const regulationIds = new Set((paper.regulationIds || []).map(String));
+      const concepts = new Set<string>();
+      const rows: PaperQuestion[] = [];
+      const groupedRules = new Map<string, PoolRule>();
+      for (let index = 0; index < items.length; index += 1) {
+        const input = items[index];
+        const version = versionMap.get(String(input.question_version_id));
+        const question = version && questionMap.get(String(version.questionId));
+        if (!version || !question || version.status !== 'approved' || String(question.currentVersionId) !== String(version.id)) {
+          throw Errors.paperReleaseConflict(`题目版本 ${input.question_version_id} 已不是当前审核通过版本`);
+        }
+        if (String(version.categoryId) !== categoryId) throw Errors.paperRuleInvalid('固定题目必须与试卷属于同一培训类别');
+        if (regulationIds.size && (!version.regulationId || !regulationIds.has(String(version.regulationId)))) {
+          throw Errors.paperRuleInvalid('固定题目不在试卷制度筛选范围内');
+        }
+        const conceptKey = version.conceptId ? `concept:${version.conceptId}` : `question:${version.questionId}`;
+        if (concepts.has(conceptKey)) throw Errors.paperRuleInvalid('固定题单存在重复考点');
+        concepts.add(conceptKey);
+        rows.push(manager.getRepository(PaperQuestion).create({
+          paperId: String(id), questionId: String(version.questionId), questionVersionId: String(version.id),
+          conceptId: version.conceptId ? String(version.conceptId) : null, sort: index,
+          score: (Number(input.score_cents) / 100).toFixed(2),
+        }));
+        const ruleKey = `${version.type}:${input.score_cents}`;
+        const grouped = groupedRules.get(ruleKey);
+        if (grouped) grouped.count += 1;
+        else groupedRules.set(ruleKey, { type: version.type as QuestionType, count: 1, scoreCents: input.score_cents });
+      }
+      const repo = manager.getRepository(PaperQuestion);
+      await repo.delete({ paperId: String(id) });
+      await repo.save(rows);
+      paper.ruleConfig = this.trainingRule(paper, [...groupedRules.values()], true, false);
+      await paperRepo.save(paper);
+      return {
+        ...this.trainingPaperView(paper),
+        sum_score_cents: totalCents,
+        questions: rows.map((row) => ({
+          question_id: String(row.questionId), question_version_id: String(row.questionVersionId),
+          concept_id: row.conceptId, sort: row.sort, score_cents: Math.round(Number(row.score) * 100),
+        })),
+      };
+    });
+    this.audit.log({
+      actor_id: Number(actor.id), actor_name: actor.name, action: 'training_paper.questions.set', object_type: 'exam_paper',
+      object_id: String(id), detail: { count: items.length }, result: 'success', source_ip: ip,
+    });
+    return result;
+  }
+
+  async trainingCandidates(id: string, query: { type?: QuestionType; difficulty?: Difficulty; page?: number; page_size?: number }) {
+    const paper = await this.paperRepo.findOne({ where: { id: String(id) } });
+    this.assertTrainingPaper(paper);
+    if (!paper.categoryId) throw Errors.paperRuleInvalid('培训试卷缺少培训类别');
+    const types = query.type ? [query.type] : ['single', 'multiple', 'judgment', 'image'] as QuestionType[];
+    const difficulties = query.difficulty ? [query.difficulty] : ['easy', 'medium', 'hard'] as Difficulty[];
+    const regulationIds = (paper.regulationIds || []).map(String);
+    const snapshots: QuestionVersionSnapshot[] = [];
+    for (const difficulty of difficulties) {
+      for (const type of types) {
+        snapshots.push(...await this.versions.approvedCandidates({
+          categoryId: String(paper.categoryId), type, difficulty,
+          ...(regulationIds.length ? { regulationIds } : {}),
+        }));
+      }
+    }
+    const unique = [...new Map(snapshots.map((item) => [String(item.versionId), item])).values()];
+    unique.sort((left, right) => Number(BigInt(right.versionId) - BigInt(left.versionId)));
+    const page = Math.max(1, Number(query.page || 1));
+    const pageSize = Math.min(100, Math.max(1, Number(query.page_size || 20)));
+    const items = unique.slice((page - 1) * pageSize, page * pageSize).map((item) => ({
+      question_id: String(item.questionId), question_version_id: String(item.versionId), revision: item.revision,
+      category_id: String(item.categoryId), difficulty: item.difficulty, type: item.type, stem: item.stem,
+      options: cloneJson(item.options), score_cents: Number(item.scoreCents), concept_id: item.conceptId || null,
+      regulation_id: item.regulationId || null, source: item.source,
+    }));
+    return { items, total: unique.length, page, page_size: pageSize };
+  }
+
+  async regulationOptions(categoryId: string, page = 1, pageSize = 100) {
+    const safePage = Math.max(1, Number(page || 1));
+    const safeSize = Math.min(100, Math.max(1, Number(pageSize || 100)));
+    await this.categories.assertActive(String(categoryId));
+    const qb = this.regulationRepo.createQueryBuilder('regulation')
+      .where('regulation.category_id = :categoryId', { categoryId: String(categoryId) })
+      .orderBy('regulation.id', 'DESC');
+    const [rows, total] = await qb.skip((safePage - 1) * safeSize).take(safeSize).getManyAndCount();
+    return {
+      items: rows.map((item) => ({ id: String(item.id), title: item.title, status: item.status })),
+      total, page: safePage, page_size: safeSize,
+    };
+  }
+
+  async courseOptions(categoryId: string, page = 1, pageSize = 100) {
+    const safePage = Math.max(1, Number(page || 1));
+    const safeSize = Math.min(100, Math.max(1, Number(pageSize || 100)));
+    await this.categories.assertActive(String(categoryId));
+    const qb = this.courseRepo.createQueryBuilder('course')
+      .where('course.category_id = :categoryId', { categoryId: String(categoryId) })
+      .orderBy('course.id', 'DESC');
+    const [rows, total] = await qb.skip((safePage - 1) * safeSize).take(safeSize).getManyAndCount();
+    return {
+      items: rows.map((item) => ({ id: String(item.id), title: item.title, status: item.status })),
+      total, page: safePage, page_size: safeSize,
+    };
+  }
+
+  async copyTraining(id: string, actor: PaperActor, ip: string | null) {
+    const source = await this.paperRepo.findOne({ where: { id: String(id) } });
+    this.assertTrainingPaper(source);
+    if (!source.categoryId) throw Errors.paperRuleInvalid('培训试卷缺少培训类别');
+    const copy = await this.dataSource.transaction(async (manager) => {
+      await this.categories.lockActive(manager, String(source.categoryId));
+      const paperRepo = manager.getRepository(ExamPaper);
+      const locked = await paperRepo.findOne({ where: { id: String(id) }, lock: { mode: 'pessimistic_read' } });
+      this.assertTrainingPaper(locked);
+      const created = await paperRepo.save(paperRepo.create({
+        regulationId: null, businessScope: 'training', mode: locked.mode, categoryId: locked.categoryId,
+        requiresLearning: locked.requiresLearning, regulationIds: cloneJson(locked.regulationIds || []),
+        courseIds: cloneJson(locked.courseIds || []), ruleConfig: locked.ruleConfig ? cloneJson(locked.ruleConfig) : null,
+        title: `${locked.title}（副本）`, totalScore: locked.totalScore, passScore: locked.passScore,
+        durationMinutes: locked.durationMinutes, maxAttempts: locked.maxAttempts,
+        partialCreditRatio: locked.partialCreditRatio, status: 'draft', createdBy: String(actor.id),
+      }));
+      const links = await manager.getRepository(PaperQuestion).find({ where: { paperId: String(id) }, order: { sort: 'ASC', id: 'ASC' } });
+      if (links.length) await manager.getRepository(PaperQuestion).save(links.map((item) => manager.getRepository(PaperQuestion).create({
+        paperId: String(created.id), questionId: item.questionId, questionVersionId: item.questionVersionId,
+        conceptId: item.conceptId, sort: item.sort, score: item.score,
+      })));
+      return created;
+    });
+    this.audit.log({
+      actor_id: Number(actor.id), actor_name: actor.name, action: 'training_paper.copy', object_type: 'exam_paper',
+      object_id: String(copy.id), detail: { source_paper_id: String(id) }, result: 'success', source_ip: ip,
+    });
+    return this.trainingPaperView(copy);
+  }
+
+  private async transitionTraining(
+    id: string,
+    actor: PaperActor,
+    ip: string | null,
+    action: 'withdraw' | 'archive',
+  ) {
+    const paper = await this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(ExamPaper);
+      const locked = await repo.findOne({ where: { id: String(id) }, lock: { mode: 'pessimistic_write' } });
+      this.assertTrainingPaper(locked);
+      if (action === 'withdraw' && locked.status !== 'published') throw Errors.paperReleaseConflict('只有已发布试卷可以撤回');
+      if (locked.status === 'archived') return locked;
+      locked.status = action === 'withdraw' ? 'withdrawn' : 'archived';
+      return repo.save(locked);
+    });
+    this.audit.log({
+      actor_id: Number(actor.id), actor_name: actor.name, action: `training_paper.${action}`, object_type: 'exam_paper',
+      object_id: String(id), detail: {}, result: 'success', source_ip: ip,
+    });
+    return this.trainingPaperView(paper);
+  }
+
+  withdrawTraining(id: string, actor: PaperActor, ip: string | null) {
+    return this.transitionTraining(id, actor, ip, 'withdraw');
+  }
+
+  archiveTraining(id: string, actor: PaperActor, ip: string | null) {
+    return this.transitionTraining(id, actor, ip, 'archive');
+  }
+
   async findById(id: string) {
     return this.paperRepo.findOne({ where: { id } });
   }
 
   async findPublishedByRegulation(regulationId: string) {
-    return this.paperRepo.findOne({ where: { regulationId, status: PaperStatus.PUBLISHED } });
+    return this.paperRepo.findOne({ where: { regulationId, status: PaperStatus.PUBLISHED, businessScope: 'regulation' } });
   }
 }

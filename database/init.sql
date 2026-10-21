@@ -325,7 +325,14 @@ CREATE TABLE IF NOT EXISTS `question_version` (
 
 CREATE TABLE IF NOT EXISTS `exam_paper` (
   `id`                   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `regulation_id`        BIGINT UNSIGNED NOT NULL COMMENT '所属制度',
+  `regulation_id`        BIGINT UNSIGNED NULL COMMENT '制度专项卷所属制度；培训卷为 NULL',
+  `business_scope`       VARCHAR(16) NOT NULL DEFAULT 'regulation' COMMENT 'regulation / training',
+  `mode`                 VARCHAR(16) NOT NULL DEFAULT 'fixed' COMMENT 'fixed / random',
+  `category_id`          BIGINT UNSIGNED NULL COMMENT '培训卷类别；制度专项卷为 NULL',
+  `requires_learning`    TINYINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '培训卷默认 0；制度专项卷保持 1',
+  `regulation_ids`       JSON NULL COMMENT '培训卷可选制度筛选；空数组表示不过滤',
+  `course_ids`           JSON NULL COMMENT '课程说明关联，不参与抽题过滤',
+  `rule_config`          JSON NULL COMMENT '草稿题型、题量与整数分配置',
   `title`                VARCHAR(128) NOT NULL COMMENT '试卷标题',
   `total_score`          DECIMAL(5,2) NOT NULL DEFAULT 100.00 COMMENT '总分，固定 100 分制',
   `pass_score`           DECIMAL(5,2) NOT NULL DEFAULT 60.00 COMMENT '及格线（(0,100]）',
@@ -337,19 +344,58 @@ CREATE TABLE IF NOT EXISTS `exam_paper` (
   `created_at`           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at`           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
-  KEY `idx_regulation_status` (`regulation_id`, `status`)
+  KEY `idx_regulation_status` (`regulation_id`, `status`),
+  KEY `idx_paper_training_pool` (`category_id`, `business_scope`, `mode`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='试卷';
 
 CREATE TABLE IF NOT EXISTS `paper_question` (
   `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `paper_id`    BIGINT UNSIGNED NOT NULL COMMENT '试卷',
   `question_id` BIGINT UNSIGNED NOT NULL COMMENT '题目',
+  `question_version_id` BIGINT UNSIGNED NULL COMMENT '培训固定卷选定的当前审核版本；legacy 为 NULL',
+  `concept_id` BIGINT UNSIGNED NULL COMMENT '发布前重复考点校验快照',
   `sort`        INT          NOT NULL DEFAULT 0 COMMENT '组卷顺序（乱序基准）',
   `score`       DECIMAL(5,2) NOT NULL COMMENT '本题在本试卷中的分值',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_paper_question` (`paper_id`, `question_id`),
-  KEY `idx_question` (`question_id`)
+  KEY `idx_question` (`question_id`),
+  KEY `idx_paper_question_version` (`question_version_id`),
+  KEY `idx_paper_question_concept` (`concept_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='试卷-题目关联';
+
+CREATE TABLE IF NOT EXISTS `paper_release` (
+  `id`                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `paper_id`          BIGINT UNSIGNED NOT NULL,
+  `version_no`        INT UNSIGNED NOT NULL,
+  `business_scope`    VARCHAR(16) NOT NULL,
+  `mode`              VARCHAR(16) NOT NULL,
+  `category_id`       BIGINT UNSIGNED NULL,
+  `requires_learning` TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  `rule_snapshot`     JSON NOT NULL,
+  `regulation_ids`    JSON NULL,
+  `course_ids`        JSON NULL,
+  `created_by`        BIGINT UNSIGNED NOT NULL,
+  `released_at`       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_paper_release_version` (`paper_id`, `version_no`),
+  KEY `idx_paper_release_category` (`category_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='不可变试卷发布版本';
+
+CREATE TABLE IF NOT EXISTS `paper_release_question` (
+  `id`                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `release_id`          BIGINT UNSIGNED NOT NULL,
+  `question_id`         BIGINT UNSIGNED NOT NULL,
+  `question_version_id` BIGINT UNSIGNED NOT NULL,
+  `concept_id`          BIGINT UNSIGNED NULL,
+  `type`                VARCHAR(16) NOT NULL,
+  `difficulty`          VARCHAR(16) NOT NULL,
+  `score_cents`         INT UNSIGNED NOT NULL,
+  `position`            INT UNSIGNED NOT NULL DEFAULT 0,
+  `snapshot_json`       JSON NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_release_question_version` (`release_id`, `question_version_id`),
+  KEY `idx_release_question_pool` (`release_id`, `difficulty`, `type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='发布时冻结的候选题版本与实际分值';
 
 CREATE TABLE IF NOT EXISTS `exam_record` (
   `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

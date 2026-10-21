@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训类别/学员/本人资料、A3 权限/会话、A4 受控媒体、A5 后台公共配置、B1 课程主体与 B3 四题型版本题库接口均以实际 controller/entity/migration 为准。A5 系统配置页已完成独立审查与有界 PC 验证，但不代表开发库/生产库已升级；B1 final 已接入真实 `/me/home`、课程菜单/路由和 Courses/CourseDetail 分区未保存保护，真实课程 PC 验收仍由 root 统一执行；B3 编辑器接线和真实 PC 由其 final owner 收口。B2 视频进度、B4 题库导入、C1 发布/个人题单及后续草稿、阅卷、监控和统计仍未实现。所有接口继续使用 `/api/v1`、`{code,message,data}`、严格 DTO/未知字段拒绝、所有权校验和 HttpOnly refresh Cookie；私有媒体与公开品牌内容流例外跳过信封。
+> **状态边界（2026-10-21）**：本册 legacy 接口与 A2—A5、B1/B3 增量继续以实际 controller/entity/migration 为准。C1 已新增独立 `/admin/papers` 培训固定/随机配置、预览、发布快照、复制、撤回/归档接口；旧 `/ai/papers` 的数字 ID、`list` 形状、制度门槛和单/多选限制不变。C2 个人题单及培训开考未实现，当前旧开考入口对 training 卷明确返回 40402。PC 交互验收仍由 root 收口，源码登记不代表开发库/生产库已升级。
 
 ---
 
@@ -88,8 +88,8 @@
 | API 范围 | 文档状态 | 规则 |
 |---|---|---|
 | `/auth`、`/users`、`/departments`、`/regulations`、`/ai`、`/learning`、旧 `/exams`、旧 `/statistics` | 当前 legacy 契约 | 旧制度阅读资格、旧固定卷字段与自动客观评分保持兼容；下发不含答案/解析，refresh 走 HttpOnly Cookie，DTO/统一信封不变 |
-| `/admin/training-categories`、`/admin/students`、`/me`、`/admin` 权限/会话/系统配置、`/media`、`/site-config`、B1 课程/视频内容版本、B3 四题型题库版本 | 当前增量契约（A2—A5/B1/B3） | A5 DTO、权限与公开白名单按实际 controller/service；B1/B3 使用字符串 ID 与 `Page.items`，课程不提前承载 B2 视频进度，题目 revision 不冒充发布或个人题单快照 |
-| 视频进度、题库导入、发布快照、个人题单、持久草稿、图片答案/阅卷、监控、培训统计 | 计划契约（B2/B4/C1—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后才补精确契约，不由 B1/B3 提前制造学习、发布或考试快照 |
+| `/admin/training-categories`、`/admin/students`、`/me`、`/admin`、`/media`、`/site-config`、B1 课程、B3 版本题库与 C1 `/admin/papers` | 当前增量契约（A2—A5/B1/B3/C1） | 新接口使用字符串 ID 与 `Page.items`；C1 只冻结发布规则/候选版本，不冒充 C2 个人题单 |
+| 视频进度、题库导入、个人题单、持久草稿、图片答案/阅卷、监控、培训统计 | 计划契约（B2/B4/C2—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后才补精确契约 |
 | 旧固定卷 vs 新培训考试开考 | 两条口径并存 | 旧固定卷继续检查 `learning_record.is_valid`；新培训考试默认关闭学习门槛，但仍检查发布、类别/来源、权限、次数、身份状态和服务端 deadline |
 
 目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 客观题自动判分/图片题待阅 → 受控逐题评分 → 服务端汇总 → 最终结果只读。具体字段由 C1—C4 落地后补入，不能让旧 `/exams` 响应提前承载两套不兼容语义。
@@ -98,7 +98,7 @@
 
 ## 2. 模块与路由总览
 
-当前 legacy 基线与 A2—A5、B1、B3 增量路由均使用同一 `/api/v1` 前缀。下表的数量按当前 controller HTTP 方法装饰器机械盘点：
+当前 legacy 基线与 A2—A5、B1、B3、C1 增量路由均使用同一 `/api/v1` 前缀。下表的数量按当前 controller HTTP 方法装饰器机械盘点：
 
 | 路由前缀 | 所属模块（固定名称） | 接口数 | 说明 |
 |---|---|---|---|
@@ -113,6 +113,7 @@
 | /departments | 1. 组织权限模块 | 6 | 部门树、CRUD、层级调整与启停 |
 | /regulations | 2. 制度文件管理模块 | 18 | 制度 CRUD、版本/文件读取、管理端预览、范围与学习要求配置、发布、阅读内容及写权限类别选项 |
 | /admin/courses | 4. 学习行为管控模块（B1 内容侧） | 14 | 课程、章节、视频课时、不可变内容版本、上架/下架与类别选项 |
+| /admin/papers | 3. AI 出题/试卷发布模块（C1） | 15 | 培训固定/随机卷配置、候选、预览、发布快照、复制、撤回与归档 |
 | /me/courses | 4. 学习行为管控模块（B1 内容侧） | 2 | 本人同类别已上架课程分页与目录；external 默认空 |
 | /ai | 3. AI 出题模块 | 26 | AI 配置/任务、B3 类别与考点窄选项、四题型版本审核、人工录入、试卷管理与组卷 |
 | /learning | 4. 学习行为管控模块 | 7 | 学习列表、会话生命周期、心跳、进度 |
@@ -120,7 +121,7 @@
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**按当前 controller HTTP 方法装饰器机械盘点，合计 153 个接口（152 个业务接口 + 1 个健康检查），其中 `/regulations` 18 个、`/ai` 26 个、B1 课程/首页 17 个、A5 `/admin` 14 个与 `/site-config` 2 个；私有媒体与公开品牌内容流不包统一信封。**
+**按当前 controller HTTP 方法装饰器机械盘点，合计 168 个接口（167 个业务接口 + 1 个健康检查）；C1 `/admin/papers` 新增 15 个。私有媒体与公开品牌内容流不包统一信封。**
 
 ---
 
@@ -410,11 +411,41 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 **扫描 PDF 来源定位**：视觉批次把程序实际调用的 `source_page_group/source_page_start/source_page_end` 写入 revision。单题重生成只渲染该页组；PDF 只有一个页组时可确定为 group 0，多页组 legacy revision 缺少定位时返回明确参数错误，不回退第一页、不依据模型声明伪造来源。
 
-**候选服务边界**：内部 `approvedCandidates({categoryId,regulationIds?,type,difficulty})` 只返回 current revision 且 approved 的不可变快照。本接口不创建发布快照或个人考试题单；C1/C2 必须冻结 versionId 后再发布/开考。
+**候选服务边界**：内部 `approvedCandidates({categoryId,regulationIds?,type,difficulty})` 只返回 current revision 且 approved 的不可变快照。C1 `PaperReleaseService` 已消费该快照并冻结 versionId；该候选方法本身仍不创建发布或 C2 个人题单。
 
-**PUT /ai/papers/{id}/questions**：入卷校验——题目 `status = approved`、`question.regulation_id` 与试卷一致、同卷不重复（uk_paper_question 兜底，05 册 4.4.7）。legacy 固定卷的乱序与自动评分当前只支持 single/multiple，因此选题、发布、开考三个边界都拒绝 judgment/image；题目一旦被任一 `paper_question` 引用，类型变更返回 40908。此限制不代表 C1/C2 新发布链已实现。
+**PUT /ai/papers/{id}/questions**：入卷校验——题目 `status = approved`、`question.regulation_id` 与试卷一致、同卷不重复（uk_paper_question 兜底，05 册 4.4.7）。legacy 固定卷的乱序与自动评分当前只支持 single/multiple，因此选题、发布、开考三个边界都拒绝 judgment/image；题目一旦被任一 `paper_question` 引用，类型变更返回 40908。C1 四题型培训卷只经 `/admin/papers` 新链路，不通过放宽 legacy guard 实现。
 
 **发布后策略可调边界**（05 册 4.4.7 生效边界表）：`paper_question`（题目组成与分值）发布后锁定；`pass_score` / `partial_credit_ratio` 判分时实时读取；`duration_minutes` / `max_attempts` 对后续发起生效。
+
+#### 3.5.1 培训试卷与不可变发布 /admin/papers（C1）
+
+本节与上述 legacy `/ai/papers` 并存，不改写其 ID 类型、分页形状或学习门槛。下表 ID 均为正十进制字符串：
+
+| # | 方法 | 路径 | 权限与语义 |
+|---|---|---|---|
+| 1 | GET | /admin/papers/category-options | `papers:read`；启用类别 `Page<{id,name}>` |
+| 2 | GET | /admin/papers/regulation-options | `papers:read`；必传 category_id，只返回同类别制度 |
+| 3 | GET | /admin/papers/course-options | `papers:read`；必传 category_id，课程仅作说明关联 |
+| 4 | GET | /admin/papers | `papers:read`；按 keyword/category_id/mode/status 分页，返回 `Page.items` |
+| 5 | POST | /admin/papers | `papers:write`；创建 training 草稿，默认 requires_learning=false |
+| 6 | GET | /admin/papers/{id} | `papers:read`；配置、固定题单及 latest_release_id |
+| 7 | PUT | /admin/papers/{id} | `papers:write`；只允许 draft，发布后返回 40970 |
+| 8 | GET | /admin/papers/{id}/candidates | `papers:write`；当前 approved revision，可按 type/difficulty 筛选 |
+| 9 | PUT | /admin/papers/{id}/questions | `papers:write`；全量替换固定题单 |
+| 10 | GET | /admin/papers/{id}/preview | `papers:read`；不返回 answer/analysis/rubric |
+| 11 | GET | /admin/papers/{id}/preview/answers | `papers:read` 且还需 `papers:export` / `questions:read` / `questions:export` 之一；答案版 |
+| 12 | POST | /admin/papers/{id}/publish | `papers:publish`；冻结发布版本，返回 `{release_id}` |
+| 13 | POST | /admin/papers/{id}/copy | `papers:write`；复制配置/固定题单为新 draft |
+| 14 | POST | /admin/papers/{id}/withdraw | `papers:publish`；published → withdrawn，保留快照 |
+| 15 | POST | /admin/papers/{id}/archive | `papers:publish`；published/withdrawn → archived，保留快照 |
+
+**创建/修改 DTO**：`title/mode/category_id` 为核心字段；`regulation_ids/course_ids` 是去重字符串 ID 数组；`requires_learning` 可选且默认 false；`pass_score/duration_minutes/max_attempts/partial_credit_ratio` 默认 60/30/3/0.5。随机卷 `rules=[{type,count,score_cents}]` 必须题型唯一且 `Σ(count×score_cents)=10000`；固定题单 `items=[{question_version_id,score_cents}]` 同样合计 10000。未知 body/query 字段一律 40001。
+
+**发布硬校验**：候选只取同培训类别、当前 approved revision、题型/难度精确匹配，制度集合可选；未选制度时无制度来源的人工/导入题可入池。课程 ID 不参与题池过滤。随机卷初级与高级两池都按 `concept_id ?? question_id` 计数，任一题型容量不足返回 40971 与 deficits；固定卷可用中级、同类别跨制度题，但禁止重复考点。
+
+**预览契约**：共通字段为 `paper_id/release_id/mode/sample_kind/note/difficulty/rule/capacities/questions`。`rule` 使用 snake_case：`total_cents/pass_cents/duration_minutes/max_attempts/partial_credit_ratio/rules[].score_cents`。固定卷 `sample_kind=fixed_paper`、`capacities=[]`；随机卷 `sample_kind=random_example`，显示初/高两池各题型 `required/available` 及选定难度的一次样例，`note` 必须明示“样例不代表所有考生同卷”。已发布/撤回/归档均读不可变 release，不回读题库当前内容。
+
+**C1/C2 边界**：C1 不新增学员开考或个人题单 API。`POST /exams/papers/{id}/start` 暂不接受 `business_scope=training` 或空 regulation_id，返回 40402；legacy 资格守卫、固定题型限制与原响应形状保留。
 
 ### 3.6 学习模块 /learning（权限：员工，数据范围自动收口为本人）
 
@@ -890,13 +921,16 @@ PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可�
 | 40907 | 409 | 题目组成不可变更 | 修改已发布试卷的 paper_question |
 | 40908 | 409 | 题目正在考试中使用，禁止编辑 | 题目被 in_progress 考试记录引用时修改 stem/options/answer/type（仅允许 analysis，05 册 4.4.6） |
 | 40909 | 409 | AI 服务未配置或配置不完整 | 未配置 base_url/api_key/model 即发起出题或连通性测试（FR-AIQ-01 验收③） |
-| 40910 | 409 | 培训类别不存在或已停用 | 学员/导入/课程/制度/题目/考点写入引用不存在或已停用类别；删除仍被学员、课程、制度、题目/版本或考点引用的类别 |
+| 40910 | 409 | 培训类别不存在或已停用 | 学员/课程/制度/题库/试卷写入引用不存在或已停用类别；删除仍被 `exam_paper` 或 `paper_release` 等任一事实引用的类别 |
 | 40911 | 409 | 导入批次已确认，不能更换行集合 | 批次确认重试更换合法行集合，或确认事务正在处理 |
 | 40912 | 409 | 至少保留一名启用的超级管理员 | 尝试删除/停用/清空最高管理员保护权限 |
 | 40913 | 409 | 媒体仍被业务引用，不能删除 | `media_reference` 存在时删除媒体资源 |
 | 40920 | 409 | 系统配置仍被引用，不能删除 | 菜单存在子项/对应权限被角色引用，或固定业务字典尝试修改/删除 |
 | 40930 | 409 | 课程状态冲突 | 必学视频未就绪、已上架课程直接修改章节/课时结构，或视频资源缺少有效服务端时长 |
 | 40940 | 409 | 题目当前版本已变化或不存在 | 编辑/审核/重生成的显式 expected_version_id 与锁内 current_version_id 不一致，或 identity/current_version 指针损坏；不写新 revision，客户端刷新后重试 |
+| 40970 | 409 | 试卷发布状态已变化 | 非 draft 修改/发布、非 published 撤回，或锁内类别/模式与预读不一致 |
+| 40971 | 409 | 候选题池容量不足 | 随机卷初级或高级任一题型的不重复考点数小于 required；data.deficits 返回 type/required/available |
+| 40972 | 409 | 试卷规则不合法 | 总分非 10000、固定题存在重复考点/非当前审核版本/越类别或制度筛选，或随机题型规则非法 |
 | 42201 | 422 | 文件格式不支持 | 上传非 pdf/docx（含魔法数不符） |
 | 41601 | 416 | 请求的媒体范围无效 | `Range` 语法非法、多段范围或起止超出文件边界 |
 | 42202 | 422 | 文件超过大小上限 | 制度文件超过 50MB，或媒体图片/视频超过当前配置限制；Multer 拦截与业务层统一此码 |
@@ -929,6 +963,7 @@ PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可�
 | /departments | tree（登录） | — | — | 其余 5 个 |
 | /regulations | — | content | 类别选项需 regulations:write；其余管理路由按 regulations:read/write/publish | 同左 |
 | /admin/courses | — | — | 由业务角色显式授予 courses:read/write/publish | super_admin 天然拥有；类别 options 只需 courses:write |
+| /admin/papers | — | — | `papers:read/write/publish/export`；答案版需额外导出或题库读权限 | super_admin 天然拥有；学员来源不参与管理权限判定 |
 | /ai | — | — | 按细权限开放 | 26 个端点逐项使用 `ai:*`、`ai_config:*`、`questions:*`、`papers:*`；人工录题 writer 可通过 `question-category-options` / `question-concept-options` 取类别/考点，不要求 questions:read；不把全局权限守卫改成 OR |
 | /learning | — | 全部 7 个 | — | — |
 | /exams | — | 全部 8 个 | — | — |
@@ -951,11 +986,13 @@ PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可�
 | POST /admin/courses/{id}/publish | 上架与下架后重上架均重新校验类别和必学视频；发布中间态不对学员可见 | 课程行悲观锁 + 同事务 readiness 校验 |
 | POST /admin/courses/{id}/lessons/{lessonId}/versions | 同一课时版本号顺序追加，旧行不修改 | 课程/课时行悲观锁 + uk_lesson_version_number |
 | POST /ai/generate-questions | 同制度同时仅一个运行中任务 | Redis SETNX；category/difficulty 固定来自请求，source version 固定为发起时制度生效版本 |
+| POST /admin/papers/{id}/publish | 重复发布已 published 卷返回现有 release_id；并发发布只生成一个版次 | 先锁培训类别、再写锁 exam_paper；uk_paper_release_version 兜底 |
+| POST /admin/papers/{id}/withdraw/archive | 状态转移串行；只阻新开考且不删 release | exam_paper 行写锁；C2 开考将消费同一行锁 |
 
 ### 6.3 传输与敏感信息
 
 - 生产环境经 nginx TLS 终止提供 HTTPS（07 册 4.1）；密码仅在登录/改密报文中出现，存储一律 bcrypt。
-- 响应体永不返回 `password_hash`、`answer`、`analysis`（成绩回看除外）、`api_key`（掩码回显，07 册 4.2）。
+- 响应体永不返回 `password_hash`或明文 `api_key`。在考 payload 及 C1 普通预览不返回 `answer/analysis/rubric`；C1 答案版是单独授权的管理接口，不与学员下发契约共用。
 - `trace_id`：50001 错误响应 `data.trace_id` 供日志排查。
 - B3 题库管理预览可读取答案、解析与 rubric，但富文本图片只存 media id 并经 Bearer 鉴权内容接口换取 Blob URL，不暴露私有存储路径或任意外链图片。未来新培训在考 payload 不返回 `answer`、`analysis` 或 rubric；图片答案/阅卷仍由 C3/C4 落地。
 
@@ -965,8 +1002,8 @@ PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可�
 
 | 校验项 | 结果 |
 |---|---|
-| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；A2—A5、B1 与 B3 增量 `/admin/training-categories`、`/admin/students`、`/admin`、`/me`（含 `/me/home`）、`/media`、`/site-config`、`/admin/courses`、`/me/courses` 及 `/ai` 版本题库端点已由 entity/controller 同步落地；B1 课程菜单/路由与分区未保存接线已完成，B3 final 边界另行验收 |
-| 当前表名/字段名（snake_case）与 03 册 | 一致（含 A5 三张公共配置表、`regulation.category_id`、四张课程内容表、`question_concept`、`question_version` 与 question 兼容列）；新增字段以迁移/entity/API 同步为准 |
+| 当前路由前缀与 README 3.4 模块映射 | 一致；legacy 八大路由保留，C1 另增 `/admin/papers` 且不替换 `/ai/papers` |
+| 当前表名/字段名（snake_case）与 03 册 | 一致；包含 C1 `exam_paper/paper_question` 兼容列、`paper_release`、`paper_release_question` 与 HTTP 层 snake_case 预览规则 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
 | 心跳/失焦/乱序/超时/切屏行为与 05 册 | 一致（5.4.2/5.4.3/6.4.1~6.4.5 逐条对应） |
 | 统计口径与 05 册 7.4.1 | 一致（七项指标逐字对齐） |

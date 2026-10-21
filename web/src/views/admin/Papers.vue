@@ -3,112 +3,191 @@
     <div class="page-head">
       <div class="eyebrow">管理台</div>
       <h2>试卷管理</h2>
-      <p class="desc">设置及格线、限时与补考次数，从审核通过的题库中组卷发布</p>
-    </div>
-    <div class="toolbar">
-      <el-select v-model="query.regulation_id" placeholder="按制度筛选" clearable filterable style="width:260px" @change="load">
-        <el-option v-for="r in regulations" :key="r.id" :label="r.title" :value="r.id" />
-      </el-select>
-      <el-select v-model="query.status" placeholder="状态" clearable style="width:140px" @change="load">
-        <el-option label="草稿" value="draft" />
-        <el-option label="已发布" value="published" />
-        <el-option label="已归档" value="archived" />
-      </el-select>
-      <div style="flex:1" />
-      <el-button v-if="auth.can('papers:write')" type="primary" @click="createVisible = true">创建试卷</el-button>
+      <p class="desc">培训卷按发布版本冻结规则与题目内容；制度专项旧卷继续使用原接口与学习门槛。</p>
     </div>
 
-    <el-table v-loading="loading" :data="list">
-      <el-table-column prop="title" label="试卷" min-width="220" />
-      <el-table-column label="所属制度" min-width="180">
-        <template #default="{ row }">{{ regTitle(row.regulation_id) }}</template>
-      </el-table-column>
-      <el-table-column label="及格线 / 限时 / 补考" width="190">
-        <template #default="{ row }">{{ row.pass_score }} 分 · {{ row.duration_minutes }} 分钟 · {{ row.max_attempts }} 次</template>
-      </el-table-column>
-      <el-table-column prop="partial_credit_ratio" label="漏选部分分" width="100" />
-      <el-table-column label="状态" width="100">
-        <template #default="{ row }">
-          <el-tag :type="row.status === 'published' ? 'success' : row.status === 'draft' ? 'info' : 'warning'">
-            {{ ({ draft: '草稿', published: '已发布', archived: '已归档' } as any)[row.status] }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="100" fixed="right">
-        <template #default="{ row }">
-          <el-button size="small" type="primary" @click="$router.push(`/admin/papers/${row.id}`)">组卷</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
-    <el-pagination style="margin-top:16px; justify-content:flex-end" layout="total, prev, pager, next" :total="total"
-      :page-size="query.page_size" v-model:current-page="query.page" @current-change="load" />
+    <el-tabs v-model="activeScope" @tab-change="load">
+      <el-tab-pane label="培训考试" name="training" />
+      <el-tab-pane label="制度专项旧卷" name="regulation" />
+    </el-tabs>
 
-    <el-dialog v-model="createVisible" title="创建试卷" width="520px">
-      <el-form label-width="120px">
-        <el-form-item label="所属制度">
-          <el-select v-model="createForm.regulation_id" filterable style="width:100%">
-            <el-option v-for="r in regulations" :key="r.id" :label="r.title" :value="r.id" />
-          </el-select>
+    <template v-if="activeScope === 'training'">
+      <div class="toolbar">
+        <el-input v-model="trainingQuery.keyword" placeholder="试卷标题" clearable style="width:220px" @keyup.enter="searchTraining" />
+        <el-select v-model="trainingQuery.category_id" placeholder="培训类别" clearable style="width:180px" @change="searchTraining">
+          <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
+        </el-select>
+        <el-select v-model="trainingQuery.mode" placeholder="组卷模式" clearable style="width:140px" @change="searchTraining">
+          <el-option label="固定组卷" value="fixed" /><el-option label="随机组卷" value="random" />
+        </el-select>
+        <el-select v-model="trainingQuery.status" placeholder="状态" clearable style="width:140px" @change="searchTraining">
+          <el-option v-for="item in trainingStatuses" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+        <div style="flex:1" />
+        <el-button v-if="auth.can('papers:write')" type="primary" @click="openTrainingCreate">创建培训试卷</el-button>
+      </div>
+      <el-table v-loading="loading" :data="trainingItems">
+        <el-table-column prop="title" label="试卷" min-width="220" />
+        <el-table-column label="类别" min-width="150"><template #default="{ row }">{{ categoryName(row.category_id) }}</template></el-table-column>
+        <el-table-column label="模式" width="110"><template #default="{ row }">{{ row.mode === 'fixed' ? '固定组卷' : '随机组卷' }}</template></el-table-column>
+        <el-table-column label="规则" min-width="230"><template #default="{ row }">{{ ruleSummary(row) }}</template></el-table-column>
+        <el-table-column label="学习门槛" width="100"><template #default="{ row }">{{ row.requires_learning ? '开启' : '关闭' }}</template></el-table-column>
+        <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
+        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="openDetail(row.id, 'training')">配置</el-button></template></el-table-column>
+      </el-table>
+      <el-pagination class="pager" layout="total, prev, pager, next" :total="trainingTotal" :page-size="trainingQuery.page_size"
+        v-model:current-page="trainingQuery.page" @current-change="loadTraining" />
+    </template>
+
+    <template v-else>
+      <el-alert type="info" :closable="false" title="此处保留原制度固定卷：数字 ID、原列表结构、单/多选限制及制度学习门槛均不变。" style="margin-bottom:14px" />
+      <div class="toolbar">
+        <el-select v-model="legacyQuery.regulation_id" placeholder="按制度筛选" clearable filterable style="width:260px" @change="loadLegacy">
+          <el-option v-for="item in regulations" :key="item.id" :label="item.title" :value="item.id" />
+        </el-select>
+        <el-select v-model="legacyQuery.status" placeholder="状态" clearable style="width:140px" @change="loadLegacy">
+          <el-option label="草稿" value="draft" /><el-option label="已发布" value="published" /><el-option label="已归档" value="archived" />
+        </el-select>
+        <div style="flex:1" />
+        <el-button v-if="auth.can('papers:write')" type="primary" @click="legacyCreateVisible = true">创建制度专项卷</el-button>
+      </div>
+      <el-table v-loading="loading" :data="legacyItems">
+        <el-table-column prop="title" label="试卷" min-width="220" />
+        <el-table-column label="所属制度" min-width="180"><template #default="{ row }">{{ regulationName(row.regulation_id) }}</template></el-table-column>
+        <el-table-column label="及格线 / 限时 / 次数" min-width="220"><template #default="{ row }">{{ row.pass_score }} 分 · {{ row.duration_minutes }} 分钟 · {{ row.max_attempts }} 次</template></el-table-column>
+        <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
+        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="openDetail(row.id, 'regulation')">组卷</el-button></template></el-table-column>
+      </el-table>
+      <el-pagination class="pager" layout="total, prev, pager, next" :total="legacyTotal" :page-size="legacyQuery.page_size"
+        v-model:current-page="legacyQuery.page" @current-change="loadLegacy" />
+    </template>
+
+    <el-dialog v-model="trainingCreateVisible" title="创建培训试卷" width="720px" :before-close="beforeTrainingCreateClose">
+      <el-form label-width="120px" :disabled="creating">
+        <el-form-item label="试卷标题"><el-input v-model="trainingCreate.title" maxlength="128" /></el-form-item>
+        <el-form-item label="组卷模式"><el-radio-group v-model="trainingCreate.mode"><el-radio-button value="fixed">固定组卷</el-radio-button><el-radio-button value="random">随机组卷</el-radio-button></el-radio-group></el-form-item>
+        <el-form-item label="培训类别"><el-select v-model="trainingCreate.category_id" filterable style="width:100%" @change="loadCreateRelations"><el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+        <el-form-item label="制度筛选">
+          <el-select v-model="trainingCreate.regulation_ids" multiple filterable clearable style="width:100%"><el-option v-for="item in createRegulations" :key="item.id" :label="item.title" :value="item.id" /></el-select>
+          <div class="hint">留空时同类别内无制度来源的人工/导入题也可进入题池。</div>
         </el-form-item>
-        <el-form-item label="试卷标题"><el-input v-model="createForm.title" /></el-form-item>
-        <el-form-item label="及格线（0-100]"><el-input-number v-model="createForm.pass_score" :min="1" :max="100" /></el-form-item>
-        <el-form-item label="限时（分钟）"><el-input-number v-model="createForm.duration_minutes" :min="1" :max="300" /></el-form-item>
-        <el-form-item label="最大作答次数"><el-input-number v-model="createForm.max_attempts" :min="1" :max="10" /></el-form-item>
-        <el-form-item label="多选漏选部分分">
-          <el-input-number v-model="createForm.partial_credit_ratio" :min="0" :max="1" :step="0.1" />
-          <span style="color:#909399; font-size:12px; margin-left:8px">默认 0.50</span>
+        <el-form-item label="关联课程"><el-select v-model="trainingCreate.course_ids" multiple filterable clearable style="width:100%"><el-option v-for="item in createCourses" :key="item.id" :label="item.title" :value="item.id" /></el-select><div class="hint">课程仅说明覆盖范围，不参与抽题过滤。</div></el-form-item>
+        <el-form-item label="学习门槛"><el-switch v-model="trainingCreate.requires_learning" /><span class="hint inline">培训考试默认关闭。</span></el-form-item>
+        <el-form-item label="及格线 / 限时"><el-input-number v-model="trainingCreate.pass_score" :min="1" :max="100" /> <el-input-number v-model="trainingCreate.duration_minutes" :min="1" :max="1440" style="margin-left:12px" /></el-form-item>
+        <el-form-item label="次数 / 漏选比例"><el-input-number v-model="trainingCreate.max_attempts" :min="1" :max="100" /> <el-input-number v-model="trainingCreate.partial_credit_ratio" :min="0" :max="1" :step="0.1" style="margin-left:12px" /></el-form-item>
+        <el-form-item v-if="trainingCreate.mode === 'random'" label="随机规则">
+          <div class="rules"><div v-for="(rule, index) in trainingCreate.rules" :key="rule.type" class="rule-row"><span>{{ typeLabel(rule.type) }}</span><el-input-number v-model="rule.count" :min="1" /><el-input-number v-model="rule.score_cents" :min="1" :max="10000" /><span>整数分</span><el-button text type="danger" @click="trainingCreate.rules.splice(index, 1)">移除</el-button></div><el-button size="small" @click="addRule">添加题型规则</el-button><div class="hint">规则总分 {{ createRuleTotal / 100 }} / 100；随机固定本机构初级、外来高级。</div></div>
         </el-form-item>
       </el-form>
-      <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-          <el-button v-if="auth.can('papers:write')" type="primary" @click="onCreate">创建（草稿）</el-button>
-      </template>
+      <template #footer><el-button @click="closeTrainingCreate">取消</el-button><el-button type="primary" :loading="creating" @click="createTraining">创建草稿</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="legacyCreateVisible" title="创建制度专项旧卷" width="520px">
+      <el-form label-width="120px">
+        <el-form-item label="所属制度"><el-select v-model="legacyCreate.regulation_id" filterable style="width:100%"><el-option v-for="item in regulations" :key="item.id" :label="item.title" :value="item.id" /></el-select></el-form-item>
+        <el-form-item label="试卷标题"><el-input v-model="legacyCreate.title" /></el-form-item>
+        <el-form-item label="及格线"><el-input-number v-model="legacyCreate.pass_score" :min="1" :max="100" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="legacyCreateVisible = false">取消</el-button><el-button type="primary" @click="createLegacy">创建草稿</el-button></template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import { useRouter } from 'vue-router';
 import http from '../../api/http';
+import type { Id, Page, PaperMode, PaperRuleInput, QuestionType, TrainingPaperStatus, TrainingPaperSummary } from '../../api/training-types';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 
-const list = ref<any[]>([]);
+interface NamedOption { id: Id; name?: string; title?: string }
+interface TrainingCreateDraft {
+  title: string; mode: PaperMode; category_id: Id | ''; regulation_ids: Id[]; course_ids: Id[]; requires_learning: boolean;
+  pass_score: number; duration_minutes: number; max_attempts: number; partial_credit_ratio: number; rules: PaperRuleInput[];
+}
+
+const router = useRouter();
 const auth = useAuthStore();
-const total = ref(0);
+const activeScope = ref<'training' | 'regulation'>('training');
 const loading = ref(false);
-const regulations = ref<any[]>([]);
-const query = reactive<any>({ page: 1, page_size: 20, regulation_id: '', status: '' });
-const createVisible = ref(false);
-const createForm = reactive<any>({ regulation_id: '', title: '', pass_score: 60, duration_minutes: 30, max_attempts: 3, partial_credit_ratio: 0.5 });
+const creating = ref(false);
+const categories = ref<Array<{ id: Id; name: string }>>([]);
+const regulations = ref<Array<{ id: string | number; title: string }>>([]);
+const createRegulations = ref<NamedOption[]>([]);
+const createCourses = ref<NamedOption[]>([]);
+const trainingItems = ref<TrainingPaperSummary[]>([]);
+const trainingTotal = ref(0);
+const legacyItems = ref<any[]>([]);
+const legacyTotal = ref(0);
+const trainingQuery = reactive({ page: 1, page_size: 20, keyword: '', category_id: '', mode: '', status: '' });
+const legacyQuery = reactive({ page: 1, page_size: 20, regulation_id: '', status: '' });
+const trainingCreateVisible = ref(false);
+const legacyCreateVisible = ref(false);
+const trainingCreate = reactive<TrainingCreateDraft>(emptyTrainingCreate());
+const legacyCreate = reactive({ regulation_id: '', title: '', pass_score: 60, duration_minutes: 30, max_attempts: 3, partial_credit_ratio: 0.5 });
+const trainingCreateDirty = ref(false);
+let createBaseline = emptyTrainingCreate();
+let relationToken = 0;
+const createUnsaved = useUnsavedChanges(trainingCreateDirty, { onDiscard: discardTrainingCreate });
+const trainingStatuses = [
+  { value: 'draft', label: '草稿' }, { value: 'published', label: '已发布' },
+  { value: 'withdrawn', label: '已撤回' }, { value: 'archived', label: '已归档' },
+];
 
-function regTitle(id: number) {
-  return regulations.value.find((r) => r.id === id)?.title || '—';
+function emptyTrainingCreate(): TrainingCreateDraft { return { title: '', mode: 'fixed', category_id: '', regulation_ids: [], course_ids: [], requires_learning: false, pass_score: 60, duration_minutes: 30, max_attempts: 3, partial_credit_ratio: 0.5, rules: [{ type: 'single', count: 1, score_cents: 10000 }] }; }
+function snapshotCreate(): TrainingCreateDraft { return JSON.parse(JSON.stringify(trainingCreate)); }
+function discardTrainingCreate() { Object.assign(trainingCreate, JSON.parse(JSON.stringify(createBaseline))); trainingCreateDirty.value = false; trainingCreateVisible.value = false; }
+watch(trainingCreate, () => { if (trainingCreateVisible.value) trainingCreateDirty.value = JSON.stringify(snapshotCreate()) !== JSON.stringify(createBaseline); }, { deep: true });
+const createRuleTotal = computed(() => trainingCreate.rules.reduce((sum, item) => sum + item.count * item.score_cents, 0));
+
+function typeLabel(type: QuestionType) { return ({ single: '单选', multiple: '多选', judgment: '判断', image: '图片作答' })[type]; }
+function statusLabel(status: TrainingPaperStatus | string) { return ({ draft: '草稿', published: '已发布', withdrawn: '已撤回', archived: '已归档' } as Record<string, string>)[status] || status; }
+function statusType(status: TrainingPaperStatus | string) { return status === 'published' ? 'success' : status === 'draft' ? 'info' : 'warning'; }
+function categoryName(categoryId: Id) { return categories.value.find((item) => item.id === categoryId)?.name || `类别 ${categoryId}`; }
+function regulationName(regulationId: string | number) { return regulations.value.find((item) => String(item.id) === String(regulationId))?.title || `制度 ${regulationId}`; }
+function ruleSummary(row: TrainingPaperSummary) { return row.mode === 'fixed' ? '手选题单 · 发布时冻结' : row.rules.map((item) => `${typeLabel(item.type)} ${item.count}×${item.score_cents / 100}分`).join('；'); }
+function openDetail(id: Id | number, scope: 'training' | 'regulation') { void router.push({ path: `/admin/papers/${id}`, query: { scope } }); }
+function searchTraining() { trainingQuery.page = 1; void loadTraining(); }
+async function load() { if (activeScope.value === 'training') await loadTraining(); else await loadLegacy(); }
+async function loadTraining() { loading.value = true; try { const data = await http.get('/admin/papers', { params: trainingQuery }) as Page<TrainingPaperSummary>; trainingItems.value = data.items; trainingTotal.value = data.total; } finally { loading.value = false; } }
+async function loadLegacy() { loading.value = true; try { const data = await http.get('/ai/papers', { params: legacyQuery }) as any; legacyItems.value = data.list; legacyTotal.value = data.total; } finally { loading.value = false; } }
+async function loadOptions() {
+  if (auth.can('papers:read')) { const data = await http.get('/admin/papers/category-options', { params: { page: 1, page_size: 100 } }) as Page<{ id: Id; name: string }>; categories.value = data.items; }
+  if (auth.can('regulations:read')) { const data = await http.get('/regulations', { params: { page: 1, page_size: 100 } }) as any; regulations.value = data.list; }
 }
-
-async function load() {
-  loading.value = true;
-  try {
-    const d: any = await http.get('/ai/papers', { params: query });
-    list.value = d.list;
-    total.value = d.total;
-  } finally {
-    loading.value = false;
-  }
+async function loadCreateRelations() {
+  const token = ++relationToken; const categoryId = trainingCreate.category_id;
+  trainingCreate.regulation_ids = []; trainingCreate.course_ids = []; createRegulations.value = []; createCourses.value = [];
+  if (!categoryId) return;
+  const [regulationsPage, coursesPage] = await Promise.all([
+    http.get('/admin/papers/regulation-options', { params: { category_id: categoryId, page: 1, page_size: 100 } }) as Promise<Page<NamedOption>>,
+    http.get('/admin/papers/course-options', { params: { category_id: categoryId, page: 1, page_size: 100 } }) as Promise<Page<NamedOption>>,
+  ]);
+  if (token !== relationToken || trainingCreate.category_id !== categoryId) return;
+  createRegulations.value = regulationsPage.items; createCourses.value = coursesPage.items;
 }
-
-async function onCreate() {
-  // 后端 DTO 要求 id 为字符串（bigint 序列化口径），下拉绑定的是数字，提交前显式转换
-  const p: any = await http.post('/ai/papers', { ...createForm, regulation_id: String(createForm.regulation_id) });
-  ElMessage.success('试卷已创建（草稿），请前往组卷');
-  createVisible.value = false;
-  await load();
-  void p;
+function openTrainingCreate() { Object.assign(trainingCreate, emptyTrainingCreate(), { category_id: categories.value[0]?.id || '' }); createBaseline = snapshotCreate(); createUnsaved.markClean(); trainingCreateVisible.value = true; void loadCreateRelations(); }
+async function closeTrainingCreate() { if (await createUnsaved.confirmDiscard()) trainingCreateVisible.value = false; }
+async function beforeTrainingCreateClose(done: () => void) { if (await createUnsaved.confirmDiscard()) done(); }
+function addRule() { const used = new Set(trainingCreate.rules.map((item) => item.type)); const next = (['single', 'multiple', 'judgment', 'image'] as QuestionType[]).find((item) => !used.has(item)); if (next) trainingCreate.rules.push({ type: next, count: 1, score_cents: 1000 }); }
+async function createTraining() {
+  if (!trainingCreate.title.trim() || !trainingCreate.category_id) { ElMessage.warning('请填写标题并选择培训类别'); return; }
+  if (trainingCreate.mode === 'random' && createRuleTotal.value !== 10000) { ElMessage.warning('随机规则总分必须等于 100 分'); return; }
+  creating.value = true;
+  try { const created = await http.post('/admin/papers', snapshotCreate()) as TrainingPaperSummary; createUnsaved.markClean(); trainingCreateVisible.value = false; ElMessage.success('培训试卷草稿已创建'); openDetail(created.id, 'training'); }
+  finally { creating.value = false; }
 }
+async function createLegacy() { const created = await http.post('/ai/papers', { ...legacyCreate, regulation_id: String(legacyCreate.regulation_id) }) as any; legacyCreateVisible.value = false; ElMessage.success('制度专项卷草稿已创建'); openDetail(created.id, 'regulation'); }
 
-onMounted(async () => {
-  const d: any = await http.get('/regulations', { params: { page_size: 100 } });
-  regulations.value = d.list;
-  await load();
-});
+onMounted(async () => { await loadOptions(); await loadTraining(); });
 </script>
+
+<style scoped>
+.pager { margin-top:16px; justify-content:flex-end; }
+.hint { color:var(--el-text-color-secondary); font-size:12px; line-height:1.5; margin-top:4px; width:100%; }
+.hint.inline { margin-left:10px; width:auto; }
+.rules { width:100%; }
+.rule-row { display:grid; grid-template-columns:90px 120px 140px 60px 60px; align-items:center; gap:8px; margin-bottom:8px; }
+</style>

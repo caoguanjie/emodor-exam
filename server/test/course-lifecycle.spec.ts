@@ -14,6 +14,8 @@ import { TrainingCategory } from '../src/entities/training-category.entity';
 import { Question } from '../src/entities/question.entity';
 import { QuestionConcept } from '../src/entities/question-concept.entity';
 import { QuestionVersion } from '../src/entities/question-version.entity';
+import { ExamPaper } from '../src/entities/exam-paper.entity';
+import { PaperRelease } from '../src/entities/paper-release.entity';
 import { CategoryService } from '../src/modules/training/category.service';
 import { RegulationService } from '../src/modules/regulations/regulation.service';
 
@@ -56,6 +58,8 @@ const categoryReferenceCases = [
   ['a question', Question],
   ['a question version', QuestionVersion],
   ['a question concept', QuestionConcept],
+  ['a training paper', ExamPaper],
+  ['a published paper release', PaperRelease],
 ] as const;
 
 function categoryDeleteFixture(referencedEntity?: unknown) {
@@ -335,6 +339,8 @@ describe('course and regulation category references', () => {
       'count:Question',
       'count:QuestionConcept',
       'count:QuestionVersion',
+      'count:ExamPaper',
+      'count:PaperRelease',
     ]);
     expect(remove).toHaveBeenCalledWith(category);
   });
