@@ -47,7 +47,7 @@
       <el-pagination v-model:current-page="studentQuery.page" style="margin-top:16px; justify-content:flex-end" layout="total, prev, pager, next" :total="studentTotal" :page-size="studentQuery.page_size" @current-change="loadStudents" />
 
       <el-dialog v-model="studentDialog" :title="studentForm.id ? '编辑学员' : '新增学员'" width="500px" destroy-on-close>
-        <el-form label-width="88px">
+        <el-form label-width="88px" :disabled="studentSaveBusy">
           <el-form-item label="用户名"><el-input v-model="studentForm.username" :disabled="!!studentForm.id" maxlength="64" /></el-form-item>
           <el-form-item label="姓名"><el-input v-model="studentForm.real_name" maxlength="64" /></el-form-item>
           <el-form-item label="工号"><el-input v-model="studentForm.employee_no" maxlength="32" /></el-form-item>
@@ -58,7 +58,7 @@
           <el-form-item label="手机号"><el-input v-model="studentForm.phone" maxlength="20" /></el-form-item>
           <el-form-item label="邮箱"><el-input v-model="studentForm.email" maxlength="128" /></el-form-item>
           <el-form-item v-if="studentForm.id && auth.can('students:write')" label="头像">
-            <MediaUpload v-model="studentForm.avatar_id" purpose="avatar" :owner-id="String(studentForm.id)" :disabled="studentForm.status === 0" @update:model-value="onStudentAvatarChange" />
+            <MediaUpload v-model="studentForm.avatar_id" purpose="avatar" :owner-id="String(studentForm.id)" :disabled="studentForm.status === 0 || studentSaveBusy" @update:model-value="onStudentAvatarChange" />
             <el-alert
               v-if="studentAvatarSync.message"
               :title="studentAvatarSync.message"
@@ -67,12 +67,12 @@
               show-icon
             >
               <template #default>
-                <el-button v-if="studentAvatarSync.status === 'unknown'" link type="primary" @click="queryStudentAvatarState">查询头像状态</el-button>
+                <el-button v-if="studentAvatarSync.status === 'unknown'" link type="primary" :disabled="studentSaveBusy" @click="queryStudentAvatarState">查询头像状态</el-button>
               </template>
             </el-alert>
           </el-form-item>
         </el-form>
-        <template #footer><el-button @click="cancelStudentDialog">取消</el-button><el-button v-if="auth.can('students:write')" type="primary" @click="saveStudent">保存</el-button></template>
+        <template #footer><el-button @click="cancelStudentDialog">取消</el-button><el-button v-if="auth.can('students:write')" type="primary" :loading="studentSaveBusy" :disabled="studentSaveBusy" @click="saveStudent">保存</el-button></template>
       </el-dialog>
 
       <el-dialog v-model="previewVisible" title="导入预览" width="650px">
@@ -189,7 +189,7 @@ import ImportPreview from '../../components/ImportPreview.vue';
 import MediaUpload from '../../components/MediaUpload.vue';
 import type { ImportPreview as ImportPreviewData } from '../../api/training-types';
 import {
-  isStudentSaveContextCurrent,
+  isStudentSaveIdentityCurrent,
   normalizeAvatarId,
   reconcileStudentAvatar,
   runStudentSaveWorkflow,
@@ -223,6 +223,7 @@ const studentAvatarWritePending = ref(false);
 const studentAvatarSync = reactive<{ status: AvatarSyncStatus; message: string }>({ status: 'idle', message: '' });
 const studentAvatarDialogVersion = ref(0);
 const studentSaveInFlightKey = ref<string | null>(null);
+const studentSaveBusy = computed(() => studentSaveInFlightKey.value !== null);
 const studentQuery = reactive<any>({ page: 1, page_size: 20, keyword: '', category_id: '', source: '' });
 const studentImportDefaults = reactive<{ source: string; category_id: string }>({ source: '', category_id: '' });
 const studentPreview = ref<ImportPreviewData | null>(null);
@@ -335,7 +336,7 @@ async function reconcileStudentAvatarState(context: StudentSaveContext, closeOnA
     context.desiredId,
     (path) => http.get(path),
   );
-  if (!isStudentSaveContextCurrent(context, currentStudentSaveContext())) return 'stale';
+  if (!isStudentSaveIdentityCurrent(context, currentStudentSaveContext())) return 'stale';
   setStudentAvatarSync(result);
   if (result.outcome === 'applied') {
     ElMessage.success('头像已通过状态查询确认更新');

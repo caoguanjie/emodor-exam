@@ -192,3 +192,51 @@ test('keeps ordinary edits when unknown avatar state is confirmed applied', asyn
   assert.deepEqual(ordinaryDraft, { real_name: '新姓名', phone: '13800000000' });
   assert.equal(avatarWrites, 0);
 });
+
+test('keeps avatar certainty when the same dialog draft changes during an uncertain PUT', async () => {
+  const original = {
+    dialogVersion: 5,
+    studentId: '42',
+    desiredId: 'asset-new',
+    ordinary: { real_name: '原姓名' },
+  };
+  let current = original;
+  let rejectAvatar;
+  let avatarWrites = 0;
+  let retryOrdinaryWrites = 0;
+  const readPaths = [];
+  const readUnavailable = async (path) => {
+    readPaths.push(path);
+    throw new Error('student detail unavailable');
+  };
+
+  const firstSave = runStudentSaveWorkflow('pending', original, {
+    avatarChanged: true,
+    read: readUnavailable,
+    currentContext: () => current,
+    writeOrdinary: async () => undefined,
+    writeAvatar: async () => {
+      avatarWrites += 1;
+      await new Promise((_resolve, reject) => { rejectAvatar = reject; });
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  current = { ...original, ordinary: { real_name: '保存中修改的姓名' } };
+  rejectAvatar(new Error('avatar response lost'));
+
+  const firstResult = await firstSave;
+  assert.equal(firstResult.outcome, 'blocked');
+  assert.equal(firstResult.avatarResult?.outcome, 'unknown');
+
+  const retry = await runStudentSaveWorkflow(firstResult.avatarResult.outcome, current, {
+    avatarChanged: true,
+    read: readUnavailable,
+    currentContext: () => current,
+    writeOrdinary: async () => { retryOrdinaryWrites += 1; },
+    writeAvatar: async () => { avatarWrites += 1; },
+  });
+  assert.equal(retry.outcome, 'blocked');
+  assert.deepEqual(readPaths, ['/admin/students/42', '/admin/students/42']);
+  assert.equal(retryOrdinaryWrites, 0);
+  assert.equal(avatarWrites, 1);
+});

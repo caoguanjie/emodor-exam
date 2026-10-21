@@ -213,10 +213,11 @@ describe('media upload storage lifecycle', () => {
       });
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    let client: ReturnType<typeof httpRequest> | undefined;
     try {
       const address = server.address();
       if (!address || typeof address === 'string') throw new Error('server did not bind');
-      const client = httpRequest({
+      client = httpRequest({
         host: '127.0.0.1',
         port: address.port,
         method: 'POST',
@@ -232,8 +233,8 @@ describe('media upload storage lifecycle', () => {
       expect(callbackError).toBeInstanceOf(Error);
       await cleanup;
       await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
-      client.destroy();
     } finally {
+      client?.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });

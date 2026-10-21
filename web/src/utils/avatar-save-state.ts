@@ -135,27 +135,23 @@ export interface StudentSaveWorkflowResult {
   error?: unknown;
 }
 
-function sameOrdinaryDraft(expected: Record<string, unknown>, current: Record<string, unknown>): boolean {
-  const keys = new Set([...Object.keys(expected), ...Object.keys(current)]);
-  return [...keys].every((key) => expected[key] === current[key]);
-}
-
-export function isStudentSaveContextCurrent(
+export function isStudentSaveIdentityCurrent(
   expected: StudentSaveContext,
   current: StudentSaveContext | null,
 ): boolean {
   return !!current
     && expected.dialogVersion === current.dialogVersion
     && expected.studentId === current.studentId
-    && expected.desiredId === current.desiredId
-    && sameOrdinaryDraft(expected.ordinary, current.ordinary);
+    && expected.desiredId === current.desiredId;
 }
 
 /**
  * Execute the complete student save sequence against one frozen dialog
- * context. Every continuation checks the current context before mutating or
- * issuing the next write; a late avatar failure is reconciled against the
- * original student id rather than whichever dialog is currently visible.
+ * context. Every continuation checks the dialog/student/avatar identity before
+ * mutating or issuing the next write. Ordinary draft edits do not erase the
+ * certainty of a write already sent for that identity. A late avatar failure
+ * is reconciled against the original student id rather than whichever dialog
+ * is currently visible.
  */
 export async function runStudentSaveWorkflow(
   status: AvatarSyncStatus,
@@ -185,7 +181,7 @@ export async function runStudentSaveWorkflow(
       },
     );
     avatarResult = preflight.result || undefined;
-    if (preflight.action === 'stale' || !isStudentSaveContextCurrent(context, options.currentContext())) {
+    if (preflight.action === 'stale' || !isStudentSaveIdentityCurrent(context, options.currentContext())) {
       return { outcome: 'stale', avatarResult };
     }
     if (preflight.action === 'blocked') return { outcome: 'blocked', avatarResult };
@@ -195,7 +191,7 @@ export async function runStudentSaveWorkflow(
   }
 
   await options.writeOrdinary(context.ordinary);
-  if (!isStudentSaveContextCurrent(context, options.currentContext())) return { outcome: 'stale', avatarResult };
+  if (!isStudentSaveIdentityCurrent(context, options.currentContext())) return { outcome: 'stale', avatarResult };
 
   if (avatarChanged) {
     try {
@@ -206,13 +202,13 @@ export async function runStudentSaveWorkflow(
       const reconciled = context.studentId === null
         ? unknownResult(context.desiredId)
         : await reconcileStudentAvatar(context.studentId, context.desiredId, options.read);
-      if (!isStudentSaveContextCurrent(context, options.currentContext())) {
+      if (!isStudentSaveIdentityCurrent(context, options.currentContext())) {
         return { outcome: 'stale', avatarResult: reconciled };
       }
       if (reconciled.outcome === 'applied') return { outcome: 'saved', avatarResult: reconciled };
       return { outcome: 'blocked', avatarResult: reconciled, error };
     }
-    if (!isStudentSaveContextCurrent(context, options.currentContext())) return { outcome: 'stale', avatarResult };
+    if (!isStudentSaveIdentityCurrent(context, options.currentContext())) return { outcome: 'stale', avatarResult };
   }
   return { outcome: 'saved', avatarResult };
 }
