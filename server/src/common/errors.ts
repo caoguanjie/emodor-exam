@@ -42,6 +42,7 @@ export const Errors = {
   categoryInactive: (msg = '培训类别不存在或已停用') => new BizError(40910, 409, msg),
   importBatchConflict: (msg = '导入批次已确认，不能更换行集合') => new BizError(40911, 409, msg),
   mediaReferenced: (msg = '媒体仍被业务引用，不能删除') => new BizError(40913, 409, msg),
+  questionVersionConflict: (msg = '题目版本已变化，请刷新后重试') => new BizError(40940, 409, msg),
   mediaRangeInvalid: (msg = '媒体 Range 无效') => new BizError(41601, 416, msg),
   fileFormat: (msg = '文件格式不支持') => new BizError(42201, 422, msg),
   fileTooLarge: (msg = '文件超过大小上限') => new BizError(42202, 422, msg),
@@ -65,9 +66,9 @@ export type Role = (typeof RoleEnum)[keyof typeof RoleEnum];
 export const RegulationStatus = { DRAFT: 'draft', PUBLISHED: 'published', ARCHIVED: 'archived' } as const;
 export const ParseStatus = { PENDING: 'pending', PARSED: 'parsed', FAILED: 'failed' } as const;
 export const FileType = { PDF: 'pdf', DOCX: 'docx' } as const;
-export const QuestionType = { SINGLE: 'single', MULTIPLE: 'multiple' } as const;
+export const QuestionType = { SINGLE: 'single', MULTIPLE: 'multiple', JUDGMENT: 'judgment', IMAGE: 'image' } as const;
 export const QuestionStatus = { PENDING: 'pending', APPROVED: 'approved', REJECTED: 'rejected' } as const;
-export const QuestionSource = { AI: 'ai', MANUAL: 'manual' } as const;
+export const QuestionSource = { AI: 'ai', MANUAL: 'manual', IMPORT: 'import' } as const;
 export const PaperStatus = { DRAFT: 'draft', PUBLISHED: 'published', ARCHIVED: 'archived' } as const;
 export const ExamStatus = {
   IN_PROGRESS: 'in_progress',

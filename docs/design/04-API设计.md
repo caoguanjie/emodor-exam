@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训类别/学员/本人资料与 A4 受控媒体接口均以实际 controller/entity/migration 为准。课程表单、题库版本、发布/个人题单、持久草稿、图片答案/阅卷、监控和场次统计接口仍由后续任务在实际实现后补入。所有接口继续使用 `/api/v1`、`{code,message,data}`、DTO 校验、所有权校验和 HttpOnly refresh Cookie。
+> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训身份、A4 受控媒体与 B3 四题型版本题库接口均以实际 controller/entity/migration 为准。B3 不包含题库导入、发布/个人题单快照、考试图片答案/阅卷、监控或场次统计。所有接口继续使用 `/api/v1`、`{code,message,data}`、严格 DTO/未知字段拒绝、所有权校验和 HttpOnly refresh Cookie。
 
 ---
 
@@ -20,7 +20,7 @@
 | 认证方式 | `Authorization: Bearer <access_token>`（JWT 双令牌，见 1.3） |
 | 时间格式 | ISO 8601（`2026-09-12T14:30:00.000+08:00`）；纯秒数字段（如 `total_seconds`）为整型 |
 | 字段命名 | JSON 字段一律 snake_case，与数据库字段对齐（03 册） |
-| ID 字段 | 路径与 body 中的 `*_id` 一律为整型（对应 03 册 `BIGINT UNSIGNED`），不使用带前缀的字符串编码；唯一例外：异步任务编号 `task_id` 为服务端生成的业务编号字符串（Redis 承载、无数据库实体，05 册 4.4.2） |
+| ID 字段 | legacy 响应为兼容可保留数值 id；A1 以后新增契约（含 B3 `question_id/current_version_id/category_id`）统一使用十进制字符串，避免 BIGINT 经 JavaScript Number 丢精度。异步 `task_id` 为业务字符串 |
 | 幂等性 | GET/PUT 天然幂等；POST 中的关键动作（交卷、开考、会话开始）通过服务端状态校验实现幂等（见 1.5） |
 
 ### 1.2 统一响应结构
@@ -86,7 +86,8 @@
 | API 范围 | 文档状态 | 规则 |
 |---|---|---|
 | `/auth`、`/users`、`/departments`、`/regulations`、`/ai`、`/learning`、旧 `/exams`、旧 `/statistics` | 当前 legacy 契约 | 旧制度阅读资格、旧固定卷字段与自动客观评分保持兼容；下发不含答案/解析，refresh 走 HttpOnly Cookie，DTO/统一信封不变 |
-| 培训类别/学员来源、课程/视频、题库版本/导入、发布快照、个人题单、持久草稿、图片附件/阅卷、监控、培训统计 | 计划契约（A1—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后，才在本册写精确 DTO、错误码、分页和路由；本阶段不凭设计表格制造“已实现 API” |
+| 培训类别/学员来源、受控媒体、四题型题库版本 | 已实现增量契约（A2/A4/B3） | B3 只冻结题目 revision 与审核轨迹；旧题未知类别/难度不自动填充 |
+| 课程/视频、题库导入、发布快照、个人题单、持久草稿、图片答案/阅卷、监控、培训统计 | 计划契约 | 只有相应 migration/entity/controller 与 API 集成测试存在后才补精确契约，不由 B3 提前制造发布或考试快照 |
 | 旧固定卷 vs 新培训考试开考 | 两条口径并存 | 旧固定卷继续检查 `learning_record.is_valid`；新培训考试默认关闭学习门槛，但仍检查发布、类别/来源、权限、次数、身份状态和服务端 deadline |
 
 目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 客观题自动判分/图片题待阅 → 受控逐题评分 → 服务端汇总 → 最终结果只读。具体字段由 C1—C4 落地后补入，不能让旧 `/exams` 响应提前承载两套不兼容语义。
@@ -107,13 +108,13 @@
 | /media | 1. 组织权限模块（A4） | 5 | 受控上传、限制查询、状态/Range 读取、引用保护删除 |
 | /departments | 1. 组织权限模块 | 5 | 部门树、CRUD、层级调整 |
 | /regulations | 2. 制度文件管理模块 | 15 | 制度 CRUD、版本上传与历史回看、管理端预览、范围与学习要求配置、发布、阅读内容 |
-| /ai | 3. AI 出题模块 | 16 | AI 配置（`ai_config:read/write`；super_admin 天然拥有）、出题任务、题目审核编辑、人工录入、试卷管理与组卷 |
+| /ai | 3. AI 出题模块 | 25 | AI 配置/任务、B3 类别与考点选项、四题型版本审核、人工录入、试卷管理与组卷 |
 | /learning | 4. 学习行为管控模块 | 7 | 学习列表、会话生命周期、心跳、进度 |
 | /exams | 5. 考试评分模块 | 8 | 可考列表、开考、心跳、切屏、交卷、成绩 |
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**合计 94 个接口（93 个业务接口 + 1 个健康检查，含 A2/A4 增量；媒体内容流不包统一信封）。**
+**合计 103 个接口（102 个业务接口 + 1 个健康检查，含 A2/A4/B3 增量；媒体内容流不包统一信封）。**
 
 ---
 
@@ -175,7 +176,7 @@
 | 3 | POST | /admin/training-categories | body：`name`（必填，1—128）、`description`（可选，≤2000） | `Category`，创建时 status=1 |
 | 4 | PUT | /admin/training-categories/{id} | body：`name?`、`description?` | `Category` |
 | 5 | PUT | /admin/training-categories/{id}/status | body：`status`（0/1） | `Category` |
-| 6 | DELETE | /admin/training-categories/{id} | — | `null`；已被 `sys_user.category_id` 引用时拒绝硬删除 |
+| 6 | DELETE | /admin/training-categories/{id} | — | `null`；已被学员、question/question_version 或 question_concept 引用时返回 40910，停用不删除历史引用 |
 
 `Category` 字段为 `{ id, name, description, status, created_by, created_at, updated_at }`。查询、分页、状态和 body 中的未知字段及非法数字（包括 NaN）均返回 40001；名称唯一冲突返回 40001。类别状态/删除与学员引用写入在同一事务中锁定类别行并重查，删除使用中的类别返回 40910。
 
@@ -302,26 +303,36 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 规则：可见性校验链——制度 `status = published` + 本人属于发布范围（regulation_scope 部门含本部门或 is_all）；返回当前生效版本（current_version_id）的产物；同时返回学习要求（required_minutes / scroll_segments）供前端渲染进度。
 
-### 3.5 AI 出题模块 /ai（任务权限：`ai:read/write`；配置权限：`ai_config:read/write`）
+### 3.5 AI 出题与版本题库 /ai（细权限分别声明）
 
 | # | 方法 | 路径 | 说明 |
 |---|---|---|---|
-| 1 | POST | /ai/generate-questions | 发起出题（异步任务） |
-| 2 | GET | /ai/generate-status/{taskId} | 任务状态轮询 |
-| 3 | GET | /ai/questions | 题目列表（筛选：regulation_id / status / type） |
-| 4 | POST | /ai/questions | 人工录入题目（source = manual、status 直接 approved 免审核） |
-| 5 | PUT | /ai/questions/{id}/review | 审核（approved / rejected + 驳回意见） |
-| 6 | PUT | /ai/questions/{id} | 编辑题目（stem / options / answer / analysis / score；题目被在考记录引用时拒绝 40908） |
-| 7 | POST | /ai/questions/{id}/regenerate | 单题重新生成（回到 pending） |
-| 8 | GET | /ai/papers | 试卷列表（筛选：regulation_id / status） |
-| 9 | POST | /ai/papers | 创建试卷（title / regulation_id + 策略字段） |
-| 10 | GET | /ai/papers/{id} | 试卷详情（含 paper_question 组成） |
-| 11 | PUT | /ai/papers/{id} | 修改策略字段（pass_score / duration_minutes / max_attempts / partial_credit_ratio） |
-| 12 | PUT | /ai/papers/{id}/questions | 组卷（题目增删、sort、score；发布后锁定） |
-| 13 | POST | /ai/papers/{id}/publish | 发布试卷（校验 SUM(score) = 100） |
-| 14 | GET | /ai/config | 读取 AI 配置（`ai_config:read`；api_key 掩码回显 sk-****xxxx） |
-| 15 | PUT | /ai/config | 保存 AI 配置（`ai_config:write`；base_url / api_key / model；AES-256-GCM 加密落配置文件，Redis 仅缓存） |
-| 16 | POST | /ai/config/test | AI 连通性测试（`ai_config:write`；返回成功/失败与脱敏错误摘要） |
+| 1 | GET | /ai/config | `ai_config:read`；读取脱敏 AI 配置 |
+| 2 | PUT | /ai/config | `ai_config:write`；保存 AI 配置 |
+| 3 | POST | /ai/config/test | `ai_config:write`；文本连通性测试 |
+| 4 | POST | /ai/config/test-vision | `ai_config:write`；视觉输入连通性测试 |
+| 5 | POST | /ai/generate-questions | `ai:write`；按制度、类别、难度异步生成 single/multiple |
+| 6 | GET | /ai/generate-status/{taskId} | `ai:read`；任务状态轮询 |
+| 7 | GET | /ai/generation-category-options | `ai:write`；启用类别 `Page<{id,name}>` |
+| 8 | GET | /ai/question-category-options | `questions:write`；人工录题类别选项 |
+| 9 | GET | /ai/question-category-filters | `questions:read`；题库筛选类别选项 |
+| 10 | GET | /ai/question-concepts | `questions:read`；按 category_id/type/keyword 查考点 |
+| 11 | GET | /ai/question-concept-options | `questions:write`；必传 category_id/type，只返回启用类别内 `Page<{id,name}>`，不依赖 `questions:read` |
+| 12 | POST | /ai/question-concepts | `questions:write`；创建同类别同题型考点 |
+| 13 | GET | /ai/questions | `questions:read`；版本兼容视图分页筛选 |
+| 14 | POST | /ai/questions | `questions:write`；人工录入四题型，首版本由录入管理员确认 approved |
+| 15 | PUT | /ai/questions/{id}/review | `questions:review`；审核当前版本及驳回意见 |
+| 16 | PUT | /ai/questions/{id} | `questions:write`；修订生成 pending revision；在考核心编辑仍拒绝 40908 |
+| 17 | POST | /ai/questions/{id}/regenerate | `questions:write`；single/multiple 单题重生成新 revision |
+| 18 | GET | /ai/questions/{id}/versions | `questions:read`；revision 历史与真实审核元数据 |
+| 19 | GET | /ai/questions/{id} | `questions:read`；题目当前兼容视图 |
+| 20 | GET | /ai/papers | 试卷列表（筛选 regulation_id/status） |
+| 21 | POST | /ai/papers | 创建试卷 |
+| 22 | GET | /ai/papers/{id} | 试卷详情 |
+| 23 | PUT | /ai/papers/{id} | 修改策略字段 |
+| 24 | PUT | /ai/papers/{id}/questions | 组卷；发布后锁定 |
+| 25 | POST | /ai/papers/{id}/publish | 发布试卷，校验 SUM(score)=100 |
+| 26 | POST | /ai/papers/{id}/archive | 归档试卷 |
 
 **试卷路由归属说明**：试卷的创建/组卷/发布属于「题目审核 → 组卷 → 发布」的出题工作流（05 册 4.4.7 组卷服务隶属 AI 出题模块），故管理侧归 `/ai/papers`；面向员工的考试执行（可考列表、开考、交卷）归 `/exams`（考试评分模块）——同一资源的管理面与执行面分离，与模块边界一致。
 
@@ -330,16 +341,22 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 参数 | 位置 | 类型 | 必填 | 说明 |
 |---|---|---|---|---|
 | regulation_id | body | int | 是 | 目标制度 |
+| category_id | body | string decimal ID | 是 | 启用培训类别；固定写入整批版本，不读取模型标签 |
+| difficulty | body | string | 是 | easy / medium / hard；固定写入整批版本 |
 | question_count_single | body | int | 否 | 单选题量，取值 1–40，默认 20 |
 | question_count_multiple | body | int | 否 | 多选题量，取值 0–20，默认 5 |
 | score_single | body | decimal | 否 | 单选每题分值，> 0，默认 3.00 |
 | score_multiple | body | decimal | 否 | 多选每题分值，> 0，默认 8.00 |
 
-校验规则：① AI 配置已保存且完整（base_url / api_key / model 齐备，否则 40909）；② 生效版本 `parse_status = parsed`；③ `question_count_single × score_single + question_count_multiple × score_multiple = 100.00`，否则 40001（附差距说明）。通过后创建异步任务（长文本分块：4000 字符/块 + 200 重叠，05 册 4.4.2），响应回显生效分值策略（question_count_single / question_count_multiple / score_single / score_multiple，未显式传值时回显默认值）并返回 `task_id`。任务状态：`queued / running / completed / failed`（AI 调用失败重试后仍失败 → failed，可重新发起）。
+校验规则：① 类别存在且启用、难度合法；② 制度存在且有 parsed 生效版本，文本不足的 PDF 可走视觉输入；③分值合计 100.00；④ AI 配置完整（否则 40909）。服务端把实际 `regulation_version_id`、请求 `category_id/difficulty` 写入每个 pending revision，拒绝模型覆盖。任务仍使用 Redis queued/running/completed/failed、长文本分块、块级重试和全失败零写入；响应与状态均回显 category_id/difficulty。
 
 **GET /ai/config**（`ai_config:read`）：读取 AI 服务配置，`api_key` 掩码回显（如 `sk-****xxxx`，完整键值永不返回，07 册 4.2）。**PUT /ai/config**（`ai_config:write`）：保存 `base_url` / `api_key` / `model`——权威副本为 AES-256-GCM 加密后的配置文件，Redis 仅作缓存（07 册 4.2），并返回同样的脱敏配置结果。**POST /ai/config/test**（`ai_config:write`）：以已保存配置发起一次连通性测试，返回成功 / 失败与脱敏错误摘要（失败 → 50005）。`ai:read/write` 仅代表出题任务/题库工作流，不自动授予配置权限；管理端入口要求 `ai_config:read` 或 `ai_config:write`，但 writer-only 页面不得调用 GET、不得伪造现有配置值，只能提交空白表单并使用 PUT 返回的脱敏结果；`super_admin` 天然拥有全部注册权限。
 
-**POST /ai/questions**（制度管理）：人工录入题目（type / stem / options / answer / analysis / score）——`source = manual`、`status` 直接 `approved`（免审核），可直接进入组卷。
+**题目写入 DTO**：`category_id/difficulty/type/stem/options/answer/score` 必填；`concept_id/regulation_id/regulation_version_id/analysis/rubric` 可选。人工题可无制度来源；若传 regulation_version_id 必须同时传匹配的 regulation_id。single 恰一答案，multiple 至少两答案，judgment 固定正确/错误，image 的 options/answer 为空且 rubric 必填。富文本仅允许白名单标签与 `<img data-media-id="数字">`；拒绝脚本、事件、javascript URL 与外链图片，媒体绑定不可变 question_version 后通过 `/media/{id}/content` 鉴权读取。
+
+**版本与审核语义**：POST 人工题创建 revision 1 并记录录入管理员的 `approved_by/approved_at`；PUT 编辑或 regenerate 创建新的 pending revision，不覆盖旧版本。审核仅允许作用于题目当前版本，竞态/损坏指针返回 40940。列表可按 `category_id/difficulty/concept_id/type/status/regulation_id/keyword` 筛选；响应同时保留旧 `id/version_id` 兼容字段并提供字符串 `question_id/current_version_id/regulation_version_id`、revision、审核元数据。旧题首次编辑/审核才捕获 revision 1，`legacy_captured_at` 明示升级快照，未知历史确认人/时间为 null。
+
+**候选服务边界**：内部 `approvedCandidates({categoryId,regulationIds?,type,difficulty})` 只返回 current revision 且 approved 的不可变快照。本接口不创建发布快照或个人考试题单；C1/C2 必须冻结 versionId 后再发布/开考。
 
 **PUT /ai/papers/{id}/questions**：入卷校验——题目 `status = approved`、`question.regulation_id` 与试卷一致、同卷不重复（uk_paper_question 兜底，05 册 4.4.7）。
 
@@ -486,9 +503,13 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 ```json
 {
-  "regulation_id": 12,
+  "regulation_id": "12",
+  "category_id": "3",
+  "difficulty": "hard",
   "question_count_single": 20,
-  "question_count_multiple": 5
+  "question_count_multiple": 5,
+  "score_single": 3,
+  "score_multiple": 8
 }
 ```
 
@@ -501,7 +522,9 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
   "data": {
     "task_id": "gen-20260912-0007",
     "status": "running",
-    "estimated_seconds": 120
+    "estimated_seconds": 120,
+    "category_id": "3",
+    "difficulty": "hard"
   }
 }
 ```
@@ -518,6 +541,12 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
     "questions": [
       {
         "id": 501,
+        "question_id": "501",
+        "current_version_id": "8801",
+        "revision": 1,
+        "category_id": "3",
+        "difficulty": "hard",
+        "regulation_version_id": "35",
         "type": "single",
         "stem": "根据本制度，动火作业审批的有效期最长不超过多少小时？",
         "options": [
@@ -768,6 +797,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 40911 | 409 | 导入批次已确认，不能更换行集合 | 批次确认重试更换合法行集合，或确认事务正在处理 |
 | 40912 | 409 | 至少保留一名启用的超级管理员 | 尝试删除/停用/清空最高管理员保护权限 |
 | 40913 | 409 | 媒体仍被业务引用，不能删除 | `media_reference` 存在时删除媒体资源 |
+| 40940 | 409 | 题目当前版本已变化或不存在 | 审核目标不是该题当前 revision，或 identity/current_version 指针不一致；客户端刷新后重试 |
 | 42201 | 422 | 文件格式不支持 | 上传非 pdf/docx（含魔法数不符） |
 | 41601 | 416 | 请求的媒体范围无效 | `Range` 语法非法、多段范围或起止超出文件边界 |
 | 42202 | 422 | 文件超过大小上限 | 制度文件超过 50MB，或媒体图片/视频超过当前配置限制；Multer 拦截与业务层统一此码 |
@@ -794,7 +824,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | /me | — | GET/PATCH 本人资料 | — | 同左 |
 | /departments | tree（登录） | — | — | 其余 5 个 |
 | /regulations | — | content | 其余 14 个 | 同左 |
-| /ai | — | — | 其余 13 个 | 出题任务/题库工作流按 `ai:read/write` 等权限；config 三接口分别使用 `ai_config:read`（GET）和 `ai_config:write`（PUT/test），不自动授予 legacy `regulation_admin` |
+| /ai | — | — | 按细权限开放 | 26 个端点逐项使用 `ai:*`、`ai_config:*`、`questions:*`、`papers:*`；人工录题 writer 可通过 `question-category-options` / `question-concept-options` 取类别/考点，不要求 questions:read；不把全局权限守卫改成 OR |
 | /learning | — | 全部 7 个 | — | — |
 | /exams | — | 全部 8 个 | — | — |
 | /statistics | — | — | 全部 6 个 | 同左 |
@@ -813,14 +843,14 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | POST /exams/records/{id}/switch | 1 秒去抖窗口 | Redis INCR + 窗口合并（前端 500ms 事件合并后上报，服务端 1 秒二次去抖，05 册 6.4.4） |
 | POST /exams/records/{id}/submit | 幂等：重复交卷返回首次结果 | 三层幂等（05 册 6.4.5） |
 | POST /regulations/{id}/versions | 并发上传同一制度串行化（版本号唯一） | 事务 + uk_regulation_version |
-| POST /ai/generate-questions | 同制度同时仅一个运行中任务 | 任务状态前置校验；计划中的 category/difficulty/source_version 由 B3 落地后扩展，不改旧接口语义 |
+| POST /ai/generate-questions | 同制度同时仅一个运行中任务 | Redis SETNX；category/difficulty 固定来自请求，source version 固定为发起时制度生效版本 |
 
 ### 6.3 传输与敏感信息
 
 - 生产环境经 nginx TLS 终止提供 HTTPS（07 册 4.1）；密码仅在登录/改密报文中出现，存储一律 bcrypt。
 - 响应体永不返回 `password_hash`、`answer`、`analysis`（成绩回看除外）、`api_key`（掩码回显，07 册 4.2）。
 - `trace_id`：50001 错误响应 `data.trace_id` 供日志排查。
-- 计划中的新培训在考 payload 同样不返回 `answer`、`analysis` 或图片评分参考；确认草稿需持久化后才可 ACK，截止时间后不接收新答案。图片题单题最多 9 张，逐题评分与最终总分只读规则由 C3/C4 的新契约承载。
+- B3 题库管理预览可读取答案、解析与 rubric，但富文本图片只存 media id 并经 Bearer 鉴权内容接口换取 Blob URL，不暴露私有存储路径或任意外链图片。未来新培训在考 payload 不返回 `answer`、`analysis` 或 rubric；图片答案/阅卷仍由 C3/C4 落地。
 
 ---
 

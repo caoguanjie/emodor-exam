@@ -7,14 +7,27 @@ export interface QuestionOption {
 
 @Entity('question')
 export class Question {
-  @PrimaryGeneratedColumn({ type: 'bigint' })
+  @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })
   id: string;
 
-  @Column({ name: 'regulation_id', type: 'bigint' })
-  regulationId: string;
+  @Column({ name: 'regulation_id', type: 'bigint', unsigned: true, nullable: true })
+  regulationId: string | null;
 
-  @Column({ name: 'version_id', type: 'bigint' })
-  versionId: string;
+  /** Legacy compatibility alias for the source regulation_version id. */
+  @Column({ name: 'version_id', type: 'bigint', unsigned: true, nullable: true })
+  versionId: string | null;
+
+  @Column({ name: 'category_id', type: 'bigint', unsigned: true, nullable: true })
+  categoryId: string | null;
+
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  difficulty: string | null;
+
+  @Column({ name: 'concept_id', type: 'bigint', unsigned: true, nullable: true })
+  conceptId: string | null;
+
+  @Column({ name: 'current_version_id', type: 'bigint', unsigned: true, nullable: true })
+  currentVersionId: string | null;
 
   /** single / multiple */
   @Column({ type: 'varchar', length: 16 })
@@ -34,6 +47,9 @@ export class Question {
   @Column({ type: 'text', nullable: true })
   analysis: string | null;
 
+  @Column({ type: 'text', nullable: true })
+  rubric: string | null;
+
   /** 题库建议分值；实际判分以 paper_question.score 为准 */
   @Column({ type: 'decimal', precision: 5, scale: 2 })
   score: string;
@@ -46,7 +62,7 @@ export class Question {
   @Column({ type: 'varchar', length: 16 })
   source: string;
 
-  @Column({ name: 'created_by', type: 'bigint' })
+  @Column({ name: 'created_by', type: 'bigint', unsigned: true })
   createdBy: string;
 
   @CreateDateColumn({ name: 'created_at', precision: 3 })

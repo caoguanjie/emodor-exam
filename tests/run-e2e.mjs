@@ -7,6 +7,7 @@
 //   node tests/run-e2e.mjs --ephemeral --suite smoke
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
@@ -27,6 +28,7 @@ export const SUITE_REGISTRY = Object.freeze({
   'training-access': join(ROOT, 'tests', 'training-access.mjs'),
   'training-student-admin-boundary': join(ROOT, 'tests', 'training-student-admin-boundary.mjs'),
   'training-media': join(ROOT, 'tests', 'training-media.mjs'),
+  'training-question-bank': join(ROOT, 'tests', 'training-question-bank.mjs'),
 });
 
 export function resolveSuitePaths(selector, registry = SUITE_REGISTRY) {
@@ -93,6 +95,7 @@ export async function runSuiteInRuntime(suitePath, ephemeral, runState = { inter
   let releaseLifecycleProbe;
   let resourceGeneration = 0;
   const ownedChildren = new Set();
+  const ownedApiPids = [];
   const trackChild = (child) => {
     ownedChildren.add(child);
     child.once('exit', () => ownedChildren.delete(child));
@@ -221,6 +224,7 @@ export async function runSuiteInRuntime(suitePath, ephemeral, runState = { inter
     if (ephemeral) {
       services = await createEphemeralServices();
       resourceGeneration += 1;
+      console.log(`[owned-ephemeral] servicesRoot=${services.root} mysqlPid=${services.mysqlPid} redisPid=${services.redisPid}`);
       await waitForLifecycleProbe('services-ready');
       if (interrupted) return;
       database = `ruleexam_test_${randomBytes(6).toString('hex')}`;
@@ -256,16 +260,21 @@ export async function runSuiteInRuntime(suitePath, ephemeral, runState = { inter
     await waitForLifecycleProbe('harness-created', { harnessRoot: createdHarness.root });
     harness = createdHarness;
     resourceGeneration += 1;
+    if (ephemeral) console.log(`[owned-ephemeral] harnessRoot=${harness.root} database=${database}`);
     if (interrupted) return;
     console.log(`[1/4] 创建隔离测试库（${database}）`);
     await resetSchema({ ...db, database });
     if (interrupted) return;
 
     console.log('[2/4] 启动 API（运行期随机密钥与独立存储目录）');
-    await harness.restartApi();
+    const firstApi = await harness.restartApi();
+    ownedApiPids.push(firstApi.pid);
+    if (ephemeral) console.log(`[owned-ephemeral] apiPid=${firstApi.pid} restart=1`);
     if (interrupted) return;
     console.log('[2/4] 重启 API 并复用同一数据库、密钥、上传与日志目录');
-    await harness.restartApi();
+    const secondApi = await harness.restartApi();
+    ownedApiPids.push(secondApi.pid);
+    if (ephemeral) console.log(`[owned-ephemeral] apiPid=${secondApi.pid} restart=2`);
     if (interrupted) return;
 
     console.log(`[3/4] 执行测试套件（${suitePath}）`);
@@ -289,7 +298,25 @@ export async function runSuiteInRuntime(suitePath, ephemeral, runState = { inter
     }
     console.log('[4/4] 测试完成');
   } finally {
+    const owned = ephemeral && services ? {
+      servicesRoot: services.root,
+      harnessRoot: harness?.root || null,
+      mysqlPid: services.mysqlPid,
+      redisPid: services.redisPid,
+      apiPids: [...ownedApiPids],
+    } : null;
     await cleanup();
+    if (owned) {
+      const livePids = [owned.mysqlPid, owned.redisPid, ...owned.apiPids].filter((pid) => {
+        if (!Number.isInteger(pid) || pid <= 0) return false;
+        try { process.kill(pid, 0); return true; }
+        catch (error) { if (error?.code === 'ESRCH') return false; throw error; }
+      });
+      if (livePids.length || existsSync(owned.servicesRoot) || (owned.harnessRoot && existsSync(owned.harnessRoot))) {
+        throw new Error(`owned ephemeral cleanup incomplete: livePids=${livePids.join(',')}`);
+      }
+      console.log(`[owned-ephemeral] stopped pids=${[owned.mysqlPid, owned.redisPid, ...owned.apiPids].join(',')}; removed exact roots=${owned.servicesRoot},${owned.harnessRoot}`);
+    }
     for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
   }
 }

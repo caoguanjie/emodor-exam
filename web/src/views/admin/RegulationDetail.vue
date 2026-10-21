@@ -13,6 +13,18 @@
     </div>
 
     <el-tabs>
+      <el-tab-pane label="基本信息">
+        <el-form label-width="140px" style="max-width:560px; margin-top:12px">
+          <el-form-item label="旧制度分类"><el-input :model-value="reg.category" disabled /></el-form-item>
+          <el-form-item label="培训类别">
+            <el-select v-if="auth.can('regulations:write')" v-model="categoryId" clearable filterable style="width:100%">
+              <el-option v-for="item in categoryOptions" :key="item.id" :label="item.name" :value="item.id" />
+            </el-select>
+            <span v-else>{{ categoryId ? `类别 ID ${categoryId}` : '未关联' }}</span>
+          </el-form-item>
+          <el-form-item v-if="auth.can('regulations:write')"><el-button type="primary" @click="saveCategory">保存培训类别</el-button></el-form-item>
+        </el-form>
+      </el-tab-pane>
       <el-tab-pane label="制度版本">
         <div class="toolbar">
           <el-upload v-if="auth.can('regulations:write')" :show-file-list="false" accept=".pdf,.docx" :auto-upload="false" :on-change="onUploadChange">
@@ -113,6 +125,8 @@ const scope = reactive<{ is_all: boolean; departmentIds: string[] }>({ is_all: f
 const previewHtml = ref('');
 const previewVisible = ref(false);
 const scopeTreeRef = ref();
+const categoryOptions = ref<Array<{ id: string; name: string }>>([]);
+const categoryId = ref<string | null>(null);
 
 function statusLabel(s: string) {
   return ({ draft: '草稿', published: '已发布', archived: '已归档' } as any)[s] || s;
@@ -123,6 +137,7 @@ function statusType(s: string) {
 
 async function load() {
   reg.value = await http.get(`/regulations/${regId}`);
+  categoryId.value = reg.value.category_id ? String(reg.value.category_id) : null;
   config.required_minutes = reg.value.required_minutes;
   config.scroll_segments = reg.value.scroll_segments;
   configKey.value++; // 强制 el-input-number 重挂载，显示与数据保持一致
@@ -135,6 +150,18 @@ async function load() {
   nextTick(() => {
     (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds);
   });
+}
+
+async function loadCategoryOptions() {
+  if (!auth.can('regulations:write')) return;
+  const result: any = await http.get('/regulations/category-options', { params: { page: 1, page_size: 100 } });
+  categoryOptions.value = result.items || [];
+}
+
+async function saveCategory() {
+  await http.put(`/regulations/${regId}`, { category_id: categoryId.value || null });
+  ElMessage.success(categoryId.value ? '培训类别已保存' : '已清除培训类别关联');
+  await load();
 }
 
 async function handleUpload(file: File) {
@@ -223,6 +250,7 @@ async function preview(row?: any) {
 }
 
 onMounted(async () => {
+  await loadCategoryOptions();
   await load();
   await preview();
   // 树渲染后回显已圈定部门（仅勾选自身节点，父级由半选态呈现）

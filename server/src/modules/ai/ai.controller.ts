@@ -12,51 +12,30 @@ import { PaperService } from './paper.service';
 import { Roles } from '../../common/guards/roles.guard';
 import { Errors, RoleEnum } from '../../common/errors';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
-import { DtoValidationPipe } from '../../common/dto-validation.pipe';
+import { DtoValidationPipe, StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
+import { Permissions } from '../../common/decorators/permissions.decorator';
+import { CategoryService } from '../training/category.service';
+import { QuestionConceptService } from '../questions/question-concept.service';
+import {
+  CategoryOptionsQueryDto,
+  CreateQuestionConceptDto,
+  CreateQuestionDto,
+  EditQuestionDto,
+  GenerateQuestionsDto,
+  QUESTION_CREATE_KEYS,
+  QUESTION_EDIT_KEYS,
+  QUESTION_LIST_KEYS,
+  QuestionConceptOptionsQueryDto,
+  QuestionConceptQueryDto,
+  QuestionListQueryDto,
+  ReviewQuestionDto,
+} from '../questions/question.dto';
 
 class SaveAiConfigDto {
   @IsString() @MinLength(1) base_url!: string;
   // api_key 可选：留空 = 保持已保存的 key（界面「留空保持不变」语义），由服务层校验首次配置必填
   @IsOptional() @IsString() api_key?: string;
   @IsString() @MinLength(1) model!: string;
-}
-
-class GenerateQuestionsDto {
-  @IsString() regulation_id!: string;
-  @IsOptional() @IsInt() @Min(1) @Max(40) question_count_single?: number;
-  @IsOptional() @IsInt() @Min(0) @Max(20) question_count_multiple?: number;
-  @IsOptional() @IsNumber() @Min(0.01) @Max(100) score_single?: number;
-  @IsOptional() @IsNumber() @Min(0.01) @Max(100) score_multiple?: number;
-}
-
-class OptionDto {
-  @IsOptional() @IsString() key?: string;
-  @IsString() @MinLength(1) text!: string;
-}
-
-class CreateQuestionDto {
-  @IsString() regulation_id!: string;
-  @IsOptional() @IsString() version_id?: string;
-  @IsString() type!: string;
-  @IsString() @MinLength(1) stem!: string;
-  // @IsArray 只校验外层：嵌套元素须经 @ValidateNested + @Type 递归校验，否则恶意载荷穿透 DTO 层
-  @IsArray() @ArrayMinSize(2) @ValidateNested({ each: true }) @Type(() => OptionDto) options!: OptionDto[];
-  @IsArray() @ArrayMinSize(1) @IsInt({ each: true }) @Min(0, { each: true }) answer!: number[];
-  @IsOptional() @IsString() analysis?: string;
-  @IsNumber() @Min(0.01) @Max(100) score!: number;
-}
-
-class ReviewDto {
-  @IsString() status!: string;
-  @IsOptional() @IsString() @MaxLength(255) reason?: string;
-}
-
-class EditQuestionDto {
-  @IsOptional() @IsString() stem?: string;
-  @IsOptional() @IsArray() @ArrayMinSize(2) @ValidateNested({ each: true }) @Type(() => OptionDto) options?: OptionDto[];
-  @IsOptional() @IsArray() @IsInt({ each: true }) @Min(0, { each: true }) answer?: number[];
-  @IsOptional() @IsString() analysis?: string;
-  @IsOptional() @IsNumber() @Min(0.01) @Max(100) score?: number;
 }
 
 class CreatePaperDto {
@@ -87,6 +66,19 @@ class SetPaperQuestionsDto {
 
 const REG_ADMIN = [RoleEnum.SUPER_ADMIN, RoleEnum.REGULATION_ADMIN] as const;
 
+function assertRequestKeys(value: unknown, allowed: readonly string[], label: string) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw Errors.param(`${label} 必须是对象`);
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length) throw Errors.param(`${label} 包含不支持的字段：${unknown.join(',')}`);
+}
+
+function assertOptionKeys(value: unknown) {
+  const options = (value as any)?.options;
+  if (options === undefined) return;
+  if (!Array.isArray(options)) throw Errors.param('options 必须是数组');
+  for (const option of options) assertRequestKeys(option, ['key', 'text'], '题目选项');
+}
+
 /** /ai AI 出题模块（04 册 3.5；/ai/config 由 ai_config:read/write 细权限控制） */
 @Controller('ai')
 export class AiController {
@@ -96,7 +88,14 @@ export class AiController {
     private readonly generation: QuestionGenerationService,
     private readonly review: QuestionReviewService,
     private readonly papers: PaperService,
+    private readonly categories: CategoryService,
+    private readonly concepts: QuestionConceptService,
   ) {}
+
+  private async categoryOptions(query: CategoryOptionsQueryDto) {
+    const page = await this.categories.list({ ...query, status: 1 });
+    return { ...page, items: page.items.map((item) => ({ id: String(item.id), name: item.name })) };
+  }
 
   // ---- AI 配置（ai_config:read/write；super_admin 天然拥有全部权限）----
 
@@ -133,9 +132,17 @@ export class AiController {
 
   @Post('generate-questions')
   @Roles(...REG_ADMIN)
-  async generate(@Body(new DtoValidationPipe()) dto: GenerateQuestionsDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+  @Permissions('ai:write')
+  async generate(
+    @Body(new StrictDtoValidationPipe(['regulation_id', 'category_id', 'difficulty', 'question_count_single', 'question_count_multiple', 'score_single', 'score_multiple'])) dto: GenerateQuestionsDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    assertRequestKeys(req.body, ['regulation_id', 'category_id', 'difficulty', 'question_count_single', 'question_count_multiple', 'score_single', 'score_multiple'], 'AI 出题请求');
     return this.generation.start({
       regulationId: dto.regulation_id,
+      categoryId: dto.category_id,
+      difficulty: dto.difficulty,
       questionCountSingle: dto.question_count_single ?? 20,
       questionCountMultiple: dto.question_count_multiple ?? 5,
       scoreSingle: dto.score_single ?? 3.0,
@@ -146,21 +153,88 @@ export class AiController {
 
   @Get('generate-status/:taskId')
   @Roles(...REG_ADMIN)
+  @Permissions('ai:read')
   generateStatus(@Param('taskId') taskId: string) {
     return this.generation.status(taskId);
   }
 
   // ---- 题库 ----
 
+  @Get('generation-category-options')
+  @Roles(...REG_ADMIN)
+  @Permissions('ai:write')
+  generationCategoryOptions(@Query(new StrictDtoValidationPipe(['page', 'page_size', 'keyword'])) query: CategoryOptionsQueryDto, @Req() req: Request) {
+    assertRequestKeys(req.query, ['page', 'page_size', 'keyword'], '类别选项查询');
+    return this.categoryOptions(query);
+  }
+
+  @Get('question-category-options')
+  @Roles(...REG_ADMIN)
+  @Permissions('questions:write')
+  questionCategoryOptions(@Query(new StrictDtoValidationPipe(['page', 'page_size', 'keyword'])) query: CategoryOptionsQueryDto, @Req() req: Request) {
+    assertRequestKeys(req.query, ['page', 'page_size', 'keyword'], '类别选项查询');
+    return this.categoryOptions(query);
+  }
+
+  @Get('question-category-filters')
+  @Roles(...REG_ADMIN)
+  @Permissions('questions:read')
+  questionCategoryFilters(@Query(new StrictDtoValidationPipe(['page', 'page_size', 'keyword'])) query: CategoryOptionsQueryDto, @Req() req: Request) {
+    assertRequestKeys(req.query, ['page', 'page_size', 'keyword'], '类别筛选查询');
+    return this.categoryOptions(query);
+  }
+
+  @Get('question-concepts')
+  @Roles(...REG_ADMIN)
+  @Permissions('questions:read')
+  listQuestionConcepts(@Query(new StrictDtoValidationPipe(['category_id', 'type', 'keyword'])) query: QuestionConceptQueryDto, @Req() req: Request) {
+    assertRequestKeys(req.query, ['category_id', 'type', 'keyword'], '考点查询');
+    return this.concepts.list({ categoryId: query.category_id, type: query.type, keyword: query.keyword });
+  }
+
+  @Get('question-concept-options')
+  @Roles(...REG_ADMIN)
+  @Permissions('questions:write')
+  questionConceptOptions(
+    @Query(new StrictDtoValidationPipe(['category_id', 'type', 'page', 'page_size', 'keyword'])) query: QuestionConceptOptionsQueryDto,
+    @Req() req: Request,
+  ) {
+    assertRequestKeys(req.query, ['category_id', 'type', 'page', 'page_size', 'keyword'], '考点选项查询');
+    return this.concepts.options({
+      categoryId: query.category_id,
+      type: query.type,
+      page: query.page,
+      pageSize: query.page_size,
+      keyword: query.keyword,
+    });
+  }
+
+  @Post('question-concepts')
+  @Roles(...REG_ADMIN)
+  @Permissions('questions:write')
+  createQuestionConcept(
+    @Body(new StrictDtoValidationPipe(['category_id', 'type', 'name'])) dto: CreateQuestionConceptDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    assertRequestKeys(req.body, ['category_id', 'type', 'name'], '考点请求');
+    return this.concepts.create({ categoryId: dto.category_id, type: dto.type, name: dto.name }, String(user.id), user.username, req.ip || null);
+  }
+
   @Get('questions')
   @Roles(...REG_ADMIN)
-  listQuestions(@Query() query: any) {
+  @Permissions('questions:read')
+  listQuestions(@Query(new StrictDtoValidationPipe(QUESTION_LIST_KEYS)) query: QuestionListQueryDto, @Req() req: Request) {
+    assertRequestKeys(req.query, QUESTION_LIST_KEYS, '题库查询');
     return this.review.list(query);
   }
 
   @Post('questions')
   @Roles(...REG_ADMIN)
-  createQuestion(@Body(new DtoValidationPipe()) dto: CreateQuestionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+  @Permissions('questions:write')
+  createQuestion(@Body(new StrictDtoValidationPipe(QUESTION_CREATE_KEYS)) dto: CreateQuestionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertRequestKeys(req.body, QUESTION_CREATE_KEYS, '题目请求');
+    assertOptionKeys(req.body);
     return this.review.createManual(
       { ...dto, options: dto.options.map((o, i) => ({ key: o.key || String.fromCharCode(65 + i), text: o.text })) },
       { id: user.id, name: user.username },
@@ -170,14 +244,18 @@ export class AiController {
 
   @Put('questions/:id/review')
   @Roles(...REG_ADMIN)
-  async reviewQuestion(@Param('id') id: string, @Body(new DtoValidationPipe()) dto: ReviewDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    if (dto.status !== 'approved' && dto.status !== 'rejected') throw Errors.param('审核状态非法（approved / rejected）');
+  @Permissions('questions:review')
+  async reviewQuestion(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['status', 'reason'])) dto: ReviewQuestionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertRequestKeys(req.body, ['status', 'reason'], '审核请求');
     return this.review.review(id, dto.status, dto.reason, { id: user.id, name: user.username }, req.ip || null);
   }
 
   @Put('questions/:id')
   @Roles(...REG_ADMIN)
-  async editQuestion(@Param('id') id: string, @Body(new DtoValidationPipe()) dto: EditQuestionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+  @Permissions('questions:write')
+  async editQuestion(@Param('id') id: string, @Body(new StrictDtoValidationPipe(QUESTION_EDIT_KEYS)) dto: EditQuestionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertRequestKeys(req.body, QUESTION_EDIT_KEYS, '题目请求');
+    assertOptionKeys(req.body);
     return this.review.edit(
       id,
       { ...dto, options: dto.options?.map((o, i) => ({ key: o.key || String.fromCharCode(65 + i), text: o.text })) } as any,
@@ -188,8 +266,23 @@ export class AiController {
 
   @Post('questions/:id/regenerate')
   @Roles(...REG_ADMIN)
+  @Permissions('questions:write')
   async regenerate(@Param('id') id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.review.regenerate(id, { id: user.id, name: user.username }, req.ip || null);
+  }
+
+  @Get('questions/:id/versions')
+  @Roles(...REG_ADMIN)
+  @Permissions('questions:read')
+  questionVersions(@Param('id') id: string) {
+    return this.review.history(id);
+  }
+
+  @Get('questions/:id')
+  @Roles(...REG_ADMIN)
+  @Permissions('questions:read')
+  questionDetail(@Param('id') id: string) {
+    return this.review.getOne(id);
   }
 
   // ---- 试卷管理（出题工作流的管理面，员工执行面在 /exams）----

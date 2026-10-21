@@ -38,6 +38,8 @@ import { ExamAnswer } from './entities/exam-answer.entity';
 import { SchemaMigration } from './entities/schema-migration.entity';
 import { MediaAsset } from './entities/media-asset.entity';
 import { MediaReference } from './entities/media-reference.entity';
+import { QuestionConcept } from './entities/question-concept.entity';
+import { QuestionVersion } from './entities/question-version.entity';
 
 import { AuthController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
@@ -79,6 +81,8 @@ import { TasksService } from './tasks.service';
 import { MediaController } from './modules/media/media.controller';
 import { MediaService } from './modules/media/media.service';
 import { MediaProbeService } from './modules/media/media-probe.service';
+import { QuestionConceptService } from './modules/questions/question-concept.service';
+import { QuestionVersionService } from './modules/questions/question-version.service';
 
 const config = loadConfig();
 
@@ -92,6 +96,7 @@ const config = loadConfig();
       TrainingCategory, ImportBatch,
       SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
       MediaAsset, MediaReference,
+      QuestionConcept, QuestionVersion,
       TrainingCategory, ImportBatch,
       SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
     ]),
@@ -114,6 +119,7 @@ const config = loadConfig();
     LearningSessionService, ExamService, ShuffleService, GradingService, StatisticsService,
     RedisService, AuditService, TasksService,
     MediaService, MediaProbeService,
+    QuestionConceptService, QuestionVersionService,
     // 守卫链（07 册 2.3.2）：① JWT 认证 → ② 细权限映射 → ③ 兼容角色边界
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },

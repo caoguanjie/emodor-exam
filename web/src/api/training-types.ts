@@ -75,6 +75,47 @@ export interface QuestionOption {
   text: string;
 }
 
+export type QuestionSource = 'ai' | 'manual' | 'import';
+
+export interface QuestionDraftPayload {
+  category_id: Id;
+  difficulty: Difficulty;
+  type: QuestionType;
+  stem: string;
+  options: QuestionOption[];
+  answer: number[];
+  analysis: string | null;
+  rubric: string | null;
+  score: number;
+  concept_id?: Id | null;
+  regulation_id?: Id | null;
+  regulation_version_id?: Id | null;
+}
+
+export interface QuestionView extends Omit<QuestionDraftPayload, 'category_id' | 'difficulty'> {
+  id: number;
+  question_id: Id;
+  category_id: Id | null;
+  difficulty: Difficulty | null;
+  current_version_id: Id | null;
+  revision: number | null;
+  status: 'pending' | 'approved' | 'rejected';
+  source: QuestionSource;
+  approved_by: Id | null;
+  approved_at: string | null;
+  reviewed_by: Id | null;
+  reviewed_at: string | null;
+  review_reason: string | null;
+  legacy_captured_at: string | null;
+}
+
+export interface QuestionConcept {
+  id: Id;
+  category_id: Id;
+  type: QuestionType;
+  name: string;
+}
+
 export interface AttemptQuestion {
   item_id: Id;
   type: QuestionType;

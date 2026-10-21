@@ -3,6 +3,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { TrainingCategory } from '../../entities/training-category.entity';
 import { SysUser } from '../../entities/sys-user.entity';
+import { Question } from '../../entities/question.entity';
+import { QuestionConcept } from '../../entities/question-concept.entity';
+import { QuestionVersion } from '../../entities/question-version.entity';
 import { Errors } from '../../common/errors';
 import { AuditService } from '../../common/audit.service';
 
@@ -141,8 +144,15 @@ export class CategoryService {
   async remove(id: string, actor: CategoryActor, ip: string | null) {
     await this.categoryRepo.manager.transaction(async (manager) => {
       const category = await this.lockExisting(manager, id);
-      const referenced = await manager.getRepository(SysUser).count({ where: { categoryId: String(id) } });
-      if (referenced > 0) throw Errors.categoryInactive('培训类别已被学员引用，不能删除');
+      const [users, questions, concepts, versions] = await Promise.all([
+        manager.getRepository(SysUser).count({ where: { categoryId: String(id) } }),
+        manager.getRepository(Question).count({ where: { categoryId: String(id) } }),
+        manager.getRepository(QuestionConcept).count({ where: { categoryId: String(id) } }),
+        manager.getRepository(QuestionVersion).count({ where: { categoryId: String(id) } }),
+      ]);
+      if (users + questions + concepts + versions > 0) {
+        throw Errors.categoryInactive('培训类别已被学员、题目或考点引用，不能删除');
+      }
       await manager.getRepository(TrainingCategory).remove(category);
     });
     this.audit.log({

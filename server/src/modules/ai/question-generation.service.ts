@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { randomBytes } from 'node:crypto';
 import { Question } from '../../entities/question.entity';
 import { Regulation } from '../../entities/regulation.entity';
@@ -14,6 +14,9 @@ import { AppConfig } from '../../config/configuration';
 import { Errors } from '../../common/errors';
 import { RedisService } from '../../common/redis.service';
 import { AuditService } from '../../common/audit.service';
+import type { Difficulty } from '../../common/training-contracts';
+import { CategoryService } from '../training/category.service';
+import { QuestionVersionService } from '../questions/question-version.service';
 
 export interface ParsedQuestion {
   type: string;
@@ -52,7 +55,8 @@ export class QuestionGenerationService {
     private readonly redis: RedisService,
     private readonly config: AppConfig,
     private readonly audit: AuditService,
-    private readonly dataSource: DataSource,
+    private readonly categories: CategoryService,
+    private readonly versions: QuestionVersionService,
   ) {}
 
   private taskKey(taskId: string) {
@@ -71,14 +75,16 @@ export class QuestionGenerationService {
   /** 发起校验（04 册 3.5）：配置完整 / 生效版本 parsed 且 text_content 非空 / 分值合计 = 100 */
   async start(input: {
     regulationId: string;
+    categoryId: string;
+    difficulty: Difficulty;
     questionCountSingle: number;
     questionCountMultiple: number;
     scoreSingle: number;
     scoreMultiple: number;
     actor: { id: number; name: string };
   }) {
-    const configured = await this.aiConfig.isConfigured();
-    if (!configured) throw Errors.aiNotConfigured();
+    if (!['easy', 'medium', 'hard'].includes(input.difficulty)) throw Errors.param('难度非法（easy / medium / hard）');
+    await this.categories.assertActive(input.categoryId);
 
     const regulation = await this.regRepo.findOne({ where: { id: input.regulationId } });
     if (!regulation) throw Errors.notFound('制度不存在');
@@ -100,6 +106,9 @@ export class QuestionGenerationService {
       throw Errors.param(`分值参数合计须等于 100.00，当前为 ${total.toFixed(2)}（差距 ${(100 - total).toFixed(2)}）`);
     }
 
+    const configured = await this.aiConfig.isConfigured();
+    if (!configured) throw Errors.aiNotConfigured();
+
     // 同制度同时仅一个运行中任务（04 册 6.2 限流约定）：先落任务记录再 SETNX 原子抢互斥键，
     // 防 check-then-set 并发穿透双跑；未抢到即回滚自建记录
     const now = new Date();
@@ -110,6 +119,8 @@ export class QuestionGenerationService {
     const taskPayload = {
       task_id: taskId,
       regulation_id: Number(input.regulationId),
+      category_id: String(input.categoryId),
+      difficulty: input.difficulty,
       status: 'queued',
       created_at: now.toISOString(),
       question_count_single: cs,
@@ -143,6 +154,8 @@ export class QuestionGenerationService {
       task_id: taskId,
       status: 'running',
       estimated_seconds: 120,
+      category_id: String(input.categoryId),
+      difficulty: input.difficulty,
       question_count_single: cs,
       question_count_multiple: cm,
       score_single: ss,
@@ -280,7 +293,7 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
     taskId: string,
     regulation: Regulation,
     version: RegulationVersion,
-    input: { questionCountSingle: number; questionCountMultiple: number; scoreSingle: number; scoreMultiple: number; actor: { id: number; name: string } },
+    input: { categoryId: string; difficulty: Difficulty; questionCountSingle: number; questionCountMultiple: number; scoreSingle: number; scoreMultiple: number; actor: { id: number; name: string } },
   ) {
     // 整体兜底：任何未预期异常都必须落到 failed 并释放互斥键，
     // 否则该制度会以「任务执行中」429 锁死直至 24h TTL（04 册 6.2 / AD-03 状态机）
@@ -306,7 +319,7 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
     taskId: string,
     regulation: Regulation,
     version: RegulationVersion,
-    input: { questionCountSingle: number; questionCountMultiple: number; scoreSingle: number; scoreMultiple: number; actor: { id: number; name: string } },
+    input: { categoryId: string; difficulty: Difficulty; questionCountSingle: number; questionCountMultiple: number; scoreSingle: number; scoreMultiple: number; actor: { id: number; name: string } },
   ) {
     await this.setTask(taskId, { ...(await this.getTask(taskId) || {}), status: 'running' });
     const text = version.textContent || '';
@@ -377,32 +390,27 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
       return;
     }
 
-    // 单事务批量落库：source=ai、status=pending、score 按分值模板写入（05 册 4.4.4 步骤 6）
-    const saved = await this.dataSource.transaction(async (m) => {
-      const repo = m.getRepository(Question);
-      const entities = validQuestions.map((q) =>
-        repo.create({
-          regulationId: String(regulation.id),
-          versionId: String(version.id),
-          type: q.type,
-          stem: q.stem,
-          options: q.options,
-          answer: q.answer,
-          analysis: q.analysis,
-          score: String(q.type === 'single' ? input.scoreSingle : input.scoreMultiple),
-          status: 'pending',
-          source: 'ai',
-          createdBy: String(input.actor.id),
-        }),
-      );
-      return repo.save(entities);
-    });
+    // 类别/难度来自请求而非模型输出；统一版本服务在一个事务内创建 identity + revision 1。
+    const saved = await this.versions.createMany(validQuestions.map((q) => ({
+      categoryId: input.categoryId,
+      difficulty: input.difficulty,
+      type: q.type as 'single' | 'multiple',
+      stem: q.stem,
+      options: q.options,
+      answer: q.answer,
+      analysis: q.analysis,
+      rubric: null,
+      scoreCents: Math.round((q.type === 'single' ? input.scoreSingle : input.scoreMultiple) * 100),
+      regulationId: String(regulation.id),
+      regulationVersionId: String(version.id),
+      source: 'ai',
+    })), String(input.actor.id));
 
     await this.setTask(taskId, {
       ...(await this.getTask(taskId) || {}),
       status: 'completed',
       completed_at: new Date().toISOString(),
-      question_ids: saved.map((q) => Number(q.id)),
+      question_ids: saved.map((q) => Number(q.questionId)),
       stats: {
         blocks_total: chunks.length,
         blocks_failed: failedBlocks.length,
@@ -414,7 +422,7 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
     await this.redis.del(`ai:task:active:${regulation.id}`);
     this.audit.log({
       actor_id: input.actor.id, actor_name: input.actor.name, action: 'ai.generate', object_type: 'regulation',
-      object_id: regulation.id, detail: { task_id: taskId, generated: saved.length }, result: 'success', source_ip: null,
+      object_id: regulation.id, detail: { task_id: taskId, category_id: input.categoryId, difficulty: input.difficulty, generated: saved.length }, result: 'success', source_ip: null,
     });
   }
 
@@ -479,6 +487,8 @@ ${block.text || ''}
       task_id: task.task_id,
       status: task.status,
       created_at: task.created_at,
+        category_id: task.category_id,
+        difficulty: task.difficulty,
     };
     if (task.status === 'completed') {
       base.question_ids = task.question_ids;
@@ -502,13 +512,19 @@ ${block.text || ''}
   private questionView(q: Question) {
     return {
       id: Number(q.id),
-      regulation_id: Number(q.regulationId),
-      version_id: Number(q.versionId),
+        regulation_id: q.regulationId === null ? null : Number(q.regulationId),
+        version_id: q.versionId === null ? null : Number(q.versionId),
+        question_id: String(q.id),
+        current_version_id: q.currentVersionId ? String(q.currentVersionId) : null,
+        category_id: q.categoryId ? String(q.categoryId) : null,
+        difficulty: q.difficulty,
+        concept_id: q.conceptId ? String(q.conceptId) : null,
       type: q.type,
       stem: q.stem,
       options: q.options,
       answer: q.answer,
       analysis: q.analysis,
+        rubric: q.rubric,
       score: Number(q.score),
       status: q.status,
       source: q.source,
