@@ -19,8 +19,15 @@ const SYSTEM_DATABASES = new Set(['mysql', 'sys', 'information_schema', 'perform
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const mysql = require('mysql2/promise');
 
-const REQUIRED_REGISTRY_COLUMNS = [
-  'migration_id', 'checksum', 'status', 'started_at', 'applied_at', 'attempts', 'error_message',
+const REGISTRY_COLUMN_CONTRACT = [
+  { name: 'migration_id', dataType: 'varchar', columnType: 'varchar(128)', nullable: 'NO', defaultValue: null },
+  { name: 'checksum', dataType: 'char', columnType: 'char(64)', nullable: 'NO', defaultValue: null },
+  { name: 'status', dataType: 'varchar', columnType: 'varchar(16)', nullable: 'NO', defaultValue: 'applied' },
+  { name: 'started_at', dataType: 'datetime', columnType: 'datetime(3)', nullable: 'YES', defaultValue: null },
+  { name: 'applied_at', dataType: 'datetime', columnType: 'datetime(3)', nullable: 'YES', defaultValue: null },
+  { name: 'attempts', dataType: 'int', columnType: 'int', nullable: 'NO', defaultValue: '0' },
+  { name: 'error_message', dataType: 'text', columnType: 'text', nullable: 'YES', defaultValue: null },
+  { name: 'progress', dataType: 'json', columnType: 'json', nullable: 'YES', defaultValue: null },
 ];
 
 export function validateMigrationTarget(database) {
@@ -315,14 +322,42 @@ async function activeExamPreflight(connection) {
 async function readRegistryColumns(connection) {
   if (!await tableExists(connection, REGISTRY_TABLE)) return new Set();
   const [rows] = await connection.execute(
-    'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
+    'SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
     [REGISTRY_TABLE],
   );
-  const columns = new Set(rows.map((row) => row.COLUMN_NAME));
-  for (const required of REQUIRED_REGISTRY_COLUMNS) {
-    if (!columns.has(required)) throw new Error(`schema_migration is missing required column: ${required}`);
+  const byName = new Map(rows.map((row) => [row.COLUMN_NAME, row]));
+  for (const contract of REGISTRY_COLUMN_CONTRACT) {
+    const row = byName.get(contract.name);
+    if (!row) {
+      if (contract.name === 'progress') continue;
+      throw new Error(`schema_migration is missing required column: ${contract.name}`);
+    }
+    if (row.DATA_TYPE !== contract.dataType
+      || row.COLUMN_TYPE !== contract.columnType
+      || row.IS_NULLABLE !== contract.nullable
+      || row.COLUMN_DEFAULT !== contract.defaultValue) {
+      throw new Error(`schema_migration column ${contract.name} has incompatible type/nullability/default`);
+    }
   }
-  return columns;
+  const [indexes] = await connection.execute(
+    'SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX',
+    [REGISTRY_TABLE],
+  );
+  const indexContract = [
+    { name: 'PRIMARY', nonUnique: 0, sequence: 1, column: 'migration_id' },
+    { name: 'idx_schema_migration_status', nonUnique: 1, sequence: 1, column: 'status' },
+  ];
+  for (const expected of indexContract) {
+    const matches = indexes.filter((index) => index.INDEX_NAME === expected.name);
+    if (matches.length !== 1
+      || Number(matches[0].NON_UNIQUE) !== expected.nonUnique
+      || Number(matches[0].SEQ_IN_INDEX) !== expected.sequence
+      || matches[0].COLUMN_NAME !== expected.column
+      || matches[0].INDEX_TYPE !== 'BTREE') {
+      throw new Error(`schema_migration index ${expected.name} is incompatible`);
+    }
+  }
+  return new Set(byName.keys());
 }
 
 function decodeProgress(value, migrationId) {

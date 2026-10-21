@@ -99,7 +99,17 @@ test('legacy registry without progress is upgraded before normal step bookkeepin
   const database = await createDatabase();
   const conn = await connectionFor(database);
   const base = await migration();
-  await conn.query(`CREATE TABLE \`${migrationTable}\` (migration_id VARCHAR(128) PRIMARY KEY, checksum CHAR(64) NOT NULL, status VARCHAR(16) NOT NULL, started_at DATETIME(3) NULL, applied_at DATETIME(3) NULL, attempts INT NOT NULL DEFAULT 0, error_message TEXT NULL)`);
+  await conn.query(`CREATE TABLE \`${migrationTable}\` (
+    migration_id VARCHAR(128) NOT NULL,
+    checksum CHAR(64) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'applied',
+    started_at DATETIME(3) NULL,
+    applied_at DATETIME(3) NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    error_message TEXT NULL,
+    PRIMARY KEY (migration_id),
+    KEY idx_schema_migration_status (status)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`);
   await conn.execute(`INSERT INTO \`${migrationTable}\` (migration_id, checksum, status, attempts) VALUES (?, ?, 'applied', 1)`, [base.id, base.checksum]);
   await applyMigrations({ connection: conn, database });
   const [[column]] = await conn.query(`SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${migrationTable}' AND COLUMN_NAME = 'progress'`);
@@ -108,6 +118,37 @@ test('legacy registry without progress is upgraded before normal step bookkeepin
   assert.equal(row.status, 'applied');
   assert.deepEqual(row.progress, ['create_registry', 'add_progress']);
   await conn.end();
+});
+
+test('registry shape drift is rejected by check and apply before changing registry data', async () => {
+  const base = await migration();
+  const variants = [
+    { name: 'json_not_null', progressDefinition: '`progress` JSON NOT NULL', progressValue: JSON.stringify([]) },
+    { name: 'non_json', progressDefinition: '`progress` VARCHAR(16) NULL', progressValue: '[]' },
+  ];
+  for (const variant of variants) {
+    const database = await createDatabase(`${variant.name}_${randomBytes(3).toString('hex')}`);
+    const conn = await connectionFor(database);
+    await conn.query(`CREATE TABLE \`${migrationTable}\` (
+      \`migration_id\` VARCHAR(128) NOT NULL,
+      \`checksum\` CHAR(64) NOT NULL,
+      \`status\` VARCHAR(16) NOT NULL DEFAULT 'applied',
+      \`started_at\` DATETIME(3) NULL,
+      \`applied_at\` DATETIME(3) NULL,
+      \`attempts\` INT NOT NULL DEFAULT 0,
+      \`error_message\` TEXT NULL,
+      ${variant.progressDefinition},
+      PRIMARY KEY (\`migration_id\`),
+      KEY \`idx_schema_migration_status\` (\`status\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`);
+    await conn.execute(`INSERT INTO \`${migrationTable}\` (migration_id, checksum, status, attempts, progress) VALUES (?, ?, 'applied', 7, ?)`, [base.id, base.checksum, variant.progressValue]);
+    const [[before]] = await conn.query(`SELECT status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id = ?`, [base.id]);
+    await assert.rejects(() => inspectMigrations({ connection: conn, database }), /schema_migration|progress|nullable|incompatible|drift/i);
+    await assert.rejects(() => applyMigrations({ connection: conn, database }), /schema_migration|progress|nullable|incompatible|drift/i);
+    const [[after]] = await conn.query(`SELECT status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id = ?`, [base.id]);
+    assert.deepEqual(after, before);
+    await conn.end();
+  }
 });
 
 test('upgrade preserves existing rows and converges INFORMATION_SCHEMA with initialization', async () => {
