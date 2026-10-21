@@ -1,6 +1,6 @@
 -- =====================================================================
 -- EmodorRuleExam 制度学习及考试系统 · 数据库初始化脚本
--- 依据 docs/design/03-数据库设计.md 逐字建 legacy、培训身份/权限/媒体与 B1 课程业务表（当前 25 张，InnoDB + utf8mb4）
+-- 依据 docs/design/03-数据库设计.md 逐字建 legacy、A2—A5、B1 与 B3 业务表（当前 30 张业务表 + 1 张迁移元数据表，InnoDB + utf8mb4）
 -- 时间字段 DATETIME(3)；无数据库级外键（03 册 1.6 节，应用层维护）
 -- 枚举字段 VARCHAR + 应用层校验（03 册 1.7 节）
 -- 种子数据（根部门 / 超级管理员）由 database/seed.mjs 按环境变量生成，
@@ -488,7 +488,107 @@ CREATE TABLE IF NOT EXISTS `lesson_version` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='视频课时不可变内容版本';
 
 -- ---------------------------------------------------------------------
--- 7. 迁移元数据（由 database/migrate.mjs 管理；不属于业务表数量）
+-- 7. 后台公共配置域（3 张，A5）
+-- ---------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS `sys_menu` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `parent_id` BIGINT UNSIGNED NULL,
+  `name` VARCHAR(128) NOT NULL,
+  `type` VARCHAR(16) NOT NULL COMMENT 'directory / menu / button',
+  `route_path` VARCHAR(255) NULL COMMENT '只能映射前端注册路由；button 必须为空',
+  `permission_code` VARCHAR(128) NULL COMMENT '只能映射服务端权限白名单；directory 必须为空',
+  `icon` VARCHAR(64) NULL,
+  `sort` INT NOT NULL DEFAULT 0,
+  `status` TINYINT NOT NULL DEFAULT 1,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  KEY `idx_sys_menu_parent_sort` (`parent_id`, `sort`),
+  KEY `idx_sys_menu_permission` (`permission_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='后台菜单与按钮目录';
+
+CREATE TABLE IF NOT EXISTS `sys_dictionary` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `type` VARCHAR(64) NOT NULL,
+  `code` VARCHAR(64) NOT NULL,
+  `label` VARCHAR(128) NOT NULL,
+  `sort` INT NOT NULL DEFAULT 0,
+  `status` TINYINT NOT NULL DEFAULT 1,
+  `is_system` TINYINT NOT NULL DEFAULT 0 COMMENT '1=业务固定枚举，只读',
+  `remark` VARCHAR(255) NULL,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_sys_dictionary_type_code` (`type`, `code`),
+  KEY `idx_sys_dictionary_type_sort` (`type`, `sort`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='显示字典；业务固定枚举不由此表改变语义';
+
+CREATE TABLE IF NOT EXISTS `site_setting` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `setting_key` VARCHAR(64) NOT NULL,
+  `value_json` JSON NULL,
+  `updated_by` BIGINT UNSIGNED NULL,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_site_setting_key` (`setting_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='站点公开展示配置白名单';
+
+INSERT INTO `sys_dictionary` (`type`, `code`, `label`, `sort`, `status`, `is_system`, `remark`) VALUES
+  ('learner_source','institution','本机构学员',10,1,1,'业务固定枚举'),
+  ('learner_source','external','外来学员',20,1,1,'业务固定枚举'),
+  ('difficulty','easy','初级',10,1,1,'业务固定枚举'),
+  ('difficulty','medium','中级',20,1,1,'业务固定枚举'),
+  ('difficulty','hard','高级',30,1,1,'业务固定枚举'),
+  ('question_type','single','单选题',10,1,1,'业务固定枚举'),
+  ('question_type','multiple','多选题',20,1,1,'业务固定枚举'),
+  ('question_type','judgment','判断题',30,1,1,'业务固定枚举'),
+  ('question_type','image','图片作答题',40,1,1,'业务固定枚举'),
+  ('regulation_status','draft','草稿',10,1,1,'业务固定枚举'),
+  ('regulation_status','published','已发布',20,1,1,'业务固定枚举'),
+  ('regulation_status','archived','已归档',30,1,1,'业务固定枚举'),
+  ('paper_status','draft','草稿',10,1,1,'业务固定枚举'),
+  ('paper_status','published','已发布',20,1,1,'业务固定枚举'),
+  ('paper_status','archived','已归档',30,1,1,'业务固定枚举'),
+  ('question_status','pending','待审核',10,1,1,'业务固定枚举'),
+  ('question_status','approved','已通过',20,1,1,'业务固定枚举'),
+  ('question_status','rejected','已驳回',30,1,1,'业务固定枚举'),
+  ('exam_status','in_progress','进行中',10,1,1,'业务固定枚举'),
+  ('exam_status','submitted','已交卷',20,1,1,'业务固定枚举'),
+  ('exam_status','passed','已通过',30,1,1,'业务固定枚举'),
+  ('exam_status','failed','未通过',40,1,1,'业务固定枚举'),
+  ('exam_status','timeout','超时交卷',50,1,1,'业务固定枚举')
+ON DUPLICATE KEY UPDATE `label` = VALUES(`label`), `sort` = VALUES(`sort`), `status` = 1, `is_system` = 1, `remark` = VALUES(`remark`);
+
+INSERT INTO `site_setting` (`id`, `setting_key`, `value_json`, `updated_by`) VALUES
+  (1,'logo_asset_id',NULL,NULL),
+  (2,'banners','[]',NULL)
+ON DUPLICATE KEY UPDATE `id` = `id`;
+
+INSERT INTO `sys_menu` (`id`, `parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`) VALUES
+  (1,NULL,'管理台','directory',NULL,NULL,'Grid',10,1),
+  (2,NULL,'系统治理','directory',NULL,NULL,'Setting',20,1),
+  (10,1,'制度管理','menu','/admin/regulations','regulations:read','Document',10,1),
+  (11,1,'题库与出题','menu','/admin/questions',NULL,'EditPen',20,1),
+  (12,1,'试卷管理','menu','/admin/papers','papers:read','Tickets',30,1),
+  (13,1,'统计报表','menu','/admin/statistics','statistics:read','DataAnalysis',40,1),
+  (14,1,'部门管理','menu','/admin/departments','departments:read','OfficeBuilding',50,1),
+  (15,1,'员工管理','menu','/admin/users','students:read','User',60,1),
+  (16,1,'学员管理','menu','/admin/students','students:read','UserFilled',70,1),
+  (17,1,'培训类别','menu','/admin/training-categories','training_categories:read','CollectionTag',80,1),
+  (18,1,'AI 服务配置','menu','/admin/ai-config',NULL,'Cpu',90,1),
+  (20,2,'管理员','menu','/admin/administrators','administrators:read','UserFilled',10,1),
+  (21,2,'角色权限','menu','/admin/roles','roles:read','SetUp',20,1),
+  (22,2,'在线会话','menu','/admin/sessions','sessions:read','Monitor',30,1),
+  (23,2,'菜单配置','menu','/admin/system/menus','system_settings:read','Menu',40,1),
+  (24,2,'字典配置','menu','/admin/system/dictionaries','system_settings:read','Notebook',50,1),
+  (25,2,'网站配置','menu','/admin/system/site-settings','system_settings:read','Picture',60,1),
+  (26,2,'审计日志','menu','/admin/system/audit-logs','system_settings:read','DocumentChecked',70,1)
+ON DUPLICATE KEY UPDATE `id` = `id`;
+
+-- ---------------------------------------------------------------------
+-- 8. 迁移元数据（由 database/migrate.mjs 管理；不属于业务表数量）
 -- ---------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS `schema_migration` (

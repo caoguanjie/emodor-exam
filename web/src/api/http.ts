@@ -7,6 +7,16 @@ import { ElMessage } from 'element-plus';
  */
 const http = axios.create({ baseURL: '/api/v1', timeout: 60000 });
 
+/** Build a same-origin URL for raw/public endpoints that are not envelope requests. */
+export function apiUrl(path: string): string {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return `/api/v1${normalized}`;
+}
+
+export function publicSiteAssetUrl(assetId: string): string {
+  return apiUrl(`/site-config/assets/${encodeURIComponent(assetId)}/content`);
+}
+
 let refreshing: Promise<boolean> | null = null;
 
 /** 以 HttpOnly refresh Cookie 静默换取新 access token（供 401 拦截与新标签页恢复会话复用） */

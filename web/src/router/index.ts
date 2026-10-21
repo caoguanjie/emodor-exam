@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
+import { QUESTION_ROUTE_PERMISSIONS, routeAccessAllowed } from './access';
 
 /**
  * 路由守卫承载前端侧访问控制（02 册 3.1 选型理由 3 双层防线）：
@@ -23,23 +24,28 @@ const routes: RouteRecordRaw[] = [
       // ---- 管理端 ----
       // These legacy pages remain the system-identity boundary. Delegated
       // learner administration uses the dedicated /admin/students route.
-      { path: 'admin/departments', component: () => import('../views/admin/Departments.vue'), meta: { title: '部门管理', admin: true, superAdminOnly: true } },
-      { path: 'admin/users', component: () => import('../views/admin/Users.vue'), meta: { title: '员工管理', admin: true, superAdminOnly: true } },
-      { path: 'admin/students', component: () => import('../views/admin/Users.vue'), meta: { title: '学员管理', admin: true, permission: 'students:read' } },
-      { path: 'admin/training-categories', component: () => import('../views/admin/TrainingCategories.vue'), meta: { title: '培训类别', admin: true, permission: 'training_categories:read' } },
-      { path: 'admin/regulations', component: () => import('../views/admin/Regulations.vue'), meta: { title: '制度管理', admin: true, permission: 'regulations:read' } },
+      // KeepAlive is opt-in: session/polling pages that rely on unmount cleanup omit cache.
+      { path: 'admin/departments', component: () => import('../views/admin/Departments.vue'), meta: { title: '部门管理', admin: true, superAdminOnly: true, cache: true } },
+      { path: 'admin/users', component: () => import('../views/admin/Users.vue'), meta: { title: '员工管理', admin: true, superAdminOnly: true, cache: true } },
+      { path: 'admin/students', component: () => import('../views/admin/Users.vue'), meta: { title: '学员管理', admin: true, permission: 'students:read', cache: true } },
+      { path: 'admin/training-categories', component: () => import('../views/admin/TrainingCategories.vue'), meta: { title: '培训类别', admin: true, permission: 'training_categories:read', cache: true } },
+      { path: 'admin/regulations', component: () => import('../views/admin/Regulations.vue'), meta: { title: '制度管理', admin: true, permission: 'regulations:read', cache: true } },
       { path: 'admin/regulations/:id', component: () => import('../views/admin/RegulationDetail.vue'), meta: { title: '制度详情', admin: true, permission: 'regulations:read' } },
-      { path: 'admin/questions', component: () => import('../views/admin/Questions.vue'), meta: { title: '题库与出题', admin: true, permission: 'questions:read' } },
-      { path: 'admin/papers', component: () => import('../views/admin/Papers.vue'), meta: { title: '试卷管理', admin: true, permission: 'papers:read' } },
-      { path: 'admin/papers/:id', component: () => import('../views/admin/PaperDetail.vue'), meta: { title: '组卷', admin: true, permission: 'papers:read' } },
-      { path: 'admin/statistics', component: () => import('../views/admin/Statistics.vue'), meta: { title: '统计报表', admin: true, permission: 'statistics:read' } },
-      { path: 'admin/ai-config', component: () => import('../views/admin/AiConfig.vue'), meta: { title: 'AI 服务配置', admin: true, permissionAny: ['ai_config:read', 'ai_config:write'] } },
-      { path: 'admin/administrators', component: () => import('../views/admin/Administrators.vue'), meta: { title: '管理员', admin: true, permission: 'administrators:read' } },
-      { path: 'admin/roles', component: () => import('../views/admin/Roles.vue'), meta: { title: '角色权限', admin: true, permission: 'roles:read' } },
-      { path: 'admin/sessions', component: () => import('../views/admin/OnlineSessions.vue'), meta: { title: '在线会话', admin: true, permission: 'sessions:read' } },
+      { path: 'admin/questions', component: () => import('../views/admin/Questions.vue'), meta: { title: '题库与出题', admin: true, permissionAny: [...QUESTION_ROUTE_PERMISSIONS] } },
+      { path: 'admin/papers', component: () => import('../views/admin/Papers.vue'), meta: { title: '试卷管理', admin: true, permission: 'papers:read', cache: true } },
+      { path: 'admin/papers/:id', component: () => import('../views/admin/PaperDetail.vue'), meta: { title: '组卷', admin: true, permission: 'papers:read', cache: true } },
+      { path: 'admin/statistics', component: () => import('../views/admin/Statistics.vue'), meta: { title: '统计报表', admin: true, permission: 'statistics:read', cache: true } },
+      { path: 'admin/ai-config', component: () => import('../views/admin/AiConfig.vue'), meta: { title: 'AI 服务配置', admin: true, permissionAny: ['ai_config:read', 'ai_config:write'], cache: true } },
+      { path: 'admin/administrators', component: () => import('../views/admin/Administrators.vue'), meta: { title: '管理员', admin: true, permission: 'administrators:read', cache: true } },
+      { path: 'admin/roles', component: () => import('../views/admin/Roles.vue'), meta: { title: '角色权限', admin: true, permission: 'roles:read', cache: true } },
+      { path: 'admin/sessions', component: () => import('../views/admin/OnlineSessions.vue'), meta: { title: '在线会话', admin: true, permission: 'sessions:read', cache: true } },
+      { path: 'admin/system/menus', component: () => import('../views/admin/Menus.vue'), meta: { title: '菜单配置', admin: true, permission: 'system_settings:read', cache: true } },
+      { path: 'admin/system/dictionaries', component: () => import('../views/admin/Dictionaries.vue'), meta: { title: '字典配置', admin: true, permission: 'system_settings:read', cache: true } },
+      { path: 'admin/system/site-settings', component: () => import('../views/admin/SiteSettings.vue'), meta: { title: '网站配置', admin: true, permission: 'system_settings:read', cache: true } },
+      { path: 'admin/system/audit-logs', component: () => import('../views/admin/AuditLogs.vue'), meta: { title: '审计日志', admin: true, permission: 'system_settings:read', cache: true } },
     ],
   },
-  { path: '/:pathMatch(.*)*', redirect: '/' },
+  { path: '/:pathMatch(.*)*', component: () => import('../views/NotFound.vue'), meta: { title: '页面未找到' } },
 ];
 
 export const router = createRouter({ history: createWebHistory(), routes });
@@ -67,8 +73,6 @@ router.beforeEach(async (to) => {
   }
   if (auth.needChangePassword && to.path !== '/change-password') return '/change-password';
   if (to.meta.admin && !auth.isAdmin) return '/my/regulations';
-  if (to.meta.superAdminOnly && !auth.isSuperAdmin) return '/my/regulations';
-  if (to.meta.permission && !auth.can(String(to.meta.permission))) return '/my/regulations';
-  if (to.meta.permissionAny && !(to.meta.permissionAny as string[]).some((permission) => auth.can(permission))) return '/my/regulations';
+  if (!routeAccessAllowed(to.meta, auth.can, auth.isSuperAdmin)) return '/my/regulations';
   return true;
 });

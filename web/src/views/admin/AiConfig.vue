@@ -8,29 +8,35 @@
         界面仅掩码回显；切换服务商 = 改配置，无需改代码、无需停机。扫描版 PDF 会自动按页面发送给支持视觉输入的模型，保存后可单独测试视觉输入。
       </p>
     </div>
-    <el-form label-width="110px">
+    <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" show-icon>
+      <template #default>
+        <el-button link type="primary" :loading="initializing" @click="loadConfig">重新加载</el-button>
+      </template>
+    </el-alert>
+    <el-form v-loading="initializing" label-width="110px">
       <el-form-item label="base_url">
-        <el-input v-model="form.base_url" :disabled="!auth.can('ai_config:write')" placeholder="如 https://open.bigmodel.cn/api/paas/v4" />
+        <el-input v-model="form.base_url" :disabled="!auth.can('ai_config:write') || configLocked" placeholder="如 https://open.bigmodel.cn/api/paas/v4" />
       </el-form-item>
       <el-form-item label="api_key">
-        <el-input v-model="form.api_key" :disabled="!auth.can('ai_config:write')" :placeholder="masked ? `已保存：${masked}（留空保持不变）` : '请输入 api_key'" show-password />
+        <el-input v-model="form.api_key" :disabled="!auth.can('ai_config:write') || configLocked" :placeholder="masked ? `已保存：${masked}（留空保持不变）` : '请输入 api_key'" show-password />
       </el-form-item>
       <el-form-item label="model">
-        <el-input v-model="form.model" :disabled="!auth.can('ai_config:write')" placeholder="如 glm-4-flash / deepseek-chat / qwen-plus" />
+        <el-input v-model="form.model" :disabled="!auth.can('ai_config:write') || configLocked" placeholder="如 glm-4-flash / deepseek-chat / qwen-plus" />
       </el-form-item>
       <el-form-item>
-        <el-button v-if="auth.can('ai_config:write')" type="primary" @click="onSave">保存配置</el-button>
-        <el-button v-if="auth.can('ai_config:write')" @click="onTest" :loading="testing">连通性测试</el-button>
-        <el-button v-if="auth.can('ai_config:write')" @click="onTestVision" :loading="testingVision">多模态测试</el-button>
+        <el-button v-if="auth.can('ai_config:write')" type="primary" :disabled="configLocked" @click="onSave">保存配置</el-button>
+        <el-button v-if="auth.can('ai_config:write')" :disabled="configLocked" @click="onTest" :loading="testing">连通性测试</el-button>
+        <el-button v-if="auth.can('ai_config:write')" :disabled="configLocked" @click="onTestVision" :loading="testingVision">多模态测试</el-button>
       </el-form-item>
     </el-form>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import http from '../../api/http';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 
 const auth = useAuthStore();
@@ -38,6 +44,28 @@ const form = reactive<any>({ base_url: '', api_key: '', model: '' });
 const masked = ref('');
 const testing = ref(false);
 const testingVision = ref(false);
+const dirty = ref(false);
+const formBaseline = ref(JSON.stringify(form));
+const canReadConfig = auth.can('ai_config:read');
+const initializing = ref(canReadConfig);
+const loadError = ref('');
+const configLocked = computed(() => initializing.value || !!loadError.value);
+
+function serializeForm() { return JSON.stringify(form); }
+function replaceForm(value: any) { Object.assign(form, value); }
+function captureBaseline() {
+  formBaseline.value = serializeForm();
+  dirty.value = false;
+}
+function discardDraft() {
+  replaceForm(JSON.parse(formBaseline.value));
+  dirty.value = false;
+}
+
+const unsaved = useUnsavedChanges(dirty, { onDiscard: discardDraft });
+watch(() => serializeForm(), () => {
+  dirty.value = serializeForm() !== formBaseline.value;
+}, { flush: 'sync' });
 
 function applyMaskedConfig(d: any) {
   form.base_url = d.base_url || '';
@@ -45,17 +73,32 @@ function applyMaskedConfig(d: any) {
   masked.value = d.api_key_masked || '';
 }
 
-onMounted(async () => {
+async function loadConfig() {
   // ai_config:write intentionally does not imply read: writer-only roles get
   // a blank form and may use the masked PUT response after saving.
-  if (auth.can('ai_config:read')) applyMaskedConfig(await http.get('/ai/config'));
-});
+  if (!canReadConfig) return;
+  initializing.value = true;
+  loadError.value = '';
+  try {
+    applyMaskedConfig(await http.get('/ai/config'));
+    form.api_key = '';
+    captureBaseline();
+  } catch {
+    loadError.value = 'AI 配置加载失败，请重试';
+  } finally {
+    initializing.value = false;
+  }
+}
+
+onMounted(loadConfig);
 
 async function onSave() {
   const saved: any = await http.put('/ai/config', form);
   applyMaskedConfig(saved);
   ElMessage.success('已保存（api_key 加密落配置文件，Redis 仅作读缓存）');
   form.api_key = '';
+  captureBaseline();
+  unsaved.markClean();
 }
 
 async function onTest() {

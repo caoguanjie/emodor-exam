@@ -42,6 +42,7 @@ export const Errors = {
   categoryInactive: (msg = '培训类别不存在或已停用') => new BizError(40910, 409, msg),
   importBatchConflict: (msg = '导入批次已确认，不能更换行集合') => new BizError(40911, 409, msg),
   mediaReferenced: (msg = '媒体仍被业务引用，不能删除') => new BizError(40913, 409, msg),
+  systemReferenced: (msg = '系统配置仍被引用，不能删除') => new BizError(40920, 409, msg),
   courseConflict: (msg = '课程状态冲突') => new BizError(40930, 409, msg),
   questionVersionConflict: (msg = '题目版本已变化，请刷新后重试') => new BizError(40940, 409, msg),
   mediaRangeInvalid: (msg = '媒体 Range 无效') => new BizError(41601, 416, msg),

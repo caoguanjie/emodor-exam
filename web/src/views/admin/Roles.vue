@@ -11,17 +11,18 @@
       <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button v-if="auth.can('roles:write')" text type="primary" :disabled="row.is_system" @click="openEdit(row)">编辑</el-button></template></el-table-column>
     </el-table>
 
-    <el-dialog v-model="dialog" :title="editing ? '编辑业务角色' : '新建业务角色'" width="620px">
+    <el-dialog v-model="dialog" :title="editing ? '编辑业务角色' : '新建业务角色'" width="620px" :before-close="beforeDialogClose">
       <el-form label-width="90px"><el-form-item label="角色代码"><el-input v-model="form.code" :disabled="editing" maxlength="64" /></el-form-item><el-form-item label="角色名称"><el-input v-model="form.name" maxlength="128" /></el-form-item><el-form-item label="权限"><el-checkbox-group v-model="form.permissions" class="permission-grid"><el-checkbox v-for="item in catalog" :key="item.code" :label="item.code">{{ item.name }}<span class="code">{{ item.code }}</span></el-checkbox></el-checkbox-group></el-form-item><el-form-item v-if="editing" label="状态"><el-switch v-model="form.status" :active-value="1" :inactive-value="0" /></el-form-item></el-form>
-      <template #footer><el-button @click="dialog = false">取消</el-button><el-button v-if="auth.can('roles:write')" type="primary" :loading="saving" @click="save">保存</el-button></template>
+      <template #footer><el-button @click="closeDialog">取消</el-button><el-button v-if="auth.can('roles:write')" type="primary" :loading="saving" @click="save">保存</el-button></template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import http from '../../api/http';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 
 const auth = useAuthStore();
@@ -32,6 +33,41 @@ const saving = ref(false);
 const dialog = ref(false);
 const editing = ref(false);
 const form = reactive<any>({ code: '', name: '', permissions: [], status: 1, id: '' });
+const dirty = ref(false);
+const formBaseline = ref('');
+
+function serializeForm() { return JSON.stringify(form); }
+function replaceForm(value: any) {
+  Object.keys(form).forEach((key) => delete form[key]);
+  Object.assign(form, value);
+}
+function beginDraft(value: any, isEditing: boolean) {
+  replaceForm(value);
+  editing.value = isEditing;
+  formBaseline.value = serializeForm();
+  dirty.value = false;
+  dialog.value = true;
+}
+function discardDraft() {
+  replaceForm(formBaseline.value ? JSON.parse(formBaseline.value) : {});
+  dirty.value = false;
+  dialog.value = false;
+}
+
+const unsaved = useUnsavedChanges(dirty, { onDiscard: discardDraft });
+watch(() => serializeForm(), () => {
+  dirty.value = dialog.value && serializeForm() !== formBaseline.value;
+}, { flush: 'sync' });
+
+async function closeDialog() {
+  if (await unsaved.confirmDiscard()) dialog.value = false;
+}
+async function beforeDialogClose(done: () => void) {
+  if (await unsaved.confirmDiscard()) {
+    dialog.value = false;
+    done();
+  }
+}
 
 async function load() {
   loading.value = true;
@@ -42,15 +78,24 @@ async function load() {
   } finally { loading.value = false; }
 }
 function reset() { Object.assign(form, { id: '', code: '', name: '', permissions: [], status: 1 }); }
-function openCreate() { reset(); editing.value = false; dialog.value = true; }
-function openEdit(row: any) { Object.assign(form, { id: row.id, code: row.code, name: row.name, permissions: [...row.permissions], status: row.status }); editing.value = true; dialog.value = true; }
+function openCreate() {
+  reset();
+  beginDraft({ ...form, permissions: [...form.permissions] }, false);
+}
+function openEdit(row: any) {
+  beginDraft({ id: row.id, code: row.code, name: row.name, permissions: [...row.permissions], status: row.status }, true);
+}
 async function save() {
   if (!form.code || !form.name) return;
   saving.value = true;
   try {
     if (editing.value) await http.put(`/admin/roles/${form.id}`, { name: form.name, permissions: form.permissions, status: form.status });
     else await http.post('/admin/roles', { code: form.code, name: form.name, permissions: form.permissions });
-    ElMessage.success('角色已保存'); dialog.value = false; await load();
+    ElMessage.success('角色已保存');
+    formBaseline.value = serializeForm();
+    unsaved.markClean();
+    dialog.value = false;
+    await load();
   } finally { saving.value = false; }
 }
 onMounted(load);

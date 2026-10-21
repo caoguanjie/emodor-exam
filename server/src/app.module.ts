@@ -44,6 +44,9 @@ import { CourseLesson } from './entities/course-lesson.entity';
 import { LessonVersion } from './entities/lesson-version.entity';
 import { QuestionConcept } from './entities/question-concept.entity';
 import { QuestionVersion } from './entities/question-version.entity';
+import { SysMenu } from './entities/sys-menu.entity';
+import { SysDictionary } from './entities/sys-dictionary.entity';
+import { SiteSetting } from './entities/site-setting.entity';
 
 import { AuthController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
@@ -90,6 +93,9 @@ import { CourseService } from './modules/courses/course.service';
 import { LessonVersionService } from './modules/courses/lesson-version.service';
 import { QuestionConceptService } from './modules/questions/question-concept.service';
 import { QuestionVersionService } from './modules/questions/question-version.service';
+import { SiteConfigController, SystemController } from './modules/system/system.controller';
+import { SystemService } from './modules/system/system.service';
+import { AuditQueryService } from './modules/system/audit-query.service';
 
 const config = loadConfig();
 
@@ -105,6 +111,7 @@ const config = loadConfig();
       MediaAsset, MediaReference,
       TrainingCourse, CourseChapter, CourseLesson, LessonVersion,
       QuestionConcept, QuestionVersion,
+      SysMenu, SysDictionary, SiteSetting,
       TrainingCategory, ImportBatch,
       SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
     ]),
@@ -118,6 +125,7 @@ const config = loadConfig();
     StatisticsController, HealthController,
     MediaController,
     CourseAdminController, MyCoursesController,
+    SystemController, SiteConfigController,
   ],
   providers: [
     // 全局配置单例（loadConfig 启动时读取环境变量）
@@ -130,6 +138,7 @@ const config = loadConfig();
     MediaService, MediaProbeService,
     CourseService, LessonVersionService,
     QuestionConceptService, QuestionVersionService,
+    SystemService, AuditQueryService,
     // 守卫链（07 册 2.3.2）：① JWT 认证 → ② 细权限映射 → ③ 兼容角色边界
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
