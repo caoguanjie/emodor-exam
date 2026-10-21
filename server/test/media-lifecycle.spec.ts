@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,6 +41,32 @@ afterEach(async () => {
 });
 
 describe('media lifecycle contracts', () => {
+  it('validates a usable asset through the caller transaction manager when supplied', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ruleexam-media-lifecycle-'));
+    roots.push(root);
+    const asset = { id: '99', ownerId: '7', purpose: 'question', mediaKind: 'image', status: 'ready' };
+    const globalFindOne = vi.fn().mockResolvedValue(asset);
+    const managerFindOne = vi.fn().mockResolvedValue(asset);
+    const media = new MediaService(
+      { findOne: globalFindOne } as any,
+      { find: async () => [] } as any,
+      {} as any,
+      { upload: { dir: root }, media: DEFAULT_MEDIA_LIMITS } as any,
+      {} as any,
+    );
+    const manager = {
+      getRepository(entity: unknown) {
+        if (entity !== MediaAsset) throw new Error('unexpected repository');
+        return { findOne: managerFindOne };
+      },
+    } as any;
+
+    await (media.assertUsable as any)('7', '99', 'question', undefined, manager);
+
+    expect(managerFindOne).toHaveBeenCalledWith({ where: { id: '99' } });
+    expect(globalFindOne).not.toHaveBeenCalled();
+  });
+
   it('keeps answer upload internal while rejecting the generic public purpose', async () => {
     expect(() => assertPublicMediaPurpose('answer')).toThrowError();
     const root = await mkdtemp(join(tmpdir(), 'ruleexam-media-lifecycle-'));

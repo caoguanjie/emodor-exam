@@ -97,6 +97,8 @@ import { VideoLearningController } from './modules/video-learning/video-learning
 import { VideoSessionService } from './modules/video-learning/video-session.service';
 import { QuestionConceptService } from './modules/questions/question-concept.service';
 import { QuestionVersionService } from './modules/questions/question-version.service';
+import { QuestionImportController } from './modules/questions/question-import.controller';
+import { QuestionImportService } from './modules/questions/question-import.service';
 import { SiteConfigController, SystemController } from './modules/system/system.controller';
 import { SystemService } from './modules/system/system.service';
 import { AuditQueryService } from './modules/system/audit-query.service';
@@ -117,20 +119,17 @@ const config = loadConfig();
       VideoLearningRecord, VideoLearningSession,
       QuestionConcept, QuestionVersion,
       SysMenu, SysDictionary, SiteSetting,
-      TrainingCategory, ImportBatch,
-      SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
     ]),
     JwtModule.register({ secret: config.jwt.secret, signOptions: { expiresIn: config.jwt.expiresIn } }),
     ScheduleModule.forRoot(),
   ],
   controllers: [
-    AuthController, DepartmentsController, UsersController, StudentsController, MeProfileController, CategoryController,
     AuthController, AccessController, DepartmentsController, UsersController, StudentsController, MeProfileController, CategoryController,
     RegulationsController, AiController, LearningController, ExamsController,
     StatisticsController, HealthController,
     MediaController,
     CourseAdminController, LearnerHomeController, MyCoursesController,
-    VideoLearningController,
+    VideoLearningController, QuestionImportController,
     SystemController, SiteConfigController,
   ],
   providers: [
@@ -144,7 +143,7 @@ const config = loadConfig();
     MediaService, MediaProbeService,
     CourseService, LessonVersionService,
     VideoSessionService,
-    QuestionConceptService, QuestionVersionService,
+    QuestionConceptService, QuestionVersionService, QuestionImportService,
     SystemService, AuditQueryService,
     // 守卫链（07 册 2.3.2）：① JWT 认证 → ② 细权限映射 → ③ 兼容角色边界
     { provide: APP_GUARD, useClass: JwtAuthGuard },

@@ -36,6 +36,7 @@
       </el-select>
       <el-input v-model="query.keyword" clearable placeholder="搜索题干" @keyup.enter="load" />
       <div class="question-toolbar__actions">
+        <el-button v-if="auth.can('questions:write')" @click="router.push('/admin/questions/import')">Excel / TXT 导题</el-button>
         <el-button v-if="auth.can('questions:write')" @click="openCreate">人工录题</el-button>
         <el-button v-if="canGenerate" type="primary" :disabled="!categories.length || !regulations.length" @click="openGenerate">AI 出题</el-button>
       </div>
@@ -179,6 +180,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
 import { useAuthStore } from '../../stores/auth';
@@ -219,6 +221,7 @@ const typeOptions: Array<{ value: QuestionType; label: string }> = [
   { value: 'judgment', label: '判断题' }, { value: 'image', label: '图片作答题' },
 ];
 const auth = useAuthStore();
+const router = useRouter();
 const list = ref<QuestionView[]>([]);
 const total = ref(0);
 const loading = ref(false);

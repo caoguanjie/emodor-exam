@@ -43,15 +43,20 @@ describe('training identity contracts', () => {
     expect(calls[0][1].lock).toEqual({ mode: 'pessimistic_write' });
   });
 
-  it('runs a registered question adapter through the batch contract', async () => {
+  it('runs a registered question adapter only through the questions commit entry', async () => {
     const service = Object.create(ImportBatchService.prototype) as ImportBatchService & { adapters: Map<string, any>; batchRepo: any };
     service.adapters = new Map();
-    service.batchRepo = { findOne: async () => ({ id: '7', kind: 'questions' }) };
+    service.batchRepo = {
+      findOne: async ({ where }: any) => where.kind === 'students'
+        ? null
+        : { id: '7', ownerId: '1', kind: 'questions' },
+    };
     service.registerAdapter('questions', {
       preview: async (_owner: string, rows: unknown[]) => ({ batch_id: '7', valid_rows: rows.map((_row, index) => index + 2), errors: [], duplicates: [] }),
       commit: async (_owner: string, batchId: string, rowNumbers: number[]) => ({ batch_id: batchId, created_ids: ['8'], committed_rows: rowNumbers }),
     });
     await expect(service.preview('1', 'questions', [{ stem: '题目' }])).resolves.toEqual({ batch_id: '7', valid_rows: [2], errors: [], duplicates: [] });
-    await expect(service.commit('1', '7', [2])).resolves.toEqual({ batch_id: '7', created_ids: ['8'], committed_rows: [2] });
+    await expect(service.commit('1', '7', [2])).rejects.toMatchObject({ code: 40401 });
+    await expect(service.commitQuestions('1', '7', [2])).resolves.toEqual({ batch_id: '7', created_ids: ['8'], committed_rows: [2] });
   });
 });

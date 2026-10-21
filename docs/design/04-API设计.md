@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训类别/学员/本人资料、A3 权限/会话、A4 受控媒体、A5 后台公共配置、B1 课程主体、B2 视频学习与 B3 四题型版本题库接口均以实际 controller/entity/migration 为准。B2 提供完整后端 API、持久会话与集成测试目标，不代表独立 H5、全屏/锁屏、微信或手机弱网体验已验收。B4 题库导入、C1 发布/个人题单及后续草稿、阅卷、监控和统计仍未实现。所有接口继续使用 `/api/v1`、`{code,message,data}`、严格 DTO/未知字段拒绝、所有权校验和 HttpOnly refresh Cookie；私有媒体与公开品牌内容流例外跳过信封。
+> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2—A5、B1 课程主体、B2 视频学习、B3 四题型版本题库及 B4 Excel/TXT 导题接口均以实际 controller/entity/migration/service 为准。B2 提供完整后端 API、持久会话与集成测试目标，不代表独立 H5、全屏/锁屏、微信或手机弱网体验已验收；B4 原生文件选择 PC 按用户要求留待稍后统一验收，不把源码或 API 回归冒充该项终端验收。C1 发布/个人题单及后续草稿、阅卷、监控和统计仍未实现。所有接口继续使用 `/api/v1`、`{code,message,data}`、严格 DTO/未知字段拒绝、所有权校验和 HttpOnly refresh Cookie；模板、私有媒体与公开品牌内容流例外跳过信封。
 
 ---
 
@@ -90,8 +90,8 @@
 | API 范围 | 文档状态 | 规则 |
 |---|---|---|
 | `/auth`、`/users`、`/departments`、`/regulations`、`/ai`、`/learning`、旧 `/exams`、旧 `/statistics` | 当前 legacy 契约 | 旧制度阅读资格、旧固定卷字段与自动客观评分保持兼容；下发不含答案/解析，refresh 走 HttpOnly Cookie，DTO/统一信封不变 |
-| `/admin/training-categories`、`/admin/students`、`/me`、`/admin` 权限/会话/系统配置、`/media`、`/site-config`、B1 课程/视频内容版本、B2 视频会话/进度、B3 四题型题库版本 | 当前增量契约（A2—A5/B1—B3） | 新接口使用字符串 ID；B2 课程完成与制度阅读分开，B3 revision 不冒充发布或个人题单快照 |
-| 题库导入、发布快照、个人题单、持久草稿、图片答案/阅卷、监控、培训统计 | 计划契约（B4/C1—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后才补精确契约 |
+| `/admin/training-categories`、`/admin/students`、`/admin/questions` 导题、`/me`、`/admin` 权限/会话/系统配置、`/media`、`/site-config`、B1 课程/视频内容版本、B2 视频会话/进度、B3 四题型题库版本 | 当前增量契约（A2—A5/B1—B4） | 新接口使用字符串 ID；B2 课程完成与制度阅读分开；B4 复用 A2 批次归属/幂等语义与 B3 校验/版本写入；题目 revision 不冒充发布或个人题单快照 |
+| 发布快照、个人题单、持久草稿、图片答案/阅卷、监控、培训统计 | 计划契约（C1—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后才补精确契约，不由当前课程/学习/题库提前制造发布或考试快照 |
 | 旧固定卷 vs 新培训考试开考 | 两条口径并存 | 旧固定卷继续检查 `learning_record.is_valid`；新培训考试默认关闭学习门槛，但仍检查发布、类别/来源、权限、次数、身份状态和服务端 deadline |
 
 目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 客观题自动判分/图片题待阅 → 受控逐题评分 → 服务端汇总 → 最终结果只读。具体字段由 C1—C4 落地后补入，不能让旧 `/exams` 响应提前承载两套不兼容语义。
@@ -100,7 +100,7 @@
 
 ## 2. 模块与路由总览
 
-当前 legacy 基线与 A2—A5、B1—B3 增量路由均使用同一 `/api/v1` 前缀。下表的数量按当前 controller HTTP 方法装饰器机械盘点：
+当前 legacy 基线与 A2—A5、B1—B4 增量路由均使用同一 `/api/v1` 前缀。下表的数量按当前 controller HTTP 方法装饰器机械盘点：
 
 | 路由前缀 | 所属模块（固定名称） | 接口数 | 说明 |
 |---|---|---|---|
@@ -108,6 +108,7 @@
 | /users | 1. 组织权限模块 | 8 | 员工 CRUD、重置密码、批量导入、启停 |
 | /admin/training-categories | 1. 组织权限模块（A2） | 6 | 培训类别分页、详情、增改、启停、引用保护删除 |
 | /admin/students | 1. 组织权限模块（A2/A4） | 11 | 学员分页、CRUD、头像、启停、重置密码、xlsx 模板/预检/批次确认 |
+| /admin/questions | 3. AI 出题模块（B4） | 4 | Excel/TXT 同版模板、预检、批次状态与 owner 幂等确认 |
 | /me | 1. 组织权限模块（A2/A4）及 4. 学习行为管控模块（B1） | 3 | 本人资料查询/修改；首页组合公开站点配置与本人可见课程分页 |
 | /media | 1. 组织权限模块（A4） | 5 | 受控上传、限制查询、状态/Range 读取、引用保护删除 |
 | /admin | 1. 组织权限模块（A3/A5） | 24 | A3 权限/角色/管理员/会话 10 个；A5 菜单/字典/站点配置/审计 14 个 |
@@ -124,7 +125,7 @@
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**按当前 controller HTTP 方法装饰器机械盘点，合计 158 个接口（157 个业务接口 + 1 个健康检查），B2 新增视频会话 3 个、课程进度 1 个与本人视频记录 1 个；私有媒体与公开品牌内容流不包统一信封。**
+**按当前 controller HTTP 方法装饰器机械盘点，合计 162 个接口（161 个业务接口 + 1 个健康检查）。B2 新增视频会话 3 个、课程进度 1 个与本人视频记录 1 个；B4 `/admin/questions` 新增模板、预检、批次状态与确认 4 个接口。模板、私有媒体与公开品牌内容流不包统一信封。**
 
 ---
 
@@ -419,6 +420,19 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 **PUT /ai/papers/{id}/questions**：入卷校验——题目 `status = approved`、`question.regulation_id` 与试卷一致、同卷不重复（uk_paper_question 兜底，05 册 4.4.7）。legacy 固定卷的乱序与自动评分当前只支持 single/multiple，因此选题、发布、开考三个边界都拒绝 judgment/image；题目一旦被任一 `paper_question` 引用，类型变更返回 40908。此限制不代表 C1/C2 新发布链已实现。
 
 **发布后策略可调边界**（05 册 4.4.7 生效边界表）：`paper_question`（题目组成与分值）发布后锁定；`pass_score` / `partial_credit_ratio` 判分时实时读取；`duration_minutes` / `max_attempts` 对后续发起生效。
+
+### 3.5.1 题库文件导入 /admin/questions（B4，权限 `questions:write`）
+
+| 方法 | 路径 | 输入 | 输出 |
+|---|---|---|---|
+| GET | `/admin/questions/import-template?format=xlsx\|txt` | 严格格式枚举 | 与实际解析器同列的二进制模板；TXT 为 UTF-8 TSV |
+| POST | `/admin/questions/import-preview` | multipart `file`、`format`；可选 `category_id/difficulty` 默认值 | `ImportPreview` |
+| GET | `/admin/questions/import-batches/{id}` | 仅 questions 批次 owner | 未提交返回 `ImportPreview`；已提交返回 `ImportResult` |
+| POST | `/admin/questions/import-batches/{id}/commit` | `{row_numbers:number[]}`，只能选预检合法行 | `ImportResult` |
+
+模板固定十列 `category/type/difficulty/concept/stem/options/answer/analysis/rubric/score`。TXT 仅接受制表符分列，`options/answer` 是 JSON 数组；支持 BOM/CRLF，不支持逗号等多义手工分隔。文件上限 5MB、数据行上限 1000；Excel 公式单元格不执行并落为行级错误，稀疏行中 K 列及其后任何真实非空值或公式同样按超列拒绝。完整填写说明见 [`docs/templates/question-import-format.md`](../templates/question-import-format.md)。
+
+预检逐行复用 B3 四题型、富文本、受控媒体、类别、考点与来源校验。重复指纹覆盖类别、题型、难度、规范化内容与答案；已存在或本批较晚重复行列入 `duplicates`，默认不进入 `valid_rows`。确认事务锁定 owner+batch，调用 B3 的 caller-transaction 写入接口；排序锁定类别后用当前锁定读再次检查数据库指纹，若其他预检批次已先写入则以 40911 明确要求重新预检，不静默缩减本批确认集合。受控媒体查询沿用该调用方事务 manager，然后创建 `source=import` 的 approved identity/revision，并把本次实际 `versionId` 写入审计明细；API 按跨任务契约只返回 `created_ids`。同一行集合重试返回首次结果，换集合返回 40911；questions 入口访问他人或 students 批次返回 40302 且不暴露批次内容，旧 students 确认入口固定只接受 students 批次，不能按批次 kind 分派到题库适配器。提交只有确定的 4xxxx 业务拒绝才允许直接重试或放弃；502/504、传输失败或无法验证的成功信封都保留原 batch 并先 GET 查询，期间不创建新预览。请求回包还绑定不可变 batch ID 与页面代次，离页或新代次后不得覆盖状态或触发导航。
 
 ### 3.6 学习模块 /learning（权限：员工，数据范围自动收口为本人）
 
@@ -951,6 +965,7 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 | /users | — | — | — | 全部 8 个 |
 | /admin/training-categories | — | — | — | A2 候选实现全部 6 个；A3 映射 training_categories:read/write |
 | /admin/students | — | — | — | A2/A4 实现全部 11 个；A3 映射 students:read/write |
+| /admin/questions | — | — | questions:write | B4 模板、预检、状态和确认均使用同一写权限；owner/kind 由服务端收口 |
 | /me | — | GET/PATCH 本人资料；GET `/me/home` 按本人身份返回公开配置与可见课程 | — | 同左 |
 | /me/courses | — | 同类别已上架课程分页/详情；external 默认空 | — | 同左（仍按本人类别收口） |
 | /media | — | 本人头像上传/所有权范围读取 | 非头像上传需 `media:write` | 同左 |
@@ -997,8 +1012,8 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 
 | 校验项 | 结果 |
 |---|---|
-| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；A2—A5、B1—B3 增量路由已由 entity/controller 同步落地；B2 新增 `/me/video-sessions` 与课程 progress，不新增独立 H5 |
-| 当前表名/字段名（snake_case）与 03 册 | 一致（含四张课程内容表、两张视频学习表、两张版本题库表）；新增字段以 migration/entity/API 同步为准 |
+| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；A2—A5、B1—B4 增量路由已由 entity/controller 同步落地；B2 新增 `/me/video-sessions`、本人 `/me/video-records` 历史与课程 progress，B4 新增 `/admin/questions` 导题且未新增数据库表；均不冒充独立 H5 或 C1 快照 |
+| 当前表名/字段名（snake_case）与 03 册 | 一致（含 A5 三张公共配置表、四张课程内容表、两张视频学习表、两张版本题库表与 question 兼容列）；新增字段以 migration/entity/API 同步为准 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
 | 心跳/失焦/乱序/超时/切屏行为与 05 册 | 一致（5.4.2/5.4.3/6.4.1~6.4.5 逐条对应） |
 | 统计口径与 05 册 7.4.1 | 一致（七项指标逐字对齐） |

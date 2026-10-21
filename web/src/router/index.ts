@@ -34,6 +34,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'admin/regulations', component: () => import('../views/admin/Regulations.vue'), meta: { title: '制度管理', admin: true, permission: 'regulations:read', cache: true } },
       { path: 'admin/regulations/:id', component: () => import('../views/admin/RegulationDetail.vue'), meta: { title: '制度详情', admin: true, permission: 'regulations:read' } },
       { path: 'admin/questions', component: () => import('../views/admin/Questions.vue'), meta: { title: '题库与出题', admin: true, permissionAny: [...QUESTION_ROUTE_PERMISSIONS] } },
+      { path: 'admin/questions/import', component: () => import('../views/admin/QuestionImport.vue'), meta: { title: '题库导入', admin: true, permission: 'questions:write' } },
       { path: 'admin/papers', component: () => import('../views/admin/Papers.vue'), meta: { title: '试卷管理', admin: true, permission: 'papers:read', cache: true } },
       { path: 'admin/papers/:id', component: () => import('../views/admin/PaperDetail.vue'), meta: { title: '组卷', admin: true, permission: 'papers:read', cache: true } },
       { path: 'admin/statistics', component: () => import('../views/admin/Statistics.vue'), meta: { title: '统计报表', admin: true, permission: 'statistics:read', cache: true } },
