@@ -5,6 +5,7 @@ import { ExamRecord } from '../src/entities/exam-record.entity';
 import { SysUser } from '../src/entities/sys-user.entity';
 import { SubmissionService, gradeSubmissionSnapshot } from '../src/modules/exams/submission.service';
 import { LegacyExamAdapter } from '../src/modules/exams/legacy-exam-adapter';
+import { projectFinalResult } from '../src/modules/exams/exam-history.service';
 
 const RULE: RuleSnapshot = {
   totalCents: 10000, passCents: 6000, durationMinutes: 30, maxAttempts: 3, partialCreditRatio: 0.5,
@@ -99,12 +100,18 @@ function submissionFixture(overrides: Record<string, unknown> = {}) {
     releaseUnconfirmedReferences: vi.fn(async () => undefined),
   };
   const reader: any = { forGrading: vi.fn(async () => structuredClone(SNAPSHOT)) };
+  const history: any = {
+    resultInTransaction: vi.fn(async (_manager: any, current: any, suppliedSnapshot?: any, suppliedRows?: any[]) => (
+      projectFinalResult(current, suppliedSnapshot || structuredClone(SNAPSHOT), suppliedRows || answers)
+    )),
+  };
   const statistics: any = {
     invalidateRegulationCache: vi.fn(async () => { events.push('cache'); }),
   };
   const audit: any = { log: vi.fn(() => { events.push('audit'); }) };
   const redis: any = { setNx: vi.fn(async () => true) };
-  const service = new (SubmissionService as any)(dataSource, drafts, reader, statistics, audit, redis) as SubmissionService;
+  history.result = vi.fn(async (_userId: string, _recordId: string) => history.resultInTransaction(manager, record));
+  const service = new (SubmissionService as any)(dataSource, drafts, reader, history, statistics, audit, redis) as SubmissionService;
   return {
     service, record, answers, drafts, recordRepo, statistics, audit, redis, events,
     get saves() { return saves; },
