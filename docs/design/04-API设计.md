@@ -534,6 +534,23 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 个人题图使用 `media_reference(owner_type=exam_record_question, owner_id=item_id)`，与题单创建同事务绑定。本人只可读取精确出现在该 item 冻结 `stem/options[].text` 的 `purpose=question` 资源；answer/analysis/rubric 图片不绑定、不授权，也不授予任何题库管理权限。
 
+### 3.7.2 C5 管理端考试记录与只读监控
+
+记录读取和监控使用两个独立权限，均由实际 API 守卫校验：`exam_records:read` 允许记录列表及安全元数据详情，`exam_records:monitor` 允许试卷选择与监控轮询；两者不复用 `papers:review`，也不互相隐式授权。
+
+| 方法 | 路径 | 权限 | 请求与成功 data |
+|---|---|---|---|
+| GET | `/admin/exam-records` | `exam_records:read` | query `page/page_size/keyword/paper_id/source/difficulty/status/grading_state`；返回分页记录摘要 |
+| GET | `/admin/exam-records/{id}` | `exam_records:read` | 返回该记录的安全元数据、服务端确认进度、剩余时间与连接提示；不返回题目答案、解析、rubric 或答题附件 ID |
+| GET | `/admin/exams/monitor-options` | `exam_records:monitor` | query `page/page_size/keyword`；返回监控选择所需的窄试卷选项，不要求试卷维护权限 |
+| GET | `/admin/exams/{id}/monitor` | `exam_records:monitor` | query `page/page_size`；返回该试卷的 `Page<MonitorRow>` |
+
+`MonitorRow` 精确字段为 `record_id/user_id/name/source/difficulty/started_at/deadline_at/server_now/remaining_seconds/answered_count/total_count/last_heartbeat_at/connection_state/switch_count/device_summary/status/grading_state/submission_method`。`source/difficulty` 只读本条 `exam_record` 冻结值，不回看用户当前资料；未知 `submission_method` 返回 null，不猜测主动或超时。`answered_count` 只统计服务端已确认且持久化的非空草稿答案；`remaining_seconds=max(0,floor((deadline_at-server_now)/1000))`。
+
+进行中记录的 `last_heartbeat_at` 为空或距 `server_now` **超过** 90 秒时 `connection_state=uncertain`，恰好 90 秒仍为 `connected`；终态为 `ended`。连接待确认只作提示，不触发作弊判断、扣分或交卷。PC `/admin/exam-monitor` 每 5 秒轮询，换卷/手动刷新会取消旧请求并以请求代次拒绝迟到响应，离页同时清理请求和定时器。强制交卷不在本期，也不放置可点击占位。
+
+`GET /admin/exam-records/{id}/result` 由 C4 统一历史/阅卷 reader 负责，C5 不复制评分或结果投影。普通 `exam_records:read` 不自动取得答题图片；图片仍只允许本人或 C4 的阅卷权限精确读取。
+
 ### 3.8 统计模块 /statistics（权限：制度管理）
 
 | # | 方法 | 路径 | 说明 |

@@ -88,6 +88,68 @@ export interface DraftAck {
 
 export type GradeState = 'not_submitted' | 'pending_manual' | 'finalized';
 export type SubmissionMethod = 'manual' | 'timeout';
+export type ExamRecordStatus = 'in_progress' | 'submitted' | 'passed' | 'failed' | 'timeout';
+export type MonitorConnectionState = 'connected' | 'uncertain' | 'ended';
+
+export interface ExamMonitorRow {
+  record_id: Id;
+  user_id: Id;
+  name: string;
+  source: LearnerSource | null;
+  difficulty: ExamDifficulty | null;
+  started_at: string;
+  deadline_at: string;
+  server_now: string;
+  remaining_seconds: number;
+  answered_count: number;
+  total_count: number;
+  last_heartbeat_at: string | null;
+  connection_state: MonitorConnectionState;
+  switch_count: number;
+  device_summary: string | null;
+  status: ExamRecordStatus;
+  grading_state: GradeState;
+  submission_method: SubmissionMethod | null;
+}
+
+export interface ExamRecordSummary {
+  record_id: Id;
+  paper_id: Id;
+  paper_title: string;
+  user_id: Id;
+  username: string;
+  name: string;
+  source: LearnerSource | null;
+  category_id: Id | null;
+  difficulty: ExamDifficulty | null;
+  release_id: Id | null;
+  attempt_no: number;
+  started_at: string;
+  deadline_at: string;
+  submitted_at: string | null;
+  answered_count: number;
+  total_count: number;
+  switch_count: number;
+  status: ExamRecordStatus;
+  grading_state: GradeState;
+  submission_method: SubmissionMethod | null;
+  score: number | null;
+}
+
+export interface ExamRecordDetail extends ExamRecordSummary {
+  server_now: string;
+  remaining_seconds: number;
+  last_heartbeat_at: string | null;
+  connection_state: MonitorConnectionState;
+  device_summary: string | null;
+}
+
+export interface MonitorPaperOption {
+  id: Id;
+  title: string;
+  status: string;
+  business_scope: string;
+}
 
 export interface TrainingCategory {
   id: Id;
