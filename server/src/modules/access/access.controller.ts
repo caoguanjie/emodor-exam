@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Query, Req } from '@nestjs/common';
 import { IsArray, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { DtoValidationPipe, StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
@@ -6,6 +6,8 @@ import { CurrentUser, AuthUser } from '../../common/decorators/current-user.deco
 import { Permissions } from '../../common/decorators/permissions.decorator';
 import { AccessService } from './access.service';
 import { SessionService } from '../auth/session.service';
+import { Errors } from '../../common/errors';
+import { Request } from 'express';
 
 class CreateRoleDto {
   @IsString() @MinLength(2) @MaxLength(64) code!: string;
@@ -30,6 +32,8 @@ class AdministratorCandidateQueryDto {
   @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
   @IsOptional() @IsString() @MaxLength(128) keyword?: string;
 }
+
+const ADMINISTRATOR_CANDIDATE_QUERY_KEYS = ['page', 'page_size', 'keyword'] as const;
 
 @Controller('admin')
 export class AccessController {
@@ -67,7 +71,15 @@ export class AccessController {
 
   @Get('administrators/candidates')
   @Permissions('administrators:write')
-  administratorCandidates(@Query(new StrictDtoValidationPipe(['page', 'page_size', 'keyword'])) query: AdministratorCandidateQueryDto) {
+  administratorCandidates(
+    @Query(new StrictDtoValidationPipe(ADMINISTRATOR_CANDIDATE_QUERY_KEYS)) query: AdministratorCandidateQueryDto,
+    @Req() req: Request,
+  ) {
+    // APP_PIPE runs before parameter-scoped pipes and its whitelist creates a
+    // DTO instance without unknown query keys. Inspect the raw request too so
+    // this new strict contract cannot silently accept a discarded field.
+    const unknown = Object.keys(req.query || {}).filter((key) => !ADMINISTRATOR_CANDIDATE_QUERY_KEYS.includes(key as any));
+    if (unknown.length) throw Errors.param(`候选查询包含不支持的字段：${unknown.join(',')}`);
     return this.access.listAssignableUsers(query);
   }
 
