@@ -24,6 +24,7 @@ const PROBE_EXPRESSION_KEYWORDS = new Set([
   'AND', 'CASE', 'ELSE', 'END', 'EXISTS', 'IN', 'IS', 'NOT', 'OR', 'THEN', 'WHEN',
 ]);
 const PROBE_FUNCTION_CALL = /(`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_$]*)\s*\(/g;
+const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const mysql = require('mysql2/promise');
 
@@ -220,7 +221,21 @@ function hasTopLevelSelectComma(statement) {
   return false;
 }
 
+function rejectUnsupportedIdentifiers(statement, kind) {
+  const withoutStrings = withoutStringLiterals(stripSqlComments(statement));
+  if (/[^\x00-\x7F]/.test(withoutStrings)) {
+    throw new Error(`${kind} uses an unsupported non-ASCII identifier; only ASCII SQL identifiers are allowed`);
+  }
+  for (const match of withoutStrings.matchAll(/`((?:``|[^`])*)`/g)) {
+    const identifier = match[1].replaceAll('``', '`');
+    if (!SAFE_IDENTIFIER.test(identifier)) {
+      throw new Error(`${kind} uses an unsupported quoted identifier: ${identifier}`);
+    }
+  }
+}
+
 function rejectUnsafeSql(statement, kind, { allowInformationSchema = false } = {}) {
+  rejectUnsupportedIdentifiers(statement, kind);
   const withoutStrings = withoutStringLiterals(statement);
   const qualified = qualifiedIdentifier(statement, allowInformationSchema);
   if (qualified || /`[^`]*\.[^`]*`/.test(withoutStrings)) {

@@ -432,14 +432,33 @@ CREATE TABLE safe_fixture (id INT PRIMARY KEY);
 -- @check SELECT \`COUNT\`(*) AS complete;
 CREATE TABLE safe_fixture (id INT PRIMARY KEY);
 `],
+    ['009_unicode_probe_function', `
+-- @step unicode_function
+-- @check SELECT 危险函数() AS complete;
+CREATE TABLE safe_fixture (id INT PRIMARY KEY);
+`],
+    ['010_unicode_cross_schema', `
+-- @step unicode_cross_schema
+-- @check SELECT 1 AS complete;
+ALTER TABLE 其他库.外表 ADD COLUMN marker INT;
+`],
   ];
   for (const [id, sql] of rejected) {
-    assert.throws(() => parseMigrationText(id, sql), /schema-qualified|session|side-effect|lock|file|completion flag|locking|function|quoted/i);
+    assert.throws(() => parseMigrationText(id, sql), /schema-qualified|session|side-effect|lock|file|completion flag|locking|function|quoted|identifier|ASCII/i);
   }
   assert.doesNotThrow(() => parseMigrationText('009_approved_probe_functions', `
 -- @step approved
 -- @check SELECT CASE WHEN EXISTS (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'safe_fixture') AND 1 IN (1, 2) THEN COALESCE(1, 0) ELSE 0 END AS complete;
 CREATE TABLE approved_probe_fixture (id INT PRIMARY KEY);
+`));
+  assert.doesNotThrow(() => parseMigrationText('011_unicode_literals_and_comments', `
+-- 中文迁移注释
+-- @step chinese_literals
+-- @check /* 中文 probe 注释 */ SELECT CASE WHEN '中文' = '中文' THEN 1 ELSE 0 END AS complete;
+CREATE TABLE chinese_literals_fixture (
+  id INT PRIMARY KEY,
+  label VARCHAR(16) COMMENT '字段中文'
+) COMMENT='表中文';
 `));
 });
 
