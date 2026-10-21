@@ -353,7 +353,7 @@ async function runAttempts(ctx) {
     });
     const legacyActor = await login(ctx, `c2_fixed_${runSuffix}`, legacyPassword, 'legacy fixed learner');
     const noLearningPassword = password('no-learning');
-    await createUser(ctx, {
+    const noLearningId = await createUser(ctx, {
       username: `c2_nolearn_${runSuffix}`, password: noLearningPassword, realName: 'C2 未学习学员',
       categoryId, source: 'institution',
     });
@@ -386,6 +386,10 @@ async function runAttempts(ctx) {
     const gated = await ctx.request(noLearningActor, 'POST', `/exams/papers/${legacyPaperId}/start`);
     assert.equal(gated.status, 409);
     assert.equal(gated.code, 40901);
+    await ctx.queryTestDb(
+      'INSERT INTO learning_record (user_id, regulation_id, version_id, total_seconds, max_scroll_percent, scroll_coverage, is_valid, valid_at, last_learn_at) VALUES (?, ?, 1, 60, 100, ?, 1, NOW(3), NOW(3))',
+      [noLearningId, regulationId, JSON.stringify([1, 1, 1, 1, 1, 1, 1, 1, 1, 1])],
+    );
     const oldStart = await ctx.request(legacyActor, 'POST', `/exams/papers/${legacyPaperId}/start`);
     assert.equal(oldStart.status, 200, JSON.stringify(oldStart));
     assert.equal(typeof oldStart.data.exam_record_id, 'number');
@@ -393,10 +397,47 @@ async function runAttempts(ctx) {
     assert.deepEqual(forbiddenKeys(oldStart.data.questions, ['answer', 'analysis', 'rubric']), []);
     const correctDisplay = oldStart.data.questions[0].options.findIndex((option) => option.key === 'A');
     assert.notEqual(correctDisplay, -1);
-    await ctx.queryTestDb(
-      'UPDATE question SET stem = ?, answer = ?, analysis = ? WHERE id = ?',
-      ['<p>开考后动态题干</p>', JSON.stringify([1]), '<p>开考后动态解析</p>', legacyQuestionId],
+    const timeoutStart = await ctx.request(noLearningActor, 'POST', `/exams/papers/${legacyPaperId}/start`);
+    assert.equal(timeoutStart.status, 200, JSON.stringify(timeoutStart));
+    const frozenSourceRows = await ctx.queryTestDb(
+      'SELECT question_version_id, score_cents, snapshot_json FROM exam_record_question WHERE record_id = ? ORDER BY position',
+      [oldStart.data.exam_record_id],
     );
+    assert.equal(frozenSourceRows.length, 1);
+    const frozenSource = typeof frozenSourceRows[0].snapshot_json === 'string'
+      ? JSON.parse(frozenSourceRows[0].snapshot_json)
+      : frozenSourceRows[0].snapshot_json;
+    const releasedLegacyPaper = await ctx.queryTestDb(
+      'INSERT INTO exam_paper (regulation_id, business_scope, mode, category_id, requires_learning, title, total_score, pass_score, duration_minutes, max_attempts, partial_credit_ratio, status, created_by) VALUES (?, ?, ?, NULL, 1, ?, 100.00, 60.00, 30, 3, 0.50, ?, ?)',
+      [regulationId, 'regulation', 'fixed', `C2 旧发布冻结卷 ${runSuffix}`, 'published', adminId],
+    );
+    const releasedLegacyPaperId = String(releasedLegacyPaper.insertId);
+    await ctx.queryTestDb(
+      'INSERT INTO paper_question (paper_id, question_id, question_version_id, concept_id, sort, score) VALUES (?, ?, ?, NULL, 0, 100.00)',
+      [releasedLegacyPaperId, legacyQuestionId, frozenSourceRows[0].question_version_id],
+    );
+    const releasedLegacy = await ctx.queryTestDb(
+      'INSERT INTO paper_release (paper_id, version_no, business_scope, mode, category_id, requires_learning, rule_snapshot, regulation_ids, course_ids, created_by) VALUES (?, 1, ?, ?, NULL, 1, ?, ?, ?, ?)',
+      [releasedLegacyPaperId, 'regulation', 'fixed', JSON.stringify(oneRule), JSON.stringify([regulationId]), JSON.stringify([]), adminId],
+    );
+    const releasedLegacyId = String(releasedLegacy.insertId);
+    await ctx.queryTestDb(
+      'INSERT INTO paper_release_question (release_id, question_id, question_version_id, concept_id, type, difficulty, score_cents, position, snapshot_json) VALUES (?, ?, ?, NULL, ?, ?, ?, 0, ?)',
+      [releasedLegacyId, legacyQuestionId, frozenSourceRows[0].question_version_id, 'single', 'unknown', frozenSourceRows[0].score_cents, JSON.stringify(frozenSource)],
+    );
+    await ctx.queryTestDb(
+      'UPDATE question SET type = ?, stem = ?, options = ?, answer = ?, analysis = ? WHERE id = ?',
+      ['judgment', '<p>开考后动态题干</p>', JSON.stringify([{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]),
+        JSON.stringify([1]), '<p>开考后动态解析</p>', legacyQuestionId],
+    );
+    await ctx.queryTestDb('DELETE FROM paper_question WHERE paper_id = ?', [legacyPaperId]);
+    const activeStart = await ctx.request(legacyActor, 'POST', `/exams/papers/${legacyPaperId}/start`);
+    assert.equal(activeStart.status, 200, JSON.stringify(activeStart));
+    assert.equal(activeStart.data.exam_record_id, oldStart.data.exam_record_id);
+    assert.deepEqual(activeStart.data.questions, oldStart.data.questions);
+    const timeoutActiveStart = await ctx.request(noLearningActor, 'POST', `/exams/papers/${legacyPaperId}/start`);
+    assert.equal(timeoutActiveStart.status, 200, JSON.stringify(timeoutActiveStart));
+    assert.equal(timeoutActiveStart.data.exam_record_id, timeoutStart.data.exam_record_id);
     const oldHeartbeat = await ctx.request(legacyActor, 'POST', `/exams/records/${oldStart.data.exam_record_id}/heartbeat`, {
       answers: [{ question_id: oldStart.data.questions[0].question_id, selected: [correctDisplay] }],
     });
@@ -410,6 +451,14 @@ async function runAttempts(ctx) {
     assert.equal(oldSubmit.status, 200, JSON.stringify(oldSubmit));
     assert.equal(oldSubmit.data.status, 'passed');
     assert.equal(oldSubmit.data.score, 100);
+    const oldFinishedRecover = await ctx.request(legacyActor, 'GET', `/exams/records/${oldStart.data.exam_record_id}`);
+    assert.equal(oldFinishedRecover.status, 200, JSON.stringify(oldFinishedRecover));
+    assert.deepEqual(oldFinishedRecover.data, {
+      exam_record_id: oldStart.data.exam_record_id,
+      status: 'passed',
+      score: 100,
+      finished: true,
+    });
     const oldResult = await ctx.request(legacyActor, 'GET', `/exams/records/${oldStart.data.exam_record_id}/result`);
     assert.equal(oldResult.status, 200, JSON.stringify(oldResult));
     assert.equal(oldResult.data.questions[0].stem, '<p>旧卷冻结题干</p>');
@@ -423,6 +472,69 @@ async function runAttempts(ctx) {
     assert.equal(legacyFacts[0].snapshot_origin, 'legacy_start');
     assert.equal(legacyFacts[0].active_assignment_id, null);
 
+    stage = 'old timeout recovery and legacy_start retake use frozen items';
+    await ctx.queryTestDb(
+      'UPDATE exam_record SET deadline_at = DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 SECOND) WHERE id = ?',
+      [timeoutStart.data.exam_record_id],
+    );
+    const timeoutFinalize = await ctx.request(noLearningActor, 'POST', `/exams/records/${timeoutStart.data.exam_record_id}/heartbeat`, { answers: [] });
+    assert.equal(timeoutFinalize.status, 409, JSON.stringify(timeoutFinalize));
+    assert.equal(timeoutFinalize.code, 40905);
+    const timeoutFinishedRecover = await ctx.request(noLearningActor, 'GET', `/exams/records/${timeoutStart.data.exam_record_id}`);
+    assert.equal(timeoutFinishedRecover.status, 200, JSON.stringify(timeoutFinishedRecover));
+    assert.deepEqual(timeoutFinishedRecover.data, {
+      exam_record_id: timeoutStart.data.exam_record_id,
+      status: 'failed',
+      score: 0,
+      finished: true,
+    });
+    const frozenRetake = await ctx.request(noLearningActor, 'POST', `/exams/papers/${legacyPaperId}/start`);
+    assert.equal(frozenRetake.status, 200, JSON.stringify(frozenRetake));
+    assert.equal(frozenRetake.data.attempt_no, 2);
+    assert.notEqual(frozenRetake.data.exam_record_id, timeoutStart.data.exam_record_id);
+    assert.equal(frozenRetake.data.questions[0].question_id, timeoutStart.data.questions[0].question_id);
+    assert.equal(frozenRetake.data.questions[0].type, 'single');
+    assert.equal(frozenRetake.data.questions[0].stem, '<p>旧卷冻结题干</p>');
+
+    stage = 'first old start uses frozen release after current type changes';
+    const releasedStart = await ctx.request(legacyActor, 'POST', `/exams/papers/${releasedLegacyPaperId}/start`);
+    assert.equal(releasedStart.status, 200, JSON.stringify(releasedStart));
+    assert.equal(releasedStart.data.questions[0].type, 'single');
+    assert.equal(releasedStart.data.questions[0].stem, '<p>旧卷冻结题干</p>');
+    const releasedFacts = await ctx.queryTestDb(
+      'SELECT release_id, snapshot_origin FROM exam_record WHERE id = ?',
+      [releasedStart.data.exam_record_id],
+    );
+    assert.equal(String(releasedFacts[0].release_id), releasedLegacyId);
+    assert.equal(releasedFacts[0].snapshot_origin, 'release');
+
+    stage = 'unsupported genuinely new legacy_start rolls back';
+    const unsupportedQuestion = await ctx.queryTestDb(
+      'INSERT INTO question (regulation_id, version_id, category_id, difficulty, concept_id, current_version_id, type, stem, options, answer, analysis, rubric, score, status, source, created_by) VALUES (?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, NULL, 100.00, ?, ?, ?)',
+      [regulationId, 'judgment', '<p>未冻结判断题</p>', JSON.stringify([{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]),
+        JSON.stringify([0]), '<p>未冻结解析</p>', 'approved', 'manual', adminId],
+    );
+    const unsupportedQuestionId = String(unsupportedQuestion.insertId);
+    const unsupportedPaper = await ctx.queryTestDb(
+      'INSERT INTO exam_paper (regulation_id, business_scope, mode, category_id, requires_learning, title, total_score, pass_score, duration_minutes, max_attempts, partial_credit_ratio, status, created_by) VALUES (?, ?, ?, NULL, 1, ?, 100.00, 60.00, 30, 3, 0.50, ?, ?)',
+      [regulationId, 'regulation', 'fixed', `C2 未冻结不支持卷 ${runSuffix}`, 'published', adminId],
+    );
+    const unsupportedPaperId = String(unsupportedPaper.insertId);
+    await ctx.queryTestDb(
+      'INSERT INTO paper_question (paper_id, question_id, question_version_id, concept_id, sort, score) VALUES (?, ?, NULL, NULL, 0, 100.00)',
+      [unsupportedPaperId, unsupportedQuestionId],
+    );
+    const unsupportedStart = await ctx.request(legacyActor, 'POST', `/exams/papers/${unsupportedPaperId}/start`);
+    assert.equal(unsupportedStart.status, 400, JSON.stringify(unsupportedStart));
+    assert.equal(unsupportedStart.code, 40001);
+    const unsupportedFacts = await ctx.queryTestDb(
+      'SELECT (SELECT COUNT(*) FROM exam_assignment WHERE user_id = ? AND paper_id = ?) AS assignments, (SELECT COUNT(*) FROM exam_record WHERE user_id = ? AND paper_id = ?) AS records, (SELECT COUNT(*) FROM exam_record_question item INNER JOIN exam_record record_row ON record_row.id = item.record_id WHERE record_row.user_id = ? AND record_row.paper_id = ?) AS items',
+      [legacyUserId, unsupportedPaperId, legacyUserId, unsupportedPaperId, legacyUserId, unsupportedPaperId],
+    );
+    assert.equal(Number(unsupportedFacts[0].assignments), 0);
+    assert.equal(Number(unsupportedFacts[0].records), 0);
+    assert.equal(Number(unsupportedFacts[0].items), 0);
+
     stage = 'new list excludes legacy fixed paper';
     const list = await ctx.request(learner, 'GET', '/me/exams?page=1&page_size=100');
     assert.equal(list.status, 200, JSON.stringify(list));
@@ -434,7 +546,7 @@ async function runAttempts(ctx) {
       assignment_id: String(assignments[0].id),
       timeout_record_id: third.data.record_id,
       legacy_record_id: String(oldStart.data.exam_record_id),
-      assertions: 'atomic-start,snapshot,retake,rollback,media,timeout-sweeper,legacy-flow',
+      assertions: 'atomic-start,snapshot,retake,rollback,media,timeout-sweeper,legacy-flow,frozen-legacy-source,terminal-recover',
     }));
   } catch (error) {
     error.message = `[training-attempts stage=${stage}] ${error.message}`;

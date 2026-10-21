@@ -219,9 +219,6 @@ export class ExamService {
     if (paper.businessScope === 'training' || !paper.regulationId) {
       throw Errors.contentInvisible('培训考试请使用本人考试接口');
     }
-    // Keep the legacy capability gate at the public boundary. AttemptService
-    // repeats the same check while freezing versions inside the start transaction.
-    await this.loadLegacyPaperQuestions(String(paper.id));
     return this.legacyAdapter.start(String(paperId), String(userId));
   }
 
@@ -251,9 +248,6 @@ export class ExamService {
     if (!record) throw Errors.notFound('考试记录不存在');
     if (Number(record.userId) !== userId) throw Errors.dataForbidden();
     this.assertLegacyRecordRoute(record);
-    if (record.assignmentId) return this.legacyAdapter.recover(String(recordId), String(userId));
-    const paper = await this.paperRepo.findOne({ where: { id: record.paperId } });
-    if (!paper) throw Errors.notFound('试卷不存在');
     if (record.status !== ExamStatus.IN_PROGRESS) {
       // 已终态：返回成绩摘要，前端路由至结果页
       return {
@@ -263,6 +257,9 @@ export class ExamService {
         finished: true,
       };
     }
+    if (record.assignmentId) return this.legacyAdapter.recover(String(recordId), String(userId));
+    const paper = await this.paperRepo.findOne({ where: { id: record.paperId } });
+    if (!paper) throw Errors.notFound('试卷不存在');
     return this.startResponse(record, paper);
   }
 

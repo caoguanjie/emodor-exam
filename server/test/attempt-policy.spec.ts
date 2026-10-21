@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { RuleSnapshot } from '../src/common/training-contracts';
+import { ExamAssignment } from '../src/entities/exam-assignment.entity';
+import { ExamPaper } from '../src/entities/exam-paper.entity';
+import { ExamRecordQuestion } from '../src/entities/exam-record-question.entity';
+import { ExamRecord } from '../src/entities/exam-record.entity';
+import { LearningRecord } from '../src/entities/learning-record.entity';
+import { PaperQuestion } from '../src/entities/paper-question.entity';
+import { Regulation } from '../src/entities/regulation.entity';
+import { SysUser } from '../src/entities/sys-user.entity';
 import type { PublishedPaper, PublishedQuestionSnapshot } from '../src/modules/exams/paper-release.service';
 import {
   AttemptService,
@@ -63,6 +71,162 @@ function published(input: Partial<PublishedPaper>): PublishedPaper {
     pool: [question('101')],
     ...input,
   } as PublishedPaper;
+}
+
+function legacyAttemptFixture(input: {
+  assignment?: Record<string, any> | null;
+  records?: Array<Record<string, any>>;
+  release?: PublishedPaper | null;
+  itemsByRecord?: Record<string, PublishedQuestionSnapshot[]>;
+  currentPool?: PublishedQuestionSnapshot[];
+}) {
+  const assignment = input.assignment === undefined ? null : input.assignment;
+  const records = input.records || [];
+  const itemsByRecord = input.itemsByRecord || {};
+  const currentPool = input.currentPool || [];
+  const savedAssignments: Array<Record<string, any>> = [];
+  const savedRecords: Array<Record<string, any>> = [];
+  const savedItems: Array<Record<string, any>> = [];
+  const versionCapture = vi.fn(async (_manager: unknown, questionId: string) => {
+    const snapshot = currentPool.find((item) => String(item.questionId) === String(questionId));
+    if (!snapshot) throw new Error(`current question ${questionId} missing`);
+    return {
+      id: snapshot.versionId,
+      questionId: snapshot.questionId,
+      revision: snapshot.revision,
+      categoryId: snapshot.categoryId,
+      difficulty: snapshot.difficulty,
+      type: snapshot.type,
+      stem: snapshot.stem,
+      options: snapshot.options,
+      answer: snapshot.answer,
+      analysis: snapshot.analysis,
+      rubric: snapshot.rubric,
+      conceptId: snapshot.conceptId || null,
+      regulationId: snapshot.regulationId || '2',
+      regulationVersionId: snapshot.regulationVersionId || null,
+      sourcePageGroup: snapshot.sourcePageGroup || null,
+      sourcePageStart: snapshot.sourcePageStart || null,
+      sourcePageEnd: snapshot.sourcePageEnd || null,
+      source: snapshot.source,
+      approvedBy: snapshot.approvedBy,
+      approvedAt: snapshot.approvedAt ? new Date(snapshot.approvedAt) : null,
+    };
+  });
+
+  const assignmentRepo = {
+    findOne: vi.fn(async () => assignment),
+    create: vi.fn((value: Record<string, any>) => value),
+    save: vi.fn(async (value: Record<string, any>) => {
+      const saved = { id: '31', ...value };
+      savedAssignments.push(saved);
+      return saved;
+    }),
+  };
+  const recordRepo = {
+    findOne: vi.fn(async ({ where }: any) => records.find((record) => String(record.id) === String(where.id)) || null),
+    createQueryBuilder: vi.fn(() => {
+      const builder: any = {
+        setLock: () => builder,
+        where: () => builder,
+        orderBy: () => builder,
+        addOrderBy: () => builder,
+        getMany: async () => records,
+      };
+      return builder;
+    }),
+    create: vi.fn((value: Record<string, any>) => value),
+    save: vi.fn(async (value: Record<string, any>) => {
+      const saved = { id: String(71 + savedRecords.length), ...value };
+      savedRecords.push(saved);
+      return saved;
+    }),
+  };
+  const itemRepo = {
+    find: vi.fn(async ({ where }: any) => (itemsByRecord[String(where.recordId)] || []).map((snapshot, position) => ({
+      id: String(801 + position),
+      recordId: String(where.recordId),
+      questionId: String(snapshot.questionId),
+      questionVersionId: String(snapshot.versionId),
+      type: snapshot.type,
+      difficulty: snapshot.difficulty,
+      scoreCents: snapshot.scoreCents,
+      position,
+      displayToOriginal: snapshot.options.map((_option, index) => index),
+      snapshotJson: structuredClone(snapshot),
+    }))),
+    create: vi.fn((value: Record<string, any>) => value),
+    save: vi.fn(async (values: Array<Record<string, any>>) => values.map((value, index) => {
+      const saved = { id: String(901 + index), ...value };
+      savedItems.push(saved);
+      return saved;
+    })),
+  };
+  const paper = {
+    id: '11', regulationId: '2', businessScope: 'regulation', mode: 'fixed', status: 'published',
+    passScore: '60.00', durationMinutes: 30, maxAttempts: 3, partialCreditRatio: '0.50', title: '旧固定卷',
+  };
+  const repositories = new Map<unknown, any>([
+    [SysUser, { findOne: vi.fn(async () => ({ id: '9', username: 'learner', role: 'super_admin', status: 1 })) }],
+    [ExamAssignment, assignmentRepo],
+    [ExamRecord, recordRepo],
+    [ExamRecordQuestion, itemRepo],
+    [ExamPaper, { findOne: vi.fn(async () => paper) }],
+    [Regulation, { findOne: vi.fn(async () => ({ id: '2', status: 'published', requiredMinutes: 1, scrollSegments: 10 })) }],
+    [LearningRecord, { findOne: vi.fn(async () => ({ isValid: 1 })) }],
+    [PaperQuestion, { find: vi.fn(async () => currentPool.map((snapshot, sort) => ({
+      id: String(51 + sort), paperId: '11', questionId: String(snapshot.questionId),
+      questionVersionId: String(snapshot.versionId), score: (snapshot.scoreCents / 100).toFixed(2), sort,
+    }))) }],
+  ]);
+  const manager = {
+    getRepository(entity: unknown) {
+      const repository = repositories.get(entity);
+      if (!repository) throw new Error(`unexpected repository ${(entity as any)?.name}`);
+      return repository;
+    },
+  };
+  const service = Object.create(AttemptService.prototype) as AttemptService & Record<string, any>;
+  service.dataSource = { transaction: vi.fn(async (work: (manager: any) => Promise<unknown>) => work(manager)) };
+  service.releases = {
+    latestForPaper: vi.fn(async () => input.release || null),
+    get: vi.fn(async () => {
+      if (!input.release) throw new Error('release missing');
+      return input.release;
+    }),
+  };
+  service.sampling = { draw: vi.fn((pool: PublishedQuestionSnapshot[]) => pool) };
+  service.shuffle = {
+    deriveSeed: vi.fn(() => 'seed'),
+    shuffleQuestionOrder: vi.fn((pool: PublishedQuestionSnapshot[]) => pool),
+    snapshotOptionMapping: vi.fn((_type: string, length: number) => Array.from({ length }, (_value, index) => index)),
+  };
+  service.versions = { currentOrCaptureForRelease: versionCapture };
+  service.scope = { isUserInScope: vi.fn(async () => true) };
+  service.reader = { forStudent: vi.fn(async (_userId: string, recordId: string) => ({ record_id: recordId })) };
+  service.media = { bind: vi.fn(async () => undefined) };
+  service.redis = { set: vi.fn(async () => undefined) };
+  service.audit = { log: vi.fn() };
+  return { service, savedAssignments, savedRecords, savedItems, versionCapture };
+}
+
+function frozenAssignment(overrides: Record<string, any> = {}) {
+  return {
+    id: '31', paperId: '11', userId: '9', releaseId: null, source: null, categoryId: null,
+    difficulty: 'unknown', ruleSnapshot: structuredClone(RULE), snapshotOrigin: 'legacy_start',
+    ...overrides,
+  };
+}
+
+function frozenRecord(id: string, status: string, attemptNo: number, overrides: Record<string, any> = {}) {
+  return {
+    id, paperId: '11', regulationId: '2', userId: '9', assignmentId: '31', activeAssignmentId: null,
+    releaseId: null, source: null, categoryId: null, difficulty: 'unknown', ruleSnapshot: structuredClone(RULE),
+    snapshotOrigin: 'legacy_start', attemptNo, status, score: status === 'failed' ? '0.00' : null,
+    startedAt: new Date('2026-10-21T10:00:00.000Z'), deadlineAt: new Date('2099-10-21T10:30:00.000Z'),
+    submittedAt: status === 'in_progress' ? null : new Date('2026-10-21T10:10:00.000Z'), switchCount: 0,
+    ...overrides,
+  };
 }
 
 describe('atomic attempt policy', () => {
@@ -154,6 +318,103 @@ describe('frozen assignment facts', () => {
       total: 1,
       items: [{ paper_id: '11', source: 'institution', category_id: '7', difficulty: 'easy' }],
     });
+  });
+
+  it('rejects an unsupported first regulation release before consuming an assignment or attempt', async () => {
+    const unsupported = question('101', 'unknown', {
+      categoryId: null,
+      type: 'judgment',
+      options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }],
+      answer: [0],
+    });
+    const release = published({
+      businessScope: 'regulation', mode: 'fixed', categoryId: null, pool: [unsupported],
+    });
+    const fixture = legacyAttemptFixture({ release });
+
+    await expect(fixture.service.start('9', '11')).rejects.toMatchObject({ code: 40001 });
+    expect(fixture.savedAssignments).toEqual([]);
+    expect(fixture.savedRecords).toEqual([]);
+    expect(fixture.savedItems).toEqual([]);
+  });
+
+  it('validates an active regulation attempt from its frozen items', async () => {
+    const active = frozenRecord('71', 'in_progress', 1, { activeAssignmentId: '31' });
+    const unsupported = question('101', 'unknown', {
+      categoryId: null,
+      type: 'image', options: [], answer: [], rubric: '<p>人工评分</p>',
+    });
+    const fixture = legacyAttemptFixture({
+      assignment: frozenAssignment(),
+      records: [active],
+      itemsByRecord: { 71: [unsupported] },
+    });
+
+    await expect(fixture.service.start('9', '11')).rejects.toMatchObject({ code: 40001 });
+    expect(fixture.savedRecords).toEqual([]);
+  });
+
+  it('validates old active recovery from its frozen items', async () => {
+    const active = frozenRecord('71', 'in_progress', 1, { activeAssignmentId: '31' });
+    const unsupported = question('101', 'unknown', {
+      categoryId: null,
+      type: 'judgment',
+      options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], answer: [0],
+    });
+    const fixture = legacyAttemptFixture({
+      assignment: frozenAssignment(),
+      records: [active],
+      itemsByRecord: { 71: [unsupported] },
+    });
+
+    await expect(fixture.service.recover('9', '71')).rejects.toMatchObject({ code: 40001 });
+  });
+
+  it('uses the previous legacy_start item snapshot for a retake without reading current questions', async () => {
+    const previous = frozenRecord('70', 'failed', 1);
+    const fixture = legacyAttemptFixture({
+      assignment: frozenAssignment(),
+      records: [previous],
+      itemsByRecord: { 70: [question('101', 'unknown', { categoryId: null })] },
+      currentPool: [question('101', 'unknown', {
+        categoryId: null, type: 'judgment',
+        options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], answer: [0],
+      })],
+    });
+
+    await expect(fixture.service.start('9', '11')).resolves.toMatchObject({ record_id: '71' });
+    expect(fixture.versionCapture).not.toHaveBeenCalled();
+    expect(fixture.savedRecords).toHaveLength(1);
+    expect(fixture.savedRecords[0].attemptNo).toBe(2);
+  });
+
+  it('reports an incomplete legacy_start snapshot instead of recapturing current questions', async () => {
+    const previous = frozenRecord('70', 'failed', 1);
+    const fixture = legacyAttemptFixture({
+      assignment: frozenAssignment(),
+      records: [previous],
+      currentPool: [question('101', 'unknown', { categoryId: null })],
+    });
+
+    await expect(fixture.service.start('9', '11')).rejects.toMatchObject({
+      code: 40970,
+      message: '个人考试冻结题池不完整',
+    });
+    expect(fixture.versionCapture).not.toHaveBeenCalled();
+    expect(fixture.savedRecords).toEqual([]);
+  });
+
+  it('still rejects unsupported current content when genuinely capturing the first legacy_start', async () => {
+    const unsupported = question('101', 'unknown', {
+      categoryId: null,
+      type: 'judgment',
+      options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], answer: [0],
+    });
+    const fixture = legacyAttemptFixture({ currentPool: [unsupported] });
+
+    await expect(fixture.service.start('9', '11')).rejects.toMatchObject({ code: 40001 });
+    expect(fixture.savedAssignments).toEqual([]);
+    expect(fixture.savedRecords).toEqual([]);
   });
 });
 

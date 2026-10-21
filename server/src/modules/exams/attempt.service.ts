@@ -104,6 +104,12 @@ function cents(value: string | number): number {
   return Math.round(Number(value) * 100);
 }
 
+function assertLegacyClientPool(pool: PublishedQuestionSnapshot[]): void {
+  if (pool.some((item) => item.type !== 'single' && item.type !== 'multiple')) {
+    throw Errors.param('legacy 固定试卷仅支持单选题和多选题');
+  }
+}
+
 @Injectable()
 export class AttemptService {
   private readonly logger = new Logger(AttemptService.name);
@@ -189,9 +195,6 @@ export class AttemptService {
     const pool = rows.map((row) => {
       const version = resolved.get(String(row.questionId));
       if (!version) throw Errors.notFound('固定试卷题目不存在');
-      if (version.type !== 'single' && version.type !== 'multiple') {
-        throw Errors.param('legacy 固定试卷仅支持单选题和多选题');
-      }
       if (!paper.regulationId || String(version.regulationId || '') !== String(paper.regulationId)) {
         throw Errors.paperReleaseConflict('固定试卷题目与制度不一致');
       }
@@ -202,6 +205,7 @@ export class AttemptService {
       else rules.set(key, { type: version.type as QuestionType, count: 1, scoreCents });
       return legacySnapshot(version, scoreCents);
     });
+    assertLegacyClientPool(pool);
     const totalCents = pool.reduce((sum, item) => sum + Number(item.scoreCents), 0);
     if (totalCents !== 10000) throw Errors.paperRuleInvalid(`题型规则总分必须为 10000 分，当前为 ${totalCents}`);
     return {
@@ -228,6 +232,17 @@ export class AttemptService {
       if (rows.length) return rows.map((row) => ({ ...deepClone(row.snapshotJson), scoreCents: Number(row.scoreCents) }));
     }
     return null;
+  }
+
+  private async frozenRecordPool(
+    manager: EntityManager,
+    recordId: string,
+  ): Promise<PublishedQuestionSnapshot[]> {
+    const rows = await manager.getRepository(ExamRecordQuestion).find({
+      where: { recordId: String(recordId) }, order: { position: 'ASC', id: 'ASC' },
+    });
+    if (!rows.length) throw Errors.paperReleaseConflict('个人考试冻结题池不完整');
+    return rows.map((row) => ({ ...deepClone(row.snapshotJson), scoreCents: Number(row.scoreCents) }));
   }
 
   private async initializeRuntime(record: ExamRecord): Promise<void> {
@@ -267,6 +282,9 @@ export class AttemptService {
         if (!assignment || String(active.assignmentId || '') !== String(assignment.id)) {
           throw Errors.examInProgress('已有升级前进行中的考试，请先完成当前作答');
         }
+        if (active.regulationId) {
+          assertLegacyClientPool(await this.frozenRecordPool(manager, String(active.id)));
+        }
         return { record: active, recovered: true, actorName: user.username };
       }
 
@@ -299,9 +317,11 @@ export class AttemptService {
         if (assignment.releaseId) {
           release = await this.releases.get(String(assignment.releaseId), manager);
           if (String(release.paperId) !== String(paper.id)) throw Errors.paperReleaseConflict('个人考试发布版本不匹配');
+          if (paper.businessScope === 'regulation') assertLegacyClientPool(release.pool);
         } else {
           pool = await this.previousLegacyPool(manager, String(assignment.id), records);
-          if (!pool) pool = (await this.legacyPool(manager, paper)).pool;
+          if (!pool) throw Errors.paperReleaseConflict('个人考试冻结题池不完整');
+          if (paper.businessScope === 'regulation') assertLegacyClientPool(pool);
         }
       } else {
         release = await this.releases.latestForPaper(String(paper.id), manager);
@@ -322,7 +342,10 @@ export class AttemptService {
           categoryId = null;
           difficulty = 'unknown';
           snapshotOrigin = release ? 'release' : 'legacy_start';
-          if (release) rule = deepClone(release.rule);
+          if (release) {
+            assertLegacyClientPool(release.pool);
+            rule = deepClone(release.rule);
+          }
           else {
             const legacy = await this.legacyPool(manager, paper);
             rule = legacy.rule;
@@ -434,6 +457,9 @@ export class AttemptService {
       if (record.status !== ExamStatus.IN_PROGRESS) throw Errors.submitConflict('考试已结束');
       if (new Date(record.deadlineAt).getTime() <= Date.now()) {
         throw Errors.examInProgress('考试已到期，系统正在自动交卷，请稍后刷新');
+      }
+      if (record.regulationId) {
+        assertLegacyClientPool(await this.frozenRecordPool(manager, String(record.id)));
       }
     });
     return this.reader.forStudent(String(userId), String(recordId));
