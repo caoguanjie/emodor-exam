@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { AppConfig } from '../../config/configuration';
 import { Errors, RoleEnum } from '../../common/errors';
 import { RedisService } from '../../common/redis.service';
@@ -37,8 +37,10 @@ export class AccessService {
     private readonly config?: AppConfig,
   ) {}
 
-  private cacheKey(userId: string | number) {
-    return `access:permissions:${String(userId)}`;
+  private cacheKey(userId: string | number, authVersion?: number) {
+    return authVersion === undefined
+      ? `access:permissions:${String(userId)}`
+      : `access:permissions:${String(userId)}:${authVersion}`;
   }
 
   private authVersion(user: SysUser): number {
@@ -46,27 +48,41 @@ export class AccessService {
   }
 
   async invalidate(userId: string | number): Promise<void> {
+    // Permission caches are generation-scoped. Deleting the legacy key keeps
+    // rolling deployments tidy; a new auth_version can never read a prior
+    // generation's permissions even if post-commit cache deletion races.
     await this.redis.del(this.cacheKey(userId));
   }
 
   /** 返回当前用户的有效权限；显式业务角色关系存在时覆盖旧三角色默认矩阵。 */
-  async permissions(userId: string | number): Promise<string[]> {
-    const cached = await this.redis.get(this.cacheKey(userId));
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) return parsed;
-      } catch { /* cache corruption is ignored and repaired below */ }
-    }
-
-    const user = await this.userRepo.findOne({ where: { id: String(userId) } });
+  async permissions(userId: string | number, options: { manager?: EntityManager; useCache?: boolean } = {}): Promise<string[]> {
+    const userRepo = options.manager?.getRepository(SysUser) || this.userRepo;
+    // Read the authoritative user generation before consulting Redis. A role
+    // mutation changes auth_version in the same transaction as its links, so
+    // a current token can never inherit a prior generation's cached matrix.
+    const user = await userRepo.findOne({ where: { id: String(userId) } });
     if (!user || user.status === 0) return [];
+    const useCache = !options.manager && options.useCache !== false;
+    const key = this.cacheKey(userId, this.authVersion(user));
+    if (useCache) {
+      const cached = await this.redis.get(key);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) return parsed;
+        } catch { /* cache corruption is ignored and repaired below */ }
+      }
+    }
 
     let effective: string[];
     if (user.role === RoleEnum.SUPER_ADMIN) {
       effective = [...PERMISSION_CATALOG];
     } else {
-      const links = await this.userRoleRepo.find({ where: { userId: String(userId) } });
+      const userRoleRepo = options.manager?.getRepository(SysUserRole) || this.userRoleRepo;
+      const roleRepo = options.manager?.getRepository(SysRole) || this.roleRepo;
+      const rolePermissionRepo = options.manager?.getRepository(SysRolePermission) || this.rolePermissionRepo;
+      const permissionRepo = options.manager?.getRepository(SysPermission) || this.permissionRepo;
+      const links = await userRoleRepo.find({ where: { userId: String(userId) } });
       if (links.length === 0 && user.role === RoleEnum.REGULATION_ADMIN && Number(user.rolesConfigured || 0) === 0) {
         // 兼容既有种子管理员；一旦配置了业务角色，就只使用显式授权。
         effective = [...LEGACY_REGULATION_ADMIN_PERMISSIONS];
@@ -74,19 +90,19 @@ export class AccessService {
         effective = [];
       } else {
         const roleIds = links.map((link) => String(link.roleId));
-        const roles = await this.roleRepo.find({ where: { id: In(roleIds), status: 1 } });
+        const roles = await roleRepo.find({ where: { id: In(roleIds), status: 1 } });
         const rolePermissionRows = roles.length
-          ? await this.rolePermissionRepo.find({ where: { roleId: In(roles.map((role) => role.id)) } })
+          ? await rolePermissionRepo.find({ where: { roleId: In(roles.map((role) => role.id)) } })
           : [];
         const permissionIds = [...new Set(rolePermissionRows.map((row) => String(row.permissionId)))];
         const permissionRows = permissionIds.length
-          ? await this.permissionRepo.find({ where: { id: In(permissionIds) } })
+          ? await permissionRepo.find({ where: { id: In(permissionIds) } })
           : [];
         effective = permissionRows.map((permission) => permission.code).filter(isRegisteredPermission);
       }
     }
     effective = [...new Set(effective)].sort();
-    await this.redis.set(this.cacheKey(userId), JSON.stringify(effective), CACHE_TTL_SECONDS);
+    if (useCache) await this.redis.set(key, JSON.stringify(effective), CACHE_TTL_SECONDS);
     return effective;
   }
 
@@ -121,7 +137,6 @@ export class AccessService {
 
   async createRole(input: { code: string; name: string; permissions: string[] }, actorId: string | number) {
     if (!/^[a-z][a-z0-9_]{1,63}$/.test(input.code)) throw Errors.param('角色代码格式非法');
-    this.assertPermissionCodes(input.permissions);
     if (['super_admin', 'regulation_admin', 'employee'].includes(input.code)) throw Errors.param('系统角色代码不可重复创建');
     let role: SysRole;
     try {
@@ -130,6 +145,10 @@ export class AccessService {
         const permissionRepo = manager.getRepository(SysPermission);
         const rolePermissionRepo = manager.getRepository(SysRolePermission);
         const created = await roleRepo.save(roleRepo.create({ code: input.code, name: input.name.trim(), isSystem: 0, status: 1 }));
+        // Validate after the parent row is written so an invalid permission
+        // proves the whole transaction rolls back, rather than only rejecting
+        // before entering the transaction.
+        this.assertPermissionCodes(input.permissions);
         const permissions = input.permissions.length ? await permissionRepo.find({ where: { code: In(input.permissions) } }) : [];
         if (permissions.length !== input.permissions.length) throw Errors.param('权限代码不存在');
         if (permissions.length) await rolePermissionRepo.save(permissions.map((permission) => rolePermissionRepo.create({ roleId: created.id, permissionId: permission.id })));
@@ -144,23 +163,39 @@ export class AccessService {
   }
 
   async updateRole(id: string, input: { name?: string; permissions?: string[]; status?: number }, actorId: string | number) {
-    const role = await this.roleRepo.findOne({ where: { id } });
-    if (!role) throw Errors.notFound('角色不存在');
-    if (role.isSystem) throw Errors.param('系统角色不可编辑');
-    if (input.permissions) this.assertPermissionCodes(input.permissions);
-    const affected = await this.userRoleRepo.find({ where: { roleId: id } });
     const oldSids: string[] = [];
+    const affectedUserIds: string[] = [];
     await this.dataSource.transaction(async (manager) => {
       const roleRepo = manager.getRepository(SysRole);
-      const current = await roleRepo.findOne({ where: { id } });
-      if (!current || current.isSystem) throw Errors.param('系统角色不可编辑');
+      // Role updates and assignments use the same lock order: role rows first,
+      // then affected user rows. This prevents an assignment committed during
+      // the affected-user scan from escaping invalidation.
+      const current = await roleRepo.createQueryBuilder('r')
+        .setLock('pessimistic_write')
+        .where('r.id = :id', { id })
+        .getOne();
+      if (!current) throw Errors.notFound('角色不存在');
+      if (current.isSystem) throw Errors.param('系统角色不可编辑');
+      if (input.permissions) this.assertPermissionCodes(input.permissions);
+      const userRoleRepo = manager.getRepository(SysUserRole);
+      const affected = await userRoleRepo.find({ where: { roleId: id }, order: { userId: 'ASC' } });
+      const ids = [...new Set(affected.map((link) => String(link.userId)))].sort((a, b) => Number(a) - Number(b));
+      const userRepo = manager.getRepository(SysUser);
+      const users = ids.length
+        ? await userRepo.createQueryBuilder('u')
+          .setLock('pessimistic_write')
+          .where('u.id IN (:...ids)', { ids })
+          .orderBy('u.id', 'ASC')
+          .getMany()
+        : [];
+      const usersById = new Map(users.map((user) => [String(user.id), user]));
+      affectedUserIds.push(...ids);
       if (input.name !== undefined) current.name = input.name.trim();
       if (input.status !== undefined) current.status = input.status ? 1 : 0;
       await roleRepo.save(current);
       if (input.permissions) await this.replaceRolePermissions(id, input.permissions, manager);
-      const userRepo = manager.getRepository(SysUser);
-      for (const link of affected) {
-        const user = await userRepo.findOne({ where: { id: String(link.userId) } });
+      for (const userId of ids) {
+        const user = usersById.get(userId);
         if (!user) continue;
         user.authVersion = this.authVersion(user) + 1;
         await userRepo.save(user);
@@ -168,7 +203,7 @@ export class AccessService {
       }
     });
     await this.sessions.markRevoked(oldSids);
-    await Promise.all(affected.map((link) => this.invalidate(link.userId)));
+    await Promise.all(affectedUserIds.map((userId) => this.invalidate(userId)));
     this.audit?.log({ actor_id: Number(actorId), actor_name: 'system', action: 'access.role.update', object_type: 'sys_role', object_id: id, detail: {}, result: 'success', source_ip: null });
     return (await this.listRoles()).find((item) => item.id === String(id));
   }
@@ -205,23 +240,30 @@ export class AccessService {
   }
 
   async assignRoles(userId: string, roleIds: string[], actorId: string | number) {
-    const user = await this.userRepo.findOne({ where: { id: userId } });
-    if (!user) throw Errors.notFound('管理员不存在');
     const uniqueRoleIds = [...new Set(roleIds.map(String))];
     if (uniqueRoleIds.length !== roleIds.length) throw Errors.param('角色不可重复选择');
-    const roles = uniqueRoleIds.length ? await this.roleRepo.find({ where: { id: In(uniqueRoleIds), status: 1 } }) : [];
-    if (roles.length !== roleIds.length) throw Errors.param('角色不存在或已停用');
-    if (roles.some((role) => role.isSystem)) throw Errors.param('只能分配业务角色');
-    if (user.role === RoleEnum.SUPER_ADMIN && Number(user.id) === 1 && roleIds.length === 0) throw Errors.lastSuperAdmin();
     const oldSids: string[] = [];
     await this.dataSource.transaction(async (manager) => {
       const userRepo = manager.getRepository(SysUser);
       const roleRepo = manager.getRepository(SysRole);
       const userRoleRepo = manager.getRepository(SysUserRole);
-      const current = await userRepo.findOne({ where: { id: userId } });
+      // Match updateRole's deterministic role -> user lock order. A role
+      // update therefore cannot miss this assignment while collecting users.
+      const currentRoles = uniqueRoleIds.length
+        ? await roleRepo.createQueryBuilder('r')
+          .setLock('pessimistic_write')
+          .where('r.id IN (:...roleIds)', { roleIds: uniqueRoleIds })
+          .orderBy('r.id', 'ASC')
+          .getMany()
+        : [];
+      if (currentRoles.length !== uniqueRoleIds.length || currentRoles.some((role) => role.status !== 1 || role.isSystem)) {
+        throw Errors.param('只能分配启用的业务角色');
+      }
+      const current = await userRepo.createQueryBuilder('u')
+        .setLock('pessimistic_write')
+        .where('u.id = :userId', { userId })
+        .getOne();
       if (!current) throw Errors.notFound('管理员不存在');
-      const currentRoles = uniqueRoleIds.length ? await roleRepo.find({ where: { id: In(uniqueRoleIds), status: 1 } }) : [];
-      if (currentRoles.length !== uniqueRoleIds.length || currentRoles.some((role) => role.isSystem)) throw Errors.param('只能分配启用的业务角色');
       if (current.role === RoleEnum.SUPER_ADMIN && Number(current.id) === 1 && uniqueRoleIds.length === 0) throw Errors.lastSuperAdmin();
       current.rolesConfigured = 1;
       current.authVersion = this.authVersion(current) + 1;

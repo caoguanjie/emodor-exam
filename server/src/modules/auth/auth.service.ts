@@ -119,52 +119,67 @@ export class AuthService {
       throw Errors.accountLocked(ttl > 0 ? ttl : LOGIN_LOCK_SECONDS);
     }
 
-    // 凭据校验：用户不存在与密码错误同一错误码 40104（不泄露区别，FR-ORG-01 验收②）
-    const user = await this.userRepo.findOne({ where: { username } });
-    // 管理员登录必须先消费一次验证码；没有任何管理权限的 legacy 员工
-    // 继续兼容旧的 username/password 请求。若员工被配置了业务管理角色，
-    // 也按管理员处理，不能靠把 system role 留为 employee 绕过验证码。
-    const effectivePermissions = user && user.role === 'employee' ? await this.access.permissions(user.id) : [];
-    const isAdminAccount = Boolean(user && (user.role !== 'employee' || effectivePermissions.length > 0));
-    if (isAdminAccount) {
-      if (!captchaId || !captchaCode || !(await this.captcha.verify(captchaId, captchaCode))) {
-        throw Errors.param('验证码错误');
+    // Credentials, the authoritative admin classification, login facts and
+    // durable session creation share one locked transaction. This prevents a
+    // concurrent reset/role assignment from minting a token from stale state,
+    // and a failed session insert from committing a false successful login.
+    let failedUserId: number | null = null;
+    let loginResult!: { user: SysUser; session: Awaited<ReturnType<SessionService['create']>>; firstLogin: boolean };
+    try {
+      loginResult = await this.dataSource.transaction(async (manager) => {
+        const repo = manager.getRepository(SysUser);
+        const current = await repo.createQueryBuilder('u')
+          .setLock('pessimistic_write')
+          .where('u.username = :username', { username })
+          .getOne();
+        failedUserId = current ? Number(current.id) : null;
+
+        // Do not consult the Redis permission cache before deciding whether a
+        // captcha is mandatory. The manager-scoped read is authoritative and
+        // observes the same locked user generation as this login.
+        const effectivePermissions = current
+          ? await this.access.permissions(current.id, { manager })
+          : [];
+        const isAdminAccount = Boolean(current && (current.role !== 'employee' || effectivePermissions.length > 0));
+        if (isAdminAccount && (!captchaId || !captchaCode || !(await this.captcha.verify(captchaId, captchaCode)))) {
+          throw Errors.param('验证码错误');
+        }
+
+        const ok = current ? await bcrypt.compare(password, current.passwordHash) : false;
+        if (!current || !ok) throw Errors.badCredentials();
+        if (current.status === 0) {
+          this.audit.log({
+            actor_id: Number(current.id), actor_name: username, action: 'auth.login', object_type: 'sys_user',
+            object_id: current.id, detail: { reason: 'disabled' }, result: 'failure', source_ip: ip,
+          });
+          throw Errors.accountDisabled();
+        }
+
+        current.loginCount = Number(current.loginCount || 0) + 1;
+        current.lastLoginAt = new Date();
+        current.lastLoginIp = ip;
+        const saved = await repo.save(current);
+        const session = await this.sessions.create(saved.id, ip, req.get('user-agent') || null, manager);
+        return { user: saved, session, firstLogin: this.passwordChangeRequired(saved) };
+      });
+    } catch (error: any) {
+      if (Number(error?.code) === 40104) {
+        const fails = await this.redis.incrLoginFail(username, LOGIN_LOCK_SECONDS);
+        this.audit.log({
+          actor_id: failedUserId, actor_name: username, action: 'auth.login',
+          object_type: 'sys_user', object_id: failedUserId, detail: { reason: 'bad_credentials' },
+          result: 'failure', source_ip: ip,
+        });
+        if (fails >= LOGIN_MAX_FAILS) throw Errors.accountLocked(LOGIN_LOCK_SECONDS);
       }
-    }
-    const ok = user ? await bcrypt.compare(password, user.passwordHash) : false;
-    if (!user || !ok) {
-      const fails = await this.redis.incrLoginFail(username, LOGIN_LOCK_SECONDS);
-      this.audit.log({
-        actor_id: user ? Number(user.id) : null, actor_name: username, action: 'auth.login',
-        object_type: 'sys_user', object_id: user?.id ?? null, detail: { reason: 'bad_credentials' },
-        result: 'failure', source_ip: ip,
-      });
-      if (fails >= LOGIN_MAX_FAILS) throw Errors.accountLocked(LOGIN_LOCK_SECONDS);
-      throw Errors.badCredentials();
-    }
-    if (user.status === 0) {
-      this.audit.log({
-        actor_id: Number(user.id), actor_name: username, action: 'auth.login', object_type: 'sys_user',
-        object_id: user.id, detail: { reason: 'disabled' }, result: 'failure', source_ip: ip,
-      });
-      throw Errors.accountDisabled();
+      throw error;
     }
 
     await this.redis.clearLoginFail(username);
-    // 真实密码登录（包括首次 pending 登录）都计入成功统计；refresh
-    // 不经过这里，因此不会伪造登录次数/IP/时间。
-    const loggedInUser = await this.dataSource.transaction(async (manager) => {
-      const repo = manager.getRepository(SysUser);
-      const current = await repo.findOne({ where: { id: String(user.id) } });
-      if (!current || current.status === 0) throw Errors.accountDisabled();
-      current.loginCount = Number(current.loginCount || 0) + 1;
-      current.lastLoginAt = new Date();
-      current.lastLoginIp = ip;
-      return repo.save(current);
-    });
-    const firstLogin = this.passwordChangeRequired(loggedInUser);
+    const loggedInUser = loginResult.user;
+    const session = loginResult.session;
+    const firstLogin = loginResult.firstLogin;
     const core = { id: Number(loggedInUser.id), username: loggedInUser.username, role: loggedInUser.role, authVersion: this.authVersion(loggedInUser) };
-    const session = await this.sessions.create(loggedInUser.id, ip, req.get('user-agent') || null);
     const access = this.sign(core, 'access', { pwdPending: firstLogin, sid: session.sid });
     const refresh = this.sign(core, 'refresh', { sid: session.sid });
     this.setRefreshCookie(res, refresh);
@@ -210,7 +225,7 @@ export class AuthService {
     // which two simultaneous refresh requests both passed the blacklist read.
     if (!await this.redis.claimRefreshJti(refreshJti, refreshRemaining)) throw Errors.tokenRevoked();
     const session = sid ? { sid } : await this.sessions.create(user.id, ip, null);
-    if (sid) await this.sessions.touch(sid);
+    if (sid) await this.sessions.touch(sid, true);
     const access = this.sign(core, 'access', { pwdPending: firstLogin, sid: session.sid });
     const newRefresh = this.sign(core, 'refresh', { sid: session.sid });
     // 轮换必须废弃前一个 refresh，不能等到自然过期。
@@ -227,19 +242,19 @@ export class AuthService {
 
   /** 修改本人密码（FR-ORG-06）：校验原密码；成功后同事务写 last_login_at、写封禁键、签发完整令牌 */
   async changePassword(userId: number, oldPassword: string, newPassword: string, ip: string | null, res: Response, currentUser?: AuthUser, refreshToken?: string, req?: Request) {
-    const user = await this.userRepo.findOne({ where: { id: String(userId) } });
-    if (!user) throw Errors.notFound();
-    const ok = await bcrypt.compare(oldPassword, user.passwordHash);
-    if (!ok) throw Errors.param('原密码错误');
-    this.validatePasswordStrength(newPassword, user);
-
-    const hash = await bcrypt.hash(newPassword, 12);
     // 同一事务：覆写哈希、清除独立强制改密标志、递增认证世代、吊销
     // durable sessions，并创建新会话；提交后才写 Redis 快速吊销标记。
     const changed = await this.dataSource.transaction(async (m) => {
       const repo = m.getRepository(SysUser);
-      const u = await repo.findOne({ where: { id: String(userId) } });
+      const u = await repo.createQueryBuilder('u')
+        .setLock('pessimistic_write')
+        .where('u.id = :userId', { userId: String(userId) })
+        .getOne();
       if (!u) throw Errors.notFound();
+      const ok = await bcrypt.compare(oldPassword, u.passwordHash);
+      if (!ok) throw Errors.param('原密码错误');
+      this.validatePasswordStrength(newPassword, u);
+      const hash = await bcrypt.hash(newPassword, 12);
       u.passwordHash = hash;
       u.forcePasswordChange = 0;
       u.authVersion = this.authVersion(u) + 1;

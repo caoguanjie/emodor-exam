@@ -301,50 +301,43 @@ export class UsersService {
   }
 
   async update(id: string, patch: { real_name?: string; employee_no?: string | null; department_id?: string | null; role?: string; phone?: string | null; email?: string | null }, actor: { id: number; name: string }, ip: string | null) {
-    const u = await this.userRepo.findOne({ where: { id } });
-    if (!u) throw Errors.notFound('员工不存在');
     if (patch.role !== undefined) this.validateRole(patch.role);
-    if (patch.role !== undefined && u.role === RoleEnum.SUPER_ADMIN && patch.role !== RoleEnum.SUPER_ADMIN) {
-      const activeSuperCount = await this.userRepo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
-      if (Number(u.id) === 1 || activeSuperCount <= 1) throw Errors.lastSuperAdmin();
-    }
     if (patch.department_id) {
       const dept = await this.dataSource.getRepository(SysDepartment).findOne({ where: { id: patch.department_id } });
       if (!dept) throw Errors.param('部门不存在');
     }
-    const roleChanged = patch.role !== undefined && patch.role !== u.role;
-    if (patch.real_name !== undefined) u.realName = patch.real_name;
-    if (patch.employee_no !== undefined) u.employeeNo = patch.employee_no || null;
-    if (patch.department_id !== undefined) u.departmentId = patch.department_id || null;
-    if (patch.role !== undefined) u.role = patch.role;
-    if (patch.phone !== undefined) u.phone = patch.phone || null;
-    if (patch.email !== undefined) u.email = patch.email || null;
+    let u!: SysUser;
+    let roleChanged = false;
+    const oldSids: string[] = [];
     try {
+      await this.dataSource.transaction(async (manager) => {
+        const repo = manager.getRepository(SysUser);
+        // Every account update takes the same authoritative user-row lock as
+        // login/password/status/role assignment, so a stale outer read cannot
+        // overwrite a concurrent system-role change.
+        const current = await repo.createQueryBuilder('u')
+          .setLock('pessimistic_write')
+          .where('u.id = :id', { id })
+          .getOne();
+        if (!current) throw Errors.notFound('员工不存在');
+        roleChanged = patch.role !== undefined && patch.role !== current.role;
+        if (patch.role !== undefined && current.role === RoleEnum.SUPER_ADMIN && patch.role !== RoleEnum.SUPER_ADMIN) {
+          const activeSuperCount = await repo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
+          if (Number(current.id) === 1 || activeSuperCount <= 1) throw Errors.lastSuperAdmin();
+        }
+        if (patch.real_name !== undefined) current.realName = patch.real_name;
+        if (patch.employee_no !== undefined) current.employeeNo = patch.employee_no || null;
+        if (patch.department_id !== undefined) current.departmentId = patch.department_id || null;
+        if (patch.role !== undefined) current.role = patch.role;
+        if (patch.phone !== undefined) current.phone = patch.phone || null;
+        if (patch.email !== undefined) current.email = patch.email || null;
+        if (roleChanged) current.authVersion = this.authVersion(current) + 1;
+        u = await repo.save(current);
+        if (roleChanged) oldSids.push(...await this.sessions.invalidateUser(manager, id));
+      });
       if (roleChanged) {
-        const oldSids: string[] = [];
-        await this.dataSource.transaction(async (manager) => {
-          const repo = manager.getRepository(SysUser);
-          const current = await repo.findOne({ where: { id } });
-          if (!current) throw Errors.notFound('员工不存在');
-          if (patch.role !== undefined && current.role === RoleEnum.SUPER_ADMIN && patch.role !== RoleEnum.SUPER_ADMIN) {
-            const activeSuperCount = await repo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
-            if (Number(current.id) === 1 || activeSuperCount <= 1) throw Errors.lastSuperAdmin();
-          }
-          if (patch.real_name !== undefined) current.realName = patch.real_name;
-          if (patch.employee_no !== undefined) current.employeeNo = patch.employee_no || null;
-          if (patch.department_id !== undefined) current.departmentId = patch.department_id || null;
-          if (patch.role !== undefined) current.role = patch.role;
-          if (patch.phone !== undefined) current.phone = patch.phone || null;
-          if (patch.email !== undefined) current.email = patch.email || null;
-          current.authVersion = this.authVersion(current) + 1;
-          await repo.save(current);
-          oldSids.push(...await this.sessions.invalidateUser(manager, id));
-          Object.assign(u, current);
-        });
         await this.sessions.markRevoked(oldSids);
         await this.access.invalidate(id);
-      } else {
-        await this.userRepo.save(u);
       }
     } catch (e: any) {
       if (String(e?.code) === 'ER_DUP_ENTRY') throw Errors.param('工号已存在');
@@ -368,7 +361,10 @@ export class UsersService {
     const oldSids: string[] = [];
     await this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(SysUser);
-      const current = await repo.findOne({ where: { id } });
+      const current = await repo.createQueryBuilder('u')
+        .setLock('pessimistic_write')
+        .where('u.id = :id', { id })
+        .getOne();
       if (!current) throw Errors.notFound('员工不存在');
       if (status === 0 && current.role === RoleEnum.SUPER_ADMIN) {
         const activeSuperCount = await repo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
@@ -407,7 +403,10 @@ export class UsersService {
     const oldSids: string[] = [];
     await this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(SysUser);
-      const current = await repo.findOne({ where: { id } });
+      const current = await repo.createQueryBuilder('u')
+        .setLock('pessimistic_write')
+        .where('u.id = :id', { id })
+        .getOne();
       if (!current) throw Errors.notFound('员工不存在');
       current.passwordHash = hash;
       current.forcePasswordChange = 1;

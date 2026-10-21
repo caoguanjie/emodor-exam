@@ -20,6 +20,9 @@ export class AuthSession {
   @Column({ name: 'last_seen_at', type: 'datetime', precision: 3 })
   lastSeenAt!: Date;
 
+  @Column({ name: 'expires_at', type: 'datetime', precision: 3 })
+  expiresAt!: Date;
+
   @Column({ name: 'revoked_at', type: 'datetime', precision: 3, nullable: true })
   revokedAt!: Date | null;
 

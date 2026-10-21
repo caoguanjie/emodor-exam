@@ -7,6 +7,7 @@ import { SkipEnvelope } from '../../common/response.interceptor';
 import { Errors, RoleEnum } from '../../common/errors';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
 import { AuditService } from '../../common/audit.service';
+import { AccessService } from '../access/access.service';
 
 /** /statistics 统计报表模块（04 册 3.8；制度管理角色；个人维度 employee 仅本人） */
 @Controller('statistics')
@@ -14,6 +15,7 @@ export class StatisticsController {
   constructor(
     private readonly stats: StatisticsService,
     private readonly audit: AuditService,
+    private readonly access: AccessService,
   ) {}
 
   @Get('regulations')
@@ -43,7 +45,9 @@ export class StatisticsController {
   @Get('users/:id')
   async personal(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     // 数据范围收口：employee 仅本人（FR-STT-03 验收②，40302）
-    if (!roleHas(user.role, [RoleEnum.SUPER_ADMIN, RoleEnum.REGULATION_ADMIN]) && Number(id) !== user.id) {
+    const permissions = await this.access.permissions(user.id);
+    const canReadOthers = roleHas(user.role, [RoleEnum.SUPER_ADMIN]) || permissions.includes('statistics:read');
+    if (!canReadOthers && Number(id) !== user.id) {
       throw Errors.dataForbidden();
     }
     return this.stats.personal(id);

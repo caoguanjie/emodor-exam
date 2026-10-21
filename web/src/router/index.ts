@@ -21,8 +21,10 @@ const routes: RouteRecordRaw[] = [
       { path: 'my/scores', component: () => import('../views/employee/MyScores.vue'), meta: { title: '我的成绩' } },
       { path: 'my/scores/:recordId', component: () => import('../views/employee/ScoreDetail.vue'), meta: { title: '成绩明细' } },
       // ---- 管理端 ----
-      { path: 'admin/departments', component: () => import('../views/admin/Departments.vue'), meta: { title: '部门管理', admin: true, superOnly: true } },
-      { path: 'admin/users', component: () => import('../views/admin/Users.vue'), meta: { title: '员工管理', admin: true, superOnly: true } },
+      // These legacy pages remain the system-identity boundary. Delegated
+      // learner administration uses the dedicated /admin/students route.
+      { path: 'admin/departments', component: () => import('../views/admin/Departments.vue'), meta: { title: '部门管理', admin: true, superAdminOnly: true } },
+      { path: 'admin/users', component: () => import('../views/admin/Users.vue'), meta: { title: '员工管理', admin: true, superAdminOnly: true } },
       { path: 'admin/students', component: () => import('../views/admin/Users.vue'), meta: { title: '学员管理', admin: true, permission: 'students:read' } },
       { path: 'admin/training-categories', component: () => import('../views/admin/TrainingCategories.vue'), meta: { title: '培训类别', admin: true, permission: 'training_categories:read' } },
       { path: 'admin/regulations', component: () => import('../views/admin/Regulations.vue'), meta: { title: '制度管理', admin: true, permission: 'regulations:read' } },
@@ -65,7 +67,7 @@ router.beforeEach(async (to) => {
   }
   if (auth.needChangePassword && to.path !== '/change-password') return '/change-password';
   if (to.meta.admin && !auth.isAdmin) return '/my/regulations';
-  if (to.meta.superOnly && !auth.isSuperAdmin) return '/my/regulations';
+  if (to.meta.superAdminOnly && !auth.isSuperAdmin) return '/my/regulations';
   if (to.meta.permission && !auth.can(String(to.meta.permission))) return '/my/regulations';
   return true;
 });

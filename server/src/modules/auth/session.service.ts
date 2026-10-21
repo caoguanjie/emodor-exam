@@ -23,19 +23,27 @@ export class SessionService {
 
   async create(userId: string | number, ip: string | null, userAgent: string | null, manager?: EntityManager): Promise<AuthSession> {
     const repo = manager?.getRepository(AuthSession) || this.repo;
+    const now = new Date();
     const session = repo.create({
       sid: randomBytes(24).toString('hex'), userId: String(userId),
       ipAddress: ip, userAgent: userAgent?.slice(0, 255) || null,
-      lastSeenAt: new Date(), revokedAt: null,
+      lastSeenAt: now, expiresAt: new Date(now.getTime() + this.refreshTtlSeconds * 1000), revokedAt: null,
     });
     return repo.save(session);
   }
 
-  async touch(sid: string): Promise<void> {
+  async touch(sid: string, renewExpiry = false): Promise<void> {
     if (!/^[a-f0-9]{48}$/.test(sid)) return;
     const current = await this.repo.findOne({ where: { sid } });
     if (!current || current.revokedAt) return;
-    await this.repo.update({ sid }, { lastSeenAt: new Date() });
+    const now = new Date();
+    const changes: Partial<AuthSession> = { lastSeenAt: now };
+    if (renewExpiry) {
+      // A successful refresh grants the full refresh TTL again. Persist the
+      // true expiry rather than deriving it from the original login time.
+      changes.expiresAt = new Date(now.getTime() + this.refreshTtlSeconds * 1000);
+    }
+    await this.repo.update({ sid }, changes);
   }
 
   async isRevoked(sid: string): Promise<boolean> {
@@ -95,13 +103,19 @@ export class SessionService {
     const rows = await qb.orderBy('s.created_at', 'DESC').skip((safePage - 1) * safePageSize).take(safePageSize).getMany();
     const now = Date.now();
     return {
-      items: rows.map((row) => ({
+      items: rows.map((row) => {
+        // Legacy rows from a rolling deployment may not expose the new field
+        // until 002_access has completed; retain the old derived fallback only
+        // for that compatibility window.
+        const expiresAt = row.expiresAt || new Date(row.createdAt.getTime() + this.refreshTtlSeconds * 1000);
+        return {
         id: String(row.id), sid: row.sid, user_id: String(row.userId),
         user_agent: row.userAgent, ip_address: row.ipAddress,
         created_at: row.createdAt, last_seen_at: row.lastSeenAt, revoked_at: row.revokedAt,
-        expires_at: new Date(row.createdAt.getTime() + this.refreshTtlSeconds * 1000),
-        status: row.revokedAt ? 'revoked' : (row.createdAt.getTime() + this.refreshTtlSeconds * 1000 <= now ? 'expired' : 'active'),
-      })),
+        expires_at: expiresAt,
+        status: row.revokedAt ? 'revoked' : (expiresAt.getTime() <= now ? 'expired' : 'active'),
+        };
+      }),
       total, page: safePage, page_size: safePageSize,
     };
   }

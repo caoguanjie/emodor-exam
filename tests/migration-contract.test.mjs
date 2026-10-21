@@ -171,7 +171,8 @@ test('upgrade preserves existing rows and converges INFORMATION_SCHEMA with init
   assert.equal(accessMigration.status, 'applied');
   assert.deepEqual(accessMigration.progress, [
     'create_sys_role', 'create_sys_permission', 'create_sys_role_permission', 'create_sys_user_role',
-    'create_auth_session', 'add_auth_version', 'add_force_password_change', 'add_login_count',
+    'create_auth_session', 'add_auth_session_expires_at', 'backfill_auth_session_expires_at',
+    'finalize_auth_session_expires_at', 'add_auth_version', 'add_force_password_change', 'add_login_count',
     'add_last_login_ip', 'add_roles_configured', 'backfill_force_password_change',
   ]);
   const [initTables] = await admin.query('SELECT TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME', [initDb]);

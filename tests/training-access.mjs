@@ -105,6 +105,31 @@ export async function run(ctx) {
     real_name: '临时员工', role: 'employee',
   });
   assert(employee.status === 200, `employee fixture create failed: ${employee.status} ${JSON.stringify(employee.json || employee.data)}`);
+  const loginCountBeforeSessionFailure = await ctx.queryTestDb(
+    'SELECT login_count FROM sys_user WHERE id = ?',
+    [String(employee.data.id)],
+  );
+  // The harness query helper intentionally uses prepared statements, so use
+  // an owned table rename rather than a trigger to force session persistence
+  // failure. The table is restored immediately after the one request.
+  await ctx.queryTestDb('RENAME TABLE auth_session TO auth_session_a3_failure');
+  let failedSessionLogin;
+  try {
+    failedSessionLogin = await ctx.request(null, 'POST', '/auth/login', {
+      username: employee.data.username, password: employeePassword,
+    });
+  } finally {
+    await ctx.queryTestDb('RENAME TABLE auth_session_a3_failure TO auth_session');
+  }
+  assert(failedSessionLogin.status >= 500, `session creation failure expected server error, got ${failedSessionLogin.status}`);
+  const loginCountAfterSessionFailure = await ctx.queryTestDb(
+    'SELECT login_count FROM sys_user WHERE id = ?',
+    [String(employee.data.id)],
+  );
+  assert(
+    Number(loginCountAfterSessionFailure[0]?.login_count || 0) === Number(loginCountBeforeSessionFailure[0]?.login_count || 0),
+    'failed session creation committed a successful-login count',
+  );
   const employeeLogin = await ctx.request(null, 'POST', '/auth/login', {
     username: employee.data.username, password: employeePassword,
   });
@@ -118,7 +143,11 @@ export async function run(ctx) {
 
   const employeeRoleCode = `employee_admin_${randomBytes(4).toString('hex')}`;
   const employeeRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
-    code: employeeRoleCode, name: '员工运营管理员', permissions: ['statistics:read', 'regulations:read', 'questions:read', 'ai:read'],
+    code: employeeRoleCode, name: '员工运营管理员', permissions: [
+      'statistics:read', 'regulations:read', 'regulations:write',
+      'questions:read', 'questions:write', 'ai:read', 'ai:write',
+      'papers:read', 'papers:write',
+    ],
   });
   assert(employeeRole.status === 200 && employeeRole.data?.id, `employee admin role create failed: ${employeeRole.status}`);
 
@@ -132,6 +161,8 @@ export async function run(ctx) {
 
   const employeeAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, { role_ids: [String(employeeRole.data.id)] });
   assert(employeeAssigned.status === 200, `employee role assignment failed: ${employeeAssigned.status}`);
+  const preGrantEmployeeSession = await ctx.request({ accessToken: employeeLogin.data.access_token }, 'GET', '/statistics/regulations');
+  assert(preGrantEmployeeSession.status === 401, `employee session before role grant remained valid: ${preGrantEmployeeSession.status}`);
   const employeeWithoutCaptcha = await ctx.request(null, 'POST', '/auth/login', {
     username: employee.data.username, password: employeePassword,
   });
@@ -145,6 +176,89 @@ export async function run(ctx) {
   assert(employeeStats.status !== 403, `employee custom statistics permission denied: ${employeeStats.status}`);
   const employeeQuestions = await ctx.request(employeeAdminLogin.actor, 'GET', '/ai/questions');
   assert(employeeQuestions.status !== 403, `employee custom AI permission denied: ${employeeQuestions.status}`);
+  const scopedRegulationId = await seedScopedPublishedRegulation(ctx, admin.result.data.user.id);
+  const employeePreview = await ctx.request(
+    employeeAdminLogin.actor,
+    'GET',
+    `/regulations/${scopedRegulationId}/preview`,
+  );
+  assert(employeePreview.status === 200, `employee custom regulation preview denied: ${employeePreview.status}`);
+  const employeeOtherUserStats = await ctx.request(employeeAdminLogin.actor, 'GET', '/statistics/users/1');
+  assert(employeeOtherUserStats.status === 200, `employee custom other-user statistics denied: ${employeeOtherUserStats.status}`);
+  const secondEmployeeSession = await captchaLogin(ctx, employee.data.username, employeeAdminLogin.password);
+  const legacyEmployeeToken = signLegacyNoSidAccessToken(
+    ctx,
+    employee.data,
+    employeeAdminLogin.result.data.user.auth_version,
+  );
+  const rotatedEmployeePassword = randomStrongPassword(employee.data.username, '临时员工');
+  const employeePasswordChange = await ctx.request(employeeAdminLogin.actor, 'PUT', '/auth/password', {
+    old_password: employeeAdminLogin.password, new_password: rotatedEmployeePassword,
+  });
+  assert(employeePasswordChange.status === 200, `employee password rotation failed: ${employeePasswordChange.status}`);
+  employeeAdminLogin.actor.accessToken = employeePasswordChange.data.access_token;
+  employeeAdminLogin.password = rotatedEmployeePassword;
+  const secondSessionAfterPasswordChange = await ctx.request(secondEmployeeSession.actor, 'GET', '/statistics/regulations');
+  assert(secondSessionAfterPasswordChange.status === 401, `same-second second sid survived password change: ${secondSessionAfterPasswordChange.status}`);
+  const legacyAfterPasswordChange = await ctx.request({ accessToken: legacyEmployeeToken }, 'GET', '/statistics/regulations');
+  assert(legacyAfterPasswordChange.status === 401, `legacy no-sid token survived password change: ${legacyAfterPasswordChange.status}`);
+  const raceUsername = `race_employee_${randomBytes(4).toString('hex')}`;
+  const racePassword = randomStrongPassword(raceUsername, '并发员工');
+  const raceEmployee = await ctx.request(admin.actor, 'POST', '/users', {
+    username: raceUsername, password: racePassword, real_name: '并发员工', role: 'employee',
+  });
+  assert(raceEmployee.status === 200 && raceEmployee.data?.id, `concurrent login fixture create failed: ${raceEmployee.status}`);
+  const [raceAssignment, raceLogin] = await Promise.all([
+    ctx.request(admin.actor, 'PUT', `/admin/administrators/${raceEmployee.data.id}/roles`, { role_ids: [String(role.data.id)] }),
+    ctx.request(null, 'POST', '/auth/login', { username: raceUsername, password: racePassword }),
+  ]);
+  assert(raceAssignment.status === 200, `concurrent role assignment failed: ${raceAssignment.status}`);
+  if (raceLogin.status === 200) {
+    const raceTokenAfterGrant = await ctx.request({ accessToken: raceLogin.data.access_token }, 'GET', '/statistics/regulations');
+    assert(raceTokenAfterGrant.status === 401, `concurrent pre-grant login minted a surviving privileged session: ${raceTokenAfterGrant.status}`);
+  } else {
+    assert(raceLogin.status === 400, `concurrent login should require captcha after grant, got ${raceLogin.status}`);
+  }
+  const versionBeforeConcurrentAssignments = await ctx.queryTestDb(
+    'SELECT auth_version FROM sys_user WHERE id = ?', [String(employee.data.id)],
+  );
+  const [assignmentA, assignmentB] = await Promise.all([
+    ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, { role_ids: [String(role.data.id)] }),
+    ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, { role_ids: [String(employeeRole.data.id)] }),
+  ]);
+  assert(assignmentA.status === 200 && assignmentB.status === 200, `concurrent role assignments failed: ${assignmentA.status}/${assignmentB.status}`);
+  const versionAfterConcurrentAssignments = await ctx.queryTestDb(
+    'SELECT auth_version FROM sys_user WHERE id = ?', [String(employee.data.id)],
+  );
+  assert(
+    Number(versionAfterConcurrentAssignments[0]?.auth_version || 0) >= Number(versionBeforeConcurrentAssignments[0]?.auth_version || 0) + 2,
+    'concurrent role assignments collapsed auth_version increments',
+  );
+  const restoreEmployeeAdmin = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, { role_ids: [String(employeeRole.data.id)] });
+  assert(restoreEmployeeAdmin.status === 200, `employee role restore failed: ${restoreEmployeeAdmin.status}`);
+  const refreshedEmployeeAdmin = await captchaLogin(ctx, employee.data.username, employeeAdminLogin.password);
+  employeeAdminLogin.actor = refreshedEmployeeAdmin.actor;
+  const delegatedRegulation = await ctx.request(employeeAdminLogin.actor, 'POST', '/regulations', {
+    title: `A3 delegated regulation ${randomBytes(4).toString('hex')}`,
+    category: 'A3', description: 'delegated write fixture',
+  });
+  assert(delegatedRegulation.status === 200 && delegatedRegulation.data?.id, `employee custom regulation write denied: ${delegatedRegulation.status}`);
+  const delegatedQuestion = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/questions', {
+    regulation_id: scopedRegulationId,
+    type: 'single', stem: 'A3 delegated question',
+    options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }],
+    answer: [0], score: 10,
+  });
+  assert(delegatedQuestion.status === 200 && delegatedQuestion.data?.id, `employee custom question write denied: ${delegatedQuestion.status}`);
+  const delegatedPaper = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/papers', {
+    regulation_id: scopedRegulationId, title: 'A3 delegated paper', pass_score: 60,
+  });
+  assert(delegatedPaper.status === 200 && delegatedPaper.data?.id, `employee custom paper write denied: ${delegatedPaper.status}`);
+  const delegatedGeneration = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/generate-questions', {
+    regulation_id: scopedRegulationId, question_count_single: 1, question_count_multiple: 0,
+    score_single: 100, score_multiple: 1,
+  });
+  assert(delegatedGeneration.status !== 403, `employee custom AI generation permission denied: ${delegatedGeneration.status}`);
   const employeeStatsRows = await ctx.queryTestDb(
     'SELECT login_count, force_password_change, last_login_at, last_login_ip FROM sys_user WHERE id = ?',
     [String(employee.data.id)],
@@ -173,11 +287,9 @@ export async function run(ctx) {
     username: restrictedUsername, password: restrictedPassword,
     real_name: '受限管理员', role: 'regulation_admin',
   });
-  assert(restricted.status === 200 && restricted.data?.id, `restricted fixture create failed: ${restricted.status}`);
+  assert(restricted.status === 200 && restricted.data?.id, `restricted fixture create failed: ${restricted.status} ${JSON.stringify(restricted.json || restricted.data)}`);
   const assigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${restricted.data.id}/roles`, { role_ids: [role.data.id] });
   assert(assigned.status === 200, `restricted role assignment failed: ${assigned.status}`);
-  const scopedRegulationId = await seedScopedPublishedRegulation(ctx, admin.result.data.user.id);
-
   const restrictedLogin = await completeFirstLogin(
     ctx,
     await captchaLogin(ctx, restricted.data.username, restrictedPassword),
@@ -216,6 +328,7 @@ export async function run(ctx) {
 
   const sessions = await ctx.request(admin.actor, 'GET', '/admin/sessions');
   assert(sessions.status === 200 && Array.isArray(sessions.data?.items), `session list failed: ${sessions.status}`);
+  assert(sessions.data.items.every((item) => item.expires_at), 'session list did not expose persisted expires_at');
   const target = sessions.data.items.find((item) => item.user_id === String(restricted.data.id) && item.status === 'active');
   assert(target, 'restricted active session missing');
   const kickedToken = postRemovalLogin.actor.accessToken;
@@ -232,10 +345,38 @@ export async function run(ctx) {
   assert(removeLastSuperAdmin.status === 409, `removeLastSuperAdmin expected 409, got ${removeLastSuperAdmin.status}`);
   assert(superRole || removeLastSuperAdmin.status === 409, 'system super admin role missing');
 
+  const adminLoginCountBeforeConcurrent = await ctx.queryTestDb('SELECT login_count FROM sys_user WHERE id = 1');
+  const [parallelAdminLoginA, parallelAdminLoginB] = await Promise.all([
+    captchaLogin(ctx, 'admin', admin.password),
+    captchaLogin(ctx, 'admin', admin.password),
+  ]);
+  assert(parallelAdminLoginA.result.status === 200 && parallelAdminLoginB.result.status === 200, 'concurrent admin logins failed');
+  const adminLoginCountAfterConcurrent = await ctx.queryTestDb('SELECT login_count FROM sys_user WHERE id = 1');
+  assert(
+    Number(adminLoginCountAfterConcurrent[0]?.login_count || 0) >= Number(adminLoginCountBeforeConcurrent[0]?.login_count || 0) + 2,
+    'concurrent successful logins lost a login_count increment',
+  );
+
   const rotation = await captchaLogin(ctx, 'admin', admin.password);
   const beforeCookie = rotation.actor.cookie;
   const rotated = await ctx.request(rotation.actor, 'POST', '/auth/refresh');
   assert(rotated.status === 200, `refresh rotation failed: ${rotated.status}`);
+  const adminSessionBeforeTouch = await ctx.queryTestDb(
+    'SELECT sid, expires_at FROM auth_session WHERE user_id = ? AND revoked_at IS NULL ORDER BY id DESC LIMIT 1',
+    ['1'],
+  );
+  assert(adminSessionBeforeTouch[0]?.sid && adminSessionBeforeTouch[0]?.expires_at, 'admin session missing persisted expiry');
+  await ctx.queryTestDb(
+    'UPDATE auth_session SET expires_at = DATE_ADD(NOW(3), INTERVAL 1 SECOND) WHERE sid = ?',
+    [adminSessionBeforeTouch[0].sid],
+  );
+  const extended = await ctx.request(rotation.actor, 'POST', '/auth/refresh');
+  assert(extended.status === 200, `refresh after near-expiry session failed: ${extended.status}`);
+  const adminSessionAfterTouch = await ctx.queryTestDb(
+    'SELECT expires_at FROM auth_session WHERE sid = ?',
+    [adminSessionBeforeTouch[0].sid],
+  );
+  assert(new Date(adminSessionAfterTouch[0]?.expires_at).getTime() > Date.now() + 3600_000, 'refresh did not extend the persisted session expiry');
   const reused = await ctx.request({ cookie: beforeCookie }, 'POST', '/auth/refresh');
   assert(reused.status === 401, `reused refresh expected 401, got ${reused.status}`);
 

@@ -184,9 +184,19 @@ export class RegulationsController {
 
   @Get(':id/preview')
   @Roles(...REG_ADMIN)
-  preview(@Param('id') id: string, @Query('versionId') versionId: string | undefined, @CurrentUser() user: AuthUser) {
+  async preview(@Param('id') id: string, @Query('versionId') versionId: string | undefined, @CurrentUser() user: AuthUser) {
     // 管理端预览：跳过 status=published 校验、仅角色校验（FR-REG-03 验收④）
-    return this.content.readingContent(id, { id: user.id, role: user.role, departmentId: null }, true, versionId);
+    // A custom employee identity with regulations:read is a delegated
+    // management principal for this route, not a learner whose department
+    // scope should hide an unpublished/out-of-scope preview.
+    const permissions = await this.access.permissions(user.id);
+    const canPreview = user.role === RoleEnum.SUPER_ADMIN || permissions.includes('regulations:read');
+    return this.content.readingContent(
+      id,
+      { id: user.id, role: canPreview ? RoleEnum.REGULATION_ADMIN : RoleEnum.EMPLOYEE, departmentId: null },
+      true,
+      versionId,
+    );
   }
 
   // ---- 3.4.2 员工侧（限发布范围内的本人）----

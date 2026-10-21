@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS `sys_user_role` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户业务角色关系';
 
 -- @step create_auth_session
--- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auth_session' AND TABLE_TYPE = 'BASE TABLE') AND (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auth_session') = 9 THEN 1 ELSE 0 END AS complete;
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auth_session' AND TABLE_TYPE = 'BASE TABLE') AND (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auth_session') >= 9 THEN 1 ELSE 0 END AS complete;
 CREATE TABLE IF NOT EXISTS `auth_session` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `sid` VARCHAR(64) NOT NULL,
@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS `auth_session` (
   `user_agent` VARCHAR(255) NULL,
   `ip_address` VARCHAR(64) NULL,
   `last_seen_at` DATETIME(3) NOT NULL,
+  `expires_at` DATETIME(3) NOT NULL COMMENT '当前 refresh 会话到期时间；刷新后顺延完整 TTL',
   `revoked_at` DATETIME(3) NULL,
   `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
@@ -68,6 +69,20 @@ CREATE TABLE IF NOT EXISTS `auth_session` (
   KEY `idx_auth_session_user_active` (`user_id`, `revoked_at`),
   KEY `idx_auth_session_last_seen` (`last_seen_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='认证会话';
+
+-- A1 accepted schemas have nine auth_session columns; add the persisted
+-- refresh expiry as an idempotent upgrade step before backfilling legacy rows.
+-- @step add_auth_session_expires_at
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auth_session' AND COLUMN_NAME = 'expires_at' AND COLUMN_TYPE = 'datetime(3)' AND IS_NULLABLE = 'YES') OR EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auth_session' AND COLUMN_NAME = 'expires_at' AND COLUMN_TYPE = 'datetime(3)' AND IS_NULLABLE = 'NO') THEN 1 ELSE 0 END AS complete;
+ALTER TABLE `auth_session` ADD COLUMN `expires_at` DATETIME(3) NULL COMMENT '当前 refresh 会话到期时间；刷新后顺延完整 TTL' AFTER `last_seen_at`;
+
+-- @step backfill_auth_session_expires_at
+-- @check SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auth_session' AND COLUMN_NAME = 'expires_at' AND IS_NULLABLE = 'YES') OR NOT EXISTS (SELECT 1 FROM `auth_session` WHERE `expires_at` IS NULL) THEN 1 ELSE 0 END AS complete;
+UPDATE `auth_session` SET `expires_at` = DATE_ADD(`created_at`, INTERVAL 7 DAY) WHERE `expires_at` IS NULL;
+
+-- @step finalize_auth_session_expires_at
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'auth_session' AND COLUMN_NAME = 'expires_at' AND COLUMN_TYPE = 'datetime(3)' AND IS_NULLABLE = 'NO' AND COLUMN_DEFAULT IS NULL) THEN 1 ELSE 0 END AS complete;
+ALTER TABLE `auth_session` MODIFY COLUMN `expires_at` DATETIME(3) NOT NULL COMMENT '当前 refresh 会话到期时间；刷新后顺延完整 TTL';
 
 -- Authentication generation/password state/login facts stay in the same
 -- A3 migration as the access/session tables so an accepted A1 install has one

@@ -223,7 +223,7 @@
 | POST / PUT | /admin/roles[/{id}] | roles:write | 新建/修改业务角色；只接受白名单权限 |
 | GET | /admin/administrators | administrators:read | 管理员及当前有效权限 |
 | PUT | /admin/administrators/{id}/roles | administrators:write | 多选业务角色；最高管理员保护 |
-| GET | /admin/sessions | sessions:read | 分页查看在线/已吊销会话 |
+| GET | /admin/sessions | sessions:read | 分页查看在线/已吊销会话（返回 `created_at`、`last_seen_at`、持久化 `expires_at` 与 `status`） |
 | POST | /admin/sessions/{id}/revoke | sessions:write | 强制下线并立即吊销该 sid 的双令牌 |
 
 ### 3.3 部门管理 /departments（权限：管理）

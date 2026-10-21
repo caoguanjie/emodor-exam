@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS `auth_session` (
   `user_agent`   VARCHAR(255) NULL,
   `ip_address`   VARCHAR(64) NULL,
   `last_seen_at` DATETIME(3) NOT NULL,
+  `expires_at`   DATETIME(3) NOT NULL COMMENT '当前 refresh 会话到期时间；刷新后顺延完整 TTL',
   `revoked_at`   DATETIME(3) NULL,
   `created_at`   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at`   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
