@@ -238,7 +238,10 @@ async function loadCategories() {
 async function loadStudents() {
   studentLoading.value = true;
   try {
-    const data: any = await http.get('/admin/students', { params: studentQuery });
+    const params = Object.fromEntries(
+      Object.entries(studentQuery).filter(([, value]) => value !== '' && value !== null && value !== undefined),
+    );
+    const data: any = await http.get('/admin/students', { params });
     students.value = data.items || [];
     studentTotal.value = data.total || 0;
   } finally { studentLoading.value = false; }
@@ -262,19 +265,29 @@ async function saveStudent() {
   if (!studentForm.username || !studentForm.real_name || !studentForm.source || !studentForm.category_id || (!studentForm.id && !studentForm.password)) {
     ElMessage.warning('请填写用户名、姓名、来源、培训类别和密码'); return;
   }
-  const payload = {
-    username: studentForm.username,
-    password: studentForm.password,
-    real_name: studentForm.real_name,
-    employee_no: studentForm.employee_no,
-    source: studentForm.source,
-    category_id: studentForm.category_id,
-    department_id: studentForm.department_id,
-    phone: studentForm.phone,
-    email: studentForm.email,
-  };
-  if (studentForm.id) await http.put(`/admin/students/${studentForm.id}`, payload);
-  else await http.post('/admin/students', payload);
+  if (studentForm.id) {
+    await http.put(`/admin/students/${studentForm.id}`, {
+      real_name: studentForm.real_name,
+      employee_no: studentForm.employee_no,
+      source: studentForm.source,
+      category_id: studentForm.category_id,
+      department_id: studentForm.department_id,
+      phone: studentForm.phone,
+      email: studentForm.email,
+    });
+  } else {
+    await http.post('/admin/students', {
+      username: studentForm.username,
+      password: studentForm.password,
+      real_name: studentForm.real_name,
+      employee_no: studentForm.employee_no,
+      source: studentForm.source,
+      category_id: studentForm.category_id,
+      department_id: studentForm.department_id,
+      phone: studentForm.phone,
+      email: studentForm.email,
+    });
+  }
   ElMessage.success('已保存'); studentDialog.value = false; await loadStudents();
 }
 async function toggleStudentStatus(row: any) {
