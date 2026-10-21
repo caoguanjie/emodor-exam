@@ -117,9 +117,16 @@ export function startMockAi(port = mockPort) {
           res.end(JSON.stringify({ choices: [{ message: { content: 'OK' } }] }));
           return;
         }
-        // 单题重新生成：只要求 1 题
+        // Respect the requested distribution so a one-question task does not
+        // silently receive the historical 10+5 fixture batch.
+        const singleCount = prompt.match(/请生成\s+(\d+)\s*道单选题/)?.[1];
+        const multipleCount = prompt.match(/请生成\s+(\d+)\s*道多选题/)?.[1];
         const wantOne = prompt.includes('重新命制 1 道');
-        const list = wantOne ? [MOCK_QUESTIONS[0]] : MOCK_QUESTIONS;
+        const singles = MOCK_QUESTIONS.filter((question) => question.type === 'single');
+        const multiples = MOCK_QUESTIONS.filter((question) => question.type === 'multiple');
+        const list = singleCount !== undefined || multipleCount !== undefined
+          ? [...singles.slice(0, Number(singleCount || 0)), ...multiples.slice(0, Number(multipleCount || 0))]
+          : (wantOne ? [MOCK_QUESTIONS[0]] : MOCK_QUESTIONS);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(list) } }] }));
       });

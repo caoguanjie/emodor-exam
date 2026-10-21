@@ -261,6 +261,131 @@ async function runBody(ctx, mockPort) {
     `new session timestamps diverged: db=${dbCreated}/${dbUpdated}/${dbLastSeen} api=${apiCreated}/${apiLastSeen}`,
   );
 
+  const adminReadRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
+    code: `admin_read_${randomBytes(4).toString('hex')}`,
+    name: '管理员只读', permissions: ['administrators:read'],
+  });
+  assert(adminReadRole.status === 200 && adminReadRole.data?.id, `administrator read role create failed: ${adminReadRole.status}`);
+  const adminWriteRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
+    code: `admin_write_${randomBytes(4).toString('hex')}`,
+    name: '管理员分配', permissions: ['administrators:read', 'administrators:write'],
+  });
+  assert(adminWriteRole.status === 200 && adminWriteRole.data?.id, `administrator write role create failed: ${adminWriteRole.status}`);
+  const firstAssignmentRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
+    code: `first_assignment_${randomBytes(4).toString('hex')}`,
+    name: '首次分配验证角色', permissions: ['statistics:read'],
+  });
+  assert(firstAssignmentRole.status === 200 && firstAssignmentRole.data?.id, `first assignment role create failed: ${firstAssignmentRole.status}`);
+
+  const ordinaryUsername = `ordinary_${randomBytes(4).toString('hex')}`;
+  const ordinaryPassword = randomStrongPassword(ordinaryUsername);
+  const ordinary = await ctx.request(admin.actor, 'POST', '/users', {
+    username: ordinaryUsername, password: ordinaryPassword, real_name: '普通树读取者', role: 'employee',
+  });
+  assert(ordinary.status === 200 && ordinary.data?.id, `ordinary tree fixture create failed: ${ordinary.status}`);
+  const ordinaryLogin = await completeFirstLogin(
+    ctx,
+    await captchaLogin(ctx, ordinaryUsername, ordinaryPassword),
+    ordinaryUsername, ordinaryPassword, 'OrdinaryTreeReader',
+  );
+  const ordinaryTree = await ctx.request(ordinaryLogin.actor, 'GET', '/departments/tree');
+  assert(ordinaryTree.status === 200 && Array.isArray(ordinaryTree.data?.list), `ordinary department tree read failed: ${ordinaryTree.status}`);
+
+  const readUsername = `admin_read_${randomBytes(4).toString('hex')}`;
+  const readPassword = randomStrongPassword(readUsername);
+  const readUser = await ctx.request(admin.actor, 'POST', '/users', {
+    username: readUsername, password: readPassword, real_name: '管理员只读账号', role: 'employee',
+  });
+  assert(readUser.status === 200 && readUser.data?.id, `administrator read fixture create failed: ${readUser.status}`);
+  const readAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${readUser.data.id}/roles`, {
+    role_ids: [String(adminReadRole.data.id)],
+  });
+  assert(readAssigned.status === 200, `administrator read fixture assignment failed: ${readAssigned.status}`);
+  const readLogin = await completeFirstLogin(
+    ctx,
+    await captchaLogin(ctx, readUsername, readPassword),
+    readUsername, readPassword, 'AdministratorReadOnly',
+  );
+  const readAdministrators = await ctx.request(readLogin.actor, 'GET', '/admin/administrators');
+  assert(readAdministrators.status === 200 && Array.isArray(readAdministrators.data), `administrator read listing failed: ${readAdministrators.status}`);
+  const readCandidatesDenied = await ctx.request(readLogin.actor, 'GET', '/admin/administrators/candidates');
+  assert(readCandidatesDenied.status === 403, `administrator read candidate lookup unexpectedly allowed: ${readCandidatesDenied.status}`);
+  const readOptionsDenied = await ctx.request(readLogin.actor, 'GET', '/admin/administrators/assignable-roles');
+  assert(readOptionsDenied.status === 403, `administrator read role options unexpectedly allowed: ${readOptionsDenied.status}`);
+  const readTree = await ctx.request(readLogin.actor, 'GET', '/departments/tree');
+  assert(readTree.status === 200 && Array.isArray(readTree.data?.list), `delegated department tree read failed: ${readTree.status}`);
+  const departmentWrites = [
+    ['POST', '/departments', { parent_id: null, name: `forbidden_${randomBytes(4).toString('hex')}` }],
+    ['PUT', '/departments/1', { name: '不得修改根部门' }],
+    ['PUT', '/departments/1/parent', { parent_id: null }],
+    ['PUT', '/departments/1/status', { status: 0 }],
+    ['DELETE', '/departments/1', undefined],
+  ];
+  for (const [method, path, body] of departmentWrites) {
+    const denied = await ctx.request(readLogin.actor, method, path, body);
+    assert(denied.status === 403, `delegated department write unexpectedly allowed: ${method} ${path} ${denied.status}`);
+  }
+
+  const writeUsername = `admin_write_${randomBytes(4).toString('hex')}`;
+  const writePassword = randomStrongPassword(writeUsername);
+  const writeUser = await ctx.request(admin.actor, 'POST', '/users', {
+    username: writeUsername, password: writePassword, real_name: '管理员分配账号', role: 'employee',
+  });
+  assert(writeUser.status === 200 && writeUser.data?.id, `administrator write fixture create failed: ${writeUser.status}`);
+  const writeAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${writeUser.data.id}/roles`, {
+    role_ids: [String(adminWriteRole.data.id)],
+  });
+  assert(writeAssigned.status === 200, `administrator write fixture assignment failed: ${writeAssigned.status}`);
+  const writeLogin = await completeFirstLogin(
+    ctx,
+    await captchaLogin(ctx, writeUsername, writePassword),
+    writeUsername, writePassword, 'AdministratorWriteOnly',
+  );
+  const generalRolesDenied = await ctx.request(writeLogin.actor, 'GET', '/admin/roles');
+  assert(generalRolesDenied.status === 403, `administrator write role unexpectedly has roles:read: ${generalRolesDenied.status}`);
+  const writeAdministrators = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators');
+  assert(writeAdministrators.status === 200 && Array.isArray(writeAdministrators.data), `administrator write listing failed: ${writeAdministrators.status}`);
+  const candidatePage = await ctx.request(
+    writeLogin.actor, 'GET', `/admin/administrators/candidates?page=1&page_size=100&keyword=${encodeURIComponent(ordinaryUsername)}`,
+  );
+  assert(
+    candidatePage.status === 200 && candidatePage.data?.page === 1 && candidatePage.data?.page_size === 100
+      && Array.isArray(candidatePage.data?.items) && candidatePage.data.total >= 1,
+    `administrator write candidate page failed: ${candidatePage.status}`,
+  );
+  for (const candidate of candidatePage.data.items) {
+    assert(
+      Object.keys(candidate).sort().join(',') === 'id,real_name,status,system_role,username'
+        && candidate.system_role !== 'super_admin'
+        && candidate.id !== '1',
+      `candidate leaked unsafe fields or highest identity: ${JSON.stringify(candidate)}`,
+    );
+  }
+  const allCandidates = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators/candidates?page=1&page_size=100');
+  assert(allCandidates.status === 200 && allCandidates.data?.items?.every((candidate) => candidate.id !== '1' && candidate.system_role !== 'super_admin'), `super admin appeared in candidate set: ${allCandidates.status}`);
+  const malformedCandidate = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators/candidates?page=not-a-number');
+  assert(malformedCandidate.status === 400, `malformed candidate page was accepted: ${malformedCandidate.status}`);
+  const unknownCandidateField = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators/candidates?unexpected=1');
+  assert(unknownCandidateField.status === 400, `unknown candidate query field was accepted: ${unknownCandidateField.status}`);
+
+  const assignableOptions = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators/assignable-roles');
+  assert(assignableOptions.status === 200 && Array.isArray(assignableOptions.data) && assignableOptions.data.length > 0, `administrator write role options failed: ${assignableOptions.status}`);
+  for (const option of assignableOptions.data) {
+    assert(
+      Object.keys(option).sort().join(',') === 'code,id,is_system,name,status'
+        && option.is_system === false && option.status === 1
+        && !Object.hasOwn(option, 'permissions'),
+      `role options leaked unsafe fields or disabled/system role: ${JSON.stringify(option)}`,
+    );
+  }
+  const firstAssignment = await ctx.request(writeLogin.actor, 'PUT', `/admin/administrators/${ordinary.data.id}/roles`, {
+    role_ids: [String(firstAssignmentRole.data.id)],
+  });
+  assert(firstAssignment.status === 200, `first business-role assignment failed: ${firstAssignment.status}`);
+  const assignedAdministrators = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators');
+  const assignedOrdinary = assignedAdministrators.data?.find((item) => item.id === String(ordinary.data.id));
+  assert(assignedAdministrators.status === 200 && assignedOrdinary?.role_ids?.includes(String(firstAssignmentRole.data.id)), 'first assignment was not reflected in administrator listing');
+
   const roleCode = `limited_${randomBytes(4).toString('hex')}`;
   const role = await ctx.request(admin.actor, 'POST', '/admin/roles', {
     code: roleCode, name: '只读统计', permissions: ['statistics:read'],
