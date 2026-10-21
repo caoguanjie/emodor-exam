@@ -1,6 +1,9 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
-import { COURSE_ROUTE_PERMISSIONS, QUESTION_ROUTE_PERMISSIONS, routeAccessAllowed } from './access';
+import {
+  COURSE_ROUTE_PERMISSIONS, QUESTION_ROUTE_PERMISSIONS, defaultHomePath, postAuthPath, routeAccessAllowed,
+  validPostAuthRedirect,
+} from './access';
 
 /**
  * 路由守卫承载前端侧访问控制（02 册 3.1 选型理由 3 双层防线）：
@@ -13,7 +16,6 @@ const routes: RouteRecordRaw[] = [
     path: '/',
     component: () => import('../layouts/MainLayout.vue'),
     children: [
-      { path: '', redirect: '/my/regulations' },
       // ---- 员工端 ----
       { path: 'my/regulations', component: () => import('../views/employee/MyRegulations.vue'), meta: { title: '我的制度' } },
       { path: 'my/regulations/:id/read', component: () => import('../views/employee/Reading.vue'), meta: { title: '在线学习' } },
@@ -25,6 +27,7 @@ const routes: RouteRecordRaw[] = [
       // These legacy pages remain the system-identity boundary. Delegated
       // learner administration uses the dedicated /admin/students route.
       // KeepAlive is opt-in: session/polling pages that rely on unmount cleanup omit cache.
+      { path: 'admin/dashboard', component: () => import('../views/admin/Dashboard.vue'), meta: { title: '业务首页', admin: true, cache: true } },
       { path: 'admin/departments', component: () => import('../views/admin/Departments.vue'), meta: { title: '部门管理', admin: true, superAdminOnly: true, cache: true } },
       { path: 'admin/users', component: () => import('../views/admin/Users.vue'), meta: { title: '员工管理', admin: true, superAdminOnly: true, cache: true } },
       { path: 'admin/students', component: () => import('../views/admin/Users.vue'), meta: { title: '学员管理', admin: true, permission: 'students:read', cache: true } },
@@ -43,6 +46,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'admin/grading', component: () => import('../views/admin/GradingQueue.vue'), meta: { title: '人工阅卷', admin: true, permission: 'exam_records:review', cache: true } },
       { path: 'admin/grading/:id', component: () => import('../views/admin/GradingDetail.vue'), meta: { title: '阅卷详情', admin: true, permission: 'exam_records:review' } },
       { path: 'admin/statistics', component: () => import('../views/admin/Statistics.vue'), meta: { title: '统计报表', admin: true, permission: 'statistics:read', cache: true } },
+      { path: 'admin/training-statistics', component: () => import('../views/admin/TrainingStatistics.vue'), meta: { title: '培训统计', admin: true, permission: 'statistics:read', cache: true } },
       { path: 'admin/ai-config', component: () => import('../views/admin/AiConfig.vue'), meta: { title: 'AI 服务配置', admin: true, permissionAny: ['ai_config:read', 'ai_config:write'], cache: true } },
       { path: 'admin/administrators', component: () => import('../views/admin/Administrators.vue'), meta: { title: '管理员', admin: true, permission: 'administrators:read', cache: true } },
       { path: 'admin/roles', component: () => import('../views/admin/Roles.vue'), meta: { title: '角色权限', admin: true, permission: 'roles:read', cache: true } },
@@ -61,7 +65,11 @@ export const router = createRouter({ history: createWebHistory(), routes });
 router.beforeEach(async (to) => {
   const auth = useAuthStore();
   if (to.meta.public) {
-    if (auth.isLoggedIn && !auth.needChangePassword) return '/my/regulations';
+    if (auth.isLoggedIn && auth.needChangePassword) {
+      const redirect = validPostAuthRedirect(to.query.redirect);
+      return { path: '/change-password', query: redirect ? { redirect } : {} };
+    }
+    if (auth.isLoggedIn) return postAuthPath(auth.isAdmin, to.query.redirect);
     return true;
   }
   if (!auth.isLoggedIn) {
@@ -80,6 +88,7 @@ router.beforeEach(async (to) => {
     }
   }
   if (auth.needChangePassword && to.path !== '/change-password') return '/change-password';
+  if (to.path === '/') return defaultHomePath(auth.isAdmin);
   if (to.meta.admin && !auth.isAdmin) return '/my/regulations';
   if (!routeAccessAllowed(to.meta, auth.can, auth.isSuperAdmin)) return '/my/regulations';
   return true;

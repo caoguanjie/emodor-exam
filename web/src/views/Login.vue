@@ -70,6 +70,7 @@ import { useRouter, useRoute } from 'vue-router';
 import { User, Lock, Key, Reading, EditPen } from '@element-plus/icons-vue';
 import { useAuthStore } from '../stores/auth';
 import http from '../api/http';
+import { defaultHomePath, validPostAuthRedirect } from '../router/access';
 import brandLogo from '../assets/brand-logo.png';
 
 const router = useRouter();
@@ -97,7 +98,10 @@ async function onLogin() {
   loading.value = true;
   try {
     await auth.login(username.value, password.value, captchaId.value || undefined, captchaCode.value || undefined);
-    router.push(auth.needChangePassword ? '/change-password' : String(route.query.redirect || '/my/regulations'));
+    const redirect = validPostAuthRedirect(route.query.redirect);
+    router.push(auth.needChangePassword
+      ? { path: '/change-password', query: redirect ? { redirect } : {} }
+      : redirect || defaultHomePath(auth.isAdmin));
   } finally {
     loading.value = false;
   }
