@@ -229,7 +229,7 @@ CREATE TABLE IF NOT EXISTS `exam_answer` (
 -- 5. 迁移元数据（由 database/migrate.mjs 管理；不属于业务表数量）
 -- ---------------------------------------------------------------------
 
-CREATE TABLE IF NOT EXISTS `schema_migrations` (
+CREATE TABLE IF NOT EXISTS `schema_migration` (
   `migration_id`  VARCHAR(128) NOT NULL,
   `checksum`      CHAR(64)     NOT NULL,
   `status`        VARCHAR(16)  NOT NULL DEFAULT 'applied' COMMENT 'applying / applied / failed',
@@ -238,5 +238,5 @@ CREATE TABLE IF NOT EXISTS `schema_migrations` (
   `attempts`      INT          NOT NULL DEFAULT 0,
   `error_message` TEXT         NULL,
   PRIMARY KEY (`migration_id`),
-  KEY `idx_schema_migrations_status` (`status`)
+  KEY `idx_schema_migration_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='受控数据库迁移注册表';

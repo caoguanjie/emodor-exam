@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { getMetadataArgsStorage } from 'typeorm';
 import { SchemaMigration } from '../src/entities/schema-migration.entity';
 
-describe('schema_migrations entity contract', () => {
+describe('schema_migration entity contract', () => {
   it('maps the migration registry columns without widening business entities', () => {
     const table = getMetadataArgsStorage().tables.find((item) => item.target === SchemaMigration);
-    expect(table?.name).toBe('schema_migrations');
+    expect(table?.name).toBe('schema_migration');
     const columns = getMetadataArgsStorage().columns
       .filter((item) => item.target === SchemaMigration)
       .map((item) => item.options.name || item.propertyName);

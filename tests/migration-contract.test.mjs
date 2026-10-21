@@ -1,10 +1,11 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { applyMigrations, getMigrationChecksum, inspectMigrations } from '../database/migrate.mjs';
+import { applyMigrations, getMigrationChecksum, inspectMigrations, validateMigrationTarget, REGISTRY_TABLE } from '../database/migrate.mjs';
 import { createEphemeralServices } from './support/ephemeral-services.mjs';
 import { renderSchemaForDatabase, isSafeTestDatabase } from './support/test-target.mjs';
 
@@ -12,7 +13,7 @@ const require = createRequire(new URL('../server/package.json', import.meta.url)
 const mysql = require('mysql2/promise');
 const ROOT = join(import.meta.dirname, '..');
 const initSql = readFileSync(join(ROOT, 'database', 'init.sql'), 'utf8');
-const migrationTable = 'schema_migrations';
+const migrationTable = 'schema_migration';
 
 let services;
 let admin;
@@ -106,4 +107,37 @@ test('checksum drift is rejected before a migration is rerun', async () => {
   await conn.execute(`UPDATE \`${migrationTable}\` SET checksum=? WHERE migration_id=?`, ['0'.repeat(64), '000_migration_registry']);
   await assert.rejects(() => inspectMigrations({ connection: conn, database }), /checksum|校验/i);
   await conn.end();
+});
+
+test('formal migration targets allow existing installs but reject system schemas', () => {
+  for (const databaseName of ['ruleexam', 'ruleexam_upgrade_fixture_abc123']) {
+    assert.doesNotThrow(() => validateMigrationTarget(databaseName));
+  }
+  for (const databaseName of ['', 'mysql', 'sys', 'information_schema', 'performance_schema', 'ruleexam;DROP']) {
+    assert.throws(() => validateMigrationTarget(databaseName), /DB_DATABASE|database|system/i);
+  }
+  assert.equal(REGISTRY_TABLE, 'schema_migration');
+});
+
+test('formal CLI check is read-only and apply upgrades a non-test fixture database', async () => {
+  const formalDatabase = `ruleexam_upgrade_fixture_${randomBytes(5).toString('hex')}`;
+  validateMigrationTarget(formalDatabase);
+  await admin.query(`CREATE DATABASE \`${formalDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`);
+  const credentials = services
+    ? { DB_HOST: services.mysql.host, DB_PORT: String(services.mysql.port), DB_USERNAME: services.mysql.user, DB_PASSWORD: services.mysql.password }
+    : { DB_HOST: process.env.DB_HOST || '127.0.0.1', DB_PORT: String(process.env.DB_PORT || 3306), DB_USERNAME: process.env.DB_USERNAME || 'root', DB_PASSWORD: process.env.DB_PASSWORD || '' };
+  const env = { ...process.env, ...credentials, DB_DATABASE: formalDatabase };
+  try {
+    const check = spawnSync(process.execPath, ['database/migrate.mjs', '--check'], { cwd: ROOT, env, encoding: 'utf8' });
+    assert.equal(check.status, 0, check.stderr);
+    const [[before]] = await admin.query('SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?', [formalDatabase, migrationTable]);
+    assert.equal(Number(before.count), 0);
+
+    const apply = spawnSync(process.execPath, ['database/migrate.mjs', '--apply'], { cwd: ROOT, env, encoding: 'utf8' });
+    assert.equal(apply.status, 0, apply.stderr);
+    const [[afterApply]] = await admin.query('SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?', [formalDatabase, migrationTable]);
+    assert.equal(Number(afterApply.count), 1);
+  } finally {
+    await admin.query(`DROP DATABASE IF EXISTS \`${formalDatabase}\``).catch(() => undefined);
+  }
 });

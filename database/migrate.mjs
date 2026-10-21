@@ -1,23 +1,31 @@
 // Safe, resumable schema migration runner.
-// It never chooses a database outside the explicit ruleexam_test_* boundary.
+// It only targets the explicitly configured, non-system database.
 import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, basename, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { isSafeTestDatabase } from '../tests/support/test-target.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const MIGRATIONS_DIR = join(ROOT, 'database', 'migrations');
-const REGISTRY_TABLE = 'schema_migrations';
+const REGISTRY_TABLE = 'schema_migration';
+const SAFE_DATABASE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const SYSTEM_DATABASES = new Set(['mysql', 'sys', 'information_schema', 'performance_schema', 'ndbinfo']);
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const mysql = require('mysql2/promise');
 
-function assertMigrationTarget(database) {
-  if (!isSafeTestDatabase(database)) {
-    throw new Error('migration target must be an isolated ruleexam_test_<suffix> database');
+export function validateMigrationTarget(database) {
+  if (typeof database !== 'string' || !database) {
+    throw new Error('DB_DATABASE must be explicitly configured for migrations');
   }
+  if (!SAFE_DATABASE_NAME.test(database)) {
+    throw new Error('DB_DATABASE must be a safe MySQL identifier');
+  }
+  if (SYSTEM_DATABASES.has(database.toLowerCase())) {
+    throw new Error(`DB_DATABASE cannot target a system database: ${database}`);
+  }
+  return database;
 }
 
 async function migrationFiles() {
@@ -60,7 +68,7 @@ async function registryRows(connection) {
 }
 
 export async function inspectMigrations({ connection, database }) {
-  assertMigrationTarget(database);
+  validateMigrationTarget(database);
   const migrations = await migrationFiles();
   const rows = await registryRows(connection);
   const byId = new Map(rows.map((row) => [row.migration_id, row]));
@@ -89,7 +97,7 @@ export async function inspectMigrations({ connection, database }) {
 }
 
 export async function applyMigrations({ connection, database }) {
-  assertMigrationTarget(database);
+  validateMigrationTarget(database);
   await ensureRegistry(connection);
   const plan = await inspectMigrations({ connection, database });
   const applied = [];
@@ -125,19 +133,21 @@ export async function applyMigrations({ connection, database }) {
 }
 
 function quoteDatabase(database) {
-  assertMigrationTarget(database);
+  validateMigrationTarget(database);
   return `\`${database}\``;
 }
 
 async function cli() {
-  const args = new Set(process.argv.slice(2));
+  const rawArgs = process.argv.slice(2);
+  const args = new Set(rawArgs);
   const mode = args.has('--check') ? 'check' : args.has('--apply') ? 'apply' : null;
-  if (!mode || (args.has('--check') && args.has('--apply'))) {
+  const unknownArgs = rawArgs.filter((arg) => arg !== '--check' && arg !== '--apply');
+  if (!mode || unknownArgs.length > 0 || (args.has('--check') && args.has('--apply'))) {
     console.error('用法：node database/migrate.mjs --check|--apply');
     process.exitCode = 2;
     return;
   }
-  const database = process.env.DB_DATABASE || '';
+  const database = process.env.DB_DATABASE;
   quoteDatabase(database);
   if (!process.env.DB_PASSWORD) {
     throw new Error('缺少 DB_PASSWORD 环境变量（运行期注入，不落盘）');

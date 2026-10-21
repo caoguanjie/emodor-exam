@@ -1,7 +1,7 @@
 import { Column, Entity, PrimaryColumn } from 'typeorm';
 
 /** Migration metadata is operational state, not a training-domain business table. */
-@Entity('schema_migrations')
+@Entity('schema_migration')
 export class SchemaMigration {
   @PrimaryColumn({ name: 'migration_id', type: 'varchar', length: 128 })
   migrationId: string;

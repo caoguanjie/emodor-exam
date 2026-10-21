@@ -14,7 +14,7 @@ import { RolesGuard } from './common/guards/roles.guard';
 import { RedisService } from './common/redis.service';
 import { AuditService } from './common/audit.service';
 
-// 业务表实体 + 迁移注册表（schema_migrations 是运维元数据，不计入业务表清单）
+// 业务表实体 + 迁移注册表（schema_migration 是运维元数据，不计入业务表清单）
 import { SysDepartment } from './entities/sys-department.entity';
 import { SysUser } from './entities/sys-user.entity';
 import { Regulation } from './entities/regulation.entity';
