@@ -100,6 +100,117 @@ function fixtureMigration(id, text) {
   return parseMigrationText(id, text);
 }
 
+function emptySchemaConnection(database) {
+  return {
+    async query(sql) {
+      assert.match(sql, /SELECT DATABASE\(\)/i);
+      return [[{ database_name: database }]];
+    },
+    async execute(sql) {
+      assert.match(sql, /INFORMATION_SCHEMA\.TABLES/i);
+      return [[{ present: 0 }]];
+    },
+  };
+}
+
+function replacementFixture(id, stepId, target = undefined) {
+  const replacement = target ? `\n-- @replaces-check ${target}` : '';
+  return fixtureMigration(id, `
+-- @step ${stepId}${replacement}
+-- @check SELECT 0 AS complete;
+CREATE TABLE ${stepId} (id INT PRIMARY KEY);
+`);
+}
+
+test('replacement-check metadata is parsed and preserved on a migration step', () => {
+  const successor = replacementFixture('002_successor', 'successor_shape', '001_target/target_shape');
+  assert.equal(successor.steps[0].replacesCheck, '001_target/target_shape');
+
+  for (const sql of [
+    `-- @step successor\n-- @replaces-check\n-- @check SELECT 0 AS complete;\nCREATE TABLE successor (id INT PRIMARY KEY);`,
+    `-- @step successor\n-- @replaces-check 001_target/target_shape/extra\n-- @check SELECT 0 AS complete;\nCREATE TABLE successor (id INT PRIMARY KEY);`,
+    `-- @step successor\n-- @replaces-check 001_target/target_shape\n-- @replaces-check 001_target/other_shape\n-- @check SELECT 0 AS complete;\nCREATE TABLE successor (id INT PRIMARY KEY);`,
+  ]) {
+    assert.throws(() => parseMigrationText('002_successor', sql), /replaces-check|replacement/i);
+  }
+});
+
+test('replacement-check definitions accept one linear predecessor chain', async () => {
+  const database = 'ruleexam_test_replacement_chain';
+  const target = replacementFixture('001_target', 'target_shape');
+  const successor = replacementFixture('002_successor', 'successor_shape', '001_target/target_shape');
+  const latest = replacementFixture('003_latest', 'latest_shape', '002_successor/successor_shape');
+  const inspected = await inspectMigrations({
+    connection: emptySchemaConnection(database),
+    database,
+    migrations: [target, successor, latest],
+  });
+  assert.deepEqual(inspected.pending.map((migrationDefinition) => migrationDefinition.id), [
+    '001_target', '002_successor', '003_latest',
+  ]);
+});
+
+test('replacement-check definitions reject unknown, same-level, forward, cyclic, and forked targets', async () => {
+  const database = 'ruleexam_test_replacement_validation';
+  const connection = emptySchemaConnection(database);
+  const target = replacementFixture('001_target', 'target_shape');
+  const unknown = replacementFixture('002_unknown', 'unknown_shape', '001_target/missing_shape');
+  await assert.rejects(
+    () => inspectMigrations({ connection, database, migrations: [target, unknown] }),
+    /unknown.*replaces-check|replaces-check.*unknown|target.*not found/i,
+  );
+
+  const sameLevel = fixtureMigration('002_same_level', `
+-- @step first_shape
+-- @check SELECT 0 AS complete;
+CREATE TABLE first_shape (id INT PRIMARY KEY);
+-- @step second_shape
+-- @replaces-check 002_same_level/first_shape
+-- @check SELECT 0 AS complete;
+CREATE TABLE second_shape (id INT PRIMARY KEY);
+`);
+  await assert.rejects(
+    () => inspectMigrations({ connection, database, migrations: [sameLevel] }),
+    /same migration|earlier migration|same-level/i,
+  );
+
+  const forward = replacementFixture('001_forward', 'forward_shape', '002_later/later_shape');
+  const later = replacementFixture('002_later', 'later_shape');
+  await assert.rejects(
+    () => inspectMigrations({ connection, database, migrations: [forward, later] }),
+    /earlier migration|forward|reverse/i,
+  );
+
+  const cycleA = replacementFixture('001_cycle_a', 'cycle_a', '002_cycle_b/cycle_b');
+  const cycleB = replacementFixture('002_cycle_b', 'cycle_b', '001_cycle_a/cycle_a');
+  await assert.rejects(
+    () => inspectMigrations({ connection, database, migrations: [cycleA, cycleB] }),
+    /cycle|cyclic/i,
+  );
+
+  const branchA = replacementFixture('002_branch_a', 'branch_a', '001_target/target_shape');
+  const branchB = replacementFixture('003_branch_b', 'branch_b', '001_target/target_shape');
+  await assert.rejects(
+    () => inspectMigrations({ connection, database, migrations: [target, branchA, branchB] }),
+    /fork|branch|multiple.*successor|already replaced/i,
+  );
+
+  const malformedDefinition = {
+    id: '002_malformed',
+    checksum: 'a'.repeat(64),
+    steps: [{
+      id: 'malformed_shape',
+      sql: 'CREATE TABLE malformed_shape (id INT PRIMARY KEY)',
+      checkSql: 'SELECT 0 AS complete',
+      replacesCheck: 42,
+    }],
+  };
+  await assert.rejects(
+    () => inspectMigrations({ connection, database, migrations: [target, malformedDefinition] }),
+    /replaces-check|replacement/i,
+  );
+});
+
 test('010 answer migration exposes stable probed steps without reinterpreting legacy rows', async () => {
   const answers = await migration('010_answers');
   assert.ok(answers);
@@ -113,6 +224,10 @@ test('010 answer migration exposes stable probed steps without reinterpreting le
     'restore_legacy_record_question_index',
     'mark_proven_legacy_finalized',
   ]);
+  assert.equal(
+    answers.steps.find((step) => step.id === 'extend_exam_record_submission').replacesCheck,
+    '009_attempt_snapshot/extend_exam_record_attempt_snapshot',
+  );
 });
 
 const correctMediaAssetFixture = `CREATE TABLE media_asset (
@@ -179,12 +294,13 @@ test('010 upgrades completed C2 answers by record-scoped item identity without c
       [JSON.stringify([1]), JSON.stringify([0]), JSON.stringify([0])],
     );
 
+    const attempts = await migration('009_attempt_snapshot');
     const answers = await migration('010_answers');
     await assert.rejects(
       () => applyMigrations({
         connection: conn,
         database,
-        migrations: [answers],
+        migrations: [attempts, answers],
         onCheckpoint: ({ event, migrationId, stepId }) => {
           if (event === 'after-step-sql' && migrationId === answers.id && stepId === 'drop_legacy_record_question_index') {
             throw new Error('injected failure after legacy index drop');
@@ -224,7 +340,7 @@ test('010 upgrades completed C2 answers by record-scoped item identity without c
       () => applyMigrations({
         connection: conn,
         database,
-        migrations: [answers],
+        migrations: [attempts, answers],
         onCheckpoint: ({ event, migrationId, stepId }) => {
           if (event === 'after-step-sql' && migrationId === answers.id && stepId === 'restore_snapshot_source_identity') {
             throw new Error('injected failure after source identity restore');
@@ -248,7 +364,7 @@ test('010 upgrades completed C2 answers by record-scoped item identity without c
       'drop_legacy_record_question_index',
     ]);
 
-    const applied = await applyMigrations({ connection: conn, database, migrations: [answers] });
+    const applied = await applyMigrations({ connection: conn, database, migrations: [attempts, answers] });
     assert.deepEqual(applied.applied, ['010_answers']);
     const [rows] = await conn.query(
       'SELECT exam_record_id, question_id, record_question_id, selected, gained_score FROM exam_answer ORDER BY exam_record_id, id',
@@ -293,8 +409,236 @@ test('010 upgrades completed C2 answers by record-scoped item identity without c
     assert.equal(completed.status, 'applied');
     assert.deepEqual(completed.progress, answers.steps.map((step) => step.id));
     assert.ok(Number(completed.attempts) >= 3);
-    const repeated = await applyMigrations({ connection: conn, database, migrations: [answers] });
+    const repeated = await applyMigrations({ connection: conn, database, migrations: [attempts, answers] });
     assert.deepEqual(repeated.applied, []);
+  } finally {
+    await conn.end();
+  }
+});
+
+test('000 through 010 upgrades once from the accepted A1 schema and then reapplies as a no-op', async () => {
+  const database = await createDatabase('succession_a1_' + randomBytes(3).toString('hex'));
+  const acceptedA1Sql = execFileSync(
+    'git',
+    ['show', 'a5955da4bf8022757008322d49b2db58d15aef74:database/init.sql'],
+    { cwd: ROOT, encoding: 'utf8' },
+  );
+  await admin.query(renderSchemaForDatabase(acceptedA1Sql, database));
+  const conn = await connectionFor(database);
+  try {
+    const throughAnswers = (await listMigrations())
+      .filter((item) => Number(item.id.slice(0, 3)) <= 10);
+    assert.deepEqual(throughAnswers.map((item) => item.id), [
+      '000_migration_registry', '001_training_identity', '002_access', '003_media',
+      '004_system', '005_courses', '006_video_learning', '007_question_bank',
+      '008_paper_release', '009_attempt_snapshot', '010_answers',
+    ]);
+
+    const first = await applyMigrations({ connection: conn, database, migrations: throughAnswers });
+    assert.deepEqual(first.applied, throughAnswers.map((item) => item.id));
+    const [[columns]] = await conn.query(
+      "SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'exam_record'",
+    );
+    assert.equal(Number(columns.count), 30);
+    const [before] = await conn.query(
+      `SELECT migration_id, checksum, status, attempts, progress FROM \`${migrationTable}\` ORDER BY migration_id`,
+    );
+
+    const repeated = await applyMigrations({ connection: conn, database, migrations: throughAnswers });
+    assert.deepEqual(repeated.applied, []);
+    const [afterRows] = await conn.query(
+      `SELECT migration_id, checksum, status, attempts, progress FROM \`${migrationTable}\` ORDER BY migration_id`,
+    );
+    assert.deepEqual(afterRows, before);
+  } finally {
+    await conn.end();
+  }
+});
+
+test('latest init with an empty registry records 009 and 010 independently and tolerates later columns', async () => {
+  const database = await createDatabase('succession_fresh_' + randomBytes(3).toString('hex'));
+  await admin.query(renderSchemaForDatabase(initSql, database));
+  const conn = await connectionFor(database);
+  try {
+    const attempts = await migration('009_attempt_snapshot');
+    const answers = await migration('010_answers');
+    const definitions = [attempts, answers];
+    const first = await applyMigrations({ connection: conn, database, migrations: definitions });
+    assert.deepEqual(first.applied, ['009_attempt_snapshot', '010_answers']);
+    const [registered] = await conn.query(
+      `SELECT migration_id, status, progress FROM \`${migrationTable}\` WHERE migration_id IN (?, ?) ORDER BY migration_id`,
+      [attempts.id, answers.id],
+    );
+    assert.deepEqual(registered.map((row) => [row.migration_id, row.status, row.progress]), [
+      [attempts.id, 'applied', attempts.steps.map((step) => step.id)],
+      [answers.id, 'applied', answers.steps.map((step) => step.id)],
+    ]);
+
+    const repeated = await applyMigrations({ connection: conn, database, migrations: definitions });
+    assert.deepEqual(repeated.applied, []);
+    await conn.query('ALTER TABLE exam_record ADD COLUMN post_010_extension INT NULL');
+    const afterExtension = await applyMigrations({ connection: conn, database, migrations: definitions });
+    assert.deepEqual(afterExtension.applied, []);
+  } finally {
+    await conn.end();
+  }
+});
+
+test('010 resumes when its exam_record ALTER committed before successor progress was saved', async () => {
+  const database = await createDatabase('succession_crash_' + randomBytes(3).toString('hex'));
+  const c2Sql = execFileSync(
+    'git',
+    ['show', 'f2bc634498561077b9c1f8d435ea8fc3483e6c56:database/init.sql'],
+    { cwd: ROOT, encoding: 'utf8' },
+  );
+  await admin.query(renderSchemaForDatabase(c2Sql, database));
+  const conn = await connectionFor(database);
+  try {
+    const attempts = await migration('009_attempt_snapshot');
+    const answers = await migration('010_answers');
+    const definitions = [attempts, answers];
+    await assert.rejects(
+      () => applyMigrations({
+        connection: conn,
+        database,
+        migrations: definitions,
+        onCheckpoint: ({ event, migrationId, stepId }) => {
+          if (event === 'before-progress'
+            && migrationId === answers.id
+            && stepId === 'extend_exam_record_submission') {
+            throw new Error('injected failure before successor progress');
+          }
+        },
+      }),
+      /injected failure before successor progress/,
+    );
+    const [[failed]] = await conn.query(
+      `SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = ?`,
+      [answers.id],
+    );
+    assert.equal(failed.status, 'failed');
+    assert.deepEqual(failed.progress, ['extend_exam_answer_draft']);
+    const [[columns]] = await conn.query(
+      "SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'exam_record'",
+    );
+    assert.equal(Number(columns.count), 30);
+
+    const resumed = await applyMigrations({ connection: conn, database, migrations: definitions });
+    assert.deepEqual(resumed.applied, ['010_answers']);
+    const [[completed]] = await conn.query(
+      `SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = ?`,
+      [answers.id],
+    );
+    assert.equal(completed.status, 'applied');
+    assert.deepEqual(completed.progress, answers.steps.map((step) => step.id));
+  } finally {
+    await conn.end();
+  }
+});
+
+test('confirmed 010 progress makes its full probe authoritative for old shape and column or index drift', async () => {
+  const variants = [
+    {
+      name: 'restored_old_shape',
+      sql: `ALTER TABLE exam_record
+        DROP COLUMN graded_at,
+        DROP COLUMN grading_revision,
+        DROP COLUMN grading_state,
+        DROP COLUMN submission_method,
+        DROP COLUMN device_summary,
+        DROP COLUMN last_heartbeat_at,
+        DROP COLUMN draft_saved_at,
+        DROP COLUMN draft_payload_hash,
+        DROP COLUMN draft_revision`,
+      oldProbe: 1,
+    },
+    {
+      name: 'old_column_drift',
+      sql: 'ALTER TABLE exam_record MODIFY COLUMN assignment_id BIGINT UNSIGNED NOT NULL',
+      oldProbe: 0,
+    },
+    {
+      name: 'old_index_drift',
+      sql: 'ALTER TABLE exam_record DROP INDEX uk_assignment_attempt, ADD UNIQUE KEY uk_assignment_attempt (attempt_no, assignment_id)',
+      oldProbe: 0,
+    },
+    {
+      name: 'old_index_uniqueness_drift',
+      sql: 'ALTER TABLE exam_record DROP INDEX uk_assignment_attempt, ADD KEY uk_assignment_attempt (assignment_id, attempt_no)',
+      oldProbe: 0,
+    },
+    {
+      name: 'new_column_drift',
+      sql: 'ALTER TABLE exam_record MODIFY COLUMN draft_revision INT NOT NULL DEFAULT 0',
+      oldProbe: 0,
+    },
+  ];
+
+  for (const variant of variants) {
+    const database = await createDatabase(`${variant.name}_${randomBytes(3).toString('hex')}`);
+    await admin.query(renderSchemaForDatabase(initSql, database));
+    const conn = await connectionFor(database);
+    try {
+      const attempts = await migration('009_attempt_snapshot');
+      const answers = await migration('010_answers');
+      const definitions = [attempts, answers];
+      await applyMigrations({ connection: conn, database, migrations: definitions });
+      await conn.query(variant.sql);
+
+      const predecessorStep = attempts.steps.find((step) => step.id === 'extend_exam_record_attempt_snapshot');
+      const successorStep = answers.steps.find((step) => step.id === 'extend_exam_record_submission');
+      const [[oldCompletion]] = await conn.execute(predecessorStep.checkSql);
+      const [[newCompletion]] = await conn.execute(successorStep.checkSql);
+      assert.equal(Number(oldCompletion.complete), variant.oldProbe, `${variant.name} predecessor fixture`);
+      assert.equal(Number(newCompletion.complete), 0, `${variant.name} successor fixture`);
+      const [before] = await conn.query(
+        `SELECT migration_id, status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id IN (?, ?) ORDER BY migration_id`,
+        [attempts.id, answers.id],
+      );
+
+      await assert.rejects(
+        () => applyMigrations({ connection: conn, database, migrations: definitions }),
+        /009_attempt_snapshot\/extend_exam_record_attempt_snapshot.*confirmed successor 010_answers\/extend_exam_record_submission.*invariant is false/i,
+      );
+      const [afterRows] = await conn.query(
+        `SELECT migration_id, status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id IN (?, ?) ORDER BY migration_id`,
+        [attempts.id, answers.id],
+      );
+      assert.deepEqual(afterRows, before);
+    } finally {
+      await conn.end();
+    }
+  }
+});
+
+test('successor checksum conflicts reject before predecessor probes or registry writes', async () => {
+  const database = await createDatabase('succession_checksum_' + randomBytes(3).toString('hex'));
+  await admin.query(renderSchemaForDatabase(initSql, database));
+  const conn = await connectionFor(database);
+  try {
+    const attempts = await migration('009_attempt_snapshot');
+    const answers = await migration('010_answers');
+    const definitions = [attempts, answers];
+    await applyMigrations({ connection: conn, database, migrations: definitions });
+    await conn.query('ALTER TABLE exam_record MODIFY COLUMN assignment_id BIGINT UNSIGNED NOT NULL');
+    await conn.execute(
+      `UPDATE \`${migrationTable}\` SET checksum = ? WHERE migration_id = ?`,
+      ['0'.repeat(64), answers.id],
+    );
+    const [before] = await conn.query(
+      `SELECT migration_id, checksum, status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id IN (?, ?) ORDER BY migration_id`,
+      [attempts.id, answers.id],
+    );
+
+    await assert.rejects(
+      () => applyMigrations({ connection: conn, database, migrations: definitions }),
+      /checksum conflict: 010_answers/i,
+    );
+    const [afterRows] = await conn.query(
+      `SELECT migration_id, checksum, status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id IN (?, ?) ORDER BY migration_id`,
+      [attempts.id, answers.id],
+    );
+    assert.deepEqual(afterRows, before);
   } finally {
     await conn.end();
   }
