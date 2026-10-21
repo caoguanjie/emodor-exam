@@ -113,3 +113,106 @@ export async function preflightAvatarSave(
     ? { action: 'confirmed', result }
     : { action: 'blocked', result };
 }
+
+export interface StudentSaveContext {
+  dialogVersion: number;
+  studentId: string | null;
+  desiredId: string | null;
+  ordinary: Record<string, unknown>;
+}
+
+export interface StudentSaveWorkflowOptions {
+  avatarChanged: boolean;
+  read: (path: string) => Promise<unknown>;
+  currentContext: () => StudentSaveContext | null;
+  writeOrdinary: (draft: Record<string, unknown>) => Promise<void>;
+  writeAvatar: (desiredId: string | null) => Promise<void>;
+}
+
+export interface StudentSaveWorkflowResult {
+  outcome: 'saved' | 'blocked' | 'stale';
+  avatarResult?: AvatarReconcileResult;
+  error?: unknown;
+}
+
+function sameOrdinaryDraft(expected: Record<string, unknown>, current: Record<string, unknown>): boolean {
+  const keys = new Set([...Object.keys(expected), ...Object.keys(current)]);
+  return [...keys].every((key) => expected[key] === current[key]);
+}
+
+export function isStudentSaveContextCurrent(
+  expected: StudentSaveContext,
+  current: StudentSaveContext | null,
+): boolean {
+  return !!current
+    && expected.dialogVersion === current.dialogVersion
+    && expected.studentId === current.studentId
+    && expected.desiredId === current.desiredId
+    && sameOrdinaryDraft(expected.ordinary, current.ordinary);
+}
+
+/**
+ * Execute the complete student save sequence against one frozen dialog
+ * context. Every continuation checks the current context before mutating or
+ * issuing the next write; a late avatar failure is reconciled against the
+ * original student id rather than whichever dialog is currently visible.
+ */
+export async function runStudentSaveWorkflow(
+  status: AvatarSyncStatus,
+  context: StudentSaveContext,
+  options: StudentSaveWorkflowOptions,
+): Promise<StudentSaveWorkflowResult> {
+  let avatarChanged = options.avatarChanged;
+  let avatarResult: AvatarReconcileResult | undefined;
+
+  if (status === 'unknown' && context.studentId !== null) {
+    const preflight = await preflightAvatarSave(
+      status,
+      {
+        dialogVersion: context.dialogVersion,
+        studentId: context.studentId,
+        desiredId: context.desiredId,
+      },
+      options.read,
+      () => {
+        const current = options.currentContext();
+        if (!current || current.studentId === null) return null;
+        return {
+          dialogVersion: current.dialogVersion,
+          studentId: current.studentId,
+          desiredId: current.desiredId,
+        };
+      },
+    );
+    avatarResult = preflight.result || undefined;
+    if (preflight.action === 'stale' || !isStudentSaveContextCurrent(context, options.currentContext())) {
+      return { outcome: 'stale', avatarResult };
+    }
+    if (preflight.action === 'blocked') return { outcome: 'blocked', avatarResult };
+    // The avatar is already confirmed by the query. The ordinary draft still
+    // needs its own PUT and must not be discarded by closing the dialog here.
+    avatarChanged = false;
+  }
+
+  await options.writeOrdinary(context.ordinary);
+  if (!isStudentSaveContextCurrent(context, options.currentContext())) return { outcome: 'stale', avatarResult };
+
+  if (avatarChanged) {
+    try {
+      await options.writeAvatar(context.desiredId);
+    } catch (error) {
+      // Even when the dialog has switched, reconcile the original student;
+      // apply the result only if the original context is still current.
+      const reconciled = context.studentId === null
+        ? unknownResult(context.desiredId)
+        : await reconcileStudentAvatar(context.studentId, context.desiredId, options.read);
+      if (!isStudentSaveContextCurrent(context, options.currentContext())) {
+        return { outcome: 'stale', avatarResult: reconciled };
+      }
+      if (reconciled.outcome === 'applied') return { outcome: 'saved', avatarResult: reconciled };
+      return { outcome: 'blocked', avatarResult: reconciled, error };
+    }
+    if (!isStudentSaveContextCurrent(context, options.currentContext())) return { outcome: 'stale', avatarResult };
+  }
+  return { outcome: 'saved', avatarResult };
+}

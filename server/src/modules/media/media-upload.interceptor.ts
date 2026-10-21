@@ -1,7 +1,7 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor, mixin } from '@nestjs/common';
 import multer, { type StorageEngine } from 'multer';
 import { randomUUID } from 'node:crypto';
-import { createWriteStream, mkdirSync, unlink } from 'node:fs';
+import { createWriteStream, mkdirSync, unlink, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { Observable, catchError, concatMap, finalize, from, map, throwError } from 'rxjs';
 import { Request, Response } from 'express';
@@ -12,8 +12,11 @@ type MediaRequest = Request & {
   file?: Express.Multer.File;
   mediaTempPath?: string;
   mediaUploadAborted?: boolean;
-  mediaUploadWriter?: { abort: () => void };
+  mediaUploadWriter?: { abort: () => void; closed: Promise<void> };
+  mediaUploadClose?: Promise<void>;
 };
+
+type MediaWriterFactory = (path: string) => WriteStream;
 
 function uploadTempRoot(): string {
   const root = process.env.UPLOAD_DIR || './data/uploads';
@@ -32,6 +35,7 @@ export class MediaUploadStorage implements StorageEngine {
   constructor(
     private readonly destination: () => string = uploadTempRoot,
     private readonly markActivePath: (path: string) => void = () => undefined,
+    private readonly createWriter: MediaWriterFactory = createWriteStream,
   ) {}
 
   _handleFile(
@@ -41,6 +45,7 @@ export class MediaUploadStorage implements StorageEngine {
   ): void {
     const mediaReq = req as MediaRequest;
     if (mediaReq.mediaUploadAborted) {
+      mediaReq.mediaUploadClose = Promise.resolve();
       let callbackCalled = false;
       let sourceFailed = false;
       const detach = () => {
@@ -75,7 +80,11 @@ export class MediaUploadStorage implements StorageEngine {
     mediaReq.mediaTempPath = path;
     this.markActivePath(path);
 
-    const writer = createWriteStream(path);
+    const writer = this.createWriter(path);
+    let resolveWriterClosed!: () => void;
+    let writerCloseResolved = false;
+    const writerClosedPromise = new Promise<void>((resolve) => { resolveWriterClosed = resolve; });
+    mediaReq.mediaUploadClose = writerClosedPromise;
     let callbackCalled = false;
     let writerClosed = false;
     let writerFinished = false;
@@ -159,9 +168,14 @@ export class MediaUploadStorage implements StorageEngine {
     };
     const onWriterClose = () => {
       writerClosed = true;
+      if (!writerCloseResolved) {
+        writerCloseResolved = true;
+        resolveWriterClosed();
+      }
       settleAfterClose();
     };
     const handle = {
+      closed: writerClosedPromise,
       abort: () => {
         if (callbackCalled || sourceFailed) return;
         abortRequested = true;
@@ -189,6 +203,10 @@ export class MediaUploadStorage implements StorageEngine {
     if (!handle) return false;
     handle.abort();
     return true;
+  }
+
+  static waitForClose(req: Request): Promise<void> {
+    return (req as MediaRequest).mediaUploadClose || Promise.resolve();
   }
 
   _removeFile(
@@ -235,6 +253,7 @@ class MediaUploadInterceptorImpl implements NestInterceptor {
     const res = context.switchToHttp().getResponse<Response>();
     let aborted = false;
     req.mediaUploadAborted = false;
+    req.mediaUploadClose = Promise.resolve();
     const onAborted = () => {
       aborted = true;
       req.mediaUploadAborted = true;
@@ -275,8 +294,10 @@ class MediaUploadInterceptorImpl implements NestInterceptor {
   }
 
   private cleanup(req: MediaRequest): Promise<void> {
-    const path = req.mediaTempPath || req.file?.path;
-    return this.media.cleanupTempPath(path);
+    return MediaUploadStorage.waitForClose(req).then(() => {
+      const path = req.mediaTempPath || req.file?.path;
+      return this.media.cleanupTempPath(path);
+    });
   }
 }
 

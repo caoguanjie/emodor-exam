@@ -4,6 +4,7 @@ import {
   classifyAvatarRead,
   preflightAvatarSave,
   reconcileStudentAvatar,
+  runStudentSaveWorkflow,
 } from '../src/utils/avatar-save-state.ts';
 
 test('confirms an uncertain write when exact student GET returns the desired id', async () => {
@@ -105,4 +106,89 @@ test('ignores an old query after cancel and opening another student dialog', asy
   const decision = await pending;
   assert.equal(decision.action, 'stale');
   assert.equal(decision.result.outcome, 'applied');
+});
+
+test('does not close or mutate another dialog after the original avatar PUT succeeds late', async () => {
+  const original = {
+    dialogVersion: 1,
+    studentId: '42',
+    desiredId: 'asset-new',
+    ordinary: { real_name: 'A' },
+  };
+  let current = original;
+  let resolveAvatar;
+  let ordinaryWrites = 0;
+  let avatarWrites = 0;
+  const pending = runStudentSaveWorkflow('pending', original, {
+    avatarChanged: true,
+    read: async () => ({ avatar_id: 'asset-old' }),
+    currentContext: () => current,
+    writeOrdinary: async (draft) => {
+      ordinaryWrites += 1;
+      assert.deepEqual(draft, { real_name: 'A' });
+    },
+    writeAvatar: async () => {
+      avatarWrites += 1;
+      await new Promise((resolve) => { resolveAvatar = resolve; });
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  current = { dialogVersion: 2, studentId: '43', desiredId: 'asset-b', ordinary: { real_name: 'B' } };
+  resolveAvatar();
+  const result = await pending;
+  assert.equal(result.outcome, 'stale');
+  assert.equal(ordinaryWrites, 1);
+  assert.equal(avatarWrites, 1);
+});
+
+test('reconciles a late failed PUT against the original student without touching the new dialog', async () => {
+  const original = {
+    dialogVersion: 1,
+    studentId: '42',
+    desiredId: 'asset-new',
+    ordinary: { real_name: 'A' },
+  };
+  let current = original;
+  const readPaths = [];
+  let rejectAvatar;
+  const pending = runStudentSaveWorkflow('pending', original, {
+    avatarChanged: true,
+    read: async (path) => {
+      readPaths.push(path);
+      return { avatar_id: 'asset-old' };
+    },
+    currentContext: () => current,
+    writeOrdinary: async () => undefined,
+    writeAvatar: async () => new Promise((_resolve, reject) => { rejectAvatar = reject; }),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  current = { dialogVersion: 2, studentId: '43', desiredId: 'asset-b', ordinary: { real_name: 'B' } };
+  rejectAvatar(new Error('late response lost'));
+  const result = await pending;
+  assert.equal(result.outcome, 'stale');
+  assert.deepEqual(readPaths, ['/admin/students/42']);
+});
+
+test('keeps ordinary edits when unknown avatar state is confirmed applied', async () => {
+  const original = {
+    dialogVersion: 4,
+    studentId: '42',
+    desiredId: 'asset-new',
+    ordinary: { real_name: '新姓名', phone: '13800000000' },
+  };
+  let ordinaryDraft;
+  let avatarWrites = 0;
+  const result = await runStudentSaveWorkflow('unknown', original, {
+    avatarChanged: true,
+    read: async (path) => {
+      assert.equal(path, '/admin/students/42');
+      return { avatar_id: 'asset-new' };
+    },
+    currentContext: () => original,
+    writeOrdinary: async (draft) => { ordinaryDraft = draft; },
+    writeAvatar: async () => { avatarWrites += 1; },
+  });
+  assert.equal(result.outcome, 'saved');
+  assert.deepEqual(ordinaryDraft, { real_name: '新姓名', phone: '13800000000' });
+  assert.equal(avatarWrites, 0);
 });
