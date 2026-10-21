@@ -100,7 +100,7 @@ function buildMockQuestions() {
   return [...singles, ...multiples];
 }
 
-export function startMockAi() {
+export function startMockAi(port = mockPort) {
   const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url.endsWith('/chat/completions')) {
       let body = '';
@@ -131,7 +131,7 @@ export function startMockAi() {
   return new Promise((resolve, reject) => {
     const onError = (error) => reject(error);
     server.once('error', onError);
-    server.listen(mockPort, '127.0.0.1', () => {
+    server.listen(port, '127.0.0.1', () => {
       server.removeListener('error', onError);
       const address = server.address();
       if (!address || typeof address === 'string' || !Number.isInteger(address.port)) {

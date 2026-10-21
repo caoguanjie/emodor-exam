@@ -226,20 +226,24 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | GET | /admin/roles | roles:read | 角色与权限关系 |
 | POST / PUT | /admin/roles[/{id}] | roles:write | 新建/修改业务角色；只接受白名单权限 |
 | GET | /admin/administrators | administrators:read | 管理员及当前有效权限 |
+| GET | /admin/administrators/candidates | administrators:write | 分页搜索可配置账号；仅返回 `id/username/real_name/status/system_role`，排除超级管理员 |
+| GET | /admin/administrators/assignable-roles | administrators:write | 仅返回启用的非系统角色 `id/code/name/status/is_system`，不返回权限矩阵 |
 | PUT | /admin/administrators/{id}/roles | administrators:write | 多选业务角色；最高管理员保护 |
-| GET | /admin/sessions | sessions:read | 分页查看在线/已吊销会话（返回 `created_at`、`last_seen_at`、持久化 `expires_at` 与 `status`） |
+| GET | /admin/sessions | sessions:read | 分页查看在线/已吊销会话（返回 `created_at`、`last_seen_at`、持久化 `expires_at` 与 `status`；新会话的创建/更新时间与最后活动时间由同一服务端时刻写入） |
 | POST | /admin/sessions/{id}/revoke | sessions:write | 强制下线并立即吊销该 sid 的双令牌 |
 
 ### 3.3 部门管理 /departments（权限：管理）
 
 | # | 方法 | 路径 | 说明 |
 |---|---|---|---|
-| 1 | GET | /departments/tree | 全量部门树（parent_id 自关联构建，05 册 2.4.3） |
+| 1 | GET | /departments/tree | 全量部门树（登录即可读；parent_id 自关联构建，05 册 2.4.3） |
 | 2 | POST | /departments | 创建部门（parent_id / name / sort） |
 | 3 | PUT | /departments/{id} | 修改部门（name / sort） |
 | 4 | PUT | /departments/{id}/parent | 层级调整（含循环引用检测，事务执行） |
 | 5 | DELETE | /departments/{id} | 删除部门（存在子部门或在职员工时拒绝） |
 | 6 | PUT | /departments/{id}/status | 停用/启用部门（status=0/1；仍被引用的部门以停用替代删除，保留为历史统计维度，05 册 2.4.3） |
+
+`GET /departments/tree` 是员工与学员管理页面复用的登录后查找接口，保留普通员工及委派管理员可读；创建、修改、移动、停用、删除等写操作仍只允许 `super_admin`，不能由树查询例外扩大权限。
 
 ### 3.4 制度管理 /regulations
 
@@ -319,7 +323,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 校验规则：① AI 配置已保存且完整（base_url / api_key / model 齐备，否则 40909）；② 生效版本 `parse_status = parsed`；③ `question_count_single × score_single + question_count_multiple × score_multiple = 100.00`，否则 40001（附差距说明）。通过后创建异步任务（长文本分块：4000 字符/块 + 200 重叠，05 册 4.4.2），响应回显生效分值策略（question_count_single / question_count_multiple / score_single / score_multiple，未显式传值时回显默认值）并返回 `task_id`。任务状态：`queued / running / completed / failed`（AI 调用失败重试后仍失败 → failed，可重新发起）。
 
-**GET /ai/config**（`ai_config:read`）：读取 AI 服务配置，`api_key` 掩码回显（如 `sk-****xxxx`，完整键值永不返回，07 册 4.2）。**PUT /ai/config**（`ai_config:write`）：保存 `base_url` / `api_key` / `model`——权威副本为 AES-256-GCM 加密后的配置文件，Redis 仅作缓存（07 册 4.2）。**POST /ai/config/test**（`ai_config:write`）：以已保存配置发起一次连通性测试，返回成功 / 失败与脱敏错误摘要（失败 → 50005）。`ai:read/write` 仅代表出题任务/题库工作流，不自动授予配置权限；`super_admin` 天然拥有全部注册权限。
+**GET /ai/config**（`ai_config:read`）：读取 AI 服务配置，`api_key` 掩码回显（如 `sk-****xxxx`，完整键值永不返回，07 册 4.2）。**PUT /ai/config**（`ai_config:write`）：保存 `base_url` / `api_key` / `model`——权威副本为 AES-256-GCM 加密后的配置文件，Redis 仅作缓存（07 册 4.2），并返回同样的脱敏配置结果。**POST /ai/config/test**（`ai_config:write`）：以已保存配置发起一次连通性测试，返回成功 / 失败与脱敏错误摘要（失败 → 50005）。`ai:read/write` 仅代表出题任务/题库工作流，不自动授予配置权限；管理端入口要求 `ai_config:read` 或 `ai_config:write`，但 writer-only 页面不得调用 GET、不得伪造现有配置值，只能提交空白表单并使用 PUT 返回的脱敏结果；`super_admin` 天然拥有全部注册权限。
 
 **POST /ai/questions**（制度管理）：人工录入题目（type / stem / options / answer / analysis / score）——`source = manual`、`status` 直接 `approved`（免审核），可直接进入组卷。
 

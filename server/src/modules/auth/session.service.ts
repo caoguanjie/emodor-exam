@@ -27,7 +27,11 @@ export class SessionService {
     const session = repo.create({
       sid: randomBytes(24).toString('hex'), userId: String(userId),
       ipAddress: ip, userAgent: userAgent?.slice(0, 255) || null,
-      lastSeenAt: now, expiresAt: new Date(now.getTime() + this.refreshTtlSeconds * 1000), revokedAt: null,
+      // Do not let MySQL CURRENT_TIMESTAMP(3) fill these two columns in its
+      // own timezone.  A newly-created session must share one JS timestamp
+      // across the UI-visible created/updated/last-seen fields.
+      createdAt: now, updatedAt: now, lastSeenAt: now,
+      expiresAt: new Date(now.getTime() + this.refreshTtlSeconds * 1000), revokedAt: null,
     });
     return repo.save(session);
   }

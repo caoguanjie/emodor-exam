@@ -39,18 +39,22 @@ const masked = ref('');
 const testing = ref(false);
 const testingVision = ref(false);
 
-onMounted(async () => {
-  const d: any = await http.get('/ai/config');
+function applyMaskedConfig(d: any) {
   form.base_url = d.base_url || '';
   form.model = d.model || '';
   masked.value = d.api_key_masked || '';
+}
+
+onMounted(async () => {
+  // ai_config:write intentionally does not imply read: writer-only roles get
+  // a blank form and may use the masked PUT response after saving.
+  if (auth.can('ai_config:read')) applyMaskedConfig(await http.get('/ai/config'));
 });
 
 async function onSave() {
-  await http.put('/ai/config', form);
+  const saved: any = await http.put('/ai/config', form);
+  applyMaskedConfig(saved);
   ElMessage.success('已保存（api_key 加密落配置文件，Redis 仅作读缓存）');
-  const d: any = await http.get('/ai/config');
-  masked.value = d.api_key_masked || '';
   form.api_key = '';
 }
 

@@ -131,6 +131,48 @@ export class AccessService {
     }));
   }
 
+  /**
+   * First-assignment role options are intentionally narrower than the general
+   * role-management view: only enabled business roles and identity fields are
+   * needed to populate the assignment dialog. Permission matrices stay behind
+   * roles:read on GET /admin/roles.
+   */
+  async listAssignableRoles() {
+    const roles = await this.roleRepo.find({ where: { isSystem: 0, status: 1 }, order: { id: 'ASC' } });
+    return roles.map((role) => ({
+      id: String(role.id), code: role.code, name: role.name,
+      status: Number(role.status), is_system: Boolean(role.isSystem),
+    }));
+  }
+
+  /**
+   * Bounded account search for first business-role assignment. The candidate
+   * set excludes all super administrators; the actual transaction repeats
+   * that authority check so a forged id cannot bypass the UI boundary.
+   */
+  async listAssignableUsers(query: { page?: number; page_size?: number; keyword?: string }) {
+    const page = Math.max(1, Number(query.page || 1));
+    const pageSize = Math.min(100, Math.max(1, Number(query.page_size || 20)));
+    const qb = this.userRepo.createQueryBuilder('u')
+      .select(['u.id', 'u.username', 'u.realName', 'u.status', 'u.role'])
+      .where('u.role <> :superAdmin', { superAdmin: RoleEnum.SUPER_ADMIN });
+    const keyword = String(query.keyword || '').trim();
+    if (keyword) {
+      qb.andWhere('(u.username LIKE :keyword OR u.real_name LIKE :keyword OR u.employee_no LIKE :keyword)', {
+        keyword: `%${keyword}%`,
+      });
+    }
+    const total = await qb.getCount();
+    const rows = await qb.orderBy('u.id', 'ASC').skip((page - 1) * pageSize).take(pageSize).getMany();
+    return {
+      items: rows.map((user) => ({
+        id: String(user.id), username: user.username, real_name: user.realName,
+        status: Number(user.status), system_role: user.role,
+      })),
+      total, page, page_size: pageSize,
+    };
+  }
+
   private assertPermissionCodes(codes: string[]): asserts codes is PermissionCode[] {
     if (!Array.isArray(codes) || codes.some((code) => !isRegisteredPermission(code))) throw Errors.param('包含未注册的权限代码');
   }
@@ -267,6 +309,7 @@ export class AccessService {
         .getOne();
       if (!current) throw Errors.notFound('管理员不存在');
       if (current.role === RoleEnum.SUPER_ADMIN && Number(current.id) === 1 && uniqueRoleIds.length === 0) throw Errors.lastSuperAdmin();
+      if (current.role === RoleEnum.SUPER_ADMIN) throw Errors.param('超级管理员不可配置业务角色');
       current.rolesConfigured = 1;
       current.authVersion = this.authVersion(current) + 1;
       await userRepo.save(current);

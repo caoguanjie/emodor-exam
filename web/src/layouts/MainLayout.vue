@@ -16,12 +16,12 @@
             <el-menu-item v-if="auth.can('questions:read')" index="/admin/questions"><el-icon><EditPen /></el-icon>题库与出题</el-menu-item>
             <el-menu-item v-if="auth.can('papers:read')" index="/admin/papers"><el-icon><Tickets /></el-icon>试卷管理</el-menu-item>
             <el-menu-item v-if="auth.can('statistics:read')" index="/admin/statistics"><el-icon><DataAnalysis /></el-icon>统计报表</el-menu-item>
-            <template v-if="auth.isSuperAdmin || auth.can('students:read') || auth.can('training_categories:read') || auth.can('ai_config:read')">
+            <template v-if="auth.isSuperAdmin || auth.can('students:read') || auth.can('training_categories:read') || auth.can('ai_config:read') || auth.can('ai_config:write')">
               <el-menu-item v-if="auth.isSuperAdmin" index="/admin/departments"><el-icon><OfficeBuilding /></el-icon>部门管理</el-menu-item>
               <el-menu-item v-if="auth.isSuperAdmin" index="/admin/users"><el-icon><User /></el-icon>员工管理</el-menu-item>
               <el-menu-item v-if="auth.can('students:read')" index="/admin/students"><el-icon><UserFilled /></el-icon>学员管理</el-menu-item>
               <el-menu-item v-if="auth.can('training_categories:read')" index="/admin/training-categories"><el-icon><CollectionTag /></el-icon>培训类别</el-menu-item>
-              <el-menu-item v-if="auth.can('ai_config:read')" index="/admin/ai-config"><el-icon><Setting /></el-icon>AI 服务配置</el-menu-item>
+              <el-menu-item v-if="auth.can('ai_config:read') || auth.can('ai_config:write')" index="/admin/ai-config"><el-icon><Setting /></el-icon>AI 服务配置</el-menu-item>
             </template>
             <template v-if="auth.can('administrators:read') || auth.can('roles:read') || auth.can('sessions:read')">
               <li class="nav-group nav-group-sub">系统治理</li>

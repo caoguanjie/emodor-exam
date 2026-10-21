@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
+import { startMockAi } from './e2e-smoke.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
@@ -144,7 +145,7 @@ function signEqualIatAccessToken(ctx, user, authVersion, iat, sid) {
   return fixtureJwt.sign(payload, { secret: ctx.env.JWT_SECRET, expiresIn: '1h' });
 }
 
-export async function run(ctx) {
+async function runBody(ctx, mockPort) {
   const refreshIp = '198.51.100.240';
   const refreshHeaders = { 'X-Forwarded-For': refreshIp };
   const previousCaptcha = await ctx.request(null, 'POST', '/auth/captcha', undefined, refreshHeaders);
@@ -240,6 +241,25 @@ export async function run(ctx) {
     username: employee.data.username, password: employeePassword,
   });
   assert(employeeLogin.status === 200, `employeeLegacyLogin expected 200, got ${employeeLogin.status}`);
+  const employeeSessionDb = await ctx.queryTestDb(
+    'SELECT sid, created_at, updated_at, last_seen_at FROM auth_session WHERE user_id = ? ORDER BY id DESC LIMIT 1',
+    [String(employee.data.id)],
+  );
+  const employeeSessionList = await ctx.request(admin.actor, 'GET', '/admin/sessions');
+  const employeeSessionApi = employeeSessionList.data?.items?.find((item) => item.sid === employeeSessionDb[0]?.sid);
+  const dbCreated = new Date(employeeSessionDb[0]?.created_at).getTime();
+  const dbUpdated = new Date(employeeSessionDb[0]?.updated_at).getTime();
+  const dbLastSeen = new Date(employeeSessionDb[0]?.last_seen_at).getTime();
+  const apiCreated = new Date(employeeSessionApi?.created_at).getTime();
+  const apiLastSeen = new Date(employeeSessionApi?.last_seen_at).getTime();
+  assert(
+    employeeSessionList.status === 200 && employeeSessionApi
+      && [dbCreated, dbUpdated, dbLastSeen, apiCreated, apiLastSeen].every(Number.isFinite)
+      && Math.abs(dbCreated - dbLastSeen) <= 10
+      && Math.abs(dbUpdated - dbLastSeen) <= 10
+      && Math.abs(apiCreated - apiLastSeen) <= 10,
+    `new session timestamps diverged: db=${dbCreated}/${dbUpdated}/${dbLastSeen} api=${apiCreated}/${apiLastSeen}`,
+  );
 
   const roleCode = `limited_${randomBytes(4).toString('hex')}`;
   const role = await ctx.request(admin.actor, 'POST', '/admin/roles', {
@@ -493,11 +513,31 @@ export async function run(ctx) {
     regulation_id: scopedRegulationId, title: 'A3 delegated paper', pass_score: 60,
   });
   assert(delegatedPaper.status === 200 && delegatedPaper.data?.id, `employee custom paper write denied: ${delegatedPaper.status}`);
+  const ownedAiConfig = await ctx.request(admin.actor, 'PUT', '/ai/config', {
+    base_url: `http://127.0.0.1:${mockPort}/v1`,
+    api_key: `run_${randomBytes(16).toString('hex')}`,
+    model: 'mock-model',
+  });
+  assert(
+    ownedAiConfig.status === 200 && ownedAiConfig.data?.configured === true && ownedAiConfig.data?.api_key_masked,
+    `run-owned AI config setup failed: ${ownedAiConfig.status}/${ownedAiConfig.code}`,
+  );
   const delegatedGeneration = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/generate-questions', {
     regulation_id: scopedRegulationId, question_count_single: 1, question_count_multiple: 0,
     score_single: 100, score_multiple: 1,
   });
-  assert(delegatedGeneration.status !== 403, `employee custom AI generation permission denied: ${delegatedGeneration.status}`);
+  assert(
+    delegatedGeneration.status === 200 && delegatedGeneration.data?.task_id,
+    `employee custom AI generation was not accepted: ${delegatedGeneration.status}/${delegatedGeneration.code}`,
+  );
+  let delegatedTask;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    delegatedTask = await ctx.request(employeeAdminLogin.actor, 'GET', `/ai/generate-status/${delegatedGeneration.data.task_id}`);
+    assert(delegatedTask.status === 200 && delegatedTask.data?.task_id, `employee custom AI task status failed: ${delegatedTask.status}/${delegatedTask.code}`);
+    if (delegatedTask.data.status === 'completed' || delegatedTask.data.status === 'failed') break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert(delegatedTask?.data?.status === 'completed', `employee custom AI task did not complete: ${delegatedTask?.data?.status}`);
   const taskOnlyConfigRead = await ctx.request(employeeAdminLogin.actor, 'GET', '/ai/config');
   assert(taskOnlyConfigRead.status === 403, `AI-task-only role read config unexpectedly allowed: ${taskOnlyConfigRead.status}`);
   const taskOnlyConfigWrite = await ctx.request(employeeAdminLogin.actor, 'PUT', '/ai/config', {
@@ -814,4 +854,21 @@ export async function run(ctx) {
   ]);
   const concurrentStatuses = [refreshA.status, refreshB.status].sort((a, b) => a - b);
   assert(concurrentStatuses[0] === 200 && concurrentStatuses[1] === 401, `simultaneous refresh expected one 200/one 401, got ${concurrentStatuses.join('/')}`);
+}
+
+export async function run(ctx) {
+  // This suite owns its Mock AI rather than relying on a developer service or
+  // the API child's environment. Port 0 delegates isolation to the kernel.
+  const mockServer = await startMockAi(0);
+  const address = mockServer.address();
+  const mockPort = address && typeof address !== 'string' ? address.port : null;
+  if (!Number.isInteger(mockPort) || mockPort < 1024) {
+    mockServer.close();
+    throw new Error('training-access Mock AI 未返回有效监听端口');
+  }
+  try {
+    return await runBody(ctx, mockPort);
+  } finally {
+    await new Promise((resolve) => mockServer.close(resolve));
+  }
 }

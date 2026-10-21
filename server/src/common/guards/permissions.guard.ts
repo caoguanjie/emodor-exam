@@ -18,6 +18,10 @@ export function legacyPermissionForRequest(req: any): PermissionCode | undefined
     if (path === '/users/import-template') return 'students:write';
     return method === 'GET' ? 'students:read' : 'students:write';
   }
+  // The department tree is the legacy authenticated lookup used by learner
+  // administration.  Keep its afe5a68 contract (ordinary/delegated users may
+  // read it) while all other department routes retain their explicit policy.
+  if (path === '/departments/tree' && method === 'GET') return undefined;
   if (path === '/departments' || path.startsWith('/departments/')) return method === 'GET' ? 'departments:read' : 'departments:write';
 
   if (path === '/regulations' || path.startsWith('/regulations/')) {

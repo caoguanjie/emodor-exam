@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
-import { IsArray, IsInt, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
-import { DtoValidationPipe } from '../../common/dto-validation.pipe';
+import { IsArray, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { DtoValidationPipe, StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
 import { Permissions } from '../../common/decorators/permissions.decorator';
 import { AccessService } from './access.service';
@@ -20,6 +21,14 @@ class UpdateRoleDto {
 
 class AssignRoleDto {
   @IsArray() @IsString({ each: true }) role_ids!: string[];
+}
+
+const QueryNumber = () => Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)));
+
+class AdministratorCandidateQueryDto {
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(1_000_000) page?: number;
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
+  @IsOptional() @IsString() @MaxLength(128) keyword?: string;
 }
 
 @Controller('admin')
@@ -54,6 +63,18 @@ export class AccessController {
   @Permissions('administrators:read')
   administrators() {
     return this.access.listAdministrators();
+  }
+
+  @Get('administrators/candidates')
+  @Permissions('administrators:write')
+  administratorCandidates(@Query(new StrictDtoValidationPipe(['page', 'page_size', 'keyword'])) query: AdministratorCandidateQueryDto) {
+    return this.access.listAssignableUsers(query);
+  }
+
+  @Get('administrators/assignable-roles')
+  @Permissions('administrators:write')
+  assignableRoles() {
+    return this.access.listAssignableRoles();
   }
 
   @Put('administrators/:id/roles')

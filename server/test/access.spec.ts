@@ -1,11 +1,13 @@
 import 'reflect-metadata';
 import { createRequire } from 'node:module';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CaptchaService } from '../src/modules/auth/captcha.service';
 import { AccessService } from '../src/modules/access/access.service';
 import { SessionService } from '../src/modules/auth/session.service';
 import { DtoValidationPipe } from '../src/common/dto-validation.pipe';
-import { legacyPermissionForRequest } from '../src/common/guards/permissions.guard';
+import { legacyPermissionForRequest, PermissionsGuard } from '../src/common/guards/permissions.guard';
+import { RoleEnum } from '../src/common/errors';
+import { RolesGuard } from '../src/common/guards/roles.guard';
 
 const require = createRequire(import.meta.url);
 const { AuthController } = require('../dist/modules/auth/auth.controller.js') as {
@@ -108,9 +110,59 @@ describe('A3 captcha and access contracts', () => {
     expect(redis.values.get('auth:session:revoked:sid17')).toBe('1');
   });
 
+  it('creates a session with one JS timestamp for created, updated, and last-seen fields', async () => {
+    const created: any[] = [];
+    const repo = {
+      create(value: any) { created.push(value); return value; },
+      async save(value: any) { return value; },
+    };
+    const sessions = new SessionService(repo as any, redisStub() as any, undefined, { jwt: { refreshExpiresDays: 7 } } as any);
+    const session = await sessions.create('9', '127.0.0.1', 'test-agent');
+    expect(created).toHaveLength(1);
+    expect(session.createdAt).toBe(session.lastSeenAt);
+    expect(session.updatedAt).toBe(session.lastSeenAt);
+    expect(session.expiresAt.getTime()).toBe(session.lastSeenAt.getTime() + 7 * 86400 * 1000);
+  });
+
   it('keeps self statistics data-scope checks and marks import templates as writes', () => {
     expect(legacyPermissionForRequest({ originalUrl: '/api/v1/statistics/users/9', method: 'GET', user: { role: 'employee' } })).toBeUndefined();
     expect(legacyPermissionForRequest({ originalUrl: '/api/v1/statistics/users/9', method: 'GET', user: { role: 'regulation_admin' } })).toBe('statistics:read');
     expect(legacyPermissionForRequest({ originalUrl: '/api/v1/users/import-template', method: 'GET' })).toBe('students:write');
+  });
+
+  it('preserves the authenticated department-tree lookup while mapping every write to write permission', () => {
+    expect(legacyPermissionForRequest({ originalUrl: '/api/v1/departments/tree', method: 'GET' })).toBeUndefined();
+    expect(legacyPermissionForRequest({ originalUrl: '/api/v1/departments/tree?status=1', method: 'GET' })).toBeUndefined();
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      expect(legacyPermissionForRequest({ originalUrl: '/api/v1/departments', method })).toBe('departments:write');
+      expect(legacyPermissionForRequest({ originalUrl: '/api/v1/departments/7/status', method })).toBe('departments:write');
+    }
+  });
+
+  it('allows the exact department-tree lookup for ordinary and delegated users, but denies all management writes', async () => {
+    const reflector = { getAllAndOverride: vi.fn().mockReturnValue(undefined) };
+    const access = { assertAllowed: vi.fn() };
+    const permissions = new PermissionsGuard(reflector as any, access as any);
+    const context = (request: any) => ({
+      switchToHttp: () => ({ getRequest: () => request }),
+      getHandler: () => ({}),
+      getClass: () => ({}),
+    }) as any;
+
+    for (const role of [RoleEnum.EMPLOYEE, RoleEnum.REGULATION_ADMIN]) {
+      await expect(permissions.canActivate(context({
+        originalUrl: '/api/v1/departments/tree', method: 'GET', user: { id: 9, role },
+      }))).resolves.toBe(true);
+    }
+    expect(access.assertAllowed).not.toHaveBeenCalled();
+
+    const roles = new RolesGuard({ getAllAndOverride: vi.fn().mockReturnValue([RoleEnum.SUPER_ADMIN]) } as any);
+    for (const role of [RoleEnum.EMPLOYEE, RoleEnum.REGULATION_ADMIN]) {
+      for (const path of ['/api/v1/departments', '/api/v1/departments/7', '/api/v1/departments/7/parent', '/api/v1/departments/7/status']) {
+        expect(() => roles.canActivate(context({
+          originalUrl: path, method: 'PUT', user: { role }, permission_authorized: true,
+        }))).toThrowError(expect.objectContaining({ code: 40301 }));
+      }
+    }
   });
 });

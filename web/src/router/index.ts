@@ -33,7 +33,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'admin/papers', component: () => import('../views/admin/Papers.vue'), meta: { title: '试卷管理', admin: true, permission: 'papers:read' } },
       { path: 'admin/papers/:id', component: () => import('../views/admin/PaperDetail.vue'), meta: { title: '组卷', admin: true, permission: 'papers:read' } },
       { path: 'admin/statistics', component: () => import('../views/admin/Statistics.vue'), meta: { title: '统计报表', admin: true, permission: 'statistics:read' } },
-      { path: 'admin/ai-config', component: () => import('../views/admin/AiConfig.vue'), meta: { title: 'AI 服务配置', admin: true, permission: 'ai_config:read' } },
+      { path: 'admin/ai-config', component: () => import('../views/admin/AiConfig.vue'), meta: { title: 'AI 服务配置', admin: true, permissionAny: ['ai_config:read', 'ai_config:write'] } },
       { path: 'admin/administrators', component: () => import('../views/admin/Administrators.vue'), meta: { title: '管理员', admin: true, permission: 'administrators:read' } },
       { path: 'admin/roles', component: () => import('../views/admin/Roles.vue'), meta: { title: '角色权限', admin: true, permission: 'roles:read' } },
       { path: 'admin/sessions', component: () => import('../views/admin/OnlineSessions.vue'), meta: { title: '在线会话', admin: true, permission: 'sessions:read' } },
@@ -69,5 +69,6 @@ router.beforeEach(async (to) => {
   if (to.meta.admin && !auth.isAdmin) return '/my/regulations';
   if (to.meta.superAdminOnly && !auth.isSuperAdmin) return '/my/regulations';
   if (to.meta.permission && !auth.can(String(to.meta.permission))) return '/my/regulations';
+  if (to.meta.permissionAny && !(to.meta.permissionAny as string[]).some((permission) => auth.can(permission))) return '/my/regulations';
   return true;
 });
