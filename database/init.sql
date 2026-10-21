@@ -1,6 +1,6 @@
 -- =====================================================================
 -- EmodorRuleExam 制度学习及考试系统 · 数据库初始化脚本
--- 依据 docs/design/03-数据库设计.md 逐字建表（12 张表，InnoDB + utf8mb4）
+-- 依据 docs/design/03-数据库设计.md 逐字建业务表（当前 12 张，InnoDB + utf8mb4）
 -- 时间字段 DATETIME(3)；无数据库级外键（03 册 1.6 节，应用层维护）
 -- 枚举字段 VARCHAR + 应用层校验（03 册 1.7 节）
 -- 种子数据（根部门 / 超级管理员）由 database/seed.mjs 按环境变量生成，
@@ -224,3 +224,19 @@ CREATE TABLE IF NOT EXISTS `exam_answer` (
   UNIQUE KEY `uk_record_question` (`exam_record_id`, `question_id`),
   KEY `idx_question` (`question_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='答题明细';
+
+-- ---------------------------------------------------------------------
+-- 5. 迁移元数据（由 database/migrate.mjs 管理；不属于业务表数量）
+-- ---------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS `schema_migrations` (
+  `migration_id`  VARCHAR(128) NOT NULL,
+  `checksum`      CHAR(64)     NOT NULL,
+  `status`        VARCHAR(16)  NOT NULL DEFAULT 'applied' COMMENT 'applying / applied / failed',
+  `started_at`    DATETIME(3)  NULL,
+  `applied_at`   DATETIME(3)  NULL,
+  `attempts`      INT          NOT NULL DEFAULT 0,
+  `error_message` TEXT         NULL,
+  PRIMARY KEY (`migration_id`),
+  KEY `idx_schema_migrations_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='受控数据库迁移注册表';

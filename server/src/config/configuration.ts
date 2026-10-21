@@ -9,7 +9,7 @@ export class AppConfig {
   env: string;
   port: number;
   db: TypeOrmModuleOptions;
-  redis: { host: string; port: number; password?: string; enabled: boolean };
+  redis: { host: string; port: number; password?: string; enabled: boolean; keyPrefix: string };
   jwt: { secret: string; expiresIn: string; refreshExpiresDays: number; priorSecret?: string };
   examShuffleSecret: string;
   appEncryptionKey?: string;
@@ -85,6 +85,8 @@ export function loadConfig(): AppConfig {
       port: Number(process.env.REDIS_PORT || 6379),
       password: process.env.REDIS_PASSWORD || undefined,
       enabled: process.env.REDIS_ENABLED !== 'false',
+      // 默认空字符串保持历史键名；测试运行由 harness 注入一次性前缀隔离。
+      keyPrefix: (process.env.REDIS_KEY_PREFIX || '').trim(),
     },
     jwt: {
       secret: req('JWT_SECRET', isProd) || randKey(),

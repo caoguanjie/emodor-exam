@@ -8,6 +8,7 @@
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { join } from 'node:path';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const JSZip = require('jszip');
@@ -689,7 +690,7 @@ async function main() {
     const preview = await api('GET', `/regulations/${regId}/preview`, { token: state.tokens.regadmin });
     check('管理端预览（docx content_html，跳过发布态校验）', preview.json?.data?.file_type === 'docx' && !!preview.json?.data?.content_html);
     const fs = await import('node:fs');
-    const logDir = new URL('../server/data/logs/audit/', import.meta.url).pathname;
+    const logDir = process.env.LOG_DIR ? join(process.env.LOG_DIR, 'audit') : new URL('../server/data/logs/audit/', import.meta.url).pathname;
     const files = fs.existsSync(logDir) ? fs.readdirSync(logDir) : [];
     check('审计日志文件生成（JSON 行）', files.some((f) => f.startsWith('audit-')), JSON.stringify(files));
   }

@@ -14,7 +14,7 @@ import { RolesGuard } from './common/guards/roles.guard';
 import { RedisService } from './common/redis.service';
 import { AuditService } from './common/audit.service';
 
-// 12 张表实体（README 3.3 清单，A-05 不增删）
+// 业务表实体 + 迁移注册表（schema_migrations 是运维元数据，不计入业务表清单）
 import { SysDepartment } from './entities/sys-department.entity';
 import { SysUser } from './entities/sys-user.entity';
 import { Regulation } from './entities/regulation.entity';
@@ -27,6 +27,7 @@ import { ExamPaper } from './entities/exam-paper.entity';
 import { PaperQuestion } from './entities/paper-question.entity';
 import { ExamRecord } from './entities/exam-record.entity';
 import { ExamAnswer } from './entities/exam-answer.entity';
+import { SchemaMigration } from './entities/schema-migration.entity';
 
 import { AuthController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
@@ -67,7 +68,7 @@ const config = loadConfig();
     TypeOrmModule.forRoot(config.db),
     TypeOrmModule.forFeature([
       SysDepartment, SysUser, Regulation, RegulationVersion, RegulationScope,
-      LearningSession, LearningRecord, Question, ExamPaper, PaperQuestion, ExamRecord, ExamAnswer,
+      LearningSession, LearningRecord, Question, ExamPaper, PaperQuestion, ExamRecord, ExamAnswer, SchemaMigration,
     ]),
     JwtModule.register({ secret: config.jwt.secret, signOptions: { expiresIn: config.jwt.expiresIn } }),
     ScheduleModule.forRoot(),

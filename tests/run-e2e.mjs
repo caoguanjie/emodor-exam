@@ -1,113 +1,170 @@
-// EmodorRuleExam 端到端冒烟测试启动器：
-// 全部敏感值（MySQL 口令 / JWT 密钥 / 管理员初始口令）在运行期生成、经子进程 env 注入，
-// 不写入任何文件（安全约束：源码/示例/测试不落可用凭据字面量）。
+// EmodorRuleExam 端到端测试启动器。
+// 默认只接受 ruleexam_test_* 目标库；--ephemeral 会创建本次运行专属的
+// 本地 MySQL/Redis，避免任何开发服务连接。口令/密钥只存在运行期环境。
 //
-// 用法：DB_PASSWORD=... node tests/run-e2e.mjs
-//       （可覆盖：DB_HOST / DB_PORT / DB_USERNAME / DB_DATABASE / API_PORT）
-import { spawnSync, spawn } from 'node:child_process';
+// 用法：
+//   DB_DATABASE=ruleexam_test_training DB_PASSWORD=... node tests/run-e2e.mjs --suite smoke
+//   node tests/run-e2e.mjs --ephemeral --suite smoke
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { accessSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+import { validateTestTarget, isSafeTestDatabase } from './support/test-target.mjs';
+import { createTrainingHarness } from './support/training-harness.mjs';
+import { createEphemeralServices, getFreePort } from './support/ephemeral-services.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const DB_HOST = process.env.DB_HOST || '127.0.0.1';
-const DB_PORT = process.env.DB_PORT || '3306';
-const DB_USERNAME = process.env.DB_USERNAME || 'root';
-const DB_PASSWORD = process.env.DB_PASSWORD;
-const DB_DATABASE = process.env.DB_DATABASE || 'ruleexam';
-const API_PORT = process.env.API_PORT || '3000';
+const require = createRequire(new URL('../server/package.json', import.meta.url));
+const mysql = require('mysql2/promise');
 
-if (!DB_PASSWORD) {
-  console.error('缺少 DB_PASSWORD 环境变量（运行期注入，不落盘）');
-  process.exit(1);
+// Registered files are explicit. User input selects a key; it never becomes a
+// path or shell fragment.
+export const SUITE_REGISTRY = Object.freeze({
+  smoke: Object.freeze([join(ROOT, 'tests', 'e2e-smoke.mjs')]),
+  'e2e-smoke': Object.freeze([join(ROOT, 'tests', 'e2e-smoke.mjs')]),
+  all: Object.freeze([join(ROOT, 'tests', 'e2e-smoke.mjs')]),
+});
+
+function parseArgs(argv) {
+  let suite = 'smoke';
+  let ephemeral = false;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--ephemeral') {
+      ephemeral = true;
+    } else if (arg === '--suite') {
+      suite = argv[++i] || '';
+    } else if (arg.startsWith('--suite=')) {
+      suite = arg.slice('--suite='.length);
+    } else {
+      throw new Error(`未知参数：${arg}`);
+    }
+  }
+  if (!Object.hasOwn(SUITE_REGISTRY, suite)) throw new Error(`未知测试套件：${suite}`);
+  return { suite, ephemeral };
 }
 
-function exists(p) {
+function quoteDatabase(database) {
+  if (!isSafeTestDatabase(database)) throw new Error('测试启动器只接受 ruleexam_test_<suffix> 目标库');
+  return `\`${database}\``;
+}
+
+async function resetSchema({ host, port, user, password, database }) {
+  const sql = await readFile(join(ROOT, 'database', 'init.sql'), 'utf8');
+  const target = validateTestTarget({ database, sql });
+  const connection = await mysql.createConnection({ host, port, user, password, multipleStatements: true });
   try {
-    accessSync(p);
-    return true;
-  } catch {
-    return false;
+    // database has been validated as an isolated test identifier before it is
+    // interpolated; no development database can reach this branch.
+    await connection.query(`DROP DATABASE IF EXISTS ${quoteDatabase(database)}`);
+    await connection.query(target.sql);
+  } finally {
+    await connection.end();
   }
 }
 
-const mysqlBin = ['/usr/local/mysql/bin/mysql', '/opt/homebrew/bin/mysql', '/usr/bin/mysql'].find(exists);
-if (!mysqlBin) {
-  console.error('未找到 mysql 客户端，请安装后重试');
-  process.exit(1);
+async function waitForApi(port, api) {
+  for (let i = 0; i < 40; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/v1/health`);
+      if (response.ok) return;
+    } catch { /* process is still booting */ }
+    if (api.exitCode !== null) break;
+  }
+  throw new Error('API 服务未在 40 秒内就绪');
 }
 
-const baseEnv = { ...process.env, DB_HOST, DB_PORT, DB_USERNAME, DB_DATABASE, DB_PASSWORD };
-
-console.log('[1/4] 重建数据库 Schema（' + DB_DATABASE + '，测试库先 DROP 重建）');
-const schemaSql = readFileSync(join(ROOT, 'database', 'init.sql'), 'utf8');
-const schemaRes = spawnSync(
-  mysqlBin,
-  ['--no-defaults', '-h' + DB_HOST, '-P' + DB_PORT, '-u' + DB_USERNAME, '-p' + DB_PASSWORD],
-  { input: `DROP DATABASE IF EXISTS \`${DB_DATABASE}\`;\n` + schemaSql, env: baseEnv, encoding: 'utf8' },
-);
-if (schemaRes.status !== 0) {
-  console.error('Schema 装载失败：', schemaRes.stderr);
-  process.exit(1);
+async function stopApi(child) {
+  if (!child || child.exitCode !== null) return;
+  child.kill('SIGTERM');
+  await Promise.race([
+    new Promise((resolve) => child.once('exit', resolve)),
+    new Promise((resolve) => setTimeout(resolve, 5_000)),
+  ]);
+  if (child.exitCode === null) child.kill('SIGKILL');
 }
 
-console.log('[2/4] 生成运行期管理员初始口令（由 API 启动种子写入）');
-// 前缀 A9 保证满足「≥8 位且同时包含字母与数字」的种子校验（base64 随机体理论上可能无数字）
-const adminInitial = 'A9' + randomBytes(18).toString('base64');
-
-console.log('[3/4] 启动 API 服务（随机密钥，仅本进程有效）');
-const serverEnv = {
-  ...baseEnv,
-  ADMIN_INITIAL_PASSWORD: adminInitial,
-  NODE_ENV: 'development',
-  PORT: API_PORT,
-  JWT_SECRET: randomBytes(48).toString('base64'),
-  JWT_SECRET_PRIOR: randomBytes(48).toString('base64'),
-  EXAM_SHUFFLE_SECRET: randomBytes(32).toString('base64'),
-  APP_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
-  // 本地 Mock AI（127.0.0.1:9101）走 SSRF 白名单例外；生产环境不设置该变量
-  AI_EGRESS_ALLOW_HOSTS: '127.0.0.1',
-  UPLOAD_DIR: join(ROOT, 'server', 'data', 'uploads'),
-  DATA_DIR: join(ROOT, 'server', 'data'),
-  LOG_DIR: join(ROOT, 'server', 'data', 'logs'),
-};
-const api = spawn('node', [join(ROOT, 'server', 'dist', 'main.js')], { env: serverEnv, stdio: ['ignore', 'inherit', 'inherit'] });
-const cleanup = () => {
+async function run() {
+  const { suite, ephemeral } = parseArgs(process.argv.slice(2));
+  let services;
+  let harness;
+  let api;
   try {
-    api.kill('SIGTERM');
-  } catch { /* ignore */ }
-};
-process.on('exit', cleanup);
-process.on('SIGINT', () => {
-  cleanup();
-  process.exit(130);
-});
-
-console.log('[4/4] 等待服务就绪并执行冒烟测试');
-let ready = false;
-for (let i = 0; i < 40; i++) {
-  await new Promise((r) => setTimeout(r, 1000));
-  try {
-    const res = await fetch(`http://127.0.0.1:${API_PORT}/api/v1/health`);
-    if (res.ok) {
-      ready = true;
-      break;
+    let database = process.env.DB_DATABASE || '';
+    let db = {
+      host: process.env.DB_HOST || '127.0.0.1',
+      port: Number(process.env.DB_PORT || 3306),
+      user: process.env.DB_USERNAME || 'root',
+      password: process.env.DB_PASSWORD,
+    };
+    let redis = {
+      host: process.env.REDIS_HOST || '127.0.0.1',
+      port: Number(process.env.REDIS_PORT || 6379),
+      password: process.env.REDIS_PASSWORD,
+    };
+    if (ephemeral) {
+      services = await createEphemeralServices();
+      database = `ruleexam_test_${randomBytes(6).toString('hex')}`;
+      db = { host: services.mysql.host, port: services.mysql.port, user: services.mysql.user, password: services.mysql.password };
+      redis = { host: services.redis.host, port: services.redis.port, password: undefined };
+    } else if (!db.password) {
+      // Validate the target before opening a socket. This branch intentionally
+      // rejects the default development database even when no password exists.
+      quoteDatabase(database);
+      throw new Error('缺少 DB_PASSWORD 环境变量（运行期注入，不落盘）；开发库不会被测试启动器访问');
     }
-  } catch { /* not ready */ }
-}
-if (!ready) {
-  console.error('API 服务未在 40 秒内就绪');
-  process.exit(1);
+    quoteDatabase(database);
+    const apiPort = ephemeral ? await getFreePort() : Number(process.env.API_PORT || process.env.PORT || 3000);
+    harness = await createTrainingHarness({ port: apiPort, redisPrefix: `e2e:${randomBytes(10).toString('hex')}:` });
+    const baseEnv = {
+      ...harness.env,
+      DB_HOST: db.host,
+      DB_PORT: String(db.port),
+      DB_USERNAME: db.user,
+      DB_PASSWORD: db.password,
+      DB_DATABASE: database,
+      REDIS_HOST: redis.host,
+      REDIS_PORT: String(redis.port),
+      REDIS_PASSWORD: redis.password || '',
+      API_PORT: String(apiPort),
+    };
+    console.log(`[1/4] 创建隔离测试库（${database}）`);
+    await resetSchema({ ...db, database });
+
+    console.log('[2/4] 启动 API（运行期随机密钥与独立存储目录）');
+    api = spawn('node', [join(ROOT, 'server', 'dist', 'main.js')], {
+      env: { ...baseEnv, PORT: String(apiPort) },
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    await waitForApi(apiPort, api);
+    console.log('[2/4] 重启 API 并复用同一数据库、密钥、上传与日志目录');
+    await stopApi(api);
+    api = spawn('node', [join(ROOT, 'server', 'dist', 'main.js')], {
+      env: { ...baseEnv, PORT: String(apiPort) },
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    await waitForApi(apiPort, api);
+
+    console.log(`[3/4] 执行测试套件（${suite}）`);
+    const suiteEnv = { ...baseEnv, BASE_URL: `http://127.0.0.1:${apiPort}/api/v1` };
+    for (const file of SUITE_REGISTRY[suite]) {
+      const result = spawnSync('node', [file], { env: suiteEnv, stdio: 'inherit' });
+      if (result.status !== 0) throw new Error(`测试套件失败：${suite}`);
+    }
+    console.log('[4/4] 测试完成');
+  } finally {
+    await stopApi(api);
+    await services?.cleanup();
+    await harness?.cleanup();
+  }
 }
 
-const smoke = spawnSync('node', [join(ROOT, 'tests', 'e2e-smoke.mjs')], {
-  env: {
-    ...baseEnv,
-    BASE_URL: `http://127.0.0.1:${API_PORT}/api/v1`,
-    ADMIN_INITIAL_PASSWORD: adminInitial,
-  },
-  stdio: 'inherit',
-});
-cleanup();
-process.exit(smoke.status || 0);
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  run().catch((error) => {
+    console.error(error.message || error);
+    process.exitCode = 1;
+  });
+}
