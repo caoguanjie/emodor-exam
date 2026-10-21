@@ -588,6 +588,48 @@ describe('versioned question bank', () => {
     });
   });
 
+  it('returns the revision written by edit separately from a later current-version view', async () => {
+    const q: any = {
+      id: '5', currentVersionId: '101', regulationId: '2', versionId: '3', categoryId: '11', difficulty: 'medium',
+      conceptId: null, type: 'single', stem: '<p>原题</p>', options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }],
+      answer: [0], analysis: null, rubric: null, score: '5.00', status: 'approved', source: 'manual',
+    };
+    const service = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
+    service.questionRepo = { findOne: vi.fn(async () => q) };
+    service.versions = { revise: vi.fn(async () => '102') };
+    service.getOne = vi.fn(async () => ({ question_id: '5', current_version_id: '103', stem: '<p>并发后的题目</p>' }));
+    service.audit = { log: vi.fn() };
+
+    const edited = await service.edit(
+      '5', { analysis: '<p>本次修改</p>' }, { id: 9, name: 'admin' }, null, '101',
+    );
+
+    expect(edited).toMatchObject({
+      question_id: '5', current_version_id: '103', saved_version_id: '102', stem: '<p>并发后的题目</p>',
+    });
+    expect(service.versions.revise).toHaveBeenCalledWith('5', expect.any(Object), '9', '101');
+  });
+
+  it('returns the revision written by manual creation separately from a later current-version view', async () => {
+    const service = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
+    service.versions = {
+      create: vi.fn(async () => ({ questionId: '7', versionId: '201' })),
+      approve: vi.fn(async () => undefined),
+    };
+    service.getOne = vi.fn(async () => ({ question_id: '7', current_version_id: '202', stem: '<p>并发后的题目</p>' }));
+    service.audit = { log: vi.fn() };
+
+    const created = await service.createManual({
+      category_id: '11', difficulty: 'easy', type: 'single', stem: '<p>本次创建</p>',
+      options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }], answer: [0], score: 5,
+    }, { id: 9, name: 'admin' }, null);
+
+    expect(created).toMatchObject({
+      question_id: '7', current_version_id: '202', saved_version_id: '201', stem: '<p>并发后的题目</p>',
+    });
+    expect(service.versions.approve).toHaveBeenCalledWith('201', '9');
+  });
+
   it('does not inherit PDF page provenance when an edit changes the regulation source version', async () => {
     const { service: versions, question, versions: rows } = versionServiceFixture();
     Object.assign(question, {

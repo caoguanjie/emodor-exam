@@ -342,6 +342,9 @@ function sourceLabel(value: string) { return ({ ai: 'AI', manual: '人工', impo
 function statusLabel(value: string) { return ({ approved: '已通过', pending: '待审核', rejected: '已驳回' } as Record<string, string>)[value] || value; }
 function statusTag(value: string) { return (value === 'approved' ? 'success' : value === 'rejected' ? 'danger' : 'info') as any; }
 function expectedVersionId(value: Id | null | undefined): Id | null { return value ?? null; }
+function savedVersionReceipt(value: unknown): Id | null {
+  return typeof value === 'string' && /^[1-9]\d*$/.test(value) ? value : null;
+}
 
 async function loadCategories() {
   const endpoint = auth.can('questions:write')
@@ -522,14 +525,18 @@ async function saveQuestion() {
     let saved: any;
     if (submitted.mode === 'create') {
       saved = await http.post('/ai/questions', payload(submitted.form));
-      ElMessage.success('人工题已保存，并记录当前管理员确认信息');
     } else {
       saved = await http.put(`/ai/questions/${submitted.id}`, {
         ...payload(submitted.form), expected_version_id: submitted.expectedVersionId,
       });
-      ElMessage.success('已生成待审核新版本，旧版本保持不变');
     }
-    if (editorContext === requestContext && editorVisible.value) {
+    const receipt = savedVersionReceipt(saved?.saved_version_id);
+    if (!receipt) {
+      ElMessage.warning('保存响应缺少本次写入版本凭据，已保留当前草稿，请刷新确认后再编辑');
+    } else {
+      ElMessage.success(submitted.mode === 'create' ? '人工题已保存，并记录当前管理员确认信息' : '已生成待审核新版本，旧版本保持不变');
+    }
+    if (receipt && editorContext === requestContext && editorVisible.value) {
       const savedId = saved?.question_id === undefined || saved?.question_id === null
         ? submitted.id
         : String(saved.question_id);
@@ -537,7 +544,7 @@ async function saveQuestion() {
         form: cloneEditorForm(submitted.form),
         mode: submitted.mode === 'create' && savedId ? 'edit' : submitted.mode,
         id: savedId,
-        expectedVersionId: expectedVersionId(saved?.current_version_id ?? submitted.expectedVersionId),
+        expectedVersionId: receipt,
       };
       editorMode.value = persisted.mode;
       editingId.value = persisted.id;

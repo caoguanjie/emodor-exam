@@ -590,6 +590,12 @@ function setHttp() {
       return { items: [{ id: `v${page}`, revision: page, status: 'pending', created_at: '2026-10-21T00:00:00Z' }], total: context.historyTotal, page, page_size: 20 };
     }
     if (method === 'get' && url.includes('/versions')) return { items: [], total: 0, page: 1, page_size: 20 };
+    if (method === 'post' && url === '/ai/questions') {
+      return { ...(context.row || {}), ...body, question_id: '7001', current_version_id: '7101', saved_version_id: '7101' };
+    }
+    if (method === 'put' && /^\/ai\/questions\/[^/]+$/.test(url)) {
+      return { ...(context.row || {}), ...body, current_version_id: '7102', saved_version_id: '7102' };
+    }
     if (method === 'upload') return { version_id: '502', duplicate_hint: null };
     return {};
   };
@@ -1054,6 +1060,7 @@ test('keeps edits made after a delayed question submit and ignores that response
     ...context.row,
     difficulty: 'hard',
     current_version_id: '900719925474099312346',
+    saved_version_id: '900719925474099312346',
   });
   await firstSave;
   await nextTick();
@@ -1081,6 +1088,7 @@ test('keeps edits made after a delayed question submit and ignores that response
     ...context.row,
     difficulty: 'hard',
     current_version_id: '900719925474099312347',
+    saved_version_id: '900719925474099312347',
   });
   await secondSave;
   await nextTick();
@@ -1090,6 +1098,103 @@ test('keeps edits made after a delayed question submit and ignores that response
   assert.equal(mounted.instance.$.setupState.editingExpectedVersionId, null);
   assert.equal(source.dirty.value, true, 'late A response must not clean reopened B');
   mounted.unmount();
+});
+
+test('uses the mutation receipt instead of a later view pointer for the next question edit', async () => {
+  context.row = legacyRow({ current_version_id: '101', revision: 1, difficulty: 'medium' });
+  const mounted = mount(Questions);
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
+  await click(button(mounted.root, '修订'));
+  const source = context.unsavedSources[0];
+  const normalHttp = context.http;
+  const firstGate = deferred();
+  let edits = 0;
+  context.http = async (method, url, body, config) => {
+    if (method === 'put' && url === `/ai/questions/${context.row.question_id}`) {
+      context.calls.push({ method, url, body, config });
+      edits += 1;
+      if (edits === 1) return firstGate.promise;
+      if (body.expected_version_id === '102') throw Object.assign(new Error('题目版本已变化'), { code: 40940 });
+      return { ...context.row, ...body, current_version_id: '104', saved_version_id: '104' };
+    }
+    return normalHttp(method, url, body, config);
+  };
+
+  await click(button(mounted.root, 'choose-hard'));
+  const firstSave = button(mounted.root, '保存为待审核版本').props.onClick();
+  await waitFor(() => edits === 1, 'v2 edit request');
+  await click(button(mounted.root, 'choose-easy'));
+  firstGate.resolve({
+    ...context.row,
+    difficulty: 'medium',
+    current_version_id: '103',
+    saved_version_id: '102',
+  });
+  await firstSave;
+  await nextTick();
+
+  assert.equal(mounted.instance.$.setupState.editingExpectedVersionId, '102');
+  assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'easy');
+  assert.equal(source.dirty.value, true);
+  await assert.rejects(
+    () => button(mounted.root, '保存为待审核版本').props.onClick(),
+    (error) => error?.code === 40940,
+  );
+  const secondRequest = context.calls.filter((call) => call.method === 'put' && call.url === `/ai/questions/${context.row.question_id}`).at(-1);
+  assert.equal(secondRequest.body.expected_version_id, '102', 'next edit must use the mutation receipt, not view current v3');
+  assert.equal(mounted.instance.$.setupState.editorVisible, true);
+  assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'easy');
+  assert.equal(source.dirty.value, true);
+  mounted.unmount();
+});
+
+test('keeps a question draft when a successful mutation response has no valid receipt', async () => {
+  context.row = legacyRow({ current_version_id: '101', revision: 1, difficulty: 'medium' });
+  const mounted = mount(Questions);
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
+  await click(button(mounted.root, '修订'));
+  await click(button(mounted.root, 'choose-hard'));
+  const source = context.unsavedSources[0];
+  const normalHttp = context.http;
+  context.http = async (method, url, body, config) => {
+    if (method === 'put' && url === `/ai/questions/${context.row.question_id}`) {
+      context.calls.push({ method, url, body, config });
+      return { ...context.row, ...body, current_version_id: '102' };
+    }
+    return normalHttp(method, url, body, config);
+  };
+
+  await button(mounted.root, '保存为待审核版本').props.onClick();
+  await nextTick();
+  assert.equal(mounted.instance.$.setupState.editorVisible, true);
+  assert.equal(mounted.instance.$.setupState.editingExpectedVersionId, '101');
+  assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'hard');
+  assert.equal(source.dirty.value, true);
+  mounted.unmount();
+});
+
+test('normalizes parent-only and all-children server scopes without creating an initial draft', async () => {
+  context.permissions = new Set(['regulations:read', 'regulations:write']);
+  for (const departmentIds of [['P'], ['A', 'B']]) {
+    context.calls = [];
+    context.unsavedSources = [];
+    context.regulation = {
+      id: '99', title: '安全制度', category: '旧分类', category_id: '7', status: 'draft',
+      required_minutes: 10, scroll_segments: 10, scope: { is_all: false, department_ids: departmentIds },
+    };
+    setHttp();
+    const mounted = mount(RegulationDetail);
+    try {
+      await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url.startsWith('/regulations/99/preview')), `scope initialization ${departmentIds.join(',')}`);
+      await nextTick();
+      assert.equal(context.unsavedSources[2].dirty.value, false, `server scope ${departmentIds.join(',')} must initialize clean`);
+      assert.deepEqual(mounted.instance.$.setupState.scope.departmentIds, ['A', 'B', 'P']);
+      const tree = walk(mounted.root, (node) => node.type === 'tree')[0];
+      assert.deepEqual(tree.props.getCheckedKeys(), ['P', 'A', 'B']);
+    } finally {
+      mounted.unmount();
+    }
+  }
 });
 
 test('rebases a delayed category save from its submitted value and serializes repeated submits', async () => {

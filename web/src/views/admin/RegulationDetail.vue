@@ -142,6 +142,22 @@ function normalizeDepartmentIds(values: unknown[]): string[] {
   return [...new Set(values.map(String))].sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
 }
 
+function treeCheckedDepartmentIds(values: unknown[], nodes: any[]): string[] {
+  const requested = new Set(normalizeDepartmentIds(values));
+  const checked: string[] = [];
+  const visit = (node: any, ancestorChecked: boolean): boolean => {
+    const id = String(node.id);
+    const children = Array.isArray(node.children) ? node.children : [];
+    const inherited = ancestorChecked || requested.has(id);
+    const childrenChecked = children.map((child: any) => visit(child, inherited));
+    const isChecked = inherited || (childrenChecked.length > 0 && childrenChecked.every(Boolean));
+    if (isChecked) checked.push(id);
+    return isChecked;
+  };
+  for (const node of nodes) visit(node, false);
+  return normalizeDepartmentIds(checked);
+}
+
 function categorySnapshot(): string | null {
   return categoryId.value || null;
 }
@@ -240,12 +256,16 @@ async function load() {
   await loadVersions();
   const tree: any = await http.get('/departments/tree');
   deptTree.value = tree.list;
+  const normalizedServerScope = {
+    is_all: serverScope.is_all,
+    departmentIds: serverScope.is_all ? [] : treeCheckedDepartmentIds(serverScope.departmentIds, deptTree.value),
+  };
   await nextTick();
   if (!scope.is_all) {
     (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds);
     scope.departmentIds = currentScopeDepartmentIds();
   }
-  syncScopeDirty();
+  setScopeBaseline(normalizedServerScope);
 }
 
 async function loadVersions() {

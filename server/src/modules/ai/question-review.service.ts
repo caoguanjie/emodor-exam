@@ -197,7 +197,7 @@ export class QuestionReviewService {
       actor_id: actor.id, actor_name: actor.name, action: 'question.edit', object_type: 'question', object_id: id,
       detail: { version_id: versionId, fields: editedFields }, result: 'success', source_ip: ip,
     });
-    return this.getOne(id);
+    return { ...await this.getOne(id), saved_version_id: String(versionId) };
   }
 
   async createManual(input: {
@@ -217,7 +217,7 @@ export class QuestionReviewService {
       object_id: created.questionId, detail: { version_id: created.versionId, category_id: input.category_id, type: input.type },
       result: 'success', source_ip: ip,
     });
-    return this.getOne(created.questionId);
+    return { ...await this.getOne(created.questionId), saved_version_id: String(created.versionId) };
   }
 
   private parseRegenerated(raw: string, expectedType: 'single' | 'multiple') {

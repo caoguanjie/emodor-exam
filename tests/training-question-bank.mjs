@@ -192,6 +192,7 @@ async function runBody(ctx, mockPort) {
   });
   assert.equal(writerQuestion.status, 200, `writer question create: ${JSON.stringify(writerQuestion)}`);
   assert.equal(writerQuestion.data.status, 'approved');
+  assert.equal(String(writerQuestion.data.saved_version_id), String(writerQuestion.data.current_version_id));
 
   const manualWithoutRegulation = await ctx.request(admin.actor, 'POST', '/ai/questions', singleDraft(categoryId));
   assert.equal(manualWithoutRegulation.status, 200, JSON.stringify(manualWithoutRegulation));
@@ -199,6 +200,8 @@ async function runBody(ctx, mockPort) {
   assert.equal(manualWithoutRegulation.data.status, 'approved');
   assert.equal(manualWithoutRegulation.data.category_id, categoryId);
   assert.match(manualWithoutRegulation.data.question_id, /^\d+$/);
+  assert.match(manualWithoutRegulation.data.saved_version_id, /^\d+$/);
+  assert.equal(String(manualWithoutRegulation.data.saved_version_id), String(manualWithoutRegulation.data.current_version_id));
   assert.ok(manualWithoutRegulation.data.approved_by);
   assert.ok(manualWithoutRegulation.data.approved_at);
   const referencedCategoryDelete = await ctx.request(admin.actor, 'DELETE', `/admin/training-categories/${categoryId}`);
@@ -259,6 +262,7 @@ async function runBody(ctx, mockPort) {
   const maliciousLegacyId = String(maliciousLegacy.insertId);
   const maliciousDetail = await ctx.request(admin.actor, 'GET', `/ai/questions/${maliciousLegacyId}`);
   assert.equal(maliciousDetail.status, 200, JSON.stringify(maliciousDetail));
+  assert.equal(Object.hasOwn(maliciousDetail.data, 'saved_version_id'), false, 'ordinary GET view must not invent a mutation receipt');
   assert.equal(maliciousDetail.data.difficulty, null, '旧题未知难度不得伪造为 easy');
   assert.equal(maliciousDetail.data.stem.includes('<script'), false);
   assert.equal(maliciousDetail.data.stem.includes('onclick'), false);
@@ -293,7 +297,7 @@ async function runBody(ctx, mockPort) {
     'SELECT owner_type, owner_id FROM media_reference WHERE asset_id = ?',
     [mediaId],
   );
-  assert.ok(references.some((row) => row.owner_type === 'question_version' && String(row.owner_id) === String(withMedia.data.current_version_id)));
+  assert.ok(references.some((row) => row.owner_type === 'question_version' && String(row.owner_id) === String(withMedia.data.saved_version_id)));
   const mediaContent = await ctx.request(admin.actor, 'GET', `/media/${mediaId}/content`);
   assert.equal(mediaContent.status, 200);
   assert.ok(Buffer.isBuffer(mediaContent.body) && mediaContent.body.length > 0);
@@ -302,7 +306,7 @@ async function runBody(ctx, mockPort) {
   assert.equal(referencedDelete.code, 40913);
 
   const manualQuestionId = manualWithoutRegulation.data.question_id;
-  const firstVersionId = String(manualWithoutRegulation.data.current_version_id);
+  const firstVersionId = String(manualWithoutRegulation.data.saved_version_id);
   const missingExpectedEdit = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}`, {
     stem: '<p>不能省略版本前置条件</p>',
   });
@@ -314,7 +318,9 @@ async function runBody(ctx, mockPort) {
   assert.equal(edited.status, 200, JSON.stringify(edited));
   assert.equal(edited.data.status, 'pending');
   assert.equal(edited.data.revision, 2);
-  const secondVersionId = String(edited.data.current_version_id);
+  assert.match(edited.data.saved_version_id, /^\d+$/);
+  assert.equal(String(edited.data.saved_version_id), String(edited.data.current_version_id));
+  const secondVersionId = String(edited.data.saved_version_id);
   const versionCountBeforeStale = await ctx.queryTestDb(
     'SELECT COUNT(*) AS total FROM question_version WHERE question_id = ?',
     [manualQuestionId],
