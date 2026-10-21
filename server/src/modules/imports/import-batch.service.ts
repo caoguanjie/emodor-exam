@@ -109,9 +109,37 @@ export class ImportBatchService {
     return this.commitStudents(String(ownerId), batch, rowNumbers);
   }
 
+  /**
+   * Question routes must not be usable as a confused-deputy entry point for a
+   * student batch. Unlike the legacy student route, a known question batch
+   * owned by somebody else is an authenticated data-scope violation (40302).
+   */
+  async commitQuestions(ownerId: Id, batchId: Id, rowNumbers: number[]): Promise<ImportResult> {
+    const batch = await this.batchRepo.findOne({ where: { id: String(batchId) } });
+    if (!batch) throw Errors.notFound('导入批次不存在');
+    if (String(batch.ownerId) !== String(ownerId) || batch.kind !== 'questions') throw Errors.dataForbidden();
+    const adapter = this.adapters.get('questions');
+    if (!adapter) throw Errors.param('题库导入适配器尚未注册');
+    return adapter.commit(String(ownerId), String(batchId), rowNumbers);
+  }
+
   async status(ownerId: Id, batchId: Id): Promise<ImportPreview | ImportResult> {
     const batch = await this.batchRepo.findOne({ where: { id: String(batchId), ownerId: String(ownerId) } });
     if (!batch) throw Errors.notFound('导入批次不存在');
+    if (batch.status === 'committed') {
+      return {
+        batch_id: String(batch.id),
+        created_ids: Array.isArray(batch.createdIds) ? batch.createdIds : [],
+        committed_rows: Array.isArray(batch.committedRows) ? batch.committedRows : [],
+      };
+    }
+    return responsePreview(batch);
+  }
+
+  async questionStatus(ownerId: Id, batchId: Id): Promise<ImportPreview | ImportResult> {
+    const batch = await this.batchRepo.findOne({ where: { id: String(batchId) } });
+    if (!batch) throw Errors.notFound('导入批次不存在');
+    if (String(batch.ownerId) !== String(ownerId) || batch.kind !== 'questions') throw Errors.dataForbidden();
     if (batch.status === 'committed') {
       return {
         batch_id: String(batch.id),

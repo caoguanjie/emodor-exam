@@ -1,6 +1,6 @@
 # 制度学习及考试系统（EmodorRuleExam）设计方案 · 总览索引
 
-> **一句话定位**：本文档是 EmodorRuleExam（制度学习及考试系统）全套设计方案的入口与一致性基准——汇总当前 legacy 实现基线、已批准培训融合目标、文档导航、技术栈、核心术语、数据实体与统一命名约定。当前制度/AI/阅读/旧固定卷/原统计，以及 A2—A5、B1、B3 已有源码与审查证据的增量均按实际登记；B2、B4、C1—C7 及仍待组合验收的入口/离页链路继续标为待实现，不把源码存在写成已部署。
+> **一句话定位**：本文档是 EmodorRuleExam（制度学习及考试系统）全套设计方案的入口与一致性基准——汇总当前 legacy 实现基线、已批准培训融合目标、文档导航、技术栈、核心术语、数据实体与统一命名约定。当前制度/AI/阅读/旧固定卷/原统计，以及 A2—A5、B1、B3 与 B4 导题已有源码的增量均按实际登记；B2、C1—C7 及仍待组合验收的入口/离页链路继续标为待实现，不把源码存在写成已部署或 PC 已验收。
 >
 > **权威链接**：融合目标以[已批准设计](../superpowers/specs/2026-10-21-training-admin-integration-design.md)和[实施总计划](../superpowers/plans/2026-10-21-training-admin-integration.md)为准。本文及 01—07 册的“当前”描述是仓库现状基线，“计划”描述是目标方案；两者冲突时先修订本索引并标明证据等级。
 
@@ -30,7 +30,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 |---|---|---|
 | 业务边界 | 制度学习、AI 出题审核、旧固定卷员工考试、原制度/部门/个人统计；A2—A5、B1、B3 已有源码与审查证据的培训管理增量 | 单家机构 PC 管理端与完整后端；不迁移旧站数据，独立 H5 下一期；不建设租户、班级、支付或证书平台 |
 | 学习 | 制度阅读双条件；服务端 30 秒心跳、单次最多计入 45 秒、10 段位图；B1 课程/章节/视频课时与不可变内容版本 | B2 视频学习进度：30 秒心跳、45 秒封顶、2 秒位置容差、95% 覆盖完成；新培训考试默认无学习门槛 |
-| 学员与题库 | A2 学员类别与 `institution/external` 来源；B3 题目 `easy/medium/hard`、`single/multiple/judgment/image`、可选考点与不可变来源版本 | B4 Excel/TXT 导题；C1 发布快照与个人题单 |
+| 学员与题库 | A2 学员类别与 `institution/external` 来源；B3 题目 `easy/medium/hard`、`single/multiple/judgment/image`、可选考点与不可变来源版本；B4 Excel/TXT 模板、预检与幂等确认 | C1 发布快照与个人题单 |
 | 考试与成绩 | 旧固定卷下发、服务端计时、自动客观评分、最高分口径 | 固定/随机发布快照、个人题单、持久草稿、图片题单题最多 9 张；图片题可受控逐题评分，服务端聚合，最终总分只读 |
 | 统计与监控 | 原制度/部门/个人报表 | 按场次/难度、已完成批改个人最高分、当前应考集合交集统计；5 秒轮询，90 秒无心跳仅“连接待确认” |
 
@@ -38,7 +38,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 
 ### 1.4 A1—C7 模块与验收进度映射
 
-当前进度：A1—A3 已验收；A4 的代码、接口回归与独立审查已通过；A5 已完成源码独立审查及后台系统管理边界的真实 PC 验收；B1 课程主体与 B3 版本题库的源码、迁移和独立回归已通过并完成后端兼容集成。B1 final 已用真实 A5 配置服务接入 `/me/home`、课程菜单/路由与分区未保存保护，自动回归完成后仍由 root 统一做课程真实 PC 验收；Questions 未保存接线与 B3 真实 PC 链路由 B3 final 收口，C1 发布快照尚未实现。A4 的伪格式/超限/头像真实 PC 补验按用户“稍后处理，先继续代码”决定留到 C7，未标记通过；[证据及边界](../../review/2026-10-21-training-a4-media-acceptance.md)。下表列各阶段最终应具备的证据，不代表所有任务已完成，也不代表已部署至开发库或生产库。
+当前进度：A1—A3 已验收；A4 的代码、接口回归与独立审查已通过；A5 已完成源码独立审查及后台系统管理边界的真实 PC 验收；B1 课程主体与 B3 版本题库的源码、迁移和独立回归已通过并完成后端兼容集成。B4 已接入 B3 统一题库与 A2 `import_batch`，源码包含 Excel/TXT 同模板解析、预检、owner+批次幂等确认及 PC 入口；原生文件选择 PC 仍按用户决定留待后续统一验收。C1 发布快照尚未实现。A4 的伪格式/超限/头像真实 PC 补验按用户“稍后处理，先继续代码”决定留到 C7，未标记通过；[证据及边界](../../review/2026-10-21-training-a4-media-acceptance.md)。下表列各阶段最终应具备的证据，不代表所有任务已完成，也不代表已部署至开发库或生产库。
 
 | owner 任务 | 目标模块/链路 | 必须留下的验收证据 |
 |---|---|---|
@@ -110,7 +110,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | 心跳上报 | 学习页面每 30 秒向服务端上报一次的保活信号，携带当前滚动位置；服务端进行时长容差校验，单次心跳最大计入 45 秒，超出部分不计入有效时长；页面失焦时暂停计时。 |
 | 滚动覆盖率 | 阅读内容按固定 10 段划分、以 JSON 位图记录的已读到位情况（learning_record.scroll_coverage）；其中底部段必须被覆盖，是「有效学习」的必要条件之一。 |
 | 考试资格 | **legacy 制度固定卷**员工参加某制度考试的前置条件：该员工在该制度上的学习已达「有效学习」标准；资格校验发生在发起考试时。计划中的新培训考试默认关闭该学习门槛，但仍执行发布、身份、次数、服务端期限与权限校验。 |
-| 试题 | 题库中的稳定身份（question），当前 B3 已支持 `single/multiple/judgment/image`、`easy/medium/hard`、可选考点、`ai/manual/import` 来源与不可变 question_version；`current_version_id` 指向当前版本。legacy AI 生成、固定卷组卷与自动评分仍只支持 single/multiple，B4 导入流程与 C1 发布快照尚未实现。 |
+| 试题 | 题库中的稳定身份（question），当前 B3 已支持 `single/multiple/judgment/image`、`easy/medium/hard`、可选考点、`ai/manual/import` 来源与不可变 question_version；`current_version_id` 指向当前版本。B4 合法导入直接创建带实际确认人/时间的 approved revision；legacy AI 生成、固定卷组卷与自动评分仍只支持 single/multiple，C1 发布快照尚未实现。 |
 | 试卷 | 针对某制度发布的考试载体（exam_paper），固定 100 分制，含及格线（pass_score，默认 60 分、可配置）、限时（duration_minutes，超时自动交卷）、最大补考次数（max_attempts，默认 3 次）、多选漏选部分分比例（partial_credit_ratio，默认 0.50，可配置）；通过 paper_question 组卷。 |
 | 考试记录 | 用户对某试卷的一次完整作答过程（exam_record），含第几次作答（attempt_no）、状态（in_progress / submitted / passed / failed / timeout）、得分与切屏次数（switch_count）；超时未交卷由系统自动交卷，状态记为 timeout。 |
 | 答题明细 | 考试记录内逐题的作答结果（exam_answer），含所选选项（selected）、是否正确（is_correct）与实际得分（gained_score）；判分规则见「自动评分」。 |
@@ -121,7 +121,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 
 ### 3.3 核心实体清单
 
-当前源码有 30 张业务表，表名及其字段必须与 migration、`database/init.sql`、entities 和 [03-数据库设计.md](03-数据库设计.md) 同步；另有不计入业务表清单的 A1 `schema_migration` 元数据表，合计 31 张物理表。以下 12 张 legacy 表保持兼容，A2—A5、B1 与 B3 已实现增量按实际源码登记；B2、B4 与 C1 以后不得在未实现前凭空预设。
+当前源码有 30 张业务表，表名及其字段必须与 migration、`database/init.sql`、entities 和 [03-数据库设计.md](03-数据库设计.md) 同步；另有不计入业务表清单的 A1 `schema_migration` 元数据表，合计 31 张物理表。以下 12 张 legacy 表保持兼容，A2—A5、B1、B3 与复用既有表的 B4 已实现增量按实际源码登记；B2 与 C1 以后不得在未实现前凭空预设。
 
 **组织权限域（2 张）**
 
@@ -162,7 +162,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | 表名 | 一句话职责 |
 |---|---|
 | training_category | 培训类别：名称唯一、启停保留历史引用，供学员资料与后续培训业务归类。 |
-| import_batch | 可恢复导入批次：保存脱敏输入指纹、规范化行、预检错误及首次确认结果；不保存明文口令。 |
+| import_batch | 可恢复导入批次：以 `students/questions` 区分学员与题库适配器，保存脱敏输入指纹、规范化行、预检错误及首次确认结果；不保存明文口令。 |
 
 **可配置权限与会话域（5 张，A3）**
 
@@ -203,7 +203,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 **数据库命名**
 
 - 表名与字段名一律使用小写 snake_case。
-- 当前表名严格使用 3.3 节清单中的 30 个业务表名称；12 张 legacy 表不改名或删改，A2—A5、B1、B3 增量按版本化 migration 演进。A1 `schema_migration` 是不计入业务表清单的元数据表，精确结构见 03 册 1.10。B2、B4、C1 以后新增培训表继续遵循“迁移脚本 → `database/init.sql` → entities → 03 册/相关分册 → API/controller”同步政策，不能由文档另造第二定义。
+- 当前表名严格使用 3.3 节清单中的 30 个业务表名称；12 张 legacy 表不改名或删改，A2—A5、B1、B3 增量按版本化 migration 演进，B4 复用 `import_batch/question/question_version` 而不新增表。A1 `schema_migration` 是不计入业务表清单的元数据表，精确结构见 03 册 1.10。B2、C1 以后新增培训表继续遵循“迁移脚本 → `database/init.sql` → entities → 03 册/相关分册 → API/controller”同步政策，不能由文档另造第二定义。
 
 **API 命名**
 
@@ -251,7 +251,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | exam_record.status | in_progress / submitted / passed / failed / timeout | 考试状态：进行中 / 已交卷 / 已通过 / 未通过 / 超时自动交卷 |
 | media_asset.status | processing / ready / failed / deleting | 媒体状态；`deleting` 仅供物理删除失败重试，公开 API 按不存在处理 |
 
-> 上表登记 legacy 与 A2—A5、B1、B3 已落地枚举。A5 固定字典只镜像当前服务端业务枚举（含 B3 使用的难度），不是新的语义来源。B4 导入流程、C1 发布/个人题单、C3 草稿及 C4 阅卷状态仍是后续契约；只有实际 migration/entity/controller 落地后才补入，不把“计划枚举”冒充当前 API 或数据库事实。
+> 上表登记 legacy 与 A2—A5、B1、B3 已落地枚举；B4 只消费既有题型、难度、来源与批次状态，不新增枚举。A5 固定字典只镜像当前服务端业务枚举，不是新的语义来源。C1 发布/个人题单、C3 草稿及 C4 阅卷状态仍是后续契约；只有实际 migration/entity/controller 落地后才补入，不把“计划枚举”冒充当前 API 或数据库事实。
 
 ---
 

@@ -61,12 +61,14 @@ export class QuestionVersionService implements OnModuleInit {
     });
   }
 
-  private async assertSource(draft: ValidatedQuestionDraft): Promise<void> {
+  private async assertSource(draft: ValidatedQuestionDraft, manager?: EntityManager): Promise<void> {
     if (!draft.regulationId && !draft.regulationVersionId) return;
-    const regulation = await this.regulationRepo.findOne({ where: { id: draft.regulationId! } });
+    const regulationRepo = manager?.getRepository(Regulation) || this.regulationRepo;
+    const regulationVersionRepo = manager?.getRepository(RegulationVersion) || this.regulationVersionRepo;
+    const regulation = await regulationRepo.findOne({ where: { id: draft.regulationId! } });
     if (!regulation) throw Errors.notFound('制度不存在');
     if (draft.regulationVersionId) {
-      const version = await this.regulationVersionRepo.findOne({
+      const version = await regulationVersionRepo.findOne({
         where: { id: draft.regulationVersionId, regulationId: draft.regulationId! },
       });
       if (!version) throw Errors.param('regulation_version_id 与制度不匹配');
@@ -90,6 +92,7 @@ export class QuestionVersionService implements OnModuleInit {
     revision: number,
     draft: ValidatedQuestionDraft,
     actorId: string,
+    approval?: { actorId: string; at: Date },
   ): QuestionVersion {
     return repo.create({
       questionId,
@@ -110,11 +113,11 @@ export class QuestionVersionService implements OnModuleInit {
       sourcePageStart: draft.sourcePageStart ?? null,
       sourcePageEnd: draft.sourcePageEnd ?? null,
       source: draft.source,
-      status: 'pending',
-      approvedBy: null,
-      approvedAt: null,
-      reviewedBy: null,
-      reviewedAt: null,
+      status: approval ? 'approved' : 'pending',
+      approvedBy: approval?.actorId || null,
+      approvedAt: approval?.at || null,
+      reviewedBy: approval?.actorId || null,
+      reviewedAt: approval?.at || null,
       reviewReason: null,
       createdBy: String(actorId),
       legacyCapturedAt: null,
@@ -182,7 +185,12 @@ export class QuestionVersionService implements OnModuleInit {
     return repo.save(captured);
   }
 
-  private async createInManager(manager: EntityManager, draft: ValidatedQuestionDraft, actorId: string) {
+  private async createInManager(
+    manager: EntityManager,
+    draft: ValidatedQuestionDraft,
+    actorId: string,
+    approval?: { actorId: string; at: Date },
+  ) {
     const questionRepo = manager.getRepository(Question);
     const versionRepo = manager.getRepository(QuestionVersion);
     const question = await questionRepo.save(questionRepo.create({
@@ -199,11 +207,11 @@ export class QuestionVersionService implements OnModuleInit {
       analysis: draft.analysis,
       rubric: draft.rubric,
       score: (draft.scoreCents / 100).toFixed(2),
-      status: 'pending',
+      status: approval ? 'approved' : 'pending',
       source: draft.source,
       createdBy: String(actorId),
     }));
-    const version = await versionRepo.save(this.versionEntity(versionRepo, String(question.id), 1, draft, actorId));
+    const version = await versionRepo.save(this.versionEntity(versionRepo, String(question.id), 1, draft, actorId, approval));
     this.applyCompatibility(question, version);
     await questionRepo.save(question);
     await this.bindMedia(manager, version, draft.mediaAssetIds);
@@ -230,6 +238,46 @@ export class QuestionVersionService implements OnModuleInit {
       for (const draft of drafts) created.push(await this.createInManager(manager, draft, actorId));
       return created;
     });
+  }
+
+  /**
+   * B4 preview uses the same structural, provenance, and controlled-media
+   * checks as ordinary question creation. This method never writes data.
+   */
+  async validateImportDraft(
+    input: QuestionDraft,
+    actorId: string,
+    manager?: EntityManager,
+  ): Promise<ValidatedQuestionDraft> {
+    const draft = validateAndSanitizeQuestionDraft(input);
+    if (draft.source !== 'import') throw Errors.param('导入适配器只能创建 import 来源题目');
+    await this.assertSource(draft, manager);
+    await this.assertMediaUsable(String(actorId), draft.mediaAssetIds);
+    return draft;
+  }
+
+  /**
+   * Caller-owned transaction adapter for B4. It intentionally does not open a
+   * nested transaction so the import batch result and every created version
+   * commit or roll back together.
+   */
+  async createApprovedImportsInManager(
+    manager: EntityManager,
+    inputs: QuestionDraft[],
+    actorId: string,
+  ): Promise<Array<{ questionId: string; versionId: string }>> {
+    if (!inputs.length) return [];
+    const drafts = await Promise.all(inputs.map((input) => this.validateImportDraft(input, actorId, manager)));
+    const categoryIds = [...new Set(drafts.map((draft) => draft.categoryId))]
+      .sort((a, b) => BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0);
+    for (const categoryId of categoryIds) await this.categories.lockActive(manager, categoryId);
+    for (const draft of drafts) {
+      if (draft.conceptId) await this.concepts.assertCompatible(manager, draft.conceptId, draft.categoryId, draft.type);
+    }
+    const approval = { actorId: String(actorId), at: new Date() };
+    const created: Array<{ questionId: string; versionId: string }> = [];
+    for (const draft of drafts) created.push(await this.createInManager(manager, draft, actorId, approval));
+    return created;
   }
 
   async revise(

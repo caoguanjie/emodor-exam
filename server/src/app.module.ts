@@ -93,6 +93,8 @@ import { CourseService } from './modules/courses/course.service';
 import { LessonVersionService } from './modules/courses/lesson-version.service';
 import { QuestionConceptService } from './modules/questions/question-concept.service';
 import { QuestionVersionService } from './modules/questions/question-version.service';
+import { QuestionImportController } from './modules/questions/question-import.controller';
+import { QuestionImportService } from './modules/questions/question-import.service';
 import { SiteConfigController, SystemController } from './modules/system/system.controller';
 import { SystemService } from './modules/system/system.service';
 import { AuditQueryService } from './modules/system/audit-query.service';
@@ -125,6 +127,7 @@ const config = loadConfig();
     StatisticsController, HealthController,
     MediaController,
     CourseAdminController, LearnerHomeController, MyCoursesController,
+    QuestionImportController,
     SystemController, SiteConfigController,
   ],
   providers: [
@@ -137,7 +140,7 @@ const config = loadConfig();
     RedisService, AuditService, TasksService,
     MediaService, MediaProbeService,
     CourseService, LessonVersionService,
-    QuestionConceptService, QuestionVersionService,
+    QuestionConceptService, QuestionVersionService, QuestionImportService,
     SystemService, AuditQueryService,
     // 守卫链（07 册 2.3.2）：① JWT 认证 → ② 细权限映射 → ③ 兼容角色边界
     { provide: APP_GUARD, useClass: JwtAuthGuard },
