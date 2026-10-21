@@ -98,30 +98,36 @@ function childExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
-async function waitForChildExit(child, timeoutMs) {
+export async function waitForChildExit(child, timeoutMs) {
   if (childExited(child)) return true;
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       child.removeListener('exit', onExit);
-      child.removeListener('error', onExit);
+      child.removeListener('error', onError);
       resolve(childExited(child));
     }, timeoutMs);
     const onExit = () => {
       clearTimeout(timer);
+      child.removeListener('error', onError);
       resolve(true);
     };
+    const onError = (error) => {
+      clearTimeout(timer);
+      child.removeListener('exit', onExit);
+      reject(error);
+    };
     child.once('exit', onExit);
-    child.once('error', onExit);
+    child.once('error', onError);
   });
 }
 
-async function stopApi(child) {
+export async function stopApi(child, { termTimeoutMs = 5_000, killTimeoutMs = 5_000 } = {}) {
   if (!child || childExited(child)) return;
   child.kill('SIGTERM');
-  if (await waitForChildExit(child, 5_000)) return;
+  if (await waitForChildExit(child, termTimeoutMs)) return;
   if (!childExited(child)) {
     child.kill('SIGKILL');
-    if (!(await waitForChildExit(child, 5_000)) && !childExited(child)) {
+    if (!(await waitForChildExit(child, killTimeoutMs)) && !childExited(child)) {
       throw new Error('API process did not exit; refusing to remove its task directory');
     }
   }
@@ -295,6 +301,9 @@ export async function createTrainingHarness({
     adminPassword,
     env,
     baseUrl: apiBaseUrl,
+    get apiPid() {
+      return api?.pid ?? null;
+    },
     database: testDatabase,
     db: dbConfig,
     redis: redisConfig,

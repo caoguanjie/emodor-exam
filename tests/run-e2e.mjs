@@ -11,7 +11,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { validateTestTarget, isSafeTestDatabase } from './support/test-target.mjs';
-import { createTrainingHarness } from './support/training-harness.mjs';
+import { createTrainingHarness, stopApi } from './support/training-harness.mjs';
 import { createEphemeralServices, getFreePort } from './support/ephemeral-services.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -70,22 +70,96 @@ export async function run() {
   let harness;
   let interrupted = false;
   let cleanupPromise;
-  const cleanup = async () => {
-    if (!harness && !services) return;
-    if (!cleanupPromise) {
-      cleanupPromise = (async () => {
-        await harness?.cleanup();
-        await services?.cleanup();
-      })();
+  let releaseLifecycleProbe;
+  const ownedChildren = new Set();
+  const trackChild = (child) => {
+    ownedChildren.add(child);
+    child.once('exit', () => ownedChildren.delete(child));
+    if (interrupted) void cleanup().catch(() => undefined);
+    return child;
+  };
+  const reportOwnedRuntime = (extra = {}) => {
+    if (typeof process.send !== 'function') return;
+    try {
+      process.send({
+        type: 'owned-runtime',
+        apiPid: harness?.apiPid ?? null,
+        mysqlPid: services?.mysqlPid ?? null,
+        redisPid: services?.redisPid ?? null,
+        harnessRoot: harness?.root ?? null,
+        servicesRoot: services?.root ?? null,
+        ...extra,
+      });
+    } catch {
+      // The probe IPC channel can close while cleanup is already in progress.
     }
-    await cleanupPromise;
+  };
+  const waitForLifecycleProbe = async (stage, metadata = {}) => {
+    if (process.env.A1_LIFECYCLE_PROBE !== stage || typeof process.send !== 'function') return;
+    reportOwnedRuntime({ ...metadata, stage });
+    await new Promise((resolve) => {
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        process.removeListener('message', onMessage);
+        if (releaseLifecycleProbe === finish) releaseLifecycleProbe = undefined;
+        resolve();
+      };
+      const onMessage = (message) => {
+        if (message?.type === 'release-lifecycle' && message.stage === stage) finish();
+      };
+      releaseLifecycleProbe = finish;
+      process.on('message', onMessage);
+      if (interrupted) finish();
+    });
+  };
+  const cleanup = async () => {
+    if (cleanupPromise) return cleanupPromise;
+    if (!harness && !services && ownedChildren.size === 0) return;
+    const task = (async () => {
+      const attempted = new Set();
+      const errors = [];
+      while (true) {
+        const children = [...ownedChildren].filter((child) => !attempted.has(child));
+        const resources = [harness, services].filter((resource) => resource && !attempted.has(resource));
+        if (!children.length && !resources.length) break;
+        for (const child of children) {
+          attempted.add(child);
+          try {
+            await stopApi(child);
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        for (const resource of resources) {
+          attempted.add(resource);
+          try {
+            await resource.cleanup();
+            if (resource === harness) harness = undefined;
+            if (resource === services) services = undefined;
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+      }
+      if (errors.length) throw new AggregateError(errors, 'owned runtime cleanup failed');
+    })();
+    cleanupPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (cleanupPromise === task) cleanupPromise = undefined;
+    }
   };
   const signalHandlers = new Map();
   for (const signal of ['SIGINT', 'SIGTERM']) {
     const handler = () => {
       interrupted = true;
       process.exitCode = signal === 'SIGINT' ? 130 : 143;
-      void cleanup();
+      releaseLifecycleProbe?.();
+      reportOwnedRuntime({ stage: 'signal-received', signal });
+      void cleanup().catch(() => undefined);
     };
     signalHandlers.set(signal, handler);
     process.once(signal, handler);
@@ -105,10 +179,8 @@ export async function run() {
     };
     if (ephemeral) {
       services = await createEphemeralServices();
-      if (interrupted) {
-        await services.cleanup();
-        return;
-      }
+      await waitForLifecycleProbe('services-ready');
+      if (interrupted) return;
       database = `ruleexam_test_${randomBytes(6).toString('hex')}`;
       db = { host: services.mysql.host, port: services.mysql.port, user: services.mysql.user, password: services.mysql.password };
       redis = { host: services.redis.host, port: services.redis.port, password: undefined };
@@ -120,7 +192,7 @@ export async function run() {
     }
     quoteDatabase(database);
     const apiPort = ephemeral ? await getFreePort() : Number(process.env.API_PORT || process.env.PORT || 3000);
-    harness = await createTrainingHarness({
+    const createdHarness = await createTrainingHarness({
       port: apiPort,
       redisPrefix: `e2e:${randomBytes(10).toString('hex')}:`,
       database,
@@ -138,10 +210,9 @@ export async function run() {
         API_PORT: String(apiPort),
       },
     });
-    if (interrupted) {
-      await harness.cleanup();
-      return;
-    }
+    await waitForLifecycleProbe('harness-created', { harnessRoot: createdHarness.root });
+    harness = createdHarness;
+    if (interrupted) return;
     console.log(`[1/4] 创建隔离测试库（${database}）`);
     await resetSchema({ ...db, database });
     if (interrupted) return;
@@ -155,16 +226,23 @@ export async function run() {
 
     console.log(`[3/4] 执行测试套件（${suite}）`);
     const suiteModule = await import(pathToFileURL(SUITE_REGISTRY[suite]).href);
+    if (interrupted) return;
     if (typeof suiteModule.run !== 'function') throw new Error(`测试套件缺少 run(ctx)：${suite}`);
-    await suiteModule.run({
-      baseUrl: harness.baseUrl,
-      env: harness.env,
-      adminPassword: harness.adminPassword,
-      request: harness.request,
-      upload: harness.upload,
-      restartApi: harness.restartApi,
-      queryTestDb: harness.queryTestDb,
-    });
+    try {
+      await suiteModule.run({
+        baseUrl: harness.baseUrl,
+        env: harness.env,
+        adminPassword: harness.adminPassword,
+        request: harness.request,
+        upload: harness.upload,
+        restartApi: harness.restartApi,
+        queryTestDb: harness.queryTestDb,
+        trackChild,
+        reportOwnedRuntime,
+      });
+    } catch (error) {
+      if (!interrupted) throw error;
+    }
     console.log('[4/4] 测试完成');
   } finally {
     await cleanup();
@@ -175,6 +253,6 @@ export async function run() {
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   run().catch((error) => {
     console.error(error.message || error);
-    process.exitCode = 1;
+    if (process.exitCode !== 130 && process.exitCode !== 143) process.exitCode = 1;
   });
 }

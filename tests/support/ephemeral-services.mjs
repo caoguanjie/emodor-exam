@@ -64,32 +64,38 @@ async function waitForTcp(host, port, child, timeoutMs = 30_000) {
   throw new Error('ephemeral service did not become ready');
 }
 
-async function stopProcess(child) {
+export async function stopProcess(child, { termTimeoutMs = 5_000, killTimeoutMs = 5_000 } = {}) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   child.kill('SIGTERM');
-  const exited = await waitForProcessExit(child, 5_000);
+  const exited = await waitForProcessExit(child, termTimeoutMs);
   if (!exited && child.exitCode === null && child.signalCode === null) {
     child.kill('SIGKILL');
-    if (!(await waitForProcessExit(child, 5_000)) && child.exitCode === null && child.signalCode === null) {
+    if (!(await waitForProcessExit(child, killTimeoutMs)) && child.exitCode === null && child.signalCode === null) {
       throw new Error('owned ephemeral process did not exit; refusing to remove its task directory');
     }
   }
 }
 
-async function waitForProcessExit(child, timeoutMs) {
+export async function waitForProcessExit(child, timeoutMs) {
   if (child.exitCode !== null || child.signalCode !== null) return true;
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       child.removeListener('exit', onExit);
-      child.removeListener('error', onExit);
+      child.removeListener('error', onError);
       resolve(child.exitCode !== null || child.signalCode !== null);
     }, timeoutMs);
     const onExit = () => {
       clearTimeout(timer);
+      child.removeListener('error', onError);
       resolve(true);
     };
+    const onError = (error) => {
+      clearTimeout(timer);
+      child.removeListener('exit', onExit);
+      reject(error);
+    };
     child.once('exit', onExit);
-    child.once('error', onExit);
+    child.once('error', onError);
   });
 }
 
@@ -167,6 +173,8 @@ export async function createEphemeralServices() {
       root,
       mysql: { host: '127.0.0.1', port: mysqlPort, user: username, password },
       redis: { host: '127.0.0.1', port: redisPort },
+      mysqlPid: mysqlProcess.pid,
+      redisPid: redisProcess.pid,
       cleanup,
     };
   } catch (error) {
