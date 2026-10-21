@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
+import { randomStrongPassword } from './training-access.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
@@ -9,10 +10,6 @@ let loginSequence = 0;
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
-}
-
-function strongPassword() {
-  return `Q${randomBytes(16).toString('hex')}Z9`;
 }
 
 async function readCaptchaAnswer(ctx, captchaId) {
@@ -28,7 +25,15 @@ async function readCaptchaAnswer(ctx, captchaId) {
   }
 }
 
-async function login(ctx, username, password) {
+function accessPayload(actor) {
+  const token = String(actor?.accessToken || '');
+  const encodedPayload = token.split('.')[1];
+  assert(encodedPayload, 'access token payload missing');
+  // Keep the sid in memory only. Never print or persist token payloads.
+  return JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+}
+
+async function login(ctx, username, password, ...personalValues) {
   const sourceIp = `198.51.100.${(loginSequence = (loginSequence % 200) + 1)}`;
   const headers = { 'X-Forwarded-For': sourceIp };
   const captcha = await ctx.request(null, 'POST', '/auth/captcha', undefined, headers);
@@ -42,7 +47,7 @@ async function login(ctx, username, password) {
   assert(result.status === 200, `login failed: ${result.status}`);
   actor.accessToken = result.data.access_token;
   if (!result.data.force_change_password) return { actor, password, result };
-  const nextPassword = strongPassword();
+  const nextPassword = randomStrongPassword(username, ...personalValues);
   const changed = await ctx.request(actor, 'PUT', '/auth/password', {
     old_password: password, new_password: nextPassword,
   });
@@ -91,8 +96,8 @@ async function waitForLockWaits(ctx, minimum, label) {
 }
 
 async function createStudent(ctx, admin, categoryId, label) {
-  const password = strongPassword();
   const username = `boundary_${label}_${randomBytes(4).toString('hex')}`;
+  const password = randomStrongPassword(username, label);
   const response = await ctx.request(admin, 'POST', '/admin/students', {
     username,
     password,
@@ -101,7 +106,7 @@ async function createStudent(ctx, admin, categoryId, label) {
     source: 'institution',
   });
   assert(response.status === 200 && response.data?.id, `student create failed: ${response.status}`);
-  return { id: String(response.data.id), username, password };
+  return { id: String(response.data.id), username, password, realName: label };
 }
 
 async function createRole(ctx, admin, name, permissions = []) {
@@ -123,11 +128,30 @@ async function assignRole(ctx, admin, userId, roleId) {
 
 async function userState(ctx, id) {
   const rows = await ctx.queryTestDb(
-    'SELECT password_hash, status, auth_version FROM sys_user WHERE id = ?',
+    'SELECT password_hash, status, auth_version, force_password_change FROM sys_user WHERE id = ?',
     [String(id)],
   );
   assert(rows.length === 1, `user ${id} disappeared`);
   return rows[0];
+}
+
+async function authSessionState(ctx, userId, actor) {
+  const sid = String(accessPayload(actor).sid || '');
+  assert(/^[a-f0-9]{48}$/.test(sid), 'access token durable sid missing');
+  const rows = await ctx.queryTestDb(
+    'SELECT sid, revoked_at FROM auth_session WHERE user_id = ? AND sid = ? LIMIT 1',
+    [String(userId), sid],
+  );
+  assert(rows.length === 1, 'durable auth session row missing');
+  return rows[0];
+}
+
+function assertSessionActive(row, label) {
+  assert(row.revoked_at === null, `${label} durable session unexpectedly revoked`);
+}
+
+function assertSessionRevoked(row, label) {
+  assert(row.revoked_at !== null, `${label} durable session was not revoked`);
 }
 
 async function linkedRoleCount(ctx, id) {
@@ -138,15 +162,18 @@ async function linkedRoleCount(ctx, id) {
 async function assertLinkedSessionAndState(ctx, linked, before, label) {
   const profile = await ctx.request(linked.actor, 'GET', '/auth/profile');
   assert(profile.status === 200, `${label} linked admin session was revoked: ${profile.status}/${profile.code}`);
+  assertSessionActive(await authSessionState(ctx, linked.id, linked.actor), label);
   const after = await userState(ctx, linked.id);
   assert(after.password_hash === before.password_hash, `${label} linked admin password changed`);
   assert(Number(after.status) === Number(before.status), `${label} linked admin status changed`);
   assert(Number(after.auth_version) === Number(before.auth_version), `${label} linked admin auth version changed`);
+  assert(Number(after.force_password_change) === Number(before.force_password_change), `${label} linked admin force flag changed`);
 }
 
 async function rejectLinkedStudentEndpoint(ctx, admin, linked, before, method, path, body, label) {
   const beforeProfile = await ctx.request(linked.actor, 'GET', '/auth/profile');
   assert(beforeProfile.status === 200, `${label} linked admin profile before request failed: ${beforeProfile.status}/${beforeProfile.code}`);
+  assertSessionActive(await authSessionState(ctx, linked.id, linked.actor), `${label} before request`);
   const response = await ctx.request(admin, method, path, body);
   assert(response.status === 404, `${label} linked admin request accepted: ${response.status}`);
   await assertLinkedSessionAndState(ctx, linked, before, label);
@@ -163,7 +190,8 @@ async function assertStudentEndpointsRejectLinkedAdmin(ctx, admin, linked, befor
     ctx, admin, linked, before, 'PUT', `/admin/students/${linked.id}/status`, { status: 0 }, 'status',
   );
   await rejectLinkedStudentEndpoint(
-    ctx, admin, linked, before, 'PUT', `/admin/students/${linked.id}/password`, { password: strongPassword() }, 'reset',
+    ctx, admin, linked, before, 'PUT', `/admin/students/${linked.id}/password`,
+    { password: randomStrongPassword(linked.username, linked.realName) }, 'reset',
   );
 }
 
@@ -179,7 +207,7 @@ async function raceRoleAssignmentFirst(ctx, admin, categoryId) {
     });
     await waitForLockWaits(ctx, 1, 'assignment-first role assignment');
     const resetPromise = ctx.request(admin, 'PUT', `/admin/students/${target.id}/password`, {
-      password: strongPassword(),
+      password: randomStrongPassword(target.username, target.realName),
     });
     await waitForLockWaits(ctx, 2, 'assignment-first reset');
     await releaseLock(blocker, true);
@@ -224,7 +252,7 @@ async function raceStatusFirst(ctx, admin, categoryId) {
 }
 
 export async function run(ctx) {
-  const adminLogin = await login(ctx, 'admin', ctx.adminPassword);
+  const adminLogin = await login(ctx, 'admin', ctx.adminPassword, '超级管理员');
   const admin = adminLogin.actor;
 
   const category = await ctx.request(admin, 'POST', '/admin/training-categories', {
@@ -236,7 +264,7 @@ export async function run(ctx) {
   const emptyRole = await createRole(ctx, admin, 'empty permission role', []);
   const emptyAdmin = await createStudent(ctx, admin, categoryId, 'empty permission admin');
   await assignRole(ctx, admin, emptyAdmin.id, emptyRole);
-  const emptyAdminLogin = await login(ctx, emptyAdmin.username, emptyAdmin.password);
+  const emptyAdminLogin = await login(ctx, emptyAdmin.username, emptyAdmin.password, emptyAdmin.realName);
   const emptyLinkedAdmin = { ...emptyAdmin, actor: emptyAdminLogin.actor };
   const emptyBefore = await userState(ctx, emptyAdmin.id);
   await assertStudentEndpointsRejectLinkedAdmin(ctx, admin, emptyLinkedAdmin, emptyBefore);
@@ -246,7 +274,7 @@ export async function run(ctx) {
   await assignRole(ctx, admin, inactiveAdmin.id, inactiveRole);
   const deactivated = await ctx.request(admin, 'PUT', `/admin/roles/${inactiveRole}`, { status: 0 });
   assert(deactivated.status === 200, `role deactivation failed: ${deactivated.status}`);
-  const inactiveAdminLogin = await login(ctx, inactiveAdmin.username, inactiveAdmin.password);
+  const inactiveAdminLogin = await login(ctx, inactiveAdmin.username, inactiveAdmin.password, inactiveAdmin.realName);
   const inactiveLinkedAdmin = { ...inactiveAdmin, actor: inactiveAdminLogin.actor };
   const inactiveBefore = await userState(ctx, inactiveAdmin.id);
   await assertStudentEndpointsRejectLinkedAdmin(ctx, admin, inactiveLinkedAdmin, inactiveBefore);
@@ -257,51 +285,62 @@ export async function run(ctx) {
   assert(!listedIds.includes(emptyAdmin.id) && !listedIds.includes(inactiveAdmin.id), 'linked admin leaked from list');
 
   const ordinary = await createStudent(ctx, admin, categoryId, 'ordinary student');
-  const ordinaryLogin = await login(ctx, ordinary.username, ordinary.password);
+  const ordinaryLogin = await login(ctx, ordinary.username, ordinary.password, ordinary.realName);
   const ordinaryBeforeUpdate = await userState(ctx, ordinary.id);
   const ordinaryProfileBeforeUpdate = await ctx.request(ordinaryLogin.actor, 'GET', '/auth/profile');
   assert(ordinaryProfileBeforeUpdate.status === 200, `ordinary profile before update failed: ${ordinaryProfileBeforeUpdate.status}`);
+  const ordinarySessionBeforeUpdate = await authSessionState(ctx, ordinary.id, ordinaryLogin.actor);
+  assertSessionActive(ordinarySessionBeforeUpdate, 'ordinary update before request');
   const updated = await ctx.request(admin, 'PUT', `/admin/students/${ordinary.id}`, { real_name: 'ordinary updated' });
   assert(updated.status === 200 && updated.data?.real_name === 'ordinary updated', 'ordinary update failed');
   const ordinaryProfileAfterUpdate = await ctx.request(ordinaryLogin.actor, 'GET', '/auth/profile');
   assert(ordinaryProfileAfterUpdate.status === 200, `ordinary update revoked old token: ${ordinaryProfileAfterUpdate.status}/${ordinaryProfileAfterUpdate.code}`);
+  const ordinarySessionAfterUpdate = await authSessionState(ctx, ordinary.id, ordinaryLogin.actor);
+  assertSessionActive(ordinarySessionAfterUpdate, 'ordinary update after request');
   const ordinaryAfterUpdate = await userState(ctx, ordinary.id);
   assert(ordinaryAfterUpdate.password_hash === ordinaryBeforeUpdate.password_hash, 'ordinary update changed password');
   assert(Number(ordinaryAfterUpdate.status) === Number(ordinaryBeforeUpdate.status), 'ordinary update changed status');
   assert(Number(ordinaryAfterUpdate.auth_version) === Number(ordinaryBeforeUpdate.auth_version), 'ordinary update changed auth version');
+  assert(Number(ordinaryAfterUpdate.force_password_change) === Number(ordinaryBeforeUpdate.force_password_change), 'ordinary update changed force flag');
 
   const statusBefore = await userState(ctx, ordinary.id);
   const statusProfileBefore = await ctx.request(ordinaryLogin.actor, 'GET', '/auth/profile');
   assert(statusProfileBefore.status === 200, `ordinary profile before status failed: ${statusProfileBefore.status}`);
+  const statusSessionBefore = await authSessionState(ctx, ordinary.id, ordinaryLogin.actor);
+  assertSessionActive(statusSessionBefore, 'ordinary status before request');
   const disabled = await ctx.request(admin, 'PUT', `/admin/students/${ordinary.id}/status`, { status: 0 });
   assert(disabled.status === 200 && Number(disabled.data?.status) === 0, 'ordinary status failed');
   const statusProfileAfter = await ctx.request(ordinaryLogin.actor, 'GET', '/auth/profile');
-  assert(
-    (statusProfileAfter.status === 403 && statusProfileAfter.code === 40105)
-      || (statusProfileAfter.status === 401 && statusProfileAfter.code === 40107),
-    `ordinary status did not revoke old token: ${statusProfileAfter.status}/${statusProfileAfter.code}`,
-  );
+  assert(statusProfileAfter.status === 403 && statusProfileAfter.code === 40105,
+    `ordinary status did not reject old token with 403/40105: ${statusProfileAfter.status}/${statusProfileAfter.code}`);
+  const statusSessionAfter = await authSessionState(ctx, ordinary.id, ordinaryLogin.actor);
+  assertSessionRevoked(statusSessionAfter, 'ordinary status');
   const statusAfter = await userState(ctx, ordinary.id);
   assert(Number(statusAfter.status) === 0, 'ordinary status was not persisted');
   assert(Number(statusAfter.auth_version) === Number(statusBefore.auth_version) + 1, 'ordinary status auth generation mismatch');
+  assert(Number(statusAfter.force_password_change) === Number(statusBefore.force_password_change), 'ordinary status changed force flag');
 
   const resetTarget = await createStudent(ctx, admin, categoryId, 'ordinary reset student');
-  const resetLogin = await login(ctx, resetTarget.username, resetTarget.password);
+  const resetLogin = await login(ctx, resetTarget.username, resetTarget.password, resetTarget.realName);
   const resetBefore = await userState(ctx, resetTarget.id);
   const resetProfileBefore = await ctx.request(resetLogin.actor, 'GET', '/auth/profile');
   assert(resetProfileBefore.status === 200, `ordinary profile before reset failed: ${resetProfileBefore.status}`);
-  const reset = await ctx.request(admin, 'PUT', `/admin/students/${resetTarget.id}/password`, { password: strongPassword() });
+  const resetSessionBefore = await authSessionState(ctx, resetTarget.id, resetLogin.actor);
+  assertSessionActive(resetSessionBefore, 'ordinary reset before request');
+  const reset = await ctx.request(admin, 'PUT', `/admin/students/${resetTarget.id}/password`, {
+    password: randomStrongPassword(resetTarget.username, resetTarget.realName),
+  });
   assert(reset.status === 200, `ordinary reset failed: ${reset.status}`);
   const resetProfileAfter = await ctx.request(resetLogin.actor, 'GET', '/auth/profile');
-  assert(
-    (resetProfileAfter.status === 401 && resetProfileAfter.code === 40107)
-      || (resetProfileAfter.status === 403 && resetProfileAfter.code === 40105),
-    `ordinary reset did not revoke old token: ${resetProfileAfter.status}/${resetProfileAfter.code}`,
-  );
+  assert(resetProfileAfter.status === 401 && resetProfileAfter.code === 40107,
+    `ordinary reset did not reject old token with 401/40107: ${resetProfileAfter.status}/${resetProfileAfter.code}`);
+  const resetSessionAfter = await authSessionState(ctx, resetTarget.id, resetLogin.actor);
+  assertSessionRevoked(resetSessionAfter, 'ordinary reset');
   const resetAfter = await userState(ctx, resetTarget.id);
   assert(resetAfter.password_hash !== resetBefore.password_hash, 'ordinary reset did not change password');
-  assert(Number(resetAfter.status) === Number(resetBefore.status), 'ordinary reset changed status');
+  assert(Number(resetAfter.status) === 1 && Number(resetAfter.status) === Number(resetBefore.status), 'ordinary reset changed status');
   assert(Number(resetAfter.auth_version) === Number(resetBefore.auth_version) + 1, 'ordinary reset auth generation mismatch');
+  assert(Number(resetAfter.force_password_change) === 1, 'ordinary reset did not set force_password_change');
   assert(await linkedRoleCount(ctx, ordinary.id) === 0, 'ordinary student unexpectedly linked');
   assert(await linkedRoleCount(ctx, resetTarget.id) === 0, 'ordinary reset student unexpectedly linked');
 

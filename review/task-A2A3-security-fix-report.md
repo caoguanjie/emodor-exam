@@ -58,10 +58,11 @@ node --input-type=module -e "import path from 'node:path'; import { runSuiteInRu
 
 独立 review 指出初版只验证了数据库字段，未证明目标账号的真实会话边界。本次仅扩展 focused suite，未改生产源：
 
-- 空权限 link 与停用角色 link 账号均真实登录并完成首登改密；detail/update/status/reset 每个请求前后都用同一持久 access token 请求 `/auth/profile`，均为 200，且 `password_hash/status/auth_version` 不变。
-- 普通学员 update 前后旧 token 的 `/auth/profile` 均为 200，且 `auth_version` 不变；status 前 profile 为 200，之后为 403/40105（或等价 401/40107），状态为 0 且认证世代递增；reset 前 profile 为 200，之后为 401/40107，密码 hash 改变且认证世代递增。
+- 每次真实登录得到的 JWT `sid` 只在 suite 内存解码，未记录或持久化 token/sid；随后按 `user_id + sid` 查询目标 `auth_session` 行。
+- 空权限 link 与停用角色 link 账号均真实登录并完成首登改密；detail/update/status/reset 每个请求前后都用同一持久 access token 请求 `/auth/profile`，均为 200，目标 `auth_session.revoked_at` 保持 `NULL`，且 `password_hash/status/auth_version/force_password_change` 不变。
+- 普通学员 update 前后旧 token 的 `/auth/profile` 均为 200，目标 session 的 `revoked_at` 保持 `NULL`，且 `auth_version/force_password_change` 不变；status 前 profile 为 200，之后严格为 `403/40105`，目标 session 的 `revoked_at` 非空、状态为 0、认证世代递增且 force flag 不变；reset 前 profile 为 200，之后严格为 `401/40107`，目标 session 的 `revoked_at` 非空、状态仍为 1、密码 hash 改变、认证世代递增且 `force_password_change=1`。
 
-补充后再次运行同一 ephemeral focused suite，仍为 `4/4 测试完成`；运行期数据库、Redis、API 与凭据均为 run-owned。
+补充后再次运行同一 ephemeral focused suite，实际结果为 `4/4 测试完成`；运行期数据库、Redis、API 与凭据均为 run-owned。
 
 ## 边界与未覆盖
 
