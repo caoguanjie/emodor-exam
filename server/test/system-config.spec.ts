@@ -36,6 +36,7 @@ describe('A5 audit redaction and bounded query', () => {
     const secret = 'A5-normal-secret-9327';
     const cookieSecret = 'sid=A5-normal-cookie-1927';
     const spacedSecret = 'A5 normal password with spaces';
+    const prefixedSecret = 'redaction-fixture-marker';
     const audit = new AuditService(config(root));
     audit.log({
       actor_id: 7,
@@ -50,6 +51,7 @@ describe('A5 audit redaction and bounded query', () => {
         legacy_blob_a: JSON.stringify({ cookie: cookieSecret }),
         legacy_blob_b: JSON.stringify({ password: spacedSecret }),
         legacy_line: `cookie="${cookieSecret}"; note=diagnostic`,
+        prefixed_assignment: `payload={"password":"${prefixedSecret}"}`,
         kept: 'diagnostic',
       },
       result: 'success',
@@ -61,6 +63,7 @@ describe('A5 audit redaction and bounded query', () => {
     expect(line).not.toContain(secret);
     expect(line).not.toContain(cookieSecret);
     expect(line).not.toContain(spacedSecret);
+    expect(line).not.toContain(prefixedSecret);
     expect(line).toContain('system.settings.update');
     expect(line).toContain('diagnostic');
     expect(JSON.parse(line).detail).toEqual({
@@ -70,6 +73,7 @@ describe('A5 audit redaction and bounded query', () => {
       legacy_blob_a: '{"cookie":"[REDACTED]"}',
       legacy_blob_b: '{"password":"[REDACTED]"}',
       legacy_line: 'cookie=[REDACTED]; note=diagnostic',
+      prefixed_assignment: 'payload={"password":[REDACTED]}',
       kept: 'diagnostic',
     });
   });
@@ -78,6 +82,7 @@ describe('A5 audit redaction and bounded query', () => {
     const secret = 'A5-fallback-secret-8441';
     const cookieSecret = 'sid=A5-fallback-cookie-7441';
     const spacedSecret = 'A5 fallback password with spaces';
+    const prefixedSecret = 'redaction-fixture-marker';
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const audit = new AuditService(config('/dev/null/not-a-directory'));
     audit.log({
@@ -91,6 +96,7 @@ describe('A5 audit redaction and bounded query', () => {
         legacy_blob_a: JSON.stringify({ cookie: cookieSecret }),
         legacy_blob_b: JSON.stringify({ password: spacedSecret }),
         legacy_line: `authorization="Bearer ${spacedSecret}"; note=bad_credentials`,
+        prefixed_assignment: `payload={"password":"${prefixedSecret}"}`,
         reason: 'bad_credentials',
       },
       result: 'failure',
@@ -101,14 +107,18 @@ describe('A5 audit redaction and bounded query', () => {
     expect(rendered).not.toContain(secret);
     expect(rendered).not.toContain(cookieSecret);
     expect(rendered).not.toContain(spacedSecret);
+    expect(rendered).not.toContain(prefixedSecret);
     expect(rendered).toContain('auth.login');
     expect(rendered).toContain('bad_credentials');
+    expect(JSON.parse(error.mock.calls[0][1] as string).detail.prefixed_assignment)
+      .toBe('payload={"password":[REDACTED]}');
   });
 
   it('queries only regular audit files inside the configured root and filters again on output', async () => {
     const secret = 'legacy-unredacted-password';
     const cookieSecret = 'sid=legacy-unredacted-cookie';
     const spacedSecret = 'legacy password with spaces';
+    const prefixedSecret = 'redaction-fixture-marker';
     const auditDir = join(root, 'audit');
     const audit = new AuditService(config(root));
     audit.log({
@@ -129,6 +139,7 @@ describe('A5 audit redaction and bounded query', () => {
         legacy_blob_a: JSON.stringify({ cookie: cookieSecret }),
         legacy_blob_b: JSON.stringify({ password: spacedSecret }),
         legacy_line: `credential="${spacedSecret}"; note=diagnostic`,
+        prefixed_assignment: `payload={"password":"${prefixedSecret}"}`,
       }, result: 'failure', source_ip: null,
       unexpected_legacy_payload: secret,
     }) + '\n', 'utf8');
@@ -153,12 +164,14 @@ describe('A5 audit redaction and bounded query', () => {
     expect(JSON.stringify(page)).not.toContain(secret);
     expect(JSON.stringify(page)).not.toContain(cookieSecret);
     expect(JSON.stringify(page)).not.toContain(spacedSecret);
+    expect(JSON.stringify(page)).not.toContain(prefixedSecret);
     expect(JSON.stringify(page)).not.toContain(linkedSecret);
     expect(page.items[0].detail).toEqual({
       password: '[REDACTED]',
       legacy_blob_a: '{"cookie":"[REDACTED]"}',
       legacy_blob_b: '{"password":"[REDACTED]"}',
       legacy_line: 'credential=[REDACTED]; note=diagnostic',
+      prefixed_assignment: 'payload={"password":[REDACTED]}',
     });
   });
 

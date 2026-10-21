@@ -15,8 +15,12 @@ export interface AuditEntry {
   source_ip: string | null;
 }
 
-const SENSITIVE_KEY = /(?:pass(?:word)?|pwd|secret|token|authorization|cookie|api[_-]?key|credential)/i;
-const TEXT_ASSIGNMENT = /(^|[\s{,;&])(["']?)([A-Za-z_][A-Za-z0-9_-]*)\2(\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|.*?)(?=\s+(?:["']?[A-Za-z_][A-Za-z0-9_-]*["']?)\s*[=:]|[,;&}\]\r\n]|$)/gim;
+const SENSITIVE_KEY_SOURCE = 'pass(?:word)?|pwd|secret|token|authorization|cookie|api[_-]?key|credential';
+const SENSITIVE_KEY = new RegExp(`(?:${SENSITIVE_KEY_SOURCE})`, 'i');
+const TEXT_ASSIGNMENT = new RegExp(
+  String.raw`(^|[\s{,;&])(["']?)((?=[A-Za-z0-9_-]*(?:${SENSITIVE_KEY_SOURCE}))[A-Za-z_][A-Za-z0-9_-]*)\2(\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|.*?)(?=\s+(?:["']?[A-Za-z_][A-Za-z0-9_-]*["']?)\s*[=:]|[,;&}\]\r\n]|$)`,
+  'gim',
+);
 
 function redactText(value: string): string {
   try {
@@ -29,10 +33,9 @@ function redactText(value: string): string {
   }
   return value
     .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
-    .replace(TEXT_ASSIGNMENT, (matched, prefix: string, quote: string, key: string, separator: string) => {
-      if (!SENSITIVE_KEY.test(key)) return matched;
-      return `${prefix}${quote}${key}${quote}${separator}[REDACTED]`;
-    });
+    .replace(TEXT_ASSIGNMENT, (_matched, prefix: string, quote: string, key: string, separator: string) => (
+      `${prefix}${quote}${key}${quote}${separator}[REDACTED]`
+    ));
 }
 
 /**
