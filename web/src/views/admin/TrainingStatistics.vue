@@ -103,7 +103,7 @@
               <el-table-column prop="record_id" label="答卷 ID" width="120" />
             </el-table>
             <el-pagination v-if="ranking.total" v-model:current-page="filters.page" v-model:page-size="filters.page_size"
-              :total="ranking.total" layout="total, prev, pager, next" class="pagination" @current-change="loadRanking" />
+              :total="ranking.total" layout="total, prev, pager, next" class="pagination" @current-change="onRankingPageChange" />
           </template>
         </div>
         <p class="as-of">统计时点：{{ formatTime(summary.as_of) }}</p>
@@ -168,6 +168,9 @@ async function loadRanking(parentEpoch?: number, query = params()) {
   const data = await http.get('/statistics/training/ranking', { params: query }) as Page<RankRow>;
   if (epoch !== rankingEpoch || (parentEpoch !== undefined && parentEpoch !== requestEpoch)) return;
   Object.assign(ranking, data);
+}
+async function onRankingPageChange() {
+  await loadRanking();
 }
 async function reload() {
   if (!filters.paper_id) return;
