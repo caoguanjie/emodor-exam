@@ -1328,6 +1328,86 @@ test('rebases a delayed scope save from its submitted value and serializes repea
   }
 });
 
+test('blocks scope writes until initialization completes and then preserves the latest saved baseline', async () => {
+  context.permissions = new Set(['regulations:read', 'regulations:write']);
+  context.regulation.scope = { is_all: false, department_ids: ['P'] };
+  const normalHttp = context.http;
+  const departmentsGate = deferred();
+  context.http = async (method, url, body, config) => {
+    if (method === 'get' && url === '/departments/tree') {
+      context.calls.push({ method, url, body, config });
+      return departmentsGate.promise;
+    }
+    return normalHttp(method, url, body, config);
+  };
+  const mounted = mount(RegulationDetail);
+  try {
+    await waitFor(() => context.calls.some((call) => call.url === '/departments/tree'), 'pending initial department tree');
+    const setup = mounted.instance.$.setupState;
+    const source = context.unsavedSources[2];
+    setup.scope.is_all = true;
+    await nextTick();
+    assert.equal(source.dirty.value, true);
+    assert.equal(button(mounted.root, '保存发布范围').props.disabled, true, 'scope save must stay disabled before initialization is complete');
+    await setup.saveScope();
+    assert.equal(context.calls.some((call) => call.method === 'put' && call.url === '/regulations/99/scope'), false, 'direct calls must not bypass the readiness gate');
+    assert.ok(context.messages.some((item) => item.type === 'warning' && item.message.includes('尚未加载')));
+
+    departmentsGate.resolve({
+      list: [{ id: 'P', name: '父部门', children: [{ id: 'A', name: '甲部门', children: [] }, { id: 'B', name: '乙部门', children: [] }] }],
+    });
+    await waitFor(() => context.calls.some((call) => call.url.startsWith('/regulations/99/preview')), 'completed scope initialization');
+    await nextTick();
+    assert.equal(setup.scopeReady, true);
+    assert.equal(button(mounted.root, '保存发布范围').props.disabled, false);
+    assert.equal(setup.scope.is_all, true, 'initialization must retain the pending user input');
+    assert.equal(source.dirty.value, true);
+
+    await setup.saveScope();
+    await nextTick();
+    const scopeWrites = context.calls.filter((call) => call.method === 'put' && call.url === '/regulations/99/scope');
+    assert.equal(scopeWrites.length, 1);
+    assert.deepEqual(scopeWrites[0].body, { is_all: true, department_ids: [] });
+    assert.equal(source.dirty.value, false);
+
+    setup.scope.is_all = false;
+    await nextTick();
+    assert.equal(source.dirty.value, true);
+    context.confirmDecisions.push(true);
+    assert.equal(await source.confirmDiscard(), true);
+    assert.equal(setup.scope.is_all, true, 'discard must restore the latest explicitly saved all-users baseline');
+    assert.equal(source.dirty.value, false);
+  } finally {
+    departmentsGate.resolve({ list: [] });
+    context.http = normalHttp;
+    mounted.unmount();
+  }
+});
+
+test('keeps scope saving locked after an initialization failure', async () => {
+  context.permissions = new Set(['regulations:read', 'regulations:write']);
+  const mounted = mount(RegulationDetail);
+  await waitFor(() => context.calls.some((call) => call.url.startsWith('/regulations/99/preview')), 'initial regulation detail');
+  const setup = mounted.instance.$.setupState;
+  const normalHttp = context.http;
+  context.http = async (method, url, body, config) => {
+    if (method === 'get' && url === '/departments/tree') throw new Error('department tree unavailable');
+    return normalHttp(method, url, body, config);
+  };
+  try {
+    await assert.rejects(() => setup.load(), /department tree unavailable/);
+    await nextTick();
+    assert.equal(setup.scopeReady, false);
+    assert.equal(button(mounted.root, '保存发布范围').props.disabled, true);
+    const writesBefore = context.calls.filter((call) => call.method === 'put' && call.url === '/regulations/99/scope').length;
+    await setup.saveScope();
+    assert.equal(context.calls.filter((call) => call.method === 'put' && call.url === '/regulations/99/scope').length, writesBefore);
+  } finally {
+    context.http = normalHttp;
+    mounted.unmount();
+  }
+});
+
 test('keeps the server scope baseline when initialization requests resolve after a user change', async () => {
   context.permissions = new Set(['regulations:read', 'regulations:write']);
   const normalHttp = context.http;

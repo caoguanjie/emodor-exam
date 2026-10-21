@@ -88,7 +88,7 @@
           <el-tree ref="scopeTreeRef" :data="deptTree" show-checkbox node-key="id" default-expand-all :disabled="!auth.can('regulations:write')"
             :props="{ label: 'name' }" @check="onScopeCheck" />
         </div>
-        <el-button v-if="auth.can('regulations:write')" type="primary" :loading="scopeSaving" :disabled="scopeSaving" style="margin-top:14px" @click="saveScope">保存发布范围</el-button>
+        <el-button v-if="auth.can('regulations:write')" type="primary" :loading="scopeSaving" :disabled="scopeSaving || !scopeReady" style="margin-top:14px" @click="saveScope">保存发布范围</el-button>
       </el-tab-pane>
 
       <el-tab-pane label="内容预览">
@@ -137,6 +137,7 @@ const scopeDirty = ref(false);
 const categorySaving = ref(false);
 const configSaving = ref(false);
 const scopeSaving = ref(false);
+const scopeReady = ref(false);
 
 function normalizeDepartmentIds(values: unknown[]): string[] {
   return [...new Set(values.map(String))].sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
@@ -237,6 +238,7 @@ function statusType(s: string) {
 }
 
 async function load() {
+  scopeReady.value = false;
   reg.value = await http.get(`/regulations/${regId}`);
   categoryId.value = reg.value.category_id ? String(reg.value.category_id) : null;
   config.required_minutes = reg.value.required_minutes;
@@ -266,6 +268,7 @@ async function load() {
     scope.departmentIds = currentScopeDepartmentIds();
   }
   setScopeBaseline(normalizedServerScope);
+  scopeReady.value = true;
 }
 
 async function loadVersions() {
@@ -363,6 +366,10 @@ async function saveConfig() {
 }
 
 async function saveScope() {
+  if (!scopeReady.value) {
+    ElMessage.warning('发布范围尚未加载完成，请稍后再试');
+    return;
+  }
   if (scopeSaving.value) return;
   scope.departmentIds = currentScopeDepartmentIds();
   const submitted = scopeSnapshot();
