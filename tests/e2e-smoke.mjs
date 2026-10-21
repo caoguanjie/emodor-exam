@@ -536,6 +536,12 @@ async function main() {
   console.log('\n== 4. AI 配置与出题（FR-AIQ-01~03） ==');
   let questionIds = [];
   {
+    const category = await api('POST', '/admin/training-categories', {
+      token: state.tokens.admin,
+      body: { name: `legacy smoke 题库类别 ${Date.now()}` },
+    });
+    const trainingCategoryId = String(category.json?.data?.id || '');
+    check('创建 legacy smoke 合法题库类别', category.status === 200 && /^\d+$/.test(trainingCategoryId), JSON.stringify(category.json));
     const deny = await api('GET', '/ai/config', { token: state.tokens.regadmin });
     check('regulation_admin 读 AI 配置被拒（40301，缺少 ai_config:read）', deny.status === 403);
     const denyWrite = await api('PUT', '/ai/config', {
@@ -555,12 +561,18 @@ async function main() {
 
     const badSum = await api('POST', '/ai/generate-questions', {
       token: state.tokens.regadmin,
-      body: { regulation_id: regId, question_count_single: 10, question_count_multiple: 5, score_single: 5, score_multiple: 8 },
+      body: {
+        regulation_id: regId, category_id: trainingCategoryId, difficulty: 'medium',
+        question_count_single: 10, question_count_multiple: 5, score_single: 5, score_multiple: 8,
+      },
     });
     check('分值合计 ≠ 100 被拦截（40001）', badSum.json?.code === 40001);
     const gen = await api('POST', '/ai/generate-questions', {
       token: state.tokens.regadmin,
-      body: { regulation_id: regId, question_count_single: 10, question_count_multiple: 5, score_single: 6, score_multiple: 8 },
+      body: {
+        regulation_id: regId, category_id: trainingCategoryId, difficulty: 'medium',
+        question_count_single: 10, question_count_multiple: 5, score_single: 6, score_multiple: 8,
+      },
     });
     check('发起出题（异步任务受理，回显分值策略）', gen.status === 200 && !!gen.json?.data?.task_id && gen.json.data.score_single === 6, JSON.stringify(gen.json));
     const taskId = gen.json?.data?.task_id;
@@ -579,8 +591,11 @@ async function main() {
 
     // 逐题审核通过（FR-AIQ-03）
     let approved = 0;
-    for (const qid of questionIds) {
-      const r = await api('PUT', `/ai/questions/${qid}/review`, { token: state.tokens.regadmin, body: { status: 'approved' } });
+    for (const question of completed?.questions || []) {
+      const r = await api('PUT', `/ai/questions/${question.id}/review`, {
+        token: state.tokens.regadmin,
+        body: { expected_version_id: String(question.current_version_id), status: 'approved' },
+      });
       if (r.json?.data?.status === 'approved') approved++;
     }
     check('15 题全部审核通过（approved）', approved === 15, `approved=${approved}`);

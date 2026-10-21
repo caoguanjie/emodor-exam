@@ -29,6 +29,25 @@ async function connectionFor(database) {
   return mysql.createConnection({ ...services.mysql, database });
 }
 
+function migrationEnv(database) {
+  return {
+    ...process.env,
+    DB_HOST: services.mysql.host,
+    DB_PORT: String(services.mysql.port),
+    DB_USERNAME: services.mysql.user,
+    DB_PASSWORD: services.mysql.password,
+    DB_DATABASE: database,
+  };
+}
+
+function applyMigration(database) {
+  return spawnSync(process.execPath, ['database/migrate.mjs', '--apply'], {
+    cwd: ROOT,
+    env: migrationEnv(database),
+    encoding: 'utf8',
+  });
+}
+
 async function questionSchema(connection) {
   const placeholders = TABLES.map(() => '?').join(', ');
   const [tables] = await connection.query(
@@ -88,14 +107,7 @@ test('B3 CLI check is read-only and apply preserves legacy questions while conve
     [JSON.stringify([{ key: 'A', text: 'yes' }, { key: 'B', text: 'no' }]), JSON.stringify([0])],
   );
 
-  const env = {
-    ...process.env,
-    DB_HOST: services.mysql.host,
-    DB_PORT: String(services.mysql.port),
-    DB_USERNAME: services.mysql.user,
-    DB_PASSWORD: services.mysql.password,
-    DB_DATABASE: upgradeDatabase,
-  };
+  const env = migrationEnv(upgradeDatabase);
   const beforeCheck = await questionSchema(upgrade);
   const check = spawnSync(process.execPath, ['database/migrate.mjs', '--check'], { cwd: ROOT, env, encoding: 'utf8' });
   assert.equal(check.status, 0, check.stderr);
@@ -120,4 +132,63 @@ test('B3 CLI check is read-only and apply preserves legacy questions while conve
   assert.deepEqual(await questionSchema(upgrade), await questionSchema(current));
   await current.end();
   await upgrade.end();
+});
+
+test('B3 migration rejects a same-name wrong unique index and preserves existing concept rows', async () => {
+  const database = await createDatabase('wrong_index');
+  const currentSql = await readFile(join(ROOT, 'database', 'init.sql'), 'utf8');
+  await admin.query(renderSchemaForDatabase(currentSql, database));
+  const connection = await connectionFor(database);
+  try {
+    await connection.query(
+      'ALTER TABLE question_concept DROP INDEX uk_question_concept_scope, ADD UNIQUE KEY uk_question_concept_scope (category_id, type, created_by)',
+    );
+    await connection.execute(
+      "INSERT INTO question_concept (category_id, type, name, created_by) VALUES (777, 'single', 'preserve wrong-index row', 999)",
+    );
+
+    const apply = applyMigration(database);
+    assert.notEqual(apply.status, 0, 'wrong same-name index was accepted as complete');
+    const [[preserved]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM question_concept WHERE name = 'preserve wrong-index row'",
+    );
+    assert.equal(Number(preserved.count), 1);
+    const [columns] = await connection.query(
+      "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'question_concept' AND INDEX_NAME = 'uk_question_concept_scope' ORDER BY SEQ_IN_INDEX",
+    );
+    assert.deepEqual(columns.map((row) => row.COLUMN_NAME), ['category_id', 'type', 'created_by']);
+  } finally {
+    await connection.end();
+  }
+});
+
+test('B3 migration rejects a wrong timestamp default/EXTRA and preserves existing concept rows', async () => {
+  const database = await createDatabase('wrong_time');
+  const currentSql = await readFile(join(ROOT, 'database', 'init.sql'), 'utf8');
+  await admin.query(renderSchemaForDatabase(currentSql, database));
+  const connection = await connectionFor(database);
+  try {
+    await connection.query(
+      "ALTER TABLE question_concept MODIFY COLUMN created_at DATETIME(3) NOT NULL DEFAULT '2000-01-01 00:00:00.000', MODIFY COLUMN updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)",
+    );
+    await connection.execute(
+      "INSERT INTO question_concept (category_id, type, name, created_by) VALUES (778, 'multiple', 'preserve wrong-time row', 999)",
+    );
+
+    const apply = applyMigration(database);
+    assert.notEqual(apply.status, 0, 'wrong timestamp EXTRA was accepted as complete');
+    const [[preserved]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM question_concept WHERE name = 'preserve wrong-time row'",
+    );
+    assert.equal(Number(preserved.count), 1);
+    const [timestamps] = await connection.query(
+      "SELECT COLUMN_NAME, COLUMN_DEFAULT, EXTRA FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'question_concept' AND COLUMN_NAME IN ('created_at', 'updated_at') ORDER BY COLUMN_NAME",
+    );
+    assert.equal(timestamps[0].COLUMN_NAME, 'created_at');
+    assert.equal(timestamps[0].COLUMN_DEFAULT, '2000-01-01 00:00:00.000');
+    assert.equal(timestamps[1].COLUMN_NAME, 'updated_at');
+    assert.equal(timestamps[1].EXTRA, 'DEFAULT_GENERATED');
+  } finally {
+    await connection.end();
+  }
 });

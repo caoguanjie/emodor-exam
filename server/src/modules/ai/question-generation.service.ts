@@ -17,6 +17,7 @@ import { AuditService } from '../../common/audit.service';
 import type { Difficulty } from '../../common/training-contracts';
 import { CategoryService } from '../training/category.service';
 import { QuestionVersionService } from '../questions/question-version.service';
+import { questionDifficultyContract, questionJsonContract } from '../questions/question-prompt';
 
 export interface ParsedQuestion {
   type: string;
@@ -24,6 +25,22 @@ export interface ParsedQuestion {
   options: { key: string; text: string }[];
   answer: number[];
   analysis: string;
+}
+
+interface GeneratedQuestion extends ParsedQuestion {
+  sourcePageGroup?: number;
+  sourcePageStart?: number;
+  sourcePageEnd?: number;
+}
+
+interface GenerationResult {
+  valid: ParsedQuestion[];
+  invalidCount: number;
+  failed: boolean;
+  reason?: string;
+  sourcePageGroup?: number;
+  sourcePageStart?: number;
+  sourcePageEnd?: number;
 }
 
 interface GenerationBlock {
@@ -164,16 +181,13 @@ export class QuestionGenerationService {
   }
 
   /** 系统提示词模板（05 册 4.4.3，score 不纳入 AI 输出） */
-  private systemPrompt(existingStems: string[]): string {
+  private systemPrompt(existingStems: string[], difficulty: Difficulty): string {
     const sample = existingStems.slice(-50).join('\n- ');
     return `你是企业制度考核命题专家。请根据提供的制度文本或制度页面图片，编写用于考核员工对企业制度理解程度的考试题目。
 
 输出要求：
-1. 仅输出一个 JSON 数组作为全部输出内容，不要输出任何解释、前后缀或 markdown 代码块标记。
-2. 数组每个元素的 JSON 结构为：
-   {"type": "single 或 multiple", "stem": "题干", "options": [{"key": "A", "text": "选项文本"}, {"key": "B", "text": "选项文本"}, {"key": "C", "text": "选项文本"}, {"key": "D", "text": "选项文本"}], "answer": [正确选项的下标数组], "analysis": "答案解析"}
-3. 题型规则：type = single 的题目，answer 必须恰好包含 1 个元素；type = multiple 的题目，answer 必须包含 2 ~ 3 个元素，且为升序、不重复的下标。
-4. 每道题 options 恰好 4 个选项；answer 中的每个下标必须在 0 ~ 3 范围内。
+${questionJsonContract('batch')}
+${questionDifficultyContract(difficulty)}
 5. 题目必须严格依据给定的制度文本命制，不得编造文本中不存在的内容；每题答案必须唯一正确（single）或组合唯一正确（multiple）。
 6. 干扰项应具有合理迷惑性但明确错误；解析须说明正确答案的依据（引用制度原文要点）。
 7. 不得与【已有题目清单】中任何题干重复或高度相似。
@@ -261,8 +275,9 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
       if (!options || options.length !== 4 || options.some((o: any) => !o || typeof o.text !== 'string' || !o.text.trim())) { invalid++; continue; }
       if (!answer || !answer.every((n: any) => Number.isInteger(n) && n >= 0 && n <= 3)) { invalid++; continue; }
       const sorted = Array.from(answer as number[]).sort((a, b) => a - b);
+      if (new Set(sorted).size !== sorted.length) { invalid++; continue; }
       if (type === 'single' && sorted.length !== 1) { invalid++; continue; }
-      if (type === 'multiple' && sorted.length < 2) { invalid++; continue; }
+      if (type === 'multiple' && (sorted.length < 2 || sorted.length > 3)) { invalid++; continue; }
       valid.push({
         type,
         stem,
@@ -336,7 +351,7 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
       : this.chunkText(text);
     const plan = this.allocateCounts(chunks, input.questionCountSingle, input.questionCountMultiple);
 
-    const results: { valid: ParsedQuestion[]; invalidCount: number; failed: boolean; reason?: string }[] = new Array(chunks.length);
+    const results: GenerationResult[] = new Array(chunks.length);
     try {
       let cursor = 0;
       const concurrency = Math.min(this.config.ai.blockConcurrency, chunks.length);
@@ -350,7 +365,7 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
           const block: GenerationBlock = vision
             ? { pages: await vision.renderGroup(index) }
             : { text: chunks[index] };
-          results[index] = await this.generateBlock(regulation, version, index, chunks.length, block, plan[index], existing);
+          results[index] = await this.generateBlock(regulation, version, index, chunks.length, block, plan[index], existing, input.difficulty);
         }
       });
       await Promise.all(workers);
@@ -358,8 +373,8 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
       await vision?.cleanup();
     }
 
-    const successful = results.filter((r): r is { valid: ParsedQuestion[]; invalidCount: number; failed: boolean; reason?: string } => !!r && !r.failed);
-    const validQuestions: ParsedQuestion[] = [];
+    const successful = results.filter((r): r is GenerationResult => !!r && !r.failed);
+    const validQuestions: GeneratedQuestion[] = [];
     const seen = new Set(existing);
     const dedupDropped = { count: 0 };
     for (const r of successful) {
@@ -370,7 +385,12 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
           continue;
         }
         seen.add(norm);
-        validQuestions.push(q);
+        validQuestions.push({
+          ...q,
+          sourcePageGroup: r.sourcePageGroup,
+          sourcePageStart: r.sourcePageStart,
+          sourcePageEnd: r.sourcePageEnd,
+        });
       }
     }
     const failedBlocks = results
@@ -404,6 +424,9 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
       regulationId: String(regulation.id),
       regulationVersionId: String(version.id),
       source: 'ai',
+      sourcePageGroup: q.sourcePageGroup,
+      sourcePageStart: q.sourcePageStart,
+      sourcePageEnd: q.sourcePageEnd,
     })), String(input.actor.id));
 
     await this.setTask(taskId, {
@@ -434,8 +457,9 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
     block: GenerationBlock,
     plan: { single: number; multiple: number },
     existing: Set<string>,
-  ): Promise<{ valid: ParsedQuestion[]; invalidCount: number; failed: boolean; reason?: string }> {
-    const attempt = async (retry: number): Promise<{ valid: ParsedQuestion[]; invalidCount: number; failed: boolean; reason?: string }> => {
+    difficulty: Difficulty,
+  ): Promise<GenerationResult> {
+    const attempt = async (retry: number): Promise<GenerationResult> => {
       try {
         const hasImages = Boolean(block.pages?.images.length);
         const source = hasImages
@@ -458,7 +482,7 @@ ${block.text || ''}
 
 请生成 ${plan.single} 道单选题（type=single）与 ${plan.multiple} 道多选题（type=multiple），合计 ${plan.single + plan.multiple} 题。`;
         const raw = await this.gateway.chat([
-          { role: 'system', content: this.systemPrompt(Array.from(existing).slice(-50)) },
+          { role: 'system', content: this.systemPrompt(Array.from(existing).slice(-50), difficulty) },
           { role: 'user', content },
         ]);
         const parsed = this.parseQuestions(raw);
@@ -470,7 +494,15 @@ ${block.text || ''}
             return { valid: [], invalidCount: parsed.invalidCount, failed: true, reason: '生成结果答案分布异常（全部集中于同一选项），已丢弃，请重新发起' };
           }
         }
-        return { ...parsed, failed: false };
+        return {
+          ...parsed,
+          failed: false,
+          ...(hasImages ? {
+            sourcePageGroup: index,
+            sourcePageStart: block.pages!.startPage,
+            sourcePageEnd: block.pages!.endPage,
+          } : {}),
+        };
       } catch (e: any) {
         // 块级失败块级重试 ≤ 2 次（05 册 4.4.2），不拖累其他块
         if (retry < 2) return attempt(retry + 1);

@@ -21,7 +21,17 @@
         <el-input-number v-model="local.score" :min="0.01" :max="100" :precision="2" :disabled="disabled" />
       </el-form-item>
       <el-form-item label="考点组">
-        <el-select v-model="local.concept_id" clearable filterable style="width:100%" :disabled="disabled">
+        <el-select
+          v-model="local.concept_id"
+          clearable
+          filterable
+          remote
+          reserve-keyword
+          style="width:100%"
+          :loading="conceptLoading"
+          :remote-method="searchConcepts"
+          :disabled="disabled"
+        >
           <el-option v-for="item in concepts" :key="item.id" :label="item.name" :value="item.id" />
         </el-select>
       </el-form-item>
@@ -76,22 +86,25 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue';
 import MediaUpload from './MediaUpload.vue';
-import type { Difficulty, Id, QuestionConcept, QuestionDraftPayload, QuestionOption, QuestionType } from '../api/training-types';
+import type { Id, QuestionDraftPayload, QuestionOption, QuestionType } from '../api/training-types';
 
 type CategoryOption = { id: Id; name: string };
+type ConceptOption = { id: Id; name: string };
 type RegulationOption = { id: Id | number; title: string; current_version_id?: Id | number | null };
 
 const props = withDefaults(defineProps<{
   modelValue: QuestionDraftPayload;
   categories?: CategoryOption[];
-  concepts?: QuestionConcept[];
+  concepts?: ConceptOption[];
   regulations?: RegulationOption[];
   disabled?: boolean;
   canUploadMedia?: boolean;
-}>(), { categories: () => [], concepts: () => [], regulations: () => [], disabled: false, canUploadMedia: false });
+  conceptLoading?: boolean;
+}>(), { categories: () => [], concepts: () => [], regulations: () => [], disabled: false, canUploadMedia: false, conceptLoading: false });
 const emit = defineEmits<{
   (event: 'update:modelValue', value: QuestionDraftPayload): void;
   (event: 'scope-change', value: { category_id: Id; type: QuestionType }): void;
+  (event: 'concept-search', value: string): void;
 }>();
 
 const local = reactive<QuestionDraftPayload>(clone(props.modelValue));
@@ -138,6 +151,10 @@ function onCategoryChange() {
 
 function onScopeChange() {
   if (local.category_id) emit('scope-change', { category_id: local.category_id, type: local.type });
+}
+
+function searchConcepts(keyword: string) {
+  emit('concept-search', keyword);
 }
 
 function onRegulationChange(value: string) {

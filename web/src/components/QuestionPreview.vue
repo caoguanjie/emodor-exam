@@ -28,7 +28,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, watch } from 'vue';
 import { getMediaImageContent } from '../api/media';
-import type { QuestionOption, QuestionType } from '../api/training-types';
+import { sanitizeQuestionHtmlForPreview, type QuestionOption, type QuestionType } from '../api/training-types';
 
 const props = withDefaults(defineProps<{
   question: {
@@ -59,14 +59,14 @@ function clearObjectUrls() {
 }
 
 async function hydrate(html: string | null | undefined, serial: number): Promise<string> {
-  if (!html || typeof DOMParser === 'undefined') return html || '';
-  const documentValue = new DOMParser().parseFromString(`<div id="question-rich-root">${html}</div>`, 'text/html');
-  const root = documentValue.getElementById('question-rich-root');
-  if (!root) return '';
-  const images = [...root.querySelectorAll<HTMLImageElement>('img[data-media-id]')];
+  const safeHtml = sanitizeQuestionHtmlForPreview(html);
+  if (!safeHtml || typeof document === 'undefined') return safeHtml;
+  const template = document.createElement('template');
+  template.innerHTML = safeHtml;
+  const images = [...template.content.querySelectorAll<HTMLImageElement>('img[data-media-id]')];
   await Promise.all(images.map(async (node) => {
     const assetId = node.dataset.mediaId || '';
-    if (!/^\d+$/.test(assetId)) {
+    if (!/^[1-9]\d*$/.test(assetId)) {
       node.remove();
       return;
     }
@@ -79,13 +79,13 @@ async function hydrate(html: string | null | undefined, serial: number): Promise
       node.removeAttribute('data-media-id');
       node.loading = 'lazy';
     } catch {
-      const fallback = documentValue.createElement('span');
+      const fallback = document.createElement('span');
       fallback.className = 'question-preview__missing-media';
       fallback.textContent = `图片 ${assetId} 暂不可预览`;
       node.replaceWith(fallback);
     }
   }));
-  return root.innerHTML;
+  return template.innerHTML;
 }
 
 async function renderQuestion() {

@@ -162,12 +162,24 @@ export class ExamService {
 
   // ================= 开考 =================
 
-  /** 乱序试卷视图（下发不含 answer / analysis，06 册 4.1） */
-  private async buildPaperView(record: ExamRecord, paper: ExamPaper) {
-    const pqs = await this.pqRepo.find({ where: { paperId: paper.id }, order: { sort: 'ASC', id: 'ASC' } });
+  private async loadLegacyPaperQuestions(paperId: string) {
+    const pqs = await this.pqRepo.find({ where: { paperId }, order: { sort: 'ASC', id: 'ASC' } });
     const qIds = pqs.map((pq) => pq.questionId);
     const questions = qIds.length ? await this.questionRepo.find({ where: { id: In(qIds) } }) : [];
     const qMap = new Map(questions.map((q) => [q.id, q]));
+    if (qIds.some((questionId) => !qMap.has(questionId))) throw Errors.param('固定试卷包含不存在的题目');
+    for (const questionId of qIds) {
+      const question = qMap.get(questionId)!;
+      if (question.type !== 'single' && question.type !== 'multiple') {
+        throw Errors.param('legacy 固定试卷仅支持单选题和多选题，暂不能开考判断题或图片题');
+      }
+    }
+    return { pqs, qMap };
+  }
+
+  /** 乱序试卷视图（下发不含 answer / analysis，06 册 4.1） */
+  private async buildPaperView(record: ExamRecord, paper: ExamPaper) {
+    const { pqs, qMap } = await this.loadLegacyPaperQuestions(String(paper.id));
     const seed = this.shuffle.deriveSeed(record.id);
     const ordered = this.shuffle.shuffleQuestionOrder(pqs, seed);
     return ordered.map((pq) => {
@@ -205,6 +217,8 @@ export class ExamService {
     }
     // ② 试卷 published（暂无已发布试卷 → 暂未开考，UC-05 A2）
     if (paper.status !== PaperStatus.PUBLISHED) throw Errors.contentInvisible('暂未开考');
+    // legacy 固定卷只支持单选/多选；须在创建 exam_record 前拒绝不兼容题型。
+    await this.loadLegacyPaperQuestions(String(paper.id));
 
     // ③ learning_record.is_valid = 1（考试资格，未达标附差距信息 40901）
     const learning = await this.learningRepo.findOne({ where: { userId: String(userId), regulationId: regulation.id } });

@@ -9,6 +9,9 @@ import { Question } from '../src/entities/question.entity';
 import { QuestionVersion } from '../src/entities/question-version.entity';
 import { QuestionConcept } from '../src/entities/question-concept.entity';
 import { QuestionReviewService } from '../src/modules/ai/question-review.service';
+import { QuestionGenerationService } from '../src/modules/ai/question-generation.service';
+import { PaperService } from '../src/modules/ai/paper.service';
+import { ExamService } from '../src/modules/exams/exam.service';
 
 function baseDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraftInput {
   return {
@@ -167,6 +170,27 @@ function versionServiceFixture() {
 }
 
 describe('versioned question bank', () => {
+  it('sanitizes malicious legacy rich text at the response boundary without rewriting storage', async () => {
+    const service = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
+    const storedStem = '<p onclick="steal()">旧题<script>alert(1)</script><img src="https://evil.test/x" onerror="steal()"><img data-media-id="42" alt="现场"></p>';
+    service.versions = { current: vi.fn(async () => null) };
+    const view = await service.questionView({
+      id: '5', regulationId: null, versionId: null, categoryId: null, difficulty: null, conceptId: null,
+      currentVersionId: null, type: 'single', stem: storedStem,
+      options: [{ key: 'A', text: '<b onmouseover="steal()">答案</b>' }, { key: 'B', text: '否' }],
+      answer: [0], analysis: '<a href="javascript:steal()">解析</a>', rubric: null, score: '5.00',
+      status: 'approved', source: 'manual', createdAt: new Date(), updatedAt: new Date(),
+    } as any);
+
+    expect(view.stem).not.toContain('<script');
+    expect(view.stem).not.toContain('onclick');
+    expect(view.stem).not.toContain('src=');
+    expect(view.stem).toContain('data-media-id="42"');
+    expect(view.options[0].text).not.toContain('onmouseover');
+    expect(view.analysis).not.toContain('javascript:');
+    expect(storedStem).toContain('onclick');
+  });
+
   it('captures a legacy row before saving a pending revision', async () => {
     const { service, question, versions } = versionServiceFixture();
 
@@ -190,6 +214,47 @@ describe('versioned question bank', () => {
     expect(versions[1].approvedBy).toBe('27');
     expect(versions[1].approvedAt).toBeInstanceOf(Date);
     expect(question.status).toBe('approved');
+  });
+
+  it('rejects a stale expected version before creating a revision', async () => {
+    const { service, question, versions } = versionServiceFixture();
+    question.categoryId = '11';
+    question.difficulty = 'medium';
+    question.currentVersionId = '99';
+    versions.push({
+      id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'medium', type: 'single',
+      stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
+      rubric: null, scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
+      source: 'ai', status: 'approved', approvedBy: '1', approvedAt: new Date(), reviewedBy: '1',
+      reviewedAt: new Date(), reviewReason: null, createdBy: '1', legacyCapturedAt: null,
+    });
+
+    await expect((service as any).revise(
+      '5', baseDraft({ regulationId: '2', regulationVersionId: '3' }), '9', '98',
+    )).rejects.toMatchObject({ code: 40940 });
+    expect(versions).toHaveLength(1);
+    expect(question.currentVersionId).toBe('99');
+  });
+
+  it('rejects a stale review without changing the current version or review state', async () => {
+    const { service, question, versions } = versionServiceFixture();
+    question.categoryId = '11';
+    question.difficulty = 'medium';
+    question.currentVersionId = '99';
+    const current = {
+      id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'medium', type: 'single',
+      stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
+      rubric: null, scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
+      source: 'ai', status: 'pending', approvedBy: null, approvedAt: null, reviewedBy: null,
+      reviewedAt: null, reviewReason: null, createdBy: '1', legacyCapturedAt: null,
+    };
+    versions.push(current);
+
+    await expect(service.reviewCurrent('5', '98', 'approved', '9'))
+      .rejects.toMatchObject({ code: 40940 });
+    expect(versions).toHaveLength(1);
+    expect(current).toMatchObject({ status: 'pending', approvedBy: null, reviewedBy: null });
+    expect(question).toMatchObject({ currentVersionId: '99', status: 'approved' });
   });
 
   it('binds each controlled rich-text image to the immutable question version', async () => {
@@ -293,20 +358,135 @@ describe('versioned question bank', () => {
     expect(page).toEqual({ items: [{ id: '7', name: '受限空间' }], total: 1, page: 1, page_size: 20 });
   });
 
-  it('regenerates a scanned PDF question through the vision path without changing its category or difficulty', async () => {
+  it('paginates the new concept list contract with Page.items', async () => {
+    const service = Object.create(QuestionConceptService.prototype) as QuestionConceptService & Record<string, any>;
+    const builder: any = {
+      where: () => builder,
+      andWhere: () => builder,
+      getCount: vi.fn(async () => 41),
+      orderBy: () => builder,
+      skip: vi.fn(() => builder),
+      take: vi.fn(() => builder),
+      getMany: vi.fn(async () => [{ id: '21', categoryId: '11', type: 'single', name: '第二页考点' }]),
+    };
+    service.conceptRepo = { createQueryBuilder: vi.fn(() => builder) };
+
+    const page = await (service as any).list({ categoryId: '11', type: 'single', page: 2, pageSize: 20 });
+
+    expect(page).toEqual({
+      items: [{ id: '21', category_id: '11', type: 'single', name: '第二页考点' }],
+      total: 41, page: 2, page_size: 20,
+    });
+    expect(builder.skip).toHaveBeenCalledWith(20);
+    expect(builder.take).toHaveBeenCalledWith(20);
+  });
+
+  it('paginates version history instead of returning an unbounded array', async () => {
+    const service = Object.create(QuestionVersionService.prototype) as QuestionVersionService & Record<string, any>;
+    service.versionRepo = {
+      findAndCount: vi.fn(async () => [[{
+        id: '22', questionId: '5', revision: 22, status: 'pending', stem: '第二页版本',
+        approvedBy: null, approvedAt: null, reviewedBy: null, reviewedAt: null, reviewReason: null,
+        legacyCapturedAt: null, createdBy: '9', createdAt: new Date('2026-10-21T09:00:00.000Z'),
+      }], 41]),
+    };
+
+    const page = await (service as any).history('5', { page: 2, pageSize: 20 });
+
+    expect(page).toMatchObject({ total: 41, page: 2, page_size: 20 });
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({ id: '22', revision: 22, stem: '第二页版本' });
+  });
+
+  it('puts authoritative difficulty and the complete JSON shape into text and vision gateway messages', async () => {
+    const service = Object.create(QuestionGenerationService.prototype) as QuestionGenerationService & Record<string, any>;
+    const calls: any[][] = [];
+    service.gateway = {
+      chat: vi.fn(async (messages: any[]) => {
+        calls.push(messages);
+        return JSON.stringify([{
+          type: 'single', stem: '题干',
+          options: [{ text: 'A' }, { text: 'B' }, { text: 'C' }, { text: 'D' }],
+          answer: [0], analysis: '解析',
+        }]);
+      }),
+    };
+    const regulation = { id: '2', title: '制度' } as any;
+    const version = { id: '3' } as any;
+
+    await service.generateBlock(regulation, version, 0, 1, { text: '制度原文' }, { single: 1, multiple: 0 }, new Set(), 'hard');
+    await service.generateBlock(regulation, version, 1, 2, {
+      pages: { startPage: 3, endPage: 4, images: ['data:image/png;base64,AAA'] },
+    }, { single: 1, multiple: 0 }, new Set(), 'medium');
+
+    const messageText = (messages: any[]) => messages.flatMap((message: any) => {
+      if (typeof message.content === 'string') return [message.content];
+      return message.content
+        .filter((part: any) => part.type === 'text')
+        .map((part: any) => part.text);
+    }).join('\n');
+    const textMessages = messageText(calls[0]);
+    const visionMessages = messageText(calls[1]);
+    expect(textMessages).toContain('高级（hard）');
+    expect(textMessages).toContain('多条规则综合应用');
+    expect(visionMessages).toContain('中级（medium）');
+    expect(visionMessages).toContain('直接应用制度规则');
+    for (const message of [textMessages, visionMessages]) {
+      expect(message).toContain('"options"');
+      expect(message).toContain('"answer"');
+      expect(message).toContain('"analysis"');
+      expect(message).toContain('恰好 4 个选项');
+    }
+  });
+
+  it('rejects duplicate or four-choice multiple answers that violate the shared JSON contract', () => {
+    const service = Object.create(QuestionGenerationService.prototype) as QuestionGenerationService & Record<string, any>;
+    const parsed = service.parseQuestions(JSON.stringify([
+      {
+        type: 'multiple', stem: '重复答案',
+        options: [{ text: 'A' }, { text: 'B' }, { text: 'C' }, { text: 'D' }],
+        answer: [0, 0], analysis: '解析',
+      },
+      {
+        type: 'multiple', stem: '全选答案',
+        options: [{ text: 'A' }, { text: 'B' }, { text: 'C' }, { text: 'D' }],
+        answer: [0, 1, 2, 3], analysis: '解析',
+      },
+    ]));
+
+    expect(parsed).toEqual({ valid: [], invalidCount: 2 });
+  });
+
+  it('regenerates a scanned PDF question from its actual second page group with a complete hard-question contract', async () => {
     const q: any = {
       id: '5', currentVersionId: '101', regulationId: '2', versionId: '3', categoryId: '11', difficulty: 'hard',
       conceptId: '7', type: 'single', stem: '<p>旧题干</p>', options: [{ key: 'A', text: '旧 A' }, { key: 'B', text: '旧 B' }],
       answer: [0], analysis: '<p>旧解析</p>', rubric: null, score: '5.00', status: 'rejected', source: 'ai',
     };
     const cleanup = vi.fn(async () => undefined);
-    const renderGroup = vi.fn(async () => ({ startPage: 1, endPage: 2, images: ['data:image/png;base64,AAA'] }));
+    const renderGroup = vi.fn(async (group: number) => ({
+      startPage: group * 2 + 1, endPage: group * 2 + 2, images: [`data:image/png;base64,${group}`],
+    }));
     const revise = vi.fn(async () => '102');
     const gateway = {
       chat: vi.fn(async (messages: any[]) => {
         expect(Array.isArray(messages[1].content)).toBe(true);
         expect(messages[1].content.some((item: any) => item.type === 'image_url')).toBe(true);
-        return JSON.stringify([{ type: 'single', stem: '新题干', options: [{ text: '新 A' }, { text: '新 B' }], answer: [1], analysis: '新解析' }]);
+        const serialized = messages.flatMap((message: any) => {
+          if (typeof message.content === 'string') return [message.content];
+          return message.content
+            .filter((part: any) => part.type === 'text')
+            .map((part: any) => part.text);
+        }).join('\n');
+        expect(serialized).toContain('高级（hard）');
+        expect(serialized).toContain('恰好 4 个选项');
+        expect(serialized).toContain('"answer"');
+        expect(serialized).toContain('"analysis"');
+        return JSON.stringify([{
+          type: 'single', stem: '新题干',
+          options: [{ text: '新 A' }, { text: '新 B' }, { text: '新 C' }, { text: '新 D' }],
+          answer: [1], analysis: '新解析',
+        }]);
       }),
     };
     const service = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
@@ -315,12 +495,13 @@ describe('versioned question bank', () => {
     service.gateway = gateway;
     service.pdfVision = {
       shouldUseVision: vi.fn(() => true),
-      prepare: vi.fn(async () => ({ groupCount: 1, pageCount: 2, renderGroup, cleanup })),
+      prepare: vi.fn(async () => ({ groupCount: 2, pageCount: 4, renderGroup, cleanup })),
     };
     service.versions = {
       revise,
       current: vi.fn(async () => ({
-        id: '102', revision: 2, approvedBy: null, approvedAt: null, reviewedBy: null,
+        id: '101', revision: 1, sourcePageGroup: 1, sourcePageStart: 3, sourcePageEnd: 4,
+        approvedBy: null, approvedAt: null, reviewedBy: null,
         reviewedAt: null, reviewReason: null, legacyCapturedAt: null,
       })),
     };
@@ -332,12 +513,134 @@ describe('versioned question bank', () => {
     };
     service.audit = { log: vi.fn() };
 
-    await service.regenerate('5', { id: 9, name: 'admin' }, null);
+    await (service as any).regenerate('5', { id: 9, name: 'admin' }, null, '101');
 
-    expect(renderGroup).toHaveBeenCalledWith(0);
+    expect(renderGroup).toHaveBeenCalledWith(1);
     expect(cleanup).toHaveBeenCalledOnce();
     expect(revise).toHaveBeenCalledWith('5', expect.objectContaining({
       categoryId: '11', difficulty: 'hard', regulationId: '2', regulationVersionId: '3', source: 'ai',
-    }), '9');
+      sourcePageGroup: 1, sourcePageStart: 3, sourcePageEnd: 4,
+    }), '9', '101');
+  });
+
+  it('rejects a delayed regeneration when the current version changes and creates no wrong version', async () => {
+    const { service: versions, question, versions: rows } = versionServiceFixture();
+    question.categoryId = '11';
+    question.difficulty = 'medium';
+    question.currentVersionId = '99';
+    rows.push({
+      id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'medium', type: 'single',
+      stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
+      rubric: null, scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
+      source: 'ai', status: 'rejected', approvedBy: null, approvedAt: null, reviewedBy: '1',
+      reviewedAt: new Date(), reviewReason: '重做', createdBy: '1', legacyCapturedAt: null,
+    });
+
+    let enterGateway!: () => void;
+    const gatewayEntered = new Promise<void>((resolve) => { enterGateway = resolve; });
+    let releaseGateway!: (value: string) => void;
+    const gatewayResult = new Promise<string>((resolve) => { releaseGateway = resolve; });
+    const review = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
+    review.questionRepo = { findOne: vi.fn(async () => question) };
+    review.versionRepo = {
+      findOne: vi.fn(async () => ({ id: '3', regulationId: '2', fileType: 'docx', textContent: '制度原文' })),
+    };
+    review.gateway = {
+      chat: vi.fn(async () => {
+        enterGateway();
+        return gatewayResult;
+      }),
+    };
+    review.pdfVision = { shouldUseVision: vi.fn(() => false) };
+    review.versions = versions;
+    review.dataSource = {
+      createQueryBuilder: () => {
+        const builder: any = {
+          select: () => builder, from: () => builder, innerJoin: () => builder, where: () => builder,
+          andWhere: () => builder, limit: () => builder, getRawOne: async () => null,
+        };
+        return builder;
+      },
+    };
+    review.audit = { log: vi.fn() };
+
+    const pending = review.regenerate('5', { id: 9, name: 'admin' }, null, '99');
+    await gatewayEntered;
+    question.currentVersionId = '100';
+    releaseGateway(JSON.stringify([{
+      type: 'single', stem: '延迟返回的新题干',
+      options: [{ text: 'A' }, { text: 'B' }, { text: 'C' }, { text: 'D' }],
+      answer: [0], analysis: '解析',
+    }]));
+
+    await expect(pending).rejects.toMatchObject({ code: 40940 });
+    expect(rows).toHaveLength(1);
+    expect(question.currentVersionId).toBe('100');
+    expect(review.audit.log).not.toHaveBeenCalled();
+  });
+
+  it('rejects judgment and image questions at every legacy fixed-paper capability boundary', async () => {
+    const unsupported = { id: '7', regulationId: '2', type: 'judgment', status: 'approved', score: '100.00', options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }] } as any;
+    const paper = { id: '3', regulationId: '2', status: 'draft', totalScore: '100.00' } as any;
+    const paperService = Object.create(PaperService.prototype) as PaperService & Record<string, any>;
+    paperService.paperRepo = { findOne: vi.fn(async () => paper), save: vi.fn(async (value: any) => value) };
+    paperService.questionRepo = { find: vi.fn(async () => [unsupported]) };
+    paperService.pqRepo = {
+      create: (value: any) => value,
+      find: vi.fn(async () => [{ id: '9', paperId: '3', questionId: '7', score: '100.00', sort: 0 }]),
+      createQueryBuilder: vi.fn(() => {
+        const builder: any = { select: () => builder, where: () => builder, getRawOne: async () => ({ sum: '100.00' }) };
+        return builder;
+      }),
+    };
+    paperService.dataSource = { transaction: vi.fn(async () => undefined) };
+    paperService.audit = { log: vi.fn() };
+    paperService.detail = vi.fn(async () => ({}));
+
+    await expect(paperService.setQuestions('3', [{ question_id: '7', score: 100 }], { id: 1, name: 'admin' }, null))
+      .rejects.toThrow('固定试卷');
+    await expect(paperService.publish('3', { id: 1, name: 'admin' }, null)).rejects.toThrow('固定试卷');
+
+    const examService = Object.create(ExamService.prototype) as ExamService & Record<string, any>;
+    examService.pqRepo = { find: vi.fn(async () => [{ id: '9', paperId: '3', questionId: '7', score: '100.00', sort: 0 }]) };
+    examService.questionRepo = { find: vi.fn(async () => [unsupported]) };
+    examService.userRepo = { findOne: vi.fn(async () => ({ id: '1', role: 'super_admin', status: 1 })) };
+    examService.paperRepo = { findOne: vi.fn(async () => ({ ...paper, status: 'published', maxAttempts: 3 })) };
+    examService.regRepo = { findOne: vi.fn(async () => ({ id: '2', status: 'published' })) };
+    examService.learningRepo = { findOne: vi.fn(async () => ({ isValid: 1 })) };
+    examService.dataSource = { transaction: vi.fn() };
+    examService.shuffle = {
+      deriveSeed: vi.fn(() => 'seed'), shuffleQuestionOrder: vi.fn((items: any[]) => items), shuffleOptions: vi.fn((items: any[]) => items),
+    };
+    await expect(examService.start('3', 1)).rejects.toThrow('固定试卷');
+    expect(examService.learningRepo.findOne).not.toHaveBeenCalled();
+    expect(examService.dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('blocks changing the type of any question already referenced by a legacy paper', async () => {
+    const q: any = {
+      id: '5', currentVersionId: '101', regulationId: '2', versionId: '3', categoryId: '11', difficulty: 'medium',
+      conceptId: null, type: 'single', stem: '题干', options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }],
+      answer: [0], analysis: null, rubric: null, score: '5.00', status: 'approved', source: 'manual',
+    };
+    let fromTable = '';
+    const builder: any = {
+      select: () => builder,
+      from: (table: string) => { fromTable = table; return builder; },
+      innerJoin: () => builder,
+      where: () => builder,
+      andWhere: () => builder,
+      limit: () => builder,
+      getRawOne: async () => fromTable === 'paper_question' ? { found: 1 } : null,
+    };
+    const service = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
+    service.questionRepo = { findOne: vi.fn(async () => q) };
+    service.dataSource = { createQueryBuilder: () => builder };
+    service.versions = { revise: vi.fn(async () => '102'), current: vi.fn(async () => null) };
+    service.audit = { log: vi.fn() };
+
+    await expect((service as any).edit('5', { type: 'judgment' }, { id: 9, name: 'admin' }, null, '101'))
+      .rejects.toMatchObject({ code: 40908 });
+    expect(service.versions.revise).not.toHaveBeenCalled();
   });
 });

@@ -27,7 +27,9 @@ import {
   QUESTION_LIST_KEYS,
   QuestionConceptOptionsQueryDto,
   QuestionConceptQueryDto,
+  QuestionHistoryQueryDto,
   QuestionListQueryDto,
+  RegenerateQuestionDto,
   ReviewQuestionDto,
 } from '../questions/question.dto';
 
@@ -77,6 +79,16 @@ function assertOptionKeys(value: unknown) {
   if (options === undefined) return;
   if (!Array.isArray(options)) throw Errors.param('options 必须是数组');
   for (const option of options) assertRequestKeys(option, ['key', 'text'], '题目选项');
+}
+
+function expectedVersionId(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || !Object.prototype.hasOwnProperty.call(value, 'expected_version_id')) {
+    throw Errors.param('expected_version_id 必须显式提供（遗留未版本化题目请传 null）');
+  }
+  const expected = (value as Record<string, unknown>).expected_version_id;
+  if (expected === null) return null;
+  if (typeof expected !== 'string' || !/^[1-9]\d*$/.test(expected)) throw Errors.param('expected_version_id 非法');
+  return expected;
 }
 
 /** /ai AI 出题模块（04 册 3.5；/ai/config 由 ai_config:read/write 细权限控制） */
@@ -187,9 +199,15 @@ export class AiController {
   @Get('question-concepts')
   @Roles(...REG_ADMIN)
   @Permissions('questions:read')
-  listQuestionConcepts(@Query(new StrictDtoValidationPipe(['category_id', 'type', 'keyword'])) query: QuestionConceptQueryDto, @Req() req: Request) {
-    assertRequestKeys(req.query, ['category_id', 'type', 'keyword'], '考点查询');
-    return this.concepts.list({ categoryId: query.category_id, type: query.type, keyword: query.keyword });
+  listQuestionConcepts(@Query(new StrictDtoValidationPipe(['category_id', 'type', 'page', 'page_size', 'keyword'])) query: QuestionConceptQueryDto, @Req() req: Request) {
+    assertRequestKeys(req.query, ['category_id', 'type', 'page', 'page_size', 'keyword'], '考点查询');
+    return this.concepts.list({
+      categoryId: query.category_id,
+      type: query.type,
+      page: query.page,
+      pageSize: query.page_size,
+      keyword: query.keyword,
+    });
   }
 
   @Get('question-concept-options')
@@ -245,9 +263,11 @@ export class AiController {
   @Put('questions/:id/review')
   @Roles(...REG_ADMIN)
   @Permissions('questions:review')
-  async reviewQuestion(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['status', 'reason'])) dto: ReviewQuestionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    assertRequestKeys(req.body, ['status', 'reason'], '审核请求');
-    return this.review.review(id, dto.status, dto.reason, { id: user.id, name: user.username }, req.ip || null);
+  async reviewQuestion(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['expected_version_id', 'status', 'reason'])) dto: ReviewQuestionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertRequestKeys(req.body, ['expected_version_id', 'status', 'reason'], '审核请求');
+    return this.review.review(
+      id, dto.status, dto.reason, { id: user.id, name: user.username }, req.ip || null, expectedVersionId(req.body),
+    );
   }
 
   @Put('questions/:id')
@@ -256,26 +276,39 @@ export class AiController {
   async editQuestion(@Param('id') id: string, @Body(new StrictDtoValidationPipe(QUESTION_EDIT_KEYS)) dto: EditQuestionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
     assertRequestKeys(req.body, QUESTION_EDIT_KEYS, '题目请求');
     assertOptionKeys(req.body);
+    const { expected_version_id: _expectedVersionId, ...patch } = dto;
     return this.review.edit(
       id,
-      { ...dto, options: dto.options?.map((o, i) => ({ key: o.key || String.fromCharCode(65 + i), text: o.text })) } as any,
+      { ...patch, options: patch.options?.map((o, i) => ({ key: o.key || String.fromCharCode(65 + i), text: o.text })) } as any,
       { id: user.id, name: user.username },
       req.ip || null,
+      expectedVersionId(req.body),
     );
   }
 
   @Post('questions/:id/regenerate')
   @Roles(...REG_ADMIN)
   @Permissions('questions:write')
-  async regenerate(@Param('id') id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    return this.review.regenerate(id, { id: user.id, name: user.username }, req.ip || null);
+  async regenerate(
+    @Param('id') id: string,
+    @Body(new StrictDtoValidationPipe(['expected_version_id'])) _dto: RegenerateQuestionDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    assertRequestKeys(req.body, ['expected_version_id'], '重新生成请求');
+    return this.review.regenerate(id, { id: user.id, name: user.username }, req.ip || null, expectedVersionId(req.body));
   }
 
-  @Get('questions/:id/versions')
+  @Get('questions/:id/history')
   @Roles(...REG_ADMIN)
   @Permissions('questions:read')
-  questionVersions(@Param('id') id: string) {
-    return this.review.history(id);
+  questionVersions(
+    @Param('id') id: string,
+    @Query(new StrictDtoValidationPipe(['page', 'page_size'])) query: QuestionHistoryQueryDto,
+    @Req() req: Request,
+  ) {
+    assertRequestKeys(req.query, ['page', 'page_size'], '题目版本查询');
+    return this.review.history(id, query);
   }
 
   @Get('questions/:id')

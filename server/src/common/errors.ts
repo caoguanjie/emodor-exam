@@ -37,7 +37,7 @@ export const Errors = {
   sessionConflict: (msg = '学习会话冲突') => new BizError(40906, 409, msg),
   lastSuperAdmin: () => new BizError(40912, 409, '至少保留一名启用的超级管理员'),
   paperQuestionsLocked: () => new BizError(40907, 409, '题目组成不可变更'),
-  questionInUse: () => new BizError(40908, 409, '题目正在考试中使用，禁止编辑'),
+  questionInUse: (msg = '题目正在考试中使用，禁止编辑') => new BizError(40908, 409, msg),
   aiNotConfigured: () => new BizError(40909, 409, 'AI 服务未配置或配置不完整'),
   categoryInactive: (msg = '培训类别不存在或已停用') => new BizError(40910, 409, msg),
   importBatchConflict: (msg = '导入批次已确认，不能更换行集合') => new BizError(40911, 409, msg),

@@ -18,7 +18,17 @@
       <el-select v-model="query.type" placeholder="题型" clearable @change="onFilterScopeChange">
         <el-option v-for="item in typeOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
-      <el-select v-model="query.concept_id" placeholder="考点组" clearable filterable @change="load">
+      <el-select
+        v-model="query.concept_id"
+        placeholder="考点组"
+        clearable
+        filterable
+        remote
+        reserve-keyword
+        :loading="filterConceptLoading"
+        :remote-method="searchFilterConcepts"
+        @change="load"
+      >
         <el-option v-for="item in filterConcepts" :key="item.id" :label="item.name" :value="item.id" />
       </el-select>
       <el-select v-model="query.status" placeholder="审核状态" clearable @change="load">
@@ -29,6 +39,17 @@
         <el-button v-if="auth.can('questions:write')" @click="openCreate">人工录题</el-button>
         <el-button v-if="canGenerate" type="primary" :disabled="!categories.length || !regulations.length" @click="openGenerate">AI 出题</el-button>
       </div>
+    </div>
+    <div v-if="filterConceptPage.total > filterConceptPage.page_size" class="concept-pagination">
+      <span>考点筛选</span>
+      <el-pagination
+        small
+        layout="total, prev, pager, next"
+        :total="filterConceptPage.total"
+        :page-size="filterConceptPage.page_size"
+        v-model:current-page="filterConceptPage.page"
+        @current-change="loadFilterConceptPage"
+      />
     </div>
 
     <el-table v-loading="loading" :data="list">
@@ -62,10 +83,39 @@
         <el-button v-if="auth.can('questions:write') && editorForm.category_id" size="small" @click="createConcept">新建当前题型考点组</el-button>
         <span v-if="editorMode === 'edit'" class="editor-hint">保存会生成待审核新版本；旧版本保持不变。</span>
       </div>
-      <QuestionEditor v-model="editorForm" :categories="categories" :concepts="editorConcepts" :regulations="regulations" :can-upload-media="auth.can('media:write')" @scope-change="loadEditorConcepts" />
+      <el-alert
+        v-if="editorMode === 'edit' && !hasEditorDifficulty"
+        type="warning"
+        show-icon
+        :closable="false"
+        title="该旧题难度未知，请明确选择初级、中级或高级后再保存。"
+        style="margin-bottom:12px"
+      />
+      <QuestionEditor
+        v-model="editorForm"
+        :categories="categories"
+        :concepts="editorConcepts"
+        :concept-loading="editorConceptLoading"
+        :regulations="regulations"
+        :can-upload-media="auth.can('media:write')"
+        @scope-change="loadEditorConcepts"
+        @concept-search="searchEditorConcepts"
+      />
+      <el-pagination
+        v-if="editorConceptPage.total > editorConceptPage.page_size"
+        class="concept-pagination"
+        small
+        layout="total, prev, pager, next"
+        :total="editorConceptPage.total"
+        :page-size="editorConceptPage.page_size"
+        v-model:current-page="editorConceptPage.page"
+        @current-change="loadEditorConceptPage"
+      />
+      <el-divider content-position="left">未保存内容预览</el-divider>
+      <QuestionPreview :question="editorForm" />
       <template #footer>
         <el-button @click="editorVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveQuestion">{{ editorMode === 'create' ? '保存并确认可用' : '保存为待审核版本' }}</el-button>
+        <el-button type="primary" :loading="saving" :disabled="saving || !hasEditorDifficulty" @click="saveQuestion">{{ editorMode === 'create' ? '保存并确认可用' : '保存为待审核版本' }}</el-button>
       </template>
     </el-dialog>
 
@@ -77,6 +127,16 @@
           <span v-if="item.legacy_captured_at">（升级时捕获，非历史还原）</span>
         </el-timeline-item>
       </el-timeline>
+      <el-pagination
+        v-if="versionHistoryPage.total > versionHistoryPage.page_size"
+        class="question-pagination"
+        small
+        layout="total, prev, pager, next"
+        :total="versionHistoryPage.total"
+        :page-size="versionHistoryPage.page_size"
+        v-model:current-page="versionHistoryPage.page"
+        @current-change="loadHistoryPage"
+      />
     </el-dialog>
 
     <el-dialog v-model="genVisible" title="发起 AI 出题" width="600px">
@@ -125,10 +185,27 @@ import { useAuthStore } from '../../stores/auth';
 import { formatDateTime } from '../../utils/format';
 import QuestionEditor from '../../components/QuestionEditor.vue';
 import QuestionPreview from '../../components/QuestionPreview.vue';
-import type { Difficulty, Id, QuestionConcept, QuestionDraftPayload, QuestionType, QuestionView } from '../../api/training-types';
+import {
+  questionDraftFromView,
+  questionRichTextToPlainText,
+  type Difficulty, type Id, type Page, type QuestionConcept, type QuestionDraftPayload, type QuestionType, type QuestionView,
+} from '../../api/training-types';
 
 type CategoryOption = { id: Id; name: string };
+type ConceptOption = { id: Id; name: string };
 type RegulationOption = { id: Id | number; title: string; current_version_id?: Id | number | null; category_id?: Id | null };
+type QuestionVersionHistory = {
+  id: Id;
+  revision: number;
+  status: 'pending' | 'approved' | 'rejected';
+  created_at: string;
+  legacy_captured_at?: string | null;
+};
+type PageState = { page: number; page_size: number; total: number; keyword: string };
+
+function pageState(): PageState {
+  return { page: 1, page_size: 20, total: 0, keyword: '' };
+}
 
 const typeOptions: Array<{ value: QuestionType; label: string }> = [
   { value: 'single', label: '单选题' }, { value: 'multiple', label: '多选题' },
@@ -141,17 +218,26 @@ const loading = ref(false);
 const categories = ref<CategoryOption[]>([]);
 const regulations = ref<RegulationOption[]>([]);
 const filterConcepts = ref<QuestionConcept[]>([]);
-const editorConcepts = ref<QuestionConcept[]>([]);
+const editorConcepts = ref<ConceptOption[]>([]);
+const filterConceptPage = reactive(pageState());
+const editorConceptPage = reactive(pageState());
+const filterConceptLoading = ref(false);
+const editorConceptLoading = ref(false);
+const editorConceptScope = reactive<{ category_id: Id; type: QuestionType }>({ category_id: '', type: 'single' });
+let filterConceptRequest = 0;
+let editorConceptRequest = 0;
 const query = reactive({ page: 1, page_size: 20, regulation_id: '', category_id: '', concept_id: '', status: '', type: '', difficulty: '', keyword: '' });
 
 const editorVisible = ref(false);
 const editorMode = ref<'create' | 'edit'>('create');
 const editingId = ref<Id | null>(null);
+const editingExpectedVersionId = ref<Id | null>(null);
 const editorForm = ref<QuestionDraftPayload>(emptyDraft());
 const saving = ref(false);
 const previewVisible = ref(false);
 const selectedQuestion = ref<QuestionView | null>(null);
-const versionHistory = ref<any[]>([]);
+const versionHistory = ref<QuestionVersionHistory[]>([]);
+const versionHistoryPage = reactive(pageState());
 
 const genVisible = ref(false);
 const genForm = reactive({ regulation_id: '', category_id: '', difficulty: 'easy' as Difficulty, question_count_single: 20, score_single: 3, question_count_multiple: 5, score_multiple: 8 });
@@ -163,6 +249,7 @@ let pollTimer: number | null = null;
 const sumScore = computed(() => Math.round((genForm.question_count_single * genForm.score_single + genForm.question_count_multiple * genForm.score_multiple) * 100) / 100);
 const taskTitle = computed(() => ({ completed: '生成完成', failed: '生成失败', running: '生成中…', queued: '排队中…' } as Record<string, string>)[taskStatus.value] || taskStatus.value);
 const canGenerate = computed(() => auth.can('ai:write') && auth.can('ai:read') && auth.can('regulations:read'));
+const hasEditorDifficulty = computed(() => ['easy', 'medium', 'hard'].includes(editorForm.value.difficulty));
 const missingAiPermissions = computed(() => {
   if (!auth.can('ai:write')) return '';
   const missing = [
@@ -183,15 +270,13 @@ function cleanParams(value: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== '' && item !== undefined && item !== null));
 }
 
-function plainText(html: string) {
-  if (typeof document === 'undefined') return html.replace(/<[^>]+>/g, '');
-  const node = document.createElement('div'); node.innerHTML = html; return node.textContent || '';
-}
+function plainText(html: string) { return questionRichTextToPlainText(html); }
 function typeLabel(value: string) { return typeOptions.find((item) => item.value === value)?.label || value; }
 function difficultyLabel(value: string | null) { return ({ easy: '初级', medium: '中级', hard: '高级' } as Record<string, string>)[value || ''] || '未知'; }
 function sourceLabel(value: string) { return ({ ai: 'AI', manual: '人工', import: '导入' } as Record<string, string>)[value] || value; }
 function statusLabel(value: string) { return ({ approved: '已通过', pending: '待审核', rejected: '已驳回' } as Record<string, string>)[value] || value; }
 function statusTag(value: string) { return (value === 'approved' ? 'success' : value === 'rejected' ? 'danger' : 'info') as any; }
+function expectedVersionId(value: Id | null | undefined): Id | null { return value ?? null; }
 
 async function loadCategories() {
   const endpoint = auth.can('questions:write')
@@ -215,56 +300,128 @@ async function load() {
   } finally { loading.value = false; }
 }
 
-async function loadConcepts(categoryId: string, type: QuestionType | undefined, purpose: 'filter' | 'editor') {
-  if (!categoryId) return [];
-  if (purpose === 'filter') {
-    if (!auth.can('questions:read')) return [];
-    return await http.get('/ai/question-concepts', { params: cleanParams({ category_id: categoryId, type }) }) as QuestionConcept[];
+function applyPage<T>(target: { value: T[] }, state: PageState, result: Page<T>) {
+  target.value = Array.isArray(result.items) ? result.items : [];
+  state.total = Number(result.total || 0);
+  state.page = Number(result.page || 1);
+  state.page_size = Number(result.page_size || 20);
+}
+
+async function loadFilterConcepts(page = filterConceptPage.page, keyword = filterConceptPage.keyword) {
+  if (!query.category_id || !auth.can('questions:read')) {
+    filterConceptRequest += 1;
+    filterConcepts.value = [];
+    Object.assign(filterConceptPage, pageState());
+    return;
   }
-  if (!auth.can('questions:write')) return [];
-  const result: any = await http.get('/ai/question-concept-options', {
-    params: cleanParams({ category_id: categoryId, type, page: 1, page_size: 100 }),
-  });
-  return result.items || [];
+  const request = ++filterConceptRequest;
+  filterConceptLoading.value = true;
+  try {
+    const result = await http.get('/ai/question-concepts', {
+      params: cleanParams({
+        category_id: query.category_id,
+        type: (query.type || undefined) as QuestionType | undefined,
+        keyword,
+        page,
+        page_size: filterConceptPage.page_size,
+      }),
+    }) as Page<QuestionConcept>;
+    if (request !== filterConceptRequest) return;
+    filterConceptPage.keyword = keyword;
+    applyPage(filterConcepts, filterConceptPage, result);
+  } finally {
+    if (request === filterConceptRequest) filterConceptLoading.value = false;
+  }
 }
 
 async function onFilterScopeChange() {
   query.concept_id = '';
-  filterConcepts.value = await loadConcepts(query.category_id, (query.type || undefined) as QuestionType | undefined, 'filter');
+  query.page = 1;
+  Object.assign(filterConceptPage, pageState());
+  await loadFilterConcepts(1, '');
   await load();
 }
 
+async function loadFilterConceptPage(page: number) {
+  await loadFilterConcepts(page, filterConceptPage.keyword);
+}
+
+function searchFilterConcepts(keyword: string) {
+  filterConceptPage.keyword = keyword;
+  void loadFilterConcepts(1, keyword);
+}
+
+async function requestEditorConcepts(page = editorConceptPage.page, keyword = editorConceptPage.keyword) {
+  if (!editorConceptScope.category_id || !auth.can('questions:write')) {
+    editorConceptRequest += 1;
+    editorConcepts.value = [];
+    Object.assign(editorConceptPage, pageState());
+    return;
+  }
+  const request = ++editorConceptRequest;
+  editorConceptLoading.value = true;
+  try {
+    const result = await http.get('/ai/question-concept-options', {
+      params: cleanParams({
+        category_id: editorConceptScope.category_id,
+        type: editorConceptScope.type,
+        keyword,
+        page,
+        page_size: editorConceptPage.page_size,
+      }),
+    }) as Page<ConceptOption>;
+    if (request !== editorConceptRequest) return;
+    editorConceptPage.keyword = keyword;
+    applyPage(editorConcepts, editorConceptPage, result);
+  } finally {
+    if (request === editorConceptRequest) editorConceptLoading.value = false;
+  }
+}
+
 async function loadEditorConcepts(scope: { category_id: Id; type: QuestionType }) {
-  editorConcepts.value = await loadConcepts(scope.category_id, scope.type, 'editor');
+  Object.assign(editorConceptScope, scope);
+  Object.assign(editorConceptPage, pageState());
+  await requestEditorConcepts(1, '');
+}
+
+async function loadEditorConceptPage(page: number) {
+  await requestEditorConcepts(page, editorConceptPage.keyword);
+}
+
+function searchEditorConcepts(keyword: string) {
+  editorConceptPage.keyword = keyword;
+  void requestEditorConcepts(1, keyword);
 }
 
 function toDraft(row: QuestionView): QuestionDraftPayload {
-  return {
-    category_id: row.category_id || '', difficulty: row.difficulty || 'easy', type: row.type,
-    stem: row.stem, options: JSON.parse(JSON.stringify(row.options || [])), answer: [...(row.answer || [])],
-    analysis: row.analysis ?? null, rubric: row.rubric ?? null, score: Number(row.score),
-    concept_id: row.concept_id || undefined,
-    regulation_id: row.regulation_id === null || row.regulation_id === undefined ? undefined : String(row.regulation_id),
-    regulation_version_id: row.regulation_version_id || undefined,
-  };
+  return questionDraftFromView(row);
 }
 
 async function openCreate() {
-  editorMode.value = 'create'; editingId.value = null; editorForm.value = emptyDraft();
+  editorMode.value = 'create'; editingId.value = null; editingExpectedVersionId.value = null; editorForm.value = emptyDraft();
   await loadEditorConcepts({ category_id: editorForm.value.category_id, type: editorForm.value.type });
   editorVisible.value = true;
 }
 
 async function openEdit(row: QuestionView) {
-  editorMode.value = 'edit'; editingId.value = row.question_id; editorForm.value = toDraft(row);
+  editorMode.value = 'edit'; editingId.value = row.question_id; editingExpectedVersionId.value = expectedVersionId(row.current_version_id); editorForm.value = toDraft(row);
   await loadEditorConcepts({ category_id: editorForm.value.category_id, type: editorForm.value.type });
   editorVisible.value = true;
 }
 
 async function openView(row: QuestionView) {
   selectedQuestion.value = row;
-  versionHistory.value = await http.get(`/ai/questions/${row.question_id}/versions`) as any[];
+  Object.assign(versionHistoryPage, pageState());
+  await loadHistoryPage(1);
   previewVisible.value = true;
+}
+
+async function loadHistoryPage(page: number) {
+  if (!selectedQuestion.value) return;
+  const history = await http.get(`/ai/questions/${selectedQuestion.value.question_id}/history`, {
+    params: { page, page_size: versionHistoryPage.page_size },
+  }) as Page<QuestionVersionHistory>;
+  applyPage(versionHistory, versionHistoryPage, history);
 }
 
 function payload(value: QuestionDraftPayload) {
@@ -279,13 +436,19 @@ function payload(value: QuestionDraftPayload) {
 }
 
 async function saveQuestion() {
+  if (!hasEditorDifficulty.value) {
+    ElMessage.warning('请选择题目难度后再保存');
+    return;
+  }
   saving.value = true;
   try {
     if (editorMode.value === 'create') {
       await http.post('/ai/questions', payload(editorForm.value));
       ElMessage.success('人工题已保存，并记录当前管理员确认信息');
     } else {
-      await http.put(`/ai/questions/${editingId.value}`, payload(editorForm.value));
+      await http.put(`/ai/questions/${editingId.value}`, {
+        ...payload(editorForm.value), expected_version_id: editingExpectedVersionId.value,
+      });
       ElMessage.success('已生成待审核新版本，旧版本保持不变');
     }
     editorVisible.value = false;
@@ -297,7 +460,8 @@ async function createConcept() {
   const answer = await ElMessageBox.prompt('输入考点组名称', '新建考点组', { inputPattern: /\S/, inputErrorMessage: '名称不能为空' }).catch(() => null);
   if (!answer) return;
   const created: any = await http.post('/ai/question-concepts', { category_id: editorForm.value.category_id, type: editorForm.value.type, name: answer.value.trim() });
-  await loadEditorConcepts({ category_id: editorForm.value.category_id, type: editorForm.value.type });
+  Object.assign(editorConceptPage, pageState());
+  await requestEditorConcepts(1, '');
   editorForm.value.concept_id = String(created.id);
 }
 
@@ -308,14 +472,16 @@ async function reviewQuestion(row: QuestionView, status: 'approved' | 'rejected'
     if (!answer) return;
     reason = answer.value;
   }
-  await http.put(`/ai/questions/${row.question_id}/review`, { status, reason });
+  await http.put(`/ai/questions/${row.question_id}/review`, {
+    expected_version_id: expectedVersionId(row.current_version_id), status, reason,
+  });
   ElMessage.success(status === 'approved' ? '已通过并记录审核人/时间' : '已驳回');
   await load();
 }
 
 async function regenerate(row: QuestionView) {
   await ElMessageBox.confirm('重新生成会保留旧版本，新内容固定沿用当前类别、难度和来源制度版本。继续？', '重新生成', { type: 'warning' });
-  await http.post(`/ai/questions/${row.question_id}/regenerate`);
+  await http.post(`/ai/questions/${row.question_id}/regenerate`, { expected_version_id: expectedVersionId(row.current_version_id) });
   ElMessage.success('已生成待审核新版本');
   await load();
 }
@@ -366,6 +532,7 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer); pollTime
 <style scoped>
 .question-toolbar { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)) minmax(160px, 1.4fr); gap: 10px; align-items: center; }
 .question-toolbar__actions { display: flex; justify-content: flex-end; gap: 8px; grid-column: 1 / -1; }
+.concept-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin: 10px 0; color: #909399; font-size: 13px; }
 .question-pagination { margin-top: 16px; justify-content: flex-end; }
 .stem-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-tools { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }

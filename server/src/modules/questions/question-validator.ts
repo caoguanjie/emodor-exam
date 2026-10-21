@@ -17,6 +17,9 @@ export interface QuestionDraftInput {
   conceptId?: string;
   regulationId?: string;
   regulationVersionId?: string;
+  sourcePageGroup?: number;
+  sourcePageStart?: number;
+  sourcePageEnd?: number;
   source: QuestionSource;
 }
 
@@ -47,14 +50,9 @@ function assertControlledImages(html: string): void {
   }
 }
 
-function cleanRichText(value: unknown, field: string, required: boolean): string | null {
-  if (value === undefined || value === null || String(value).trim() === '') {
-    if (required) throw Errors.param(`${field}不能为空`);
-    return null;
-  }
-  const html = String(value);
-  assertControlledImages(html);
-  const cleaned = sanitizeHtml(html, {
+export function sanitizeQuestionRichTextForDisplay(value: unknown): string | null {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const cleaned = sanitizeHtml(String(value), {
     allowedTags: [
       'p', 'h1', 'h2', 'h3', 'h4', 'ul', 'ol', 'li', 'strong', 'em', 'b', 'i', 'u', 'br',
       'blockquote', 'span', 'a', 'img', 'code', 'pre', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
@@ -76,14 +74,25 @@ function cleanRichText(value: unknown, field: string, required: boolean): string
         return { tagName: 'a', attribs };
       },
       img: (_tagName, attributes) => ({
-        tagName: 'img',
-        attribs: {
+        tagName: /^\d+$/.test(attributes['data-media-id'] || '') ? 'img' : 'span',
+        attribs: /^\d+$/.test(attributes['data-media-id'] || '') ? {
           'data-media-id': String(attributes['data-media-id']),
           ...(attributes.alt ? { alt: attributes.alt } : {}),
-        },
+        } : {},
       }),
     },
   }).trim();
+  return cleaned || null;
+}
+
+function cleanRichText(value: unknown, field: string, required: boolean): string | null {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    if (required) throw Errors.param(`${field}不能为空`);
+    return null;
+  }
+  const html = String(value);
+  assertControlledImages(html);
+  const cleaned = sanitizeQuestionRichTextForDisplay(html) || '';
   const visibleText = sanitizeHtml(cleaned, { allowedTags: [], allowedAttributes: {} })
     .replace(/&nbsp;/g, ' ')
     .trim();
@@ -151,6 +160,15 @@ export function validateAndSanitizeQuestionDraft(input: QuestionDraftInput): Val
   if (input.source === 'ai' && (!regulationId || !regulationVersionId)) {
     throw Errors.param('AI 题必须记录实际制度及来源版本');
   }
+  const provenance = [input.sourcePageGroup, input.sourcePageStart, input.sourcePageEnd];
+  if (provenance.some((value) => value !== undefined)) {
+    if (!provenance.every((value) => Number.isInteger(value) && Number(value) >= 0)) {
+      throw Errors.param('PDF 页组来源非法');
+    }
+    if (Number(input.sourcePageStart) < 1 || Number(input.sourcePageEnd) < Number(input.sourcePageStart)) {
+      throw Errors.param('PDF 页码来源非法');
+    }
+  }
   if (!Number.isInteger(input.scoreCents) || input.scoreCents <= 0 || input.scoreCents > 10000) {
     throw Errors.param('建议分值须为 1–10000 整数分');
   }
@@ -177,6 +195,9 @@ export function validateAndSanitizeQuestionDraft(input: QuestionDraftInput): Val
     regulationId,
     regulationVersionId,
     source: input.source,
+    sourcePageGroup: input.sourcePageGroup,
+    sourcePageStart: input.sourcePageStart,
+    sourcePageEnd: input.sourcePageEnd,
     mediaAssetIds: controlledQuestionMediaIds([stem, analysis, rubric, ...options.map((option) => option.text)]),
   };
 }

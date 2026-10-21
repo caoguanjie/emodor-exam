@@ -51,6 +51,15 @@ export class QuestionVersion {
   @Column({ name: 'regulation_version_id', type: 'bigint', unsigned: true, nullable: true })
   regulationVersionId: string | null;
 
+  @Column({ name: 'source_page_group', type: 'int', unsigned: true, nullable: true })
+  sourcePageGroup: number | null;
+
+  @Column({ name: 'source_page_start', type: 'int', unsigned: true, nullable: true })
+  sourcePageStart: number | null;
+
+  @Column({ name: 'source_page_end', type: 'int', unsigned: true, nullable: true })
+  sourcePageEnd: number | null;
+
   @Column({ type: 'varchar', length: 16 })
   source: string;
 

@@ -39,6 +39,7 @@ export class CreateQuestionDto {
 }
 
 export class EditQuestionDto {
+  @IsOptional() @IsString() @IdField() expected_version_id?: string | null;
   @IsOptional() @IsString() @IdField() category_id?: string;
   @IsOptional() @IsIn(['easy', 'medium', 'hard']) difficulty?: Difficulty;
   @IsOptional() @IsString() @IdField() concept_id?: string | null;
@@ -54,8 +55,13 @@ export class EditQuestionDto {
 }
 
 export class ReviewQuestionDto {
+  @IsOptional() @IsString() @IdField() expected_version_id?: string | null;
   @IsIn(['approved', 'rejected']) status!: 'approved' | 'rejected';
   @IsOptional() @IsString() @MaxLength(1000) reason?: string;
+}
+
+export class RegenerateQuestionDto {
+  @IsOptional() @IsString() @IdField() expected_version_id?: string | null;
 }
 
 export class QuestionListQueryDto {
@@ -73,7 +79,14 @@ export class QuestionListQueryDto {
 export class QuestionConceptQueryDto {
   @IsString() @IdField() category_id!: string;
   @IsOptional() @IsIn(['single', 'multiple', 'judgment', 'image']) type?: QuestionType;
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) page?: number;
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
   @IsOptional() @IsString() @MaxLength(128) keyword?: string;
+}
+
+export class QuestionHistoryQueryDto {
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) page?: number;
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
 }
 
 export class QuestionConceptOptionsQueryDto {
@@ -100,7 +113,7 @@ export const QUESTION_CREATE_KEYS = [
   'category_id', 'difficulty', 'concept_id', 'regulation_id', 'regulation_version_id', 'type', 'stem',
   'options', 'answer', 'analysis', 'rubric', 'score',
 ] as const;
-export const QUESTION_EDIT_KEYS = [...QUESTION_CREATE_KEYS] as const;
+export const QUESTION_EDIT_KEYS = ['expected_version_id', ...QUESTION_CREATE_KEYS] as const;
 export const QUESTION_LIST_KEYS = [
   'page', 'page_size', 'regulation_id', 'category_id', 'concept_id', 'status', 'type', 'difficulty', 'keyword',
 ] as const;

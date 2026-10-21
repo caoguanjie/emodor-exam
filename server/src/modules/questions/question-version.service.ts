@@ -13,6 +13,7 @@ import { CategoryService } from '../training/category.service';
 import { QuestionConceptService } from './question-concept.service';
 import {
   controlledQuestionMediaIds,
+  sanitizeQuestionRichTextForDisplay,
   validateAndSanitizeQuestionDraft,
   type QuestionDraftInput,
   type ValidatedQuestionDraft,
@@ -77,6 +78,12 @@ export class QuestionVersionService implements OnModuleInit {
     if (draft.conceptId) await this.concepts.assertCompatible(manager, draft.conceptId, draft.categoryId, draft.type);
   }
 
+  private assertExpectedVersion(question: Question, expectedVersionId: string | null | undefined): void {
+    if (expectedVersionId === undefined) return;
+    const actual = question.currentVersionId ? String(question.currentVersionId) : null;
+    if (actual !== expectedVersionId) throw Errors.questionVersionConflict();
+  }
+
   private versionEntity(
     repo: Repository<QuestionVersion>,
     questionId: string,
@@ -99,6 +106,9 @@ export class QuestionVersionService implements OnModuleInit {
       conceptId: draft.conceptId || null,
       regulationId: draft.regulationId || null,
       regulationVersionId: draft.regulationVersionId || null,
+      sourcePageGroup: draft.sourcePageGroup ?? null,
+      sourcePageStart: draft.sourcePageStart ?? null,
+      sourcePageEnd: draft.sourcePageEnd ?? null,
       source: draft.source,
       status: 'pending',
       approvedBy: null,
@@ -156,6 +166,9 @@ export class QuestionVersionService implements OnModuleInit {
       conceptId: question.conceptId,
       regulationId: question.regulationId,
       regulationVersionId: question.versionId,
+      sourcePageGroup: null,
+      sourcePageStart: null,
+      sourcePageEnd: null,
       source: question.source,
       status: question.status,
       approvedBy: null,
@@ -219,7 +232,12 @@ export class QuestionVersionService implements OnModuleInit {
     });
   }
 
-  async revise(questionId: string, input: QuestionDraft, actorId: string): Promise<string> {
+  async revise(
+    questionId: string,
+    input: QuestionDraft,
+    actorId: string,
+    expectedVersionId?: string | null,
+  ): Promise<string> {
     const draft = validateAndSanitizeQuestionDraft(input);
     await this.assertSource(draft);
     return this.dataSource.transaction(async (manager) => {
@@ -228,6 +246,7 @@ export class QuestionVersionService implements OnModuleInit {
       const versionRepo = manager.getRepository(QuestionVersion);
       const question = await questionRepo.findOne({ where: { id: String(questionId) }, lock: { mode: 'pessimistic_write' } });
       if (!question) throw Errors.notFound('题目不存在');
+      this.assertExpectedVersion(question, expectedVersionId);
       const existingMediaIds = new Set(controlledQuestionMediaIds([
         question.stem,
         question.analysis,
@@ -296,6 +315,54 @@ export class QuestionVersionService implements OnModuleInit {
     });
   }
 
+  async reviewCurrent(
+    questionId: string,
+    expectedVersionId: string | null,
+    status: 'approved' | 'rejected',
+    actorId: string,
+    reason?: string,
+  ): Promise<string> {
+    return this.dataSource.transaction(async (manager) => {
+      const versionRepo = manager.getRepository(QuestionVersion);
+      const questionRepo = manager.getRepository(Question);
+      const question = await questionRepo.findOne({ where: { id: String(questionId) }, lock: { mode: 'pessimistic_write' } });
+      if (!question) throw Errors.notFound('题目不存在');
+      this.assertExpectedVersion(question, expectedVersionId);
+
+      let version: QuestionVersion;
+      if (!question.currentVersionId) {
+        version = await this.captureLegacy(manager, question);
+        question.currentVersionId = version.id;
+      } else {
+        const found = await versionRepo.findOne({
+          where: { id: String(question.currentVersionId) },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!found || String(found.questionId) !== String(question.id)) {
+          throw Errors.questionVersionConflict('题目当前版本不存在');
+        }
+        version = found;
+      }
+
+      const now = new Date();
+      version.status = status;
+      version.reviewedBy = String(actorId);
+      version.reviewedAt = now;
+      version.reviewReason = status === 'rejected' ? reason?.trim().slice(0, 1000) || null : null;
+      if (status === 'approved') {
+        version.approvedBy = String(actorId);
+        version.approvedAt = now;
+      } else {
+        version.approvedBy = null;
+        version.approvedAt = null;
+      }
+      await versionRepo.save(version);
+      question.status = status;
+      await questionRepo.save(question);
+      return String(version.id);
+    });
+  }
+
   async reject(versionId: string, actorId: string, reason?: string): Promise<void> {
     await this.dataSource.transaction(async (manager) => {
       const versionRepo = manager.getRepository(QuestionVersion);
@@ -324,6 +391,9 @@ export class QuestionVersionService implements OnModuleInit {
       stem: version.stem, options: version.options as QuestionOption[], answer: version.answer, analysis: version.analysis,
       rubric: version.rubric, scoreCents: Number(version.scoreCents), conceptId: version.conceptId || undefined,
       regulationId: version.regulationId || undefined, regulationVersionId: version.regulationVersionId || undefined,
+      sourcePageGroup: version.sourcePageGroup ?? undefined,
+      sourcePageStart: version.sourcePageStart ?? undefined,
+      sourcePageEnd: version.sourcePageEnd ?? undefined,
       source: version.source as QuestionDraft['source'], approvedBy: version.approvedBy,
       approvedAt: version.approvedAt?.toISOString() || null,
     });
@@ -350,13 +420,22 @@ export class QuestionVersionService implements OnModuleInit {
     return this.versionRepo.findOne({ where: { id: String(question.currentVersionId) } });
   }
 
-  async history(questionId: string) {
-    const rows = await this.versionRepo.find({ where: { questionId: String(questionId) }, order: { revision: 'DESC' } });
-    return rows.map((row) => ({
-      id: String(row.id), revision: Number(row.revision), status: row.status, stem: row.stem,
+  async history(questionId: string, input: { page?: number; pageSize?: number } = {}) {
+    const page = Math.max(1, Number(input.page || 1));
+    const pageSize = Math.min(100, Math.max(1, Number(input.pageSize || 20)));
+    const [rows, total] = await this.versionRepo.findAndCount({
+      where: { questionId: String(questionId) },
+      order: { revision: 'DESC' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    });
+    return { items: rows.map((row) => ({
+      id: String(row.id), revision: Number(row.revision), status: row.status,
+      stem: sanitizeQuestionRichTextForDisplay(row.stem) || '',
       approved_by: row.approvedBy, approved_at: row.approvedAt, reviewed_by: row.reviewedBy,
       reviewed_at: row.reviewedAt, review_reason: row.reviewReason, legacy_captured_at: row.legacyCapturedAt,
+      source_page_group: row.sourcePageGroup, source_page_start: row.sourcePageStart, source_page_end: row.sourcePageEnd,
       created_by: String(row.createdBy), created_at: row.createdAt,
-    }));
+    })), total, page, page_size: pageSize };
   }
 }

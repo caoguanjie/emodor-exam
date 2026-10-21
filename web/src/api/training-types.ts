@@ -79,7 +79,7 @@ export type QuestionSource = 'ai' | 'manual' | 'import';
 
 export interface QuestionDraftPayload {
   category_id: Id;
-  difficulty: Difficulty;
+  difficulty: Difficulty | '';
   type: QuestionType;
   stem: string;
   options: QuestionOption[];
@@ -107,6 +107,143 @@ export interface QuestionView extends Omit<QuestionDraftPayload, 'category_id' |
   reviewed_at: string | null;
   review_reason: string | null;
   legacy_captured_at: string | null;
+}
+
+export function questionDraftFromView(row: Pick<QuestionView,
+  'category_id' | 'difficulty' | 'type' | 'stem' | 'options' | 'answer' | 'analysis' | 'rubric' | 'score'
+  | 'concept_id' | 'regulation_id' | 'regulation_version_id'>): QuestionDraftPayload {
+  return {
+    category_id: row.category_id || '',
+    difficulty: row.difficulty || '',
+    type: row.type,
+    stem: row.stem,
+    options: JSON.parse(JSON.stringify(row.options || [])),
+    answer: [...(row.answer || [])],
+    analysis: row.analysis ?? null,
+    rubric: row.rubric ?? null,
+    score: Number(row.score),
+    concept_id: row.concept_id || undefined,
+    regulation_id: row.regulation_id === null || row.regulation_id === undefined ? undefined : String(row.regulation_id),
+    regulation_version_id: row.regulation_version_id || undefined,
+  };
+}
+
+const QUESTION_RICH_TAGS = new Set([
+  'p', 'h1', 'h2', 'h3', 'h4', 'ul', 'ol', 'li', 'strong', 'em', 'b', 'i', 'u', 'br',
+  'blockquote', 'span', 'a', 'img', 'code', 'pre', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
+]);
+const DROP_CONTENT_TAGS = new Set(['script', 'style', 'iframe', 'object', 'embed', 'svg', 'math']);
+const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
+
+function escapeQuestionText(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]!);
+}
+
+function inertQuestionFragment(html: string): DocumentFragment | null {
+  if (typeof document === 'undefined') return null;
+  // HTMLTemplateElement parses into a detached template document. Scripts do
+  // not execute and remote img/iframe resources are not attached or fetched.
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  return template.content;
+}
+
+function safeQuestionLink(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function appendSanitizedQuestionNode(source: ChildNode, target: Node): void {
+  if (source.nodeType === 3) {
+    target.appendChild(document.createTextNode(source.nodeValue || ''));
+    return;
+  }
+  if (source.nodeType !== 1) return;
+
+  const element = source as HTMLElement;
+  const tag = element.tagName.toLowerCase();
+  if (element.namespaceURI && element.namespaceURI !== HTML_NAMESPACE) return;
+  if (DROP_CONTENT_TAGS.has(tag)) return;
+  if (!QUESTION_RICH_TAGS.has(tag)) {
+    for (const child of Array.from(element.childNodes)) appendSanitizedQuestionNode(child, target);
+    return;
+  }
+
+  if (tag === 'img') {
+    const mediaId = element.getAttribute('data-media-id') || '';
+    if (!/^[1-9]\d*$/.test(mediaId)) return;
+    const cleanImage = document.createElement('img');
+    cleanImage.setAttribute('data-media-id', mediaId);
+    const alt = element.getAttribute('alt');
+    if (alt) cleanImage.setAttribute('alt', alt);
+    target.appendChild(cleanImage);
+    return;
+  }
+
+  const cleanElement = document.createElement(tag);
+  if (tag === 'a') {
+    const href = safeQuestionLink(element.getAttribute('href'));
+    if (href) {
+      cleanElement.setAttribute('href', href);
+      cleanElement.setAttribute('rel', 'noopener noreferrer');
+    }
+  } else if (tag === 'td' || tag === 'th') {
+    for (const attribute of ['colspan', 'rowspan']) {
+      const value = element.getAttribute(attribute) || '';
+      if (/^[1-9]\d*$/.test(value)) cleanElement.setAttribute(attribute, value);
+    }
+  }
+  for (const child of Array.from(element.childNodes)) appendSanitizedQuestionNode(child, cleanElement);
+  target.appendChild(cleanElement);
+}
+
+/** Browser-side display boundary for legacy rows and unsaved preview content. */
+export function sanitizeQuestionHtmlForPreview(value: string | null | undefined): string {
+  const html = String(value || '');
+  if (!html) return '';
+  const source = inertQuestionFragment(html);
+  if (!source) return escapeQuestionText(html);
+
+  const output = document.createElement('template');
+  for (const child of Array.from(source.childNodes)) appendSanitizedQuestionNode(child, output.content);
+  return output.innerHTML;
+}
+
+/** Plain-text list summary; parses inertly and never assigns untrusted HTML to a live element. */
+export function questionRichTextToPlainText(value: string | null | undefined): string {
+  const html = String(value || '');
+  if (!html) return '';
+  const source = inertQuestionFragment(html);
+  if (!source) return html;
+
+  const parts: string[] = [];
+  const visit = (node: ChildNode) => {
+    if (node.nodeType === 3) {
+      parts.push(node.nodeValue || '');
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    const element = node as HTMLElement;
+    const tag = element.tagName.toLowerCase();
+    if ((element.namespaceURI && element.namespaceURI !== HTML_NAMESPACE) || DROP_CONTENT_TAGS.has(tag)) return;
+    if (tag === 'img') {
+      const mediaId = element.getAttribute('data-media-id') || '';
+      if (/^[1-9]\d*$/.test(mediaId)) parts.push(element.getAttribute('alt') || '[图片]');
+      return;
+    }
+    if (tag === 'br') parts.push(' ');
+    for (const child of Array.from(element.childNodes)) visit(child);
+    if (['p', 'h1', 'h2', 'h3', 'h4', 'li', 'blockquote', 'tr'].includes(tag)) parts.push(' ');
+  };
+  for (const child of Array.from(source.childNodes)) visit(child);
+  return parts.join('').replace(/\s+/g, ' ').trim();
 }
 
 export interface QuestionConcept {

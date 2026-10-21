@@ -122,6 +122,17 @@ async function runBody(ctx, mockPort) {
     category_id: categoryId, type: 'single', name: `受限空间 ${suffix}`,
   });
   assert.equal(concept.status, 200, `concept: ${JSON.stringify(concept)}`);
+  const conceptList = await ctx.request(admin.actor, 'GET', `/ai/question-concepts?category_id=${categoryId}`);
+  assert.equal(conceptList.status, 200, `concept list: ${JSON.stringify(conceptList)}`);
+  assert.equal(conceptList.data.page, 1);
+  assert.equal(conceptList.data.page_size, 20);
+  assert.ok(conceptList.data.items.some((item) => item.id === String(concept.data.id)));
+  assert.deepEqual(
+    Object.keys(conceptList.data.items.find((item) => item.id === String(concept.data.id))).sort(),
+    ['category_id', 'id', 'name', 'type'],
+  );
+  const malformedConceptList = await ctx.request(admin.actor, 'GET', `/ai/question-concepts?category_id=${categoryId}&page_size=101`);
+  assert.equal(malformedConceptList.status, 400, '考点管理列表必须校验分页上限');
   const conceptOptions = await ctx.request(admin.actor, 'GET', `/ai/question-concept-options?category_id=${categoryId}&type=single&page=1&page_size=100`);
   assert.equal(conceptOptions.status, 200, `concept options: ${JSON.stringify(conceptOptions)}`);
   assert.ok(conceptOptions.data.items.some((item) => item.id === String(concept.data.id)));
@@ -221,8 +232,8 @@ async function runBody(ctx, mockPort) {
 
   const unknownType = await ctx.request(admin.actor, 'POST', '/ai/questions', { ...singleDraft(categoryId), type: 'essay' });
   assert.equal(unknownType.status, 400);
-  const aiWithoutSourceVersion = await ctx.request(admin.actor, 'POST', '/ai/questions', { ...singleDraft(categoryId), source: 'ai' });
-  assert.equal(aiWithoutSourceVersion.status, 400);
+  const unsupportedSourceOverride = await ctx.request(admin.actor, 'POST', '/ai/questions', { ...singleDraft(categoryId), source: 'ai' });
+  assert.equal(unsupportedSourceOverride.status, 400, '人工录题 API 不允许客户端伪造 source=ai');
 
   const crossCategoryConcept = await ctx.request(admin.actor, 'POST', '/ai/questions', {
     ...singleDraft(otherCategoryId), concept_id: String(concept.data.id),
@@ -236,6 +247,32 @@ async function runBody(ctx, mockPort) {
   assert.equal(sanitized.status, 200);
   assert.equal(sanitized.data.stem.includes('<script'), false);
   assert.equal(sanitized.data.stem.includes('onclick'), false);
+  const maliciousLegacyStem = '<p onclick="steal()">恶意旧题<script>alert(1)</script><img src="https://evil.test/tracker.png" onerror="steal()"></p>';
+  const maliciousLegacy = await ctx.queryTestDb(
+    'INSERT INTO question (regulation_id, version_id, type, stem, options, answer, analysis, score, status, source, created_by) VALUES (NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [
+      'single', maliciousLegacyStem,
+      JSON.stringify([{ key: 'A', text: '<b onmouseover="steal()">是</b>' }, { key: 'B', text: '否' }]),
+      JSON.stringify([0]), '<a href="javascript:steal()">旧解析</a>', '2.00', 'approved', 'manual', admin.id,
+    ],
+  );
+  const maliciousLegacyId = String(maliciousLegacy.insertId);
+  const maliciousDetail = await ctx.request(admin.actor, 'GET', `/ai/questions/${maliciousLegacyId}`);
+  assert.equal(maliciousDetail.status, 200, JSON.stringify(maliciousDetail));
+  assert.equal(maliciousDetail.data.difficulty, null, '旧题未知难度不得伪造为 easy');
+  assert.equal(maliciousDetail.data.stem.includes('<script'), false);
+  assert.equal(maliciousDetail.data.stem.includes('onclick'), false);
+  assert.equal(maliciousDetail.data.stem.includes('src='), false);
+  assert.equal(maliciousDetail.data.options[0].text.includes('onmouseover'), false);
+  assert.equal(maliciousDetail.data.analysis.includes('javascript:'), false);
+  const maliciousList = await ctx.request(admin.actor, 'GET', '/ai/questions?keyword=%E6%81%B6%E6%84%8F%E6%97%A7%E9%A2%98');
+  assert.equal(maliciousList.status, 200, JSON.stringify(maliciousList));
+  const maliciousListItem = maliciousList.data.list.find((item) => item.question_id === maliciousLegacyId);
+  assert.ok(maliciousListItem);
+  assert.equal(maliciousListItem.stem.includes('<script'), false);
+  assert.equal(maliciousListItem.stem.includes('onclick'), false);
+  const storedMalicious = await ctx.queryTestDb('SELECT stem FROM question WHERE id = ?', [maliciousLegacyId]);
+  assert.equal(storedMalicious[0].stem, maliciousLegacyStem, '响应清洗不得重写遗留历史');
   const externalImage = await ctx.request(admin.actor, 'POST', '/ai/questions', singleDraft(
     categoryId,
     '<p>非法图片<img src="https://example.com/tracker.png"></p>',
@@ -265,18 +302,61 @@ async function runBody(ctx, mockPort) {
   assert.equal(referencedDelete.code, 40913);
 
   const manualQuestionId = manualWithoutRegulation.data.question_id;
+  const firstVersionId = String(manualWithoutRegulation.data.current_version_id);
+  const missingExpectedEdit = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}`, {
+    stem: '<p>不能省略版本前置条件</p>',
+  });
+  assert.equal(missingExpectedEdit.status, 400);
   const edited = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}`, {
+    expected_version_id: firstVersionId,
     stem: '<p>修订后的题干</p>',
   });
   assert.equal(edited.status, 200, JSON.stringify(edited));
   assert.equal(edited.data.status, 'pending');
   assert.equal(edited.data.revision, 2);
-  const history = await ctx.request(admin.actor, 'GET', `/ai/questions/${manualQuestionId}/versions`);
+  const secondVersionId = String(edited.data.current_version_id);
+  const versionCountBeforeStale = await ctx.queryTestDb(
+    'SELECT COUNT(*) AS total FROM question_version WHERE question_id = ?',
+    [manualQuestionId],
+  );
+  const staleEdit = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}`, {
+    expected_version_id: firstVersionId,
+    stem: '<p>旧页面覆盖</p>',
+  });
+  assert.equal(staleEdit.status, 409);
+  assert.equal(staleEdit.code, 40940);
+  const versionCountAfterStale = await ctx.queryTestDb(
+    'SELECT COUNT(*) AS total FROM question_version WHERE question_id = ?',
+    [manualQuestionId],
+  );
+  assert.equal(Number(versionCountAfterStale[0].total), Number(versionCountBeforeStale[0].total));
+  const history = await ctx.request(admin.actor, 'GET', `/ai/questions/${manualQuestionId}/history`);
   assert.equal(history.status, 200);
-  assert.equal(history.data[0].stem, '<p>修订后的题干</p>');
-  assert.equal(history.data[1].stem, '<p>进入受限空间前应做什么？</p>');
+  assert.equal(history.data.page, 1);
+  assert.equal(history.data.page_size, 20);
+  assert.equal(history.data.total, 2);
+  assert.equal(history.data.items[0].stem, '<p>修订后的题干</p>');
+  assert.equal(history.data.items[1].stem, '<p>进入受限空间前应做什么？</p>');
+  const historyPage = await ctx.request(admin.actor, 'GET', `/ai/questions/${manualQuestionId}/history?page=2&page_size=1`);
+  assert.equal(historyPage.status, 200);
+  assert.equal(historyPage.data.items.length, 1);
+  assert.equal(historyPage.data.items[0].stem, '<p>进入受限空间前应做什么？</p>');
+  const malformedHistory = await ctx.request(admin.actor, 'GET', `/ai/questions/${manualQuestionId}/history?page_size=101`);
+  assert.equal(malformedHistory.status, 400);
 
-  const approved = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}/review`, { status: 'approved' });
+  const missingExpectedReview = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}/review`, { status: 'approved' });
+  assert.equal(missingExpectedReview.status, 400);
+  const staleReview = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}/review`, {
+    expected_version_id: firstVersionId, status: 'approved',
+  });
+  assert.equal(staleReview.status, 409);
+  assert.equal(staleReview.code, 40940);
+  const afterStaleReview = await ctx.request(admin.actor, 'GET', `/ai/questions/${manualQuestionId}`);
+  assert.equal(afterStaleReview.data.status, 'pending');
+  assert.equal(String(afterStaleReview.data.current_version_id), secondVersionId);
+  const approved = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}/review`, {
+    expected_version_id: secondVersionId, status: 'approved',
+  });
   assert.equal(approved.status, 200);
   assert.equal(approved.data.status, 'approved');
   assert.equal(String(approved.data.approved_by), admin.id);
@@ -287,17 +367,65 @@ async function runBody(ctx, mockPort) {
   );
   const legacyId = String(legacyInsert.insertId);
   const upgraded = await ctx.request(admin.actor, 'PUT', `/ai/questions/${legacyId}`, {
+    expected_version_id: null,
     category_id: categoryId, difficulty: 'medium', stem: '<p>升级后题干</p>',
   });
   assert.equal(upgraded.status, 200, JSON.stringify(upgraded));
   assert.equal(upgraded.data.status, 'pending');
-  const legacyHistory = await ctx.request(admin.actor, 'GET', `/ai/questions/${legacyId}/versions`);
+  const legacyHistory = await ctx.request(admin.actor, 'GET', `/ai/questions/${legacyId}/history`);
   assert.equal(legacyHistory.status, 200);
-  assert.equal(legacyHistory.data[1].stem, '<p>升级前题干</p>');
-  assert.ok(legacyHistory.data[1].legacy_captured_at);
-  assert.equal(legacyHistory.data[1].approved_by, null);
+  assert.equal(legacyHistory.data.items[1].stem, '<p>升级前题干</p>');
+  assert.ok(legacyHistory.data.items[1].legacy_captured_at);
+  assert.equal(legacyHistory.data.items[1].approved_by, null);
 
   const { regulationId, versionId } = await seedParsedRegulation(ctx, admin.id);
+  const fixedSingle = await ctx.request(admin.actor, 'POST', '/ai/questions', {
+    ...singleDraft(categoryId, '<p>固定卷单选题。</p>'),
+    regulation_id: regulationId,
+    regulation_version_id: versionId,
+    score: 100,
+  });
+  assert.equal(fixedSingle.status, 200, JSON.stringify(fixedSingle));
+  const fixedJudgment = await ctx.request(admin.actor, 'POST', '/ai/questions', {
+    ...singleDraft(categoryId, '<p>固定卷不支持判断题。</p>'),
+    regulation_id: regulationId,
+    regulation_version_id: versionId,
+    type: 'judgment',
+    options: [{ text: '正确' }, { text: '错误' }],
+    answer: [1],
+    score: 100,
+  });
+  assert.equal(fixedJudgment.status, 200, JSON.stringify(fixedJudgment));
+  const legacyPaper = await ctx.request(admin.actor, 'POST', '/ai/papers', {
+    regulation_id: regulationId, title: `B3 legacy 能力边界 ${suffix}`, pass_score: 60,
+  });
+  assert.equal(legacyPaper.status, 200, JSON.stringify(legacyPaper));
+  const unsupportedSelection = await ctx.request(admin.actor, 'PUT', `/ai/papers/${legacyPaper.data.id}/questions`, {
+    items: [{ question_id: Number(fixedJudgment.data.question_id), score: 100 }],
+  });
+  assert.equal(unsupportedSelection.status, 400, 'legacy 固定卷选题必须拒绝判断题');
+  const supportedSelection = await ctx.request(admin.actor, 'PUT', `/ai/papers/${legacyPaper.data.id}/questions`, {
+    items: [{ question_id: Number(fixedSingle.data.question_id), score: 100 }],
+  });
+  assert.equal(supportedSelection.status, 200, JSON.stringify(supportedSelection));
+  const referencedTypeChange = await ctx.request(admin.actor, 'PUT', `/ai/questions/${fixedSingle.data.question_id}`, {
+    expected_version_id: String(fixedSingle.data.current_version_id),
+    type: 'judgment', options: [{ text: '正确' }, { text: '错误' }], answer: [1],
+  });
+  assert.equal(referencedTypeChange.status, 409);
+  assert.equal(referencedTypeChange.code, 40908);
+
+  const corruptedPaper = await ctx.request(admin.actor, 'POST', '/ai/papers', {
+    regulation_id: regulationId, title: `B3 legacy 发布边界 ${suffix}`, pass_score: 60,
+  });
+  assert.equal(corruptedPaper.status, 200, JSON.stringify(corruptedPaper));
+  await ctx.queryTestDb(
+    'INSERT INTO paper_question (paper_id, question_id, sort, score) VALUES (?, ?, 0, 100.00)',
+    [String(corruptedPaper.data.id), String(fixedJudgment.data.question_id)],
+  );
+  const unsupportedPublish = await ctx.request(admin.actor, 'POST', `/ai/papers/${corruptedPaper.data.id}/publish`);
+  assert.equal(unsupportedPublish.status, 400, 'legacy 固定卷发布必须重新拒绝判断题');
+
   const missingVersionRegulation = await ctx.request(admin.actor, 'POST', '/regulations', {
     title: `B3 无版本 ${suffix}`, category: '旧类别',
   });
@@ -322,7 +450,7 @@ async function runBody(ctx, mockPort) {
   assert.ok(task.question_ids.length > 0);
   const placeholders = task.question_ids.map(() => '?').join(',');
   const generatedRows = await ctx.queryTestDb(
-    `SELECT q.category_id, q.difficulty, q.status, q.version_id, q.current_version_id, v.regulation_version_id, v.source FROM question q INNER JOIN question_version v ON v.id = q.current_version_id WHERE q.id IN (${placeholders})`,
+    `SELECT q.id, q.type, q.category_id, q.difficulty, q.status, q.version_id, q.current_version_id, v.regulation_version_id, v.source, v.source_page_group, v.source_page_start, v.source_page_end FROM question q INNER JOIN question_version v ON v.id = q.current_version_id WHERE q.id IN (${placeholders})`,
     task.question_ids.map(String),
   );
   assert.ok(generatedRows.length > 0);
@@ -333,7 +461,37 @@ async function runBody(ctx, mockPort) {
     assert.equal(String(row.version_id), versionId);
     assert.equal(String(row.regulation_version_id), versionId);
     assert.equal(row.source, 'ai');
+    assert.equal(row.source_page_group, null);
+    assert.equal(row.source_page_start, null);
+    assert.equal(row.source_page_end, null);
   }
+
+  const regenQuestion = generatedRows.find((row) => row.type === 'single');
+  assert.ok(regenQuestion, 'Mock AI 结果应至少包含一题可重生成的单选题');
+  const regenQuestionId = String(regenQuestion.id);
+  const regenVersionId = String(regenQuestion.current_version_id);
+  const missingExpectedRegen = await ctx.request(admin.actor, 'POST', `/ai/questions/${regenQuestionId}/regenerate`, {});
+  assert.equal(missingExpectedRegen.status, 400);
+  const beforeStaleRegen = await ctx.queryTestDb(
+    'SELECT COUNT(*) AS total FROM question_version WHERE question_id = ?',
+    [regenQuestionId],
+  );
+  const staleRegen = await ctx.request(admin.actor, 'POST', `/ai/questions/${regenQuestionId}/regenerate`, {
+    expected_version_id: String(BigInt(regenVersionId) + 1n),
+  });
+  assert.equal(staleRegen.status, 409);
+  assert.equal(staleRegen.code, 40940);
+  const afterStaleRegen = await ctx.queryTestDb(
+    'SELECT COUNT(*) AS total FROM question_version WHERE question_id = ?',
+    [regenQuestionId],
+  );
+  assert.equal(Number(afterStaleRegen[0].total), Number(beforeStaleRegen[0].total));
+  const regenerated = await ctx.request(admin.actor, 'POST', `/ai/questions/${regenQuestionId}/regenerate`, {
+    expected_version_id: regenVersionId,
+  });
+  assert.equal(regenerated.status, 200, JSON.stringify(regenerated));
+  assert.equal(regenerated.data.revision, 2);
+  assert.equal(regenerated.data.difficulty, 'hard');
 }
 
 export async function run(ctx) {

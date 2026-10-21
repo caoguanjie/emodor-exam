@@ -25,13 +25,21 @@ export class QuestionConceptService {
     return concept;
   }
 
-  async list(input: { categoryId: string; type?: QuestionType; keyword?: string }) {
+  async list(input: { categoryId: string; type?: QuestionType; keyword?: string; page?: number; pageSize?: number }) {
+    const page = Math.max(1, Number(input.page || 1));
+    const pageSize = Math.min(100, Math.max(1, Number(input.pageSize || 20)));
     const qb = this.conceptRepo.createQueryBuilder('concept')
       .where('concept.category_id = :categoryId', { categoryId: String(input.categoryId) });
     if (input.type) qb.andWhere('concept.type = :type', { type: input.type });
     if (input.keyword?.trim()) qb.andWhere('concept.name LIKE :keyword', { keyword: `%${input.keyword.trim()}%` });
-    const rows = await qb.orderBy('concept.id', 'ASC').getMany();
-    return rows.map((row) => ({ id: String(row.id), category_id: String(row.categoryId), type: row.type, name: row.name }));
+    const total = await qb.getCount();
+    const rows = await qb.orderBy('concept.id', 'ASC').skip((page - 1) * pageSize).take(pageSize).getMany();
+    return {
+      items: rows.map((row) => ({ id: String(row.id), category_id: String(row.categoryId), type: row.type, name: row.name })),
+      total,
+      page,
+      page_size: pageSize,
+    };
   }
 
   async options(input: { categoryId: string; type: QuestionType; page?: number; pageSize?: number; keyword?: string }) {
