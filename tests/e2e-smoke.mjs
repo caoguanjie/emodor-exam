@@ -119,8 +119,8 @@ export function startMockAi(port = mockPort) {
         }
         // Respect the requested distribution so a one-question task does not
         // silently receive the historical 10+5 fixture batch.
-        const singleCount = prompt.match(/请生成\s+(\d+)\s*道单选题/)?.[1];
-        const multipleCount = prompt.match(/请生成\s+(\d+)\s*道多选题/)?.[1];
+        const singleCount = prompt.match(/(\d+)\s*道单选题/)?.[1];
+        const multipleCount = prompt.match(/(\d+)\s*道多选题/)?.[1];
         const wantOne = prompt.includes('重新命制 1 道');
         const singles = MOCK_QUESTIONS.filter((question) => question.type === 'single');
         const multiples = MOCK_QUESTIONS.filter((question) => question.type === 'multiple');
