@@ -75,6 +75,8 @@ async function ffmpegFixture(extension = '.mp4', options = {}) {
   const output = join(root, `silent-h264${extension}`);
   const executable = options.executable || process.env.FFMPEG_PATH || 'ffmpeg';
   const timeoutMs = options.timeoutMs || 15_000;
+  const readyMarker = options.readyMarker;
+  const startupTimeoutMs = options.startupTimeoutMs || 5_000;
   try {
     await new Promise((resolve, reject) => {
       const args = [
@@ -93,10 +95,15 @@ async function ffmpegFixture(extension = '.mp4', options = {}) {
       let stopReason;
       let processError;
       let timer;
+      let startupTimer;
       const requestStop = (error) => {
         if (settled || stopReason) return;
         stopReason = error;
         child.kill('SIGKILL');
+      };
+      const startRunTimeout = () => {
+        if (settled || stopReason || timer) return;
+        timer = setTimeout(() => requestStop(new Error('ffmpeg fixture timed out')), timeoutMs);
       };
       child.stderr.on('data', (chunk) => {
         if (settled || stopReason) return;
@@ -106,6 +113,10 @@ async function ffmpegFixture(extension = '.mp4', options = {}) {
           return;
         }
         stderr += chunk.toString();
+        if (readyMarker && stderr.includes(readyMarker)) {
+          clearTimeout(startupTimer);
+          startRunTimeout();
+        }
       });
       child.once('error', (error) => {
         processError = error;
@@ -114,12 +125,21 @@ async function ffmpegFixture(extension = '.mp4', options = {}) {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(startupTimer);
         if (stopReason) reject(stopReason);
         else if (processError) reject(processError);
+        else if (readyMarker && !stderr.includes(readyMarker)) reject(new Error('ffmpeg fixture exited before ready'));
         else if (code === 0) resolve();
         else reject(new Error(`ffmpeg failed: ${stderr.slice(0, 200)}`));
       });
-      timer = setTimeout(() => requestStop(new Error('ffmpeg fixture timed out')), timeoutMs);
+      if (readyMarker) {
+        startupTimer = setTimeout(
+          () => requestStop(new Error('ffmpeg fixture readiness timed out')),
+          startupTimeoutMs,
+        );
+      } else {
+        startRunTimeout();
+      }
     });
     return await readFile(output);
   } finally {
@@ -150,6 +170,7 @@ export async function verifyFfmpegFixtureTimeoutCleanup() {
   const controlRoot = await mkdtemp(join(tmpdir(), 'ruleexam-media-fixture-timeout-check-'));
   const executable = join(controlRoot, 'delayed-close-ffmpeg.cjs');
   const recordPath = join(controlRoot, 'processes.json');
+  const readyMarker = `ruleexam-ffmpeg-ready-${randomBytes(8).toString('hex')}`;
   let record;
   try {
     await writeFile(executable, `#!/usr/bin/env node
@@ -165,10 +186,16 @@ export async function verifyFfmpegFixtureTimeoutCleanup() {
         descendantPid: descendant.pid,
         fixtureRoot: path.dirname(output),
       }));
+      process.stderr.write(${JSON.stringify(`${readyMarker}\n`)});
       setInterval(() => {}, 1000);
     `, 'utf8');
     await chmod(executable, 0o755);
-    const error = await captureError(ffmpegFixture('.mp4', { executable, timeoutMs: 1000 }));
+    const error = await captureError(ffmpegFixture('.mp4', {
+      executable,
+      timeoutMs: 1000,
+      readyMarker,
+      startupTimeoutMs: 5000,
+    }));
     assert(error?.message === 'ffmpeg fixture timed out', `fixture timeout expected bounded error: ${error?.message ?? 'resolved'}`);
     record = JSON.parse(await readFile(recordPath, 'utf8'));
     assert(!processExists(record.pid), 'timed-out ffmpeg fixture parent was still running after rejection');
