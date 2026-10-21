@@ -523,6 +523,117 @@ describe('versioned question bank', () => {
     }), '9', '101');
   });
 
+  it('preserves the actual PDF page group through an analysis edit and uses it for the next regeneration', async () => {
+    const { service: versions, question, versions: rows } = versionServiceFixture();
+    Object.assign(question, {
+      categoryId: '11', difficulty: 'hard', currentVersionId: '99', status: 'rejected',
+    });
+    rows.push({
+      id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'hard', type: 'single',
+      stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
+      rubric: null, scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
+      sourcePageGroup: 1, sourcePageStart: 3, sourcePageEnd: 4,
+      source: 'ai', status: 'rejected', approvedBy: null, approvedAt: null, reviewedBy: '1',
+      reviewedAt: new Date(), reviewReason: '重做', createdBy: '1', legacyCapturedAt: null,
+    });
+    const renderGroup = vi.fn(async (group: number) => ({
+      startPage: group * 2 + 1, endPage: group * 2 + 2, images: [`data:image/png;base64,${group}`],
+    }));
+    const review = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
+    review.questionRepo = { findOne: vi.fn(async () => question) };
+    review.versionRepo = {
+      findOne: vi.fn(async () => ({ id: '3', regulationId: '2', fileType: 'pdf', textContent: null })),
+    };
+    review.gateway = {
+      chat: vi.fn(async () => JSON.stringify([{
+        type: 'single', stem: '重生成题干',
+        options: [{ text: 'A' }, { text: 'B' }, { text: 'C' }, { text: 'D' }],
+        answer: [0], analysis: '重生成解析',
+      }])),
+    };
+    review.pdfVision = {
+      shouldUseVision: vi.fn(() => true),
+      prepare: vi.fn(async () => ({
+        groupCount: 2, pageCount: 4, renderGroup, cleanup: vi.fn(async () => undefined),
+      })),
+    };
+    review.versions = versions;
+    review.dataSource = {
+      createQueryBuilder: () => {
+        const builder: any = {
+          select: () => builder, from: () => builder, innerJoin: () => builder, where: () => builder,
+          andWhere: () => builder, limit: () => builder, getRawOne: async () => null,
+        };
+        return builder;
+      },
+    };
+    review.audit = { log: vi.fn() };
+
+    const edited = await review.edit(
+      '5', { analysis: '<p>管理员仅修改解析</p>' }, { id: 9, name: 'admin' }, null, '99',
+    );
+
+    expect(edited.current_version_id).toBe('100');
+    expect(rows[1]).toMatchObject({
+      regulationId: '2', regulationVersionId: '3',
+      sourcePageGroup: 1, sourcePageStart: 3, sourcePageEnd: 4,
+    });
+
+    await review.regenerate('5', { id: 9, name: 'admin' }, null, '100');
+
+    expect(renderGroup).toHaveBeenCalledWith(1);
+    expect(rows[2]).toMatchObject({
+      regulationId: '2', regulationVersionId: '3',
+      sourcePageGroup: 1, sourcePageStart: 3, sourcePageEnd: 4,
+    });
+  });
+
+  it('does not inherit PDF page provenance when an edit changes the regulation source version', async () => {
+    const { service: versions, question, versions: rows } = versionServiceFixture();
+    Object.assign(question, {
+      categoryId: '11', difficulty: 'hard', currentVersionId: '99', status: 'rejected',
+    });
+    rows.push({
+      id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'hard', type: 'single',
+      stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
+      rubric: null, scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
+      sourcePageGroup: 1, sourcePageStart: 3, sourcePageEnd: 4,
+      source: 'ai', status: 'rejected', approvedBy: null, approvedAt: null, reviewedBy: '1',
+      reviewedAt: new Date(), reviewReason: '重做', createdBy: '1', legacyCapturedAt: null,
+    });
+    (versions as any).regulationVersionRepo = {
+      findOne: vi.fn(async ({ where }: any) => (
+        String(where.id) === '4' && String(where.regulationId) === '2'
+          ? { id: '4', regulationId: '2' }
+          : null
+      )),
+    };
+    const review = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
+    review.questionRepo = { findOne: vi.fn(async () => question) };
+    review.versions = versions;
+    review.dataSource = {
+      createQueryBuilder: () => {
+        const builder: any = {
+          select: () => builder, from: () => builder, innerJoin: () => builder, where: () => builder,
+          andWhere: () => builder, limit: () => builder, getRawOne: async () => null,
+        };
+        return builder;
+      },
+    };
+    review.audit = { log: vi.fn() };
+
+    const edited = await review.edit(
+      '5', { regulation_version_id: '4', analysis: '<p>改用新制度版本</p>' },
+      { id: 9, name: 'admin' }, null, '99',
+    );
+
+    expect(edited.current_version_id).toBe('100');
+    expect(rows[1]).toMatchObject({
+      regulationId: '2', regulationVersionId: '4',
+      sourcePageGroup: null, sourcePageStart: null, sourcePageEnd: null,
+    });
+  });
+
   it('rejects a delayed regeneration when the current version changes and creates no wrong version', async () => {
     const { service: versions, question, versions: rows } = versionServiceFixture();
     question.categoryId = '11';

@@ -267,7 +267,23 @@ export class QuestionVersionService implements OnModuleInit {
         if (!found) throw Errors.questionVersionConflict('题目当前版本不存在');
         current = found;
       }
-      const next = await versionRepo.save(this.versionEntity(versionRepo, String(question.id), Number(current.revision) + 1, draft, actorId));
+      const sourceUnchanged = (current.regulationId ?? null) === (draft.regulationId ?? null)
+        && (current.regulationVersionId ?? null) === (draft.regulationVersionId ?? null);
+      const draftHasNoProvenance = [draft.sourcePageGroup, draft.sourcePageStart, draft.sourcePageEnd]
+        .every((value) => value === undefined);
+      const currentProvenance = [current.sourcePageGroup, current.sourcePageStart, current.sourcePageEnd];
+      const currentHasCompleteProvenance = currentProvenance.every((value) => Number.isInteger(value));
+      const revisionDraft = sourceUnchanged && draftHasNoProvenance && currentHasCompleteProvenance
+        ? {
+            ...draft,
+            sourcePageGroup: current.sourcePageGroup!,
+            sourcePageStart: current.sourcePageStart!,
+            sourcePageEnd: current.sourcePageEnd!,
+          }
+        : draft;
+      const next = await versionRepo.save(
+        this.versionEntity(versionRepo, String(question.id), Number(current.revision) + 1, revisionDraft, actorId),
+      );
       this.applyCompatibility(question, next);
       await questionRepo.save(question);
       await this.bindMedia(manager, next, draft.mediaAssetIds);
