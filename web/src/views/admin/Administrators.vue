@@ -47,20 +47,21 @@
       <template #footer><el-button @click="candidateDialog = false">取消</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="dialog" :title="selected ? `配置业务角色：${selected.username}` : '配置业务角色'" width="480px">
+    <el-dialog v-model="dialog" :title="selected ? `配置业务角色：${selected.username}` : '配置业务角色'" width="480px" :before-close="beforeRoleDialogClose">
       <div class="dialog-note">保存后旧令牌立即重新计算权限；清空角色表示移除该账号的业务角色。</div>
       <el-checkbox-group v-model="selectedRoleIds" class="role-list">
         <el-checkbox v-for="role in editableRoles" :key="role.id" :label="role.id">{{ role.name }}（{{ role.code }}）</el-checkbox>
       </el-checkbox-group>
-      <template #footer><el-button @click="dialog = false">取消</el-button><el-button v-if="auth.can('administrators:write')" type="primary" :loading="saving" @click="saveRoles">保存</el-button></template>
+      <template #footer><el-button @click="closeRoleDialog">取消</el-button><el-button v-if="auth.can('administrators:write')" type="primary" :loading="saving" @click="saveRoles">保存</el-button></template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import http from '../../api/http';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 
 interface AdministratorRow {
@@ -104,6 +105,40 @@ const candidateRows = ref<CandidateAccount[]>([]);
 const candidateTotal = ref(0);
 const candidateQuery = reactive({ page: 1, page_size: 20, keyword: '' });
 const editableRoles = computed(() => roles.value.filter((role) => !role.is_system && role.status === 1));
+const dirty = ref(false);
+const roleBaseline = ref<{ selected: AdministratorRow | CandidateAccount | null; roleIds: string[] }>({ selected: null, roleIds: [] });
+
+function cloneAccount(value: AdministratorRow | CandidateAccount | null) {
+  return value ? { ...value, ...('role_ids' in value ? { role_ids: [...value.role_ids], permissions: [...value.permissions] } : {}) } : null;
+}
+function beginRoleDraft(account: AdministratorRow | CandidateAccount, roleIds: string[]) {
+  selected.value = account;
+  selectedRoleIds.value = [...roleIds];
+  roleBaseline.value = { selected: cloneAccount(account), roleIds: [...roleIds] };
+  dirty.value = false;
+  dialog.value = true;
+}
+function discardRoleDraft() {
+  selected.value = cloneAccount(roleBaseline.value.selected);
+  selectedRoleIds.value = [...roleBaseline.value.roleIds];
+  dirty.value = false;
+  dialog.value = false;
+}
+
+const unsaved = useUnsavedChanges(dirty, { onDiscard: discardRoleDraft });
+watch(selectedRoleIds, (value) => {
+  dirty.value = dialog.value && JSON.stringify(value) !== JSON.stringify(roleBaseline.value.roleIds);
+}, { deep: true, flush: 'sync' });
+
+async function closeRoleDialog() {
+  if (await unsaved.confirmDiscard()) dialog.value = false;
+}
+async function beforeRoleDialogClose(done: () => void) {
+  if (await unsaved.confirmDiscard()) {
+    dialog.value = false;
+    done();
+  }
+}
 
 function roleName(code: string) {
   return ({ super_admin: '超级管理员', regulation_admin: '制度管理员', employee: '员工' } as Record<string, string>)[code] || code;
@@ -121,11 +156,10 @@ async function loadAssignableRoles() {
 }
 
 async function openRoles(row: AdministratorRow) {
-  selected.value = row;
   await loadAssignableRoles();
   const editableIds = new Set(editableRoles.value.map((role) => String(role.id)));
-  selectedRoleIds.value = (row.role_ids || []).map((id) => String(id)).filter((id) => editableIds.has(id));
-  dialog.value = true;
+  const roleIds = (row.role_ids || []).map((id) => String(id)).filter((id) => editableIds.has(id));
+  beginRoleDraft(row, roleIds);
 }
 
 async function openAssignment() {
@@ -146,10 +180,8 @@ async function searchCandidates() {
 
 async function chooseCandidate(row: CandidateAccount) {
   candidateDialog.value = false;
-  selected.value = row;
   await loadAssignableRoles();
-  selectedRoleIds.value = [];
-  dialog.value = true;
+  beginRoleDraft(row, []);
 }
 
 async function saveRoles() {
@@ -158,6 +190,8 @@ async function saveRoles() {
   try {
     await http.put(`/admin/administrators/${selected.value.id}/roles`, { role_ids: selectedRoleIds.value });
     ElMessage.success('角色权限已更新');
+    roleBaseline.value = { selected: cloneAccount(selected.value), roleIds: [...selectedRoleIds.value] };
+    unsaved.markClean();
     dialog.value = false;
     await load();
   } finally { saving.value = false; }

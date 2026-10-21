@@ -33,20 +33,21 @@
     <el-empty v-if="!loading && items.length === 0" description="暂无培训类别" />
     <el-pagination v-model:current-page="query.page" style="margin-top:16px; justify-content:flex-end" layout="total, prev, pager, next" :total="total" :page-size="query.page_size" @current-change="load" />
 
-    <el-dialog v-model="dialog" :title="form.id ? '编辑类别' : '新增类别'" width="480px">
+    <el-dialog v-model="dialog" :title="form.id ? '编辑类别' : '新增类别'" width="480px" :before-close="beforeDialogClose">
       <el-form label-width="88px">
         <el-form-item label="名称"><el-input v-model="form.name" maxlength="128" /></el-form-item>
         <el-form-item label="说明"><el-input v-model="form.description" type="textarea" maxlength="2000" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="dialog = false">取消</el-button><el-button v-if="auth.can('training_categories:write')" type="primary" @click="save">保存</el-button></template>
+      <template #footer><el-button @click="closeDialog">取消</el-button><el-button v-if="auth.can('training_categories:write')" type="primary" @click="save">保存</el-button></template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { formatDateTime } from '../../utils/format';
 import { useAuthStore } from '../../stores/auth';
 
@@ -57,6 +58,40 @@ const dialog = ref(false);
 const form = reactive<any>({});
 const query = reactive({ page: 1, page_size: 20, keyword: '', status: undefined as number | undefined });
 const auth = useAuthStore();
+const dirty = ref(false);
+const formBaseline = ref('');
+
+function serializeForm() { return JSON.stringify(form); }
+function replaceForm(value: any) {
+  Object.keys(form).forEach((key) => delete form[key]);
+  Object.assign(form, value);
+}
+function beginDraft(value: any) {
+  replaceForm(value);
+  formBaseline.value = serializeForm();
+  dirty.value = false;
+  dialog.value = true;
+}
+function discardDraft() {
+  replaceForm(formBaseline.value ? JSON.parse(formBaseline.value) : {});
+  dirty.value = false;
+  dialog.value = false;
+}
+
+const unsaved = useUnsavedChanges(dirty, { onDiscard: discardDraft });
+watch(() => serializeForm(), () => {
+  dirty.value = dialog.value && serializeForm() !== formBaseline.value;
+}, { flush: 'sync' });
+
+async function closeDialog() {
+  if (await unsaved.confirmDiscard()) dialog.value = false;
+}
+async function beforeDialogClose(done: () => void) {
+  if (await unsaved.confirmDiscard()) {
+    dialog.value = false;
+    done();
+  }
+}
 
 async function load() {
   loading.value = true;
@@ -66,13 +101,17 @@ async function load() {
     total.value = data.total || 0;
   } finally { loading.value = false; }
 }
-function openCreate() { Object.keys(form).forEach((key) => delete form[key]); form.name = ''; form.description = ''; dialog.value = true; }
-function openEdit(row: any) { Object.assign(form, { id: row.id, name: row.name, description: row.description || '' }); dialog.value = true; }
+function openCreate() { beginDraft({ name: '', description: '' }); }
+function openEdit(row: any) { beginDraft({ id: row.id, name: row.name, description: row.description || '' }); }
 async function save() {
   if (!form.name?.trim()) { ElMessage.warning('请填写类别名称'); return; }
   if (form.id) await http.put(`/admin/training-categories/${form.id}`, { name: form.name, description: form.description });
   else await http.post('/admin/training-categories', { name: form.name, description: form.description });
-  ElMessage.success('已保存'); dialog.value = false; await load();
+  ElMessage.success('已保存');
+  formBaseline.value = serializeForm();
+  unsaved.markClean();
+  dialog.value = false;
+  await load();
 }
 async function toggleStatus(row: any) {
   await http.put(`/admin/training-categories/${row.id}/status`, { status: row.status === 1 ? 0 : 1 });

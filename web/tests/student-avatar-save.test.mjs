@@ -14,6 +14,7 @@ const authStubId = '\0student-avatar-save-auth-test';
 const formatStubId = '\0student-avatar-save-format-test';
 const mediaStubId = '\0student-avatar-save-media-test';
 const importPreviewStubId = '\0student-avatar-save-import-preview-test';
+const unsavedStubId = '\0student-avatar-save-unsaved-test';
 
 const testContext = {
   post: async () => ({}),
@@ -62,6 +63,17 @@ const mediaStubCode = `
   };
 `;
 const importPreviewStubCode = `export default { name: 'ImportPreviewStub', render() { return null; } };`;
+const unsavedStubCode = `
+  export function useUnsavedChanges(dirty, options = {}) {
+    return {
+      markClean() { dirty.value = false; },
+      async confirmDiscard() {
+        if (dirty.value) await options.onDiscard?.();
+        return true;
+      },
+    };
+  }
+`;
 
 function testPlugin() {
   return {
@@ -75,6 +87,7 @@ function testPlugin() {
       if (source === '../../utils/format' && importer?.includes('/src/views/admin/Users.vue')) return formatStubId;
       if (source === '../../components/MediaUpload.vue' && importer?.includes('/src/views/admin/Users.vue')) return mediaStubId;
       if (source === '../../components/ImportPreview.vue' && importer?.includes('/src/views/admin/Users.vue')) return importPreviewStubId;
+      if (source === '../../composables/useUnsavedChanges' && importer?.includes('/src/views/admin/Users.vue')) return unsavedStubId;
       if (source === clientComponentId) return clientComponentId;
       return undefined;
     },
@@ -86,6 +99,7 @@ function testPlugin() {
       if (id === formatStubId) return formatStubCode;
       if (id === mediaStubId) return mediaStubCode;
       if (id === importPreviewStubId) return importPreviewStubCode;
+      if (id === unsavedStubId) return unsavedStubCode;
       if (id === clientComponentId) return clientComponentCode;
       return undefined;
     },

@@ -46,7 +46,7 @@
       <el-empty v-if="!studentLoading && students.length === 0" description="暂无学员" />
       <el-pagination v-model:current-page="studentQuery.page" style="margin-top:16px; justify-content:flex-end" layout="total, prev, pager, next" :total="studentTotal" :page-size="studentQuery.page_size" @current-change="loadStudents" />
 
-      <el-dialog v-model="studentDialog" :title="studentForm.id ? '编辑学员' : '新增学员'" width="500px" destroy-on-close>
+      <el-dialog v-model="studentDialog" :title="studentForm.id ? '编辑学员' : '新增学员'" width="500px" destroy-on-close :before-close="beforeStudentDialogClose">
         <el-form label-width="88px" :disabled="studentSaveBusy">
           <el-form-item label="用户名"><el-input v-model="studentForm.username" :disabled="!!studentForm.id" maxlength="64" /></el-form-item>
           <el-form-item label="姓名"><el-input v-model="studentForm.real_name" maxlength="64" /></el-form-item>
@@ -135,7 +135,7 @@
     <el-pagination style="margin-top:16px; justify-content:flex-end" layout="total, prev, pager, next" :total="total"
       :page-size="query.page_size" v-model:current-page="query.page" @current-change="load" />
 
-    <el-dialog v-model="dialog" :title="form.id ? '编辑员工' : '新增员工'" width="480px">
+    <el-dialog v-model="dialog" :title="form.id ? '编辑员工' : '新增员工'" width="480px" :before-close="beforeEmployeeDialogClose">
       <el-form label-width="90px">
         <el-form-item label="用户名"><el-input v-model="form.username" :disabled="!!form.id" maxlength="64" /></el-form-item>
         <el-form-item label="姓名"><el-input v-model="form.real_name" maxlength="64" /></el-form-item>
@@ -157,7 +157,7 @@
         <el-form-item label="邮箱"><el-input v-model="form.email" maxlength="128" /></el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialog = false">取消</el-button>
+        <el-button @click="closeEmployeeDialog">取消</el-button>
         <el-button v-if="auth.can('students:write')" type="primary" @click="onSave">保存</el-button>
       </template>
     </el-dialog>
@@ -178,11 +178,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { UploadFile } from 'element-plus';
 import http, { download, upload } from '../../api/http';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 import { formatDateTime } from '../../utils/format';
 import ImportPreview from '../../components/ImportPreview.vue';
@@ -228,6 +229,110 @@ const studentQuery = reactive<any>({ page: 1, page_size: 20, keyword: '', catego
 const studentImportDefaults = reactive<{ source: string; category_id: string }>({ source: '', category_id: '' });
 const studentPreview = ref<ImportPreviewData | null>(null);
 const previewVisible = ref(false);
+const employeeDirty = ref(false);
+const employeeBaseline = ref('{}');
+const studentDirty = ref(false);
+interface StudentDraftBaseline {
+  form: Record<string, unknown>;
+  avatarOriginalId: string | null;
+  avatarWritePending: boolean;
+  avatarSync: { status: AvatarSyncStatus; message: string };
+}
+const studentBaseline = ref<StudentDraftBaseline>({
+  form: {},
+  avatarOriginalId: null,
+  avatarWritePending: false,
+  avatarSync: { status: 'idle', message: '' },
+});
+
+function cloneDraft<T>(value: T): T { return JSON.parse(JSON.stringify(value)); }
+function replaceReactive(target: Record<string, unknown>, value: Record<string, unknown>) {
+  Object.keys(target).forEach((key) => delete target[key]);
+  Object.assign(target, value);
+}
+function captureEmployeeBaseline() {
+  employeeBaseline.value = JSON.stringify(form);
+  employeeDirty.value = false;
+}
+function beginEmployeeDraft(value: Record<string, unknown>) {
+  replaceReactive(form, value);
+  captureEmployeeBaseline();
+  dialog.value = true;
+}
+function discardEmployeeDraft() {
+  replaceReactive(form, JSON.parse(employeeBaseline.value));
+  employeeDirty.value = false;
+  dialog.value = false;
+}
+function captureStudentBaseline() {
+  studentBaseline.value = {
+    form: cloneDraft(studentForm),
+    avatarOriginalId: studentAvatarOriginalId.value,
+    avatarWritePending: studentAvatarWritePending.value,
+    avatarSync: { ...studentAvatarSync },
+  };
+  studentDirty.value = false;
+}
+function discardStudentDraft() {
+  studentAvatarDialogVersion.value += 1;
+  replaceReactive(studentForm, cloneDraft(studentBaseline.value.form));
+  studentAvatarOriginalId.value = studentBaseline.value.avatarOriginalId;
+  studentAvatarWritePending.value = studentBaseline.value.avatarWritePending;
+  Object.assign(studentAvatarSync, studentBaseline.value.avatarSync);
+  studentDirty.value = false;
+  studentDialog.value = false;
+}
+function rebaseStudentAvatar(confirmedId: string | null) {
+  if (!studentDialog.value) return;
+  studentBaseline.value = {
+    ...studentBaseline.value,
+    form: { ...studentBaseline.value.form, avatar_id: confirmedId },
+    avatarOriginalId: confirmedId,
+    avatarWritePending: false,
+    avatarSync: { status: 'idle', message: '' },
+  };
+}
+
+const employeeUnsaved = useUnsavedChanges(employeeDirty, { onDiscard: discardEmployeeDraft });
+const studentUnsaved = useUnsavedChanges(studentDirty, { onDiscard: discardStudentDraft });
+watch(() => JSON.stringify(form), () => {
+  employeeDirty.value = dialog.value && JSON.stringify(form) !== employeeBaseline.value;
+}, { flush: 'sync' });
+watch([() => JSON.stringify(studentForm), studentAvatarWritePending], () => {
+  const baseline = studentBaseline.value;
+  studentDirty.value = studentDialog.value && (
+    JSON.stringify(studentForm) !== JSON.stringify(baseline.form)
+    || studentAvatarWritePending.value !== baseline.avatarWritePending
+  );
+}, { flush: 'sync' });
+
+async function closeEmployeeDialog() {
+  if (await employeeUnsaved.confirmDiscard()) dialog.value = false;
+}
+async function beforeEmployeeDialogClose(done: () => void) {
+  if (await employeeUnsaved.confirmDiscard()) {
+    dialog.value = false;
+    done();
+  }
+}
+
+function closeCleanStudentDialog() {
+  studentAvatarDialogVersion.value += 1;
+  studentDialog.value = false;
+  studentAvatarOriginalId.value = null;
+  resetStudentAvatarState();
+  studentUnsaved.markClean();
+}
+
+async function cancelStudentDialog() {
+  if (!await studentUnsaved.confirmDiscard()) return;
+  if (studentDialog.value) closeCleanStudentDialog();
+}
+async function beforeStudentDialogClose(done: () => void) {
+  if (!await studentUnsaved.confirmDiscard()) return;
+  if (studentDialog.value) closeCleanStudentDialog();
+  done();
+}
 
 function roleLabel(r: string) {
   return ({ super_admin: '超级管理员', regulation_admin: '制度管理员', employee: '员工' } as any)[r] || r;
@@ -295,11 +400,13 @@ function setStudentAvatarSync(result: AvatarReconcileResult) {
   studentAvatarSync.status = result.outcome === 'applied' ? 'confirmed' : result.outcome;
   studentAvatarSync.message = result.message;
   if (result.outcome === 'applied') {
+    rebaseStudentAvatar(result.confirmedId);
     studentAvatarOriginalId.value = result.confirmedId;
     studentAvatarWritePending.value = false;
   } else if (result.outcome === 'not_applied') {
     // The server has confirmed the current id, while the staged desired id is
     // retained in studentForm.avatar_id for an explicit save retry.
+    rebaseStudentAvatar(result.confirmedId);
     studentAvatarOriginalId.value = result.confirmedId;
     studentAvatarWritePending.value = true;
   } else {
@@ -359,6 +466,7 @@ function openStudentCreate() {
   studentAvatarOriginalId.value = null;
   resetStudentAvatarState();
   Object.assign(studentForm, { source: 'institution', category_id: categories.value[0]?.id || '', department_id: '' });
+  captureStudentBaseline();
   studentDialog.value = true;
 }
 function openStudentEdit(row: any) {
@@ -367,6 +475,7 @@ function openStudentEdit(row: any) {
   Object.assign(studentForm, row, { department_id: row.department_id || '', category_id: row.category_id || '', employee_no: row.employee_no || '' });
   studentAvatarOriginalId.value = row.avatar_id ? String(row.avatar_id) : null;
   resetStudentAvatarState();
+  captureStudentBaseline();
   studentDialog.value = true;
 }
 
@@ -379,13 +488,6 @@ function onStudentAvatarChange(assetId: string | null) {
   studentAvatarWritePending.value = true;
   studentAvatarSync.status = 'pending';
   studentAvatarSync.message = assetId ? '头像已暂存，点击保存后绑定' : '头像清除已暂存，点击保存后生效';
-}
-
-function cancelStudentDialog() {
-  studentAvatarDialogVersion.value += 1;
-  studentDialog.value = false;
-  studentAvatarOriginalId.value = null;
-  resetStudentAvatarState();
 }
 
 async function queryStudentAvatarState() {
@@ -444,6 +546,7 @@ async function saveStudent() {
     }
     if (context.studentId) studentAvatarOriginalId.value = context.desiredId;
     ElMessage.success('已保存');
+    studentUnsaved.markClean();
     studentAvatarDialogVersion.value += 1;
     studentDialog.value = false;
     studentAvatarOriginalId.value = null;
@@ -478,19 +581,16 @@ async function commitStudentImport(rows: number[]) {
 }
 
 function openCreate() {
-  Object.keys(form).forEach((k) => delete form[k]);
-  Object.assign(form, { role: 'employee' });
-  dialog.value = true;
+  beginEmployeeDraft({ role: 'employee' });
 }
 
 function openEdit(row: any) {
-  Object.keys(form).forEach((k) => delete form[k]);
-  Object.assign(form, row, {
+  beginEmployeeDraft({
+    ...row,
     employee_no: row.employee_no || '',
     // 列表返回的 department_id 是 number，DTO 按字符串校验，树选择器取值也是字符串
     department_id: row.department_id === null || row.department_id === undefined ? '' : String(row.department_id),
   });
-  dialog.value = true;
 }
 
 async function onSave() {
@@ -500,6 +600,8 @@ async function onSave() {
     await http.post('/users', form);
   }
   ElMessage.success('已保存');
+  captureEmployeeBaseline();
+  employeeUnsaved.markClean();
   dialog.value = false;
   await load();
 }

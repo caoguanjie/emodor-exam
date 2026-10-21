@@ -14,6 +14,12 @@ const clientIds = {
   settings: '\0a5-site-settings-client-test',
   menus: '\0a5-menus-client-test',
   dictionaries: '\0a5-dictionaries-client-test',
+  departments: '\0a5-departments-client-test',
+  users: '\0a5-users-client-test',
+  trainingCategories: '\0a5-training-categories-client-test',
+  administrators: '\0a5-administrators-client-test',
+  roles: '\0a5-roles-client-test',
+  aiConfig: '\0a5-ai-config-client-test',
   unsaved: '\0a5-unsaved-client-test',
 };
 const elementStubId = '\0a5-element-test';
@@ -22,6 +28,7 @@ const httpStubId = '\0a5-http-test';
 const authStubId = '\0a5-auth-test';
 const tabsStubId = '\0a5-tabs-test';
 const mediaStubId = '\0a5-media-test';
+const importPreviewStubId = '\0a5-import-preview-test';
 const axiosStubId = '\0a5-axios-test';
 const clientCode = new Map();
 
@@ -85,6 +92,7 @@ const iconsStubCode = `
 const httpStubCode = `
   const context = globalThis.__a5ShellTest;
   const clone = (value) => JSON.parse(JSON.stringify(value));
+  const copy = (value) => value === undefined ? undefined : clone(value);
   const http = {
     async get(path) {
       context.calls.push({ method: 'GET', path });
@@ -97,12 +105,25 @@ const httpStubCode = `
       if (path === '/me/profile') return clone(context.profile);
       if (path === '/admin/menus') return [];
       if (path === '/admin/dictionaries') return { items: [], total: 0 };
+      if (path === '/departments/tree') return { list: clone(context.departments) };
+      if (path === '/users') return { list: clone(context.users), total: context.users.length };
+      if (path === '/admin/students') return { items: clone(context.students), total: context.students.length };
+      if (/^\\/admin\\/students\\/[^/]+$/.test(path)) {
+        const id = decodeURIComponent(path.split('/').at(-1));
+        return clone(context.students.find((item) => String(item.id) === id));
+      }
+      if (path === '/admin/training-categories') return { items: clone(context.trainingCategories), total: context.trainingCategories.length };
+      if (path === '/admin/administrators') return clone(context.administrators);
+      if (path === '/admin/administrators/assignable-roles') return [
+        { id: 'role-1', code: 'role_one', name: '角色一', status: 1, is_system: false },
+        { id: 'role-2', code: 'role_two', name: '角色二', status: 1, is_system: false },
+      ];
+      if (path === '/admin/roles') return clone(context.roles);
+      if (path === '/ai/config') return { base_url: 'https://ai.example.test/v1', model: 'model-baseline', api_key_masked: '****base' };
       if (path === '/admin/menus/permission-options') {
         return [{ code: 'system_settings:write', name: '系统配置维护' }];
       }
-      if (path === '/admin/permissions') {
-        throw new Error('roles:read endpoint must not be used');
-      }
+      if (path === '/admin/permissions') return [{ code: 'students:read', name: '查看学员' }];
       if (/^\\/regulations\\/[^/]+\\/content$/.test(path)) {
         return { title: '制度', file_type: 'docx', content_html: '<p>content</p>', scroll_segments: 10, required_minutes: 1 };
       }
@@ -111,8 +132,8 @@ const httpStubCode = `
       }
       throw new Error('unexpected GET ' + path);
     },
-    async post(path) {
-      context.calls.push({ method: 'POST', path });
+    async post(path, body) {
+      context.calls.push({ method: 'POST', path, body: copy(body) });
       if (path === '/learning/sessions/start') {
         context.learningStarts += 1;
         return { session_id: 'session-' + context.learningStarts, progress: { total_seconds: 0, required_seconds: 60, max_scroll_percent: 0, scroll_coverage: { total_segments: 10, covered_count: 0 }, is_valid: false, valid_at: null } };
@@ -128,15 +149,16 @@ const httpStubCode = `
       return {};
     },
     async put(path, body) {
-      context.calls.push({ method: 'PUT', path, body });
+      context.calls.push({ method: 'PUT', path, body: copy(body) });
       if (path === '/admin/site-settings') {
         context.siteConfig = clone(body);
         return clone(body);
       }
+      if (path === '/ai/config') return { base_url: body.base_url, model: body.model, api_key_masked: '****saved' };
       return {};
     },
     async patch(path, body) {
-      context.calls.push({ method: 'PATCH', path, body });
+      context.calls.push({ method: 'PATCH', path, body: copy(body) });
       if (path === '/me/profile') context.profile = { ...context.profile, ...clone(body) };
       return {};
     },
@@ -144,6 +166,8 @@ const httpStubCode = `
   };
   export default http;
   export function publicSiteAssetUrl(assetId) { return '/public/' + assetId; }
+  export function download() {}
+  export async function upload() { return {}; }
 `;
 
 const authStubCode = `
@@ -178,6 +202,11 @@ const mediaStubCode = `
   export default { name: 'MediaUploadStub', props: ['modelValue'], render() { return h('media-upload'); } };
 `;
 
+const importPreviewStubCode = `
+  import { h } from 'vue';
+  export default { name: 'ImportPreviewStub', render() { return h('import-preview'); } };
+`;
+
 const axiosStubCode = `export default { async post() { return { data: {} }; } };`;
 
 function testPlugin() {
@@ -195,6 +224,7 @@ function testPlugin() {
       if (source === '../stores/auth' || source === '../../stores/auth' || source === '/src/stores/auth.ts') return authStubId;
       if (source === '../stores/tabs' || source === '/src/stores/tabs.ts') return tabsStubId;
       if (source === '../components/MediaUpload.vue' || source === '../../components/MediaUpload.vue' || source === '/src/components/MediaUpload.vue') return mediaStubId;
+      if (source === '../../components/ImportPreview.vue' || source === '/src/components/ImportPreview.vue') return importPreviewStubId;
       if (source === '/src/composables/useUnsavedChanges.ts' && clientCode.has(clientIds.unsaved)) return clientIds.unsaved;
       return undefined;
     },
@@ -206,6 +236,7 @@ function testPlugin() {
       if (id === authStubId) return authStubCode;
       if (id === tabsStubId) return tabsStubCode;
       if (id === mediaStubId) return mediaStubCode;
+      if (id === importPreviewStubId) return importPreviewStubCode;
       if (id === axiosStubId) return axiosStubCode;
       return undefined;
     },
@@ -251,7 +282,7 @@ function passthrough(type) {
   return {
     inheritAttrs: false,
     setup(_props, { attrs, slots }) {
-      return () => h(type, attrs, Object.values(slots).flatMap((slot) => slot?.({ row: {} }) || []));
+      return () => h(type, attrs, Object.values(slots).flatMap((slot) => slot?.({ row: {}, data: {} }) || []));
     },
   };
 }
@@ -263,7 +294,7 @@ const elementComponents = [
   'el-header', 'el-icon', 'el-input', 'el-input-number', 'el-main', 'el-menu',
   'el-menu-item', 'el-option', 'el-pagination', 'el-progress', 'el-radio',
   'el-radio-button', 'el-radio-group', 'el-result', 'el-scrollbar', 'el-select',
-  'el-switch', 'el-table', 'el-table-column', 'el-tag', 'el-tree-select',
+  'el-switch', 'el-table', 'el-table-column', 'el-tag', 'el-tree', 'el-tree-select', 'el-upload',
 ];
 
 function registerUi(app) {
@@ -324,6 +355,12 @@ let ExamRoom;
 let SiteSettings;
 let Menus;
 let Dictionaries;
+let Departments;
+let Users;
+let TrainingCategories;
+let Administrators;
+let Roles;
+let AiConfig;
 let useUnsavedChanges;
 let fakeWindow;
 let fakeDocument;
@@ -428,6 +465,13 @@ async function mountShell(initialPath, extraChildren = []) {
         { path: 'settings', component: SiteSettings, meta: { title: '网站配置', admin: true, cache: true } },
         { path: 'menus', component: Menus, meta: { title: '菜单配置', admin: true, cache: true } },
         { path: 'dictionaries', component: Dictionaries, meta: { title: '字典配置', admin: true, cache: true } },
+        { path: 'admin/departments', component: Departments, meta: { title: '部门管理', admin: true, cache: true } },
+        { path: 'admin/users', component: Users, meta: { title: '员工管理', admin: true, cache: true } },
+        { path: 'admin/students', component: Users, meta: { title: '学员管理', admin: true, cache: true } },
+        { path: 'admin/training-categories', component: TrainingCategories, meta: { title: '培训类别', admin: true, cache: true } },
+        { path: 'admin/administrators', component: Administrators, meta: { title: '管理员', admin: true, cache: true } },
+        { path: 'admin/roles', component: Roles, meta: { title: '角色权限', admin: true, cache: true } },
+        { path: 'admin/ai-config', component: AiConfig, meta: { title: 'AI 配置', admin: true, cache: true } },
         { path: 'other', component: OtherPage, meta: { title: '其它管理页', admin: true, cache: true } },
         ...extraChildren,
       ],
@@ -481,6 +525,12 @@ before(async () => {
   SiteSettings = await loadClientSfc('/src/views/admin/SiteSettings.vue', clientIds.settings);
   Menus = await loadClientSfc('/src/views/admin/Menus.vue', clientIds.menus);
   Dictionaries = await loadClientSfc('/src/views/admin/Dictionaries.vue', clientIds.dictionaries);
+  Departments = await loadClientSfc('/src/views/admin/Departments.vue', clientIds.departments);
+  Users = await loadClientSfc('/src/views/admin/Users.vue', clientIds.users);
+  TrainingCategories = await loadClientSfc('/src/views/admin/TrainingCategories.vue', clientIds.trainingCategories);
+  Administrators = await loadClientSfc('/src/views/admin/Administrators.vue', clientIds.administrators);
+  Roles = await loadClientSfc('/src/views/admin/Roles.vue', clientIds.roles);
+  AiConfig = await loadClientSfc('/src/views/admin/AiConfig.vue', clientIds.aiConfig);
 });
 
 after(async () => {
@@ -500,7 +550,17 @@ beforeEach(() => {
   testContext.settingsReads = 0;
   testContext.logoutCalls = 0;
   testContext.tabResetCalls = 0;
-  testContext.permissions = new Set(['system_settings:read', 'system_settings:write']);
+  testContext.permissions = new Set([
+    'system_settings:read', 'system_settings:write', 'departments:write', 'students:write',
+    'training_categories:write', 'administrators:write', 'roles:write',
+    'ai_config:read', 'ai_config:write',
+  ]);
+  testContext.departments = [{ id: 'dept-1', parent_id: null, name: '部门基线', sort: 10, status: 1, children: [] }];
+  testContext.users = [{ id: 'user-1', username: 'employee', real_name: '员工基线', employee_no: 'E001', department_id: 'dept-1', role: 'employee', phone: '', email: '', status: 1, last_login_at: null }];
+  testContext.students = [{ id: 'student-1', username: 'student', real_name: '学员基线', employee_no: '', source: 'institution', category_id: 'category-1', department_id: '', phone: '', email: '', status: 1, avatar_id: 'avatar-old' }];
+  testContext.trainingCategories = [{ id: 'category-1', name: '类别基线', description: '类别说明', status: 1 }];
+  testContext.administrators = [{ id: 'admin-1', username: 'manager', real_name: '管理员', system_role: 'employee', status: 1, last_login_at: null, role_ids: ['role-1'], permissions: [] }];
+  testContext.roles = [{ id: 'business-role-1', code: 'business_role', name: '角色基线', permissions: ['students:read'], status: 1, is_system: false }];
   testContext.siteConfig = { logo_asset_id: 'logo-saved', banners: [{ asset_id: 'banner-saved', sort: 10 }] };
   testContext.profile = { real_name: '原姓名', phone: '13800000000', email: 'old@example.test', avatar_id: 'avatar-saved', source: 'institution', category_id: 'category-1' };
   fakeWindow.activeIntervals.clear();
@@ -712,6 +772,272 @@ test('dictionary dialog keeps a cancelled draft and restores its edit baseline a
   assert.equal(restoredDictionaries.setupState.form.label, '字典基线');
   assert.equal(restoredDictionaries.setupState.dialogVisible, false);
   assert.equal(restoredDictionaries.setupState.dirty, false);
+  mounted.unmount();
+});
+
+test('department edit protects dialog and route exits, restores baseline, and clears dirty after save', async () => {
+  const mounted = await mountShell('/admin/departments');
+  const first = findInstance(mounted.app, 'moveTree');
+  await waitFor(() => first.setupState.tree.length === 1, 'department tree');
+  first.setupState.openEdit(first.setupState.tree[0]);
+  first.setupState.form.name = '未保存部门';
+  await nextTick();
+  assert.equal(first.setupState.dirty, true);
+
+  testContext.confirmDecisions.push(false);
+  await first.setupState.closeDialog();
+  assert.equal(first.setupState.dialog, true);
+  assert.equal(first.setupState.form.name, '未保存部门');
+
+  testContext.confirmDecisions.push(false);
+  await mounted.router.push('/other');
+  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/departments');
+  assert.equal(first.setupState.form.name, '未保存部门');
+
+  testContext.confirmDecisions.push(true);
+  await mounted.router.push('/other');
+  await mounted.router.push('/admin/departments');
+  const restored = findInstance(mounted.app, 'moveTree');
+  assert.equal(restored.uid, first.uid);
+  assert.equal(restored.setupState.form.name, '部门基线');
+  assert.equal(restored.setupState.dialog, false);
+  assert.equal(restored.setupState.dirty, false);
+
+  restored.setupState.openEdit(restored.setupState.tree[0]);
+  restored.setupState.form.name = '已保存部门';
+  await restored.setupState.onSave();
+  assert.equal(restored.setupState.dirty, false);
+  assert.equal(restored.setupState.dialog, false);
+  assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/departments/dept-1' && call.body.name === '已保存部门'));
+  mounted.unmount();
+});
+
+test('employee edit protects dialog and route exits, restores baseline, and clears dirty after save', async () => {
+  const mounted = await mountShell('/admin/users');
+  const first = findInstance(mounted.app, 'studentSaveInFlightKey');
+  await waitFor(() => first.setupState.list.length === 1, 'employee list');
+  first.setupState.openEdit(first.setupState.list[0]);
+  first.setupState.form.real_name = '未保存员工';
+  await nextTick();
+  assert.equal(first.setupState.employeeDirty, true);
+
+  testContext.confirmDecisions.push(false);
+  await first.setupState.closeEmployeeDialog();
+  assert.equal(first.setupState.dialog, true);
+  assert.equal(first.setupState.form.real_name, '未保存员工');
+
+  testContext.confirmDecisions.push(false);
+  await mounted.router.push('/other');
+  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/users');
+  assert.equal(first.setupState.form.real_name, '未保存员工');
+
+  testContext.confirmDecisions.push(true);
+  await mounted.router.push('/other');
+  await mounted.router.push('/admin/users');
+  const restored = findInstance(mounted.app, 'studentSaveInFlightKey');
+  assert.equal(restored.uid, first.uid);
+  assert.equal(restored.setupState.form.real_name, '员工基线');
+  assert.equal(restored.setupState.dialog, false);
+  assert.equal(restored.setupState.employeeDirty, false);
+
+  restored.setupState.openEdit(restored.setupState.list[0]);
+  restored.setupState.form.real_name = '已保存员工';
+  await restored.setupState.onSave();
+  assert.equal(restored.setupState.employeeDirty, false);
+  assert.equal(restored.setupState.dialog, false);
+  assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/users/user-1' && call.body.real_name === '已保存员工'));
+  mounted.unmount();
+});
+
+test('student edit restores form and avatar state on discard while preserving the guarded save workflow', async () => {
+  const mounted = await mountShell('/admin/students');
+  const first = findInstance(mounted.app, 'studentSaveInFlightKey');
+  await waitFor(() => first.setupState.students.length === 1, 'student list');
+  first.setupState.openStudentEdit(first.setupState.students[0]);
+  const versionBeforeEdit = first.setupState.studentAvatarDialogVersion;
+  first.setupState.studentForm.real_name = '未保存学员';
+  first.setupState.onStudentAvatarChange('avatar-new');
+  await nextTick();
+  assert.equal(first.setupState.studentDirty, true);
+  assert.equal(first.setupState.studentAvatarWritePending, true);
+  assert.equal(first.setupState.studentAvatarSync.status, 'pending');
+
+  testContext.confirmDecisions.push(false);
+  await first.setupState.cancelStudentDialog();
+  assert.equal(first.setupState.studentDialog, true);
+  assert.equal(first.setupState.studentForm.avatar_id, 'avatar-new');
+  assert.equal(first.setupState.studentAvatarWritePending, true);
+  assert.equal(first.setupState.studentAvatarDialogVersion, versionBeforeEdit);
+
+  testContext.confirmDecisions.push(false);
+  await mounted.router.push('/other');
+  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/students');
+  assert.equal(first.setupState.studentForm.real_name, '未保存学员');
+
+  testContext.confirmDecisions.push(true);
+  await mounted.router.push('/other');
+  await mounted.router.push('/admin/students');
+  const restored = findInstance(mounted.app, 'studentSaveInFlightKey');
+  assert.equal(restored.uid, first.uid);
+  assert.equal(restored.setupState.studentForm.real_name, '学员基线');
+  assert.equal(restored.setupState.studentForm.avatar_id, 'avatar-old');
+  assert.equal(restored.setupState.studentAvatarOriginalId, 'avatar-old');
+  assert.equal(restored.setupState.studentAvatarWritePending, false);
+  assert.equal(restored.setupState.studentAvatarSync.status, 'idle');
+  assert.equal(restored.setupState.studentDialog, false);
+  assert.equal(restored.setupState.studentDirty, false);
+  assert.ok(restored.setupState.studentAvatarDialogVersion > versionBeforeEdit, 'discard invalidates late avatar continuations');
+  assert.equal(testContext.calls.some((call) => call.path === '/admin/students/student-1/avatar'), false, 'discard must not write an avatar');
+
+  restored.setupState.openStudentEdit(restored.setupState.students[0]);
+  restored.setupState.studentForm.real_name = '已保存学员';
+  restored.setupState.onStudentAvatarChange('avatar-saved');
+  await restored.setupState.saveStudent();
+  assert.equal(restored.setupState.studentDirty, false);
+  assert.equal(restored.setupState.studentDialog, false);
+  assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/admin/students/student-1' && call.body.real_name === '已保存学员'));
+  assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/admin/students/student-1/avatar' && call.body.avatar_id === 'avatar-saved'));
+  mounted.unmount();
+});
+
+test('training category edit protects dialog and route exits, restores baseline, and clears dirty after save', async () => {
+  const mounted = await mountShell('/admin/training-categories');
+  const first = findInstance(mounted.app, 'toggleStatus');
+  await waitFor(() => first.setupState.items.length === 1, 'training category list');
+  first.setupState.openEdit(first.setupState.items[0]);
+  first.setupState.form.name = '未保存类别';
+  await nextTick();
+  assert.equal(first.setupState.dirty, true);
+
+  testContext.confirmDecisions.push(false);
+  await first.setupState.closeDialog();
+  assert.equal(first.setupState.dialog, true);
+  assert.equal(first.setupState.form.name, '未保存类别');
+
+  testContext.confirmDecisions.push(false);
+  await mounted.router.push('/other');
+  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/training-categories');
+
+  testContext.confirmDecisions.push(true);
+  await mounted.router.push('/other');
+  await mounted.router.push('/admin/training-categories');
+  const restored = findInstance(mounted.app, 'toggleStatus');
+  assert.equal(restored.uid, first.uid);
+  assert.equal(restored.setupState.form.name, '类别基线');
+  assert.equal(restored.setupState.dialog, false);
+  assert.equal(restored.setupState.dirty, false);
+
+  restored.setupState.openEdit(restored.setupState.items[0]);
+  restored.setupState.form.name = '已保存类别';
+  await restored.setupState.save();
+  assert.equal(restored.setupState.dirty, false);
+  assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/admin/training-categories/category-1' && call.body.name === '已保存类别'));
+  mounted.unmount();
+});
+
+test('administrator role draft protects dialog and route exits, restores baseline, and clears dirty after save', async () => {
+  const mounted = await mountShell('/admin/administrators');
+  const first = findInstance(mounted.app, 'candidateDialog');
+  await waitFor(() => first.setupState.rows.length === 1, 'administrator list');
+  await first.setupState.openRoles(first.setupState.rows[0]);
+  first.setupState.selectedRoleIds.push('role-2');
+  await nextTick();
+  assert.equal(first.setupState.dirty, true);
+
+  testContext.confirmDecisions.push(false);
+  await first.setupState.closeRoleDialog();
+  assert.equal(first.setupState.dialog, true);
+  assert.deepEqual([...first.setupState.selectedRoleIds], ['role-1', 'role-2']);
+
+  testContext.confirmDecisions.push(false);
+  await mounted.router.push('/other');
+  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/administrators');
+
+  testContext.confirmDecisions.push(true);
+  await mounted.router.push('/other');
+  await mounted.router.push('/admin/administrators');
+  const restored = findInstance(mounted.app, 'candidateDialog');
+  assert.equal(restored.uid, first.uid);
+  assert.deepEqual([...restored.setupState.selectedRoleIds], ['role-1']);
+  assert.equal(restored.setupState.selected.id, 'admin-1');
+  assert.equal(restored.setupState.dialog, false);
+  assert.equal(restored.setupState.dirty, false);
+
+  await restored.setupState.openRoles(restored.setupState.rows[0]);
+  restored.setupState.selectedRoleIds.push('role-2');
+  await restored.setupState.saveRoles();
+  assert.equal(restored.setupState.dirty, false);
+  assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/admin/administrators/admin-1/roles' && call.body.role_ids.join(',') === 'role-1,role-2'));
+  mounted.unmount();
+});
+
+test('role edit protects dialog and route exits, restores baseline, and clears dirty after save', async () => {
+  const mounted = await mountShell('/admin/roles');
+  const first = findInstance(mounted.app, 'catalog');
+  await waitFor(() => first.setupState.roles.length === 1, 'role list');
+  first.setupState.openEdit(first.setupState.roles[0]);
+  first.setupState.form.name = '未保存角色';
+  first.setupState.form.permissions.push('roles:read');
+  await nextTick();
+  assert.equal(first.setupState.dirty, true);
+
+  testContext.confirmDecisions.push(false);
+  await first.setupState.closeDialog();
+  assert.equal(first.setupState.dialog, true);
+  assert.equal(first.setupState.form.name, '未保存角色');
+
+  testContext.confirmDecisions.push(false);
+  await mounted.router.push('/other');
+  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/roles');
+
+  testContext.confirmDecisions.push(true);
+  await mounted.router.push('/other');
+  await mounted.router.push('/admin/roles');
+  const restored = findInstance(mounted.app, 'catalog');
+  assert.equal(restored.uid, first.uid);
+  assert.equal(restored.setupState.form.name, '角色基线');
+  assert.deepEqual([...restored.setupState.form.permissions], ['students:read']);
+  assert.equal(restored.setupState.dialog, false);
+  assert.equal(restored.setupState.dirty, false);
+
+  restored.setupState.openEdit(restored.setupState.roles[0]);
+  restored.setupState.form.name = '已保存角色';
+  await restored.setupState.save();
+  assert.equal(restored.setupState.dirty, false);
+  assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/admin/roles/business-role-1' && call.body.name === '已保存角色'));
+  mounted.unmount();
+});
+
+test('AI config keeps a cancelled inline draft, restores server baseline on discard, and clears dirty after save', async () => {
+  const mounted = await mountShell('/admin/ai-config');
+  const first = findInstance(mounted.app, 'masked');
+  await waitFor(() => first.setupState.form.model === 'model-baseline', 'AI config');
+  first.setupState.form.base_url = 'https://draft.example.test/v1';
+  first.setupState.form.api_key = 'draft-key';
+  await nextTick();
+  assert.equal(first.setupState.dirty, true);
+
+  testContext.confirmDecisions.push(false);
+  await mounted.router.push('/other');
+  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/ai-config');
+  assert.equal(first.setupState.form.api_key, 'draft-key');
+
+  testContext.confirmDecisions.push(true);
+  await mounted.router.push('/other');
+  await mounted.router.push('/admin/ai-config');
+  const restored = findInstance(mounted.app, 'masked');
+  assert.equal(restored.uid, first.uid);
+  assert.equal(restored.setupState.form.base_url, 'https://ai.example.test/v1');
+  assert.equal(restored.setupState.form.api_key, '');
+  assert.equal(restored.setupState.form.model, 'model-baseline');
+  assert.equal(restored.setupState.dirty, false);
+
+  restored.setupState.form.base_url = 'https://saved.example.test/v1';
+  restored.setupState.form.api_key = 'saved-key';
+  await restored.setupState.onSave();
+  assert.equal(restored.setupState.form.api_key, '');
+  assert.equal(restored.setupState.dirty, false);
+  assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/ai/config' && call.body.base_url === 'https://saved.example.test/v1' && call.body.api_key === 'saved-key'));
   mounted.unmount();
 });
 

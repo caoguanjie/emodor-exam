@@ -28,9 +28,10 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import http from '../../api/http';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 
 const auth = useAuthStore();
@@ -38,6 +39,24 @@ const form = reactive<any>({ base_url: '', api_key: '', model: '' });
 const masked = ref('');
 const testing = ref(false);
 const testingVision = ref(false);
+const dirty = ref(false);
+const formBaseline = ref(JSON.stringify(form));
+
+function serializeForm() { return JSON.stringify(form); }
+function replaceForm(value: any) { Object.assign(form, value); }
+function captureBaseline() {
+  formBaseline.value = serializeForm();
+  dirty.value = false;
+}
+function discardDraft() {
+  replaceForm(JSON.parse(formBaseline.value));
+  dirty.value = false;
+}
+
+const unsaved = useUnsavedChanges(dirty, { onDiscard: discardDraft });
+watch(() => serializeForm(), () => {
+  dirty.value = serializeForm() !== formBaseline.value;
+}, { flush: 'sync' });
 
 function applyMaskedConfig(d: any) {
   form.base_url = d.base_url || '';
@@ -48,7 +67,11 @@ function applyMaskedConfig(d: any) {
 onMounted(async () => {
   // ai_config:write intentionally does not imply read: writer-only roles get
   // a blank form and may use the masked PUT response after saving.
-  if (auth.can('ai_config:read')) applyMaskedConfig(await http.get('/ai/config'));
+  if (auth.can('ai_config:read')) {
+    applyMaskedConfig(await http.get('/ai/config'));
+    form.api_key = '';
+    captureBaseline();
+  }
 });
 
 async function onSave() {
@@ -56,6 +79,8 @@ async function onSave() {
   applyMaskedConfig(saved);
   ElMessage.success('已保存（api_key 加密落配置文件，Redis 仅作读缓存）');
   form.api_key = '';
+  captureBaseline();
+  unsaved.markClean();
 }
 
 async function onTest() {
