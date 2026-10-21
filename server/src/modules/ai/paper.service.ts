@@ -38,6 +38,21 @@ export class PaperService {
     };
   }
 
+  private assertLegacyFixedQuestion(question: Question): void {
+    if (question.type !== 'single' && question.type !== 'multiple') {
+      throw Errors.param('legacy 固定试卷仅支持单选题和多选题；判断题/图片题须使用后续培训发布链路');
+    }
+  }
+
+  private async assertLegacyPaperQuestions(paperId: string): Promise<void> {
+    const items = await this.pqRepo.find({ where: { paperId } });
+    const questionIds = items.map((item) => String(item.questionId));
+    if (!questionIds.length) return;
+    const questions = await this.questionRepo.find({ where: { id: In(questionIds) } });
+    if (questions.length !== questionIds.length) throw Errors.param('固定试卷包含不存在的题目');
+    for (const question of questions) this.assertLegacyFixedQuestion(question);
+  }
+
   async list(query: { page?: number; page_size?: number; regulation_id?: number; status?: string }) {
     const page = Math.max(1, Number(query.page || 1));
     const pageSize = Math.min(100, Math.max(1, Number(query.page_size || 20)));
@@ -152,6 +167,7 @@ export class PaperService {
       const it = items[i];
       const q = qMap.get(String(it.question_id));
       if (!q) throw Errors.param(`题目 ${it.question_id} 不存在`);
+      this.assertLegacyFixedQuestion(q);
       // 选题入卷校验（05 册 4.4.7）：approved + 同制度 + 同卷不重复
       if (q.status !== QuestionStatus.APPROVED) throw Errors.param(`题目 ${it.question_id} 未审核通过，不能入卷`);
       if (q.regulationId !== p.regulationId) throw Errors.param(`题目 ${it.question_id} 与试卷不属于同一制度`);
@@ -184,6 +200,7 @@ export class PaperService {
     if (!p) throw Errors.notFound('试卷不存在');
     if (p.status === PaperStatus.PUBLISHED) return this.paperView(p);
     if (p.status === PaperStatus.ARCHIVED) throw Errors.param('已归档试卷不可发布');
+    await this.assertLegacyPaperQuestions(id);
     const sumQb = await this.pqRepo
       .createQueryBuilder('pq')
       .select('COALESCE(SUM(pq.score), 0)', 'sum')

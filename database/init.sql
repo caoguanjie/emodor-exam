@@ -245,28 +245,83 @@ CREATE TABLE IF NOT EXISTS `learning_record` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='学习汇总';
 
 -- ---------------------------------------------------------------------
--- 4. 考试域（5 张）
+-- 4. 考试域（5 张 legacy + 2 张题库增量）
 -- ---------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS `question` (
-  `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `regulation_id` BIGINT UNSIGNED NOT NULL COMMENT '所属制度',
-  `version_id`    BIGINT UNSIGNED NOT NULL COMMENT '出题依据的制度版本',
-  `type`          VARCHAR(16)  NOT NULL COMMENT 'single / multiple',
-  `stem`          TEXT         NOT NULL COMMENT '题干',
-  `options`       JSON         NOT NULL COMMENT '选项数组 [{key,text}]',
-  `answer`        JSON         NOT NULL COMMENT '正确答案（选项下标数组）',
-  `analysis`      TEXT         NULL COMMENT '答案解析',
-  `score`         DECIMAL(5,2) NOT NULL COMMENT '题库默认分值',
-  `status`        VARCHAR(16)  NOT NULL DEFAULT 'pending' COMMENT 'pending / approved / rejected',
-  `source`        VARCHAR(16)  NOT NULL COMMENT 'ai / manual',
-  `created_by`    BIGINT UNSIGNED NOT NULL COMMENT '创建人',
-  `created_at`    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at`    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  `id`                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `regulation_id`      BIGINT UNSIGNED NULL COMMENT '可选制度来源',
+  `version_id`         BIGINT UNSIGNED NULL COMMENT '兼容字段：可选制度版本来源',
+  `category_id`        BIGINT UNSIGNED NULL COMMENT '培训类别；旧题未知保持 NULL',
+  `difficulty`         VARCHAR(16) NULL COMMENT 'easy / medium / hard；旧题未知保持 NULL',
+  `concept_id`         BIGINT UNSIGNED NULL COMMENT '可选同考点组',
+  `current_version_id` BIGINT UNSIGNED NULL COMMENT '当前题目版本；旧题首次编辑/审核时捕获',
+  `type`               VARCHAR(16)  NOT NULL COMMENT 'single / multiple / judgment / image',
+  `stem`               TEXT         NOT NULL COMMENT '题干',
+  `options`            JSON         NOT NULL COMMENT '选项数组 [{key,text}]',
+  `answer`             JSON         NOT NULL COMMENT '正确答案（选项下标数组）',
+  `analysis`           TEXT         NULL COMMENT '答案解析',
+  `rubric`             TEXT         NULL COMMENT '图片题评分参考；其他题为 NULL',
+  `score`              DECIMAL(5,2) NOT NULL COMMENT '题库建议分值；考试实际分值另存',
+  `status`             VARCHAR(16)  NOT NULL DEFAULT 'pending' COMMENT 'pending / approved / rejected',
+  `source`             VARCHAR(16)  NOT NULL COMMENT 'ai / manual / import',
+  `created_by`         BIGINT UNSIGNED NOT NULL COMMENT '创建人',
+  `created_at`         DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`         DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   KEY `idx_regulation_status_type` (`regulation_id`, `status`, `type`),
-  KEY `idx_version` (`version_id`)
+  KEY `idx_version` (`version_id`),
+  KEY `idx_question_category_pool` (`category_id`, `status`, `type`, `difficulty`),
+  KEY `idx_question_concept` (`concept_id`),
+  KEY `idx_question_current_version` (`current_version_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='试题库';
+
+CREATE TABLE IF NOT EXISTS `question_concept` (
+  `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `category_id` BIGINT UNSIGNED NOT NULL COMMENT '培训类别',
+  `type`        VARCHAR(16) NOT NULL COMMENT 'single / multiple / judgment / image',
+  `name`        VARCHAR(128) NOT NULL COMMENT '考点名称',
+  `created_by`  BIGINT UNSIGNED NOT NULL,
+  `created_at`  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_question_concept_scope` (`category_id`, `type`, `name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='题目考点组';
+
+CREATE TABLE IF NOT EXISTS `question_version` (
+  `id`                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `question_id`           BIGINT UNSIGNED NOT NULL,
+  `revision`              INT UNSIGNED NOT NULL,
+  `category_id`           BIGINT UNSIGNED NULL,
+  `difficulty`            VARCHAR(16) NULL COMMENT 'easy / medium / hard；旧捕获版本可 NULL',
+  `type`                  VARCHAR(16) NOT NULL COMMENT 'single / multiple / judgment / image',
+  `stem`                  TEXT NOT NULL,
+  `options`               JSON NOT NULL,
+  `answer`                JSON NOT NULL,
+  `analysis`              TEXT NULL,
+  `rubric`                TEXT NULL,
+  `score_cents`           INT UNSIGNED NOT NULL COMMENT '题库建议分值，整数分；考试实际分值另存',
+  `concept_id`            BIGINT UNSIGNED NULL,
+  `regulation_id`         BIGINT UNSIGNED NULL,
+  `regulation_version_id` BIGINT UNSIGNED NULL,
+  `source_page_group`     INT UNSIGNED NULL COMMENT '实际 PDF 页组下标；旧题未知保持 NULL',
+  `source_page_start`     INT UNSIGNED NULL COMMENT '实际来源起始页（1-based）',
+  `source_page_end`       INT UNSIGNED NULL COMMENT '实际来源结束页（1-based）',
+  `source`                VARCHAR(16) NOT NULL COMMENT 'ai / manual / import',
+  `status`                VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending / approved / rejected',
+  `approved_by`           BIGINT UNSIGNED NULL,
+  `approved_at`           DATETIME(3) NULL,
+  `reviewed_by`           BIGINT UNSIGNED NULL,
+  `reviewed_at`           DATETIME(3) NULL,
+  `review_reason`         VARCHAR(1000) NULL,
+  `created_by`            BIGINT UNSIGNED NOT NULL,
+  `legacy_captured_at`    DATETIME(3) NULL COMMENT '仅表示升级时捕获，不代表历史考试版本',
+  `created_at`            DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_question_version_revision` (`question_id`, `revision`),
+  KEY `idx_question_version_candidate` (`category_id`, `type`, `difficulty`, `status`),
+  KEY `idx_question_version_regulation` (`regulation_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='不可变题目内容版本及审核轨迹';
 
 CREATE TABLE IF NOT EXISTS `exam_paper` (
   `id`                   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
