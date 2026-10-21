@@ -78,7 +78,7 @@
     </el-table>
     <el-pagination class="question-pagination" layout="total, prev, pager, next" :total="total" :page-size="query.page_size" v-model:current-page="query.page" @current-change="load" />
 
-    <el-dialog v-model="editorVisible" :title="editorMode === 'create' ? '人工录入题目' : '修订题目'" width="860px" destroy-on-close>
+    <el-dialog v-model="editorVisible" :title="editorMode === 'create' ? '人工录入题目' : '修订题目'" width="860px" destroy-on-close :before-close="beforeEditorClose">
       <div class="editor-tools">
         <el-button v-if="auth.can('questions:write') && editorForm.category_id" size="small" @click="createConcept">新建当前题型考点组</el-button>
         <span v-if="editorMode === 'edit'" class="editor-hint">保存会生成待审核新版本；旧版本保持不变。</span>
@@ -114,7 +114,7 @@
       <el-divider content-position="left">未保存内容预览</el-divider>
       <QuestionPreview :question="editorForm" />
       <template #footer>
-        <el-button @click="editorVisible = false">取消</el-button>
+        <el-button @click="closeEditor">取消</el-button>
         <el-button type="primary" :loading="saving" :disabled="saving || !hasEditorDifficulty" @click="saveQuestion">{{ editorMode === 'create' ? '保存并确认可用' : '保存为待审核版本' }}</el-button>
       </template>
     </el-dialog>
@@ -178,10 +178,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
 import { useAuthStore } from '../../stores/auth';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { formatDateTime } from '../../utils/format';
 import QuestionEditor from '../../components/QuestionEditor.vue';
 import QuestionPreview from '../../components/QuestionPreview.vue';
@@ -202,6 +203,12 @@ type QuestionVersionHistory = {
   legacy_captured_at?: string | null;
 };
 type PageState = { page: number; page_size: number; total: number; keyword: string };
+type EditorBaseline = {
+  form: QuestionDraftPayload;
+  mode: 'create' | 'edit';
+  id: Id | null;
+  expectedVersionId: Id | null;
+};
 
 function pageState(): PageState {
   return { page: 1, page_size: 20, total: 0, keyword: '' };
@@ -233,6 +240,8 @@ const editorMode = ref<'create' | 'edit'>('create');
 const editingId = ref<Id | null>(null);
 const editingExpectedVersionId = ref<Id | null>(null);
 const editorForm = ref<QuestionDraftPayload>(emptyDraft());
+const editorDirty = ref(false);
+const editorBaseline = ref<EditorBaseline | null>(null);
 const saving = ref(false);
 const previewVisible = ref(false);
 const selectedQuestion = ref<QuestionView | null>(null);
@@ -268,6 +277,53 @@ function emptyDraft(): QuestionDraftPayload {
 
 function cleanParams(value: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== '' && item !== undefined && item !== null));
+}
+
+function cloneEditorForm(value: QuestionDraftPayload): QuestionDraftPayload {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function editorSnapshot(): EditorBaseline {
+  return {
+    form: cloneEditorForm(editorForm.value),
+    mode: editorMode.value,
+    id: editingId.value,
+    expectedVersionId: editingExpectedVersionId.value,
+  };
+}
+
+function captureEditorBaseline() {
+  editorBaseline.value = editorSnapshot();
+  editorDirty.value = false;
+}
+
+function discardEditorDraft() {
+  const baseline = editorBaseline.value;
+  if (baseline) {
+    editorMode.value = baseline.mode;
+    editingId.value = baseline.id;
+    editingExpectedVersionId.value = baseline.expectedVersionId;
+    editorForm.value = cloneEditorForm(baseline.form);
+  }
+  editorDirty.value = false;
+}
+
+const editorUnsaved = useUnsavedChanges(editorDirty, { onDiscard: discardEditorDraft });
+watch(
+  () => [editorVisible.value, JSON.stringify(editorSnapshot())] as const,
+  ([visible, current]) => {
+    editorDirty.value = !!visible && !!editorBaseline.value && current !== JSON.stringify(editorBaseline.value);
+  },
+  { flush: 'sync' },
+);
+
+async function closeEditor() {
+  if (await editorUnsaved.confirmDiscard()) editorVisible.value = false;
+}
+
+async function beforeEditorClose(done: () => void) {
+  if (!await editorUnsaved.confirmDiscard()) return;
+  done();
 }
 
 function plainText(html: string) { return questionRichTextToPlainText(html); }
@@ -399,12 +455,14 @@ function toDraft(row: QuestionView): QuestionDraftPayload {
 
 async function openCreate() {
   editorMode.value = 'create'; editingId.value = null; editingExpectedVersionId.value = null; editorForm.value = emptyDraft();
+  captureEditorBaseline();
   await loadEditorConcepts({ category_id: editorForm.value.category_id, type: editorForm.value.type });
   editorVisible.value = true;
 }
 
 async function openEdit(row: QuestionView) {
   editorMode.value = 'edit'; editingId.value = row.question_id; editingExpectedVersionId.value = expectedVersionId(row.current_version_id); editorForm.value = toDraft(row);
+  captureEditorBaseline();
   await loadEditorConcepts({ category_id: editorForm.value.category_id, type: editorForm.value.type });
   editorVisible.value = true;
 }
@@ -451,6 +509,8 @@ async function saveQuestion() {
       });
       ElMessage.success('已生成待审核新版本，旧版本保持不变');
     }
+    captureEditorBaseline();
+    editorUnsaved.markClean();
     editorVisible.value = false;
     await load();
   } finally { saving.value = false; }

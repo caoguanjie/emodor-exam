@@ -86,7 +86,7 @@
         </el-radio-group>
         <div v-if="!scope.is_all" style="margin-top:14px; max-width:420px">
           <el-tree ref="scopeTreeRef" :data="deptTree" show-checkbox node-key="id" default-expand-all :disabled="!auth.can('regulations:write')"
-            :props="{ label: 'name' }" />
+            :props="{ label: 'name' }" @check="onScopeCheck" />
         </div>
         <el-button v-if="auth.can('regulations:write')" type="primary" style="margin-top:14px" @click="saveScope">保存发布范围</el-button>
       </el-tab-pane>
@@ -103,7 +103,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
@@ -111,6 +111,7 @@ import type { UploadFile } from 'element-plus';
 import http, { upload } from '../../api/http';
 import { formatDateTime } from '../../utils/format';
 import { useAuthStore } from '../../stores/auth';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 
 const route = useRoute();
 const regId = String(route.params.id);
@@ -127,6 +128,77 @@ const previewVisible = ref(false);
 const scopeTreeRef = ref();
 const categoryOptions = ref<Array<{ id: string; name: string }>>([]);
 const categoryId = ref<string | null>(null);
+const categoryBaseline = ref<string | null>(null);
+const configBaseline = ref({ required_minutes: 10, scroll_segments: 10 });
+const scopeBaseline = ref<{ is_all: boolean; departmentIds: string[] }>({ is_all: false, departmentIds: [] });
+const categoryDirty = ref(false);
+const configDirty = ref(false);
+const scopeDirty = ref(false);
+
+function normalizeDepartmentIds(values: unknown[]): string[] {
+  return [...new Set(values.map(String))].sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+}
+
+function configSnapshot() {
+  return { required_minutes: Number(config.required_minutes), scroll_segments: Number(config.scroll_segments) };
+}
+
+function scopeSnapshot() {
+  return {
+    is_all: !!scope.is_all,
+    departmentIds: scope.is_all ? [] : normalizeDepartmentIds(scope.departmentIds),
+  };
+}
+
+function captureCategoryBaseline() {
+  categoryBaseline.value = categoryId.value;
+  categoryDirty.value = false;
+}
+
+function captureConfigBaseline() {
+  configBaseline.value = configSnapshot();
+  configDirty.value = false;
+}
+
+function captureScopeBaseline() {
+  scopeBaseline.value = scopeSnapshot();
+  scopeDirty.value = false;
+}
+
+function restoreCategoryBaseline() {
+  categoryId.value = categoryBaseline.value;
+  categoryDirty.value = false;
+}
+
+function restoreConfigBaseline() {
+  Object.assign(config, configBaseline.value);
+  configKey.value += 1;
+  configDirty.value = false;
+}
+
+function restoreScopeBaseline() {
+  scope.is_all = scopeBaseline.value.is_all;
+  scope.departmentIds = [...scopeBaseline.value.departmentIds];
+  scopeDirty.value = false;
+  void nextTick(() => (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds));
+}
+
+const categoryUnsaved = useUnsavedChanges(categoryDirty, { onDiscard: restoreCategoryBaseline });
+const configUnsaved = useUnsavedChanges(configDirty, { onDiscard: restoreConfigBaseline });
+const scopeUnsaved = useUnsavedChanges(scopeDirty, { onDiscard: restoreScopeBaseline });
+
+watch(categoryId, () => {
+  categoryDirty.value = categoryId.value !== categoryBaseline.value;
+}, { flush: 'sync' });
+watch(config, () => {
+  configDirty.value = JSON.stringify(configSnapshot()) !== JSON.stringify(configBaseline.value);
+}, { deep: true, flush: 'sync' });
+watch(scope, () => {
+  scopeDirty.value = JSON.stringify(scopeSnapshot()) !== JSON.stringify(scopeBaseline.value);
+}, { deep: true, flush: 'sync' });
+watch(() => scope.is_all, (isAll) => {
+  if (!isAll) void nextTick(() => (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds));
+});
 
 function statusLabel(s: string) {
   return ({ draft: '草稿', published: '已发布', archived: '已归档' } as any)[s] || s;
@@ -144,12 +216,32 @@ async function load() {
   // 发布范围回显（详情接口含 scope：is_all / department_ids）
   scope.is_all = !!reg.value.scope?.is_all;
   scope.departmentIds = (reg.value.scope?.department_ids || []).map(String);
-  versions.value = await http.get(`/regulations/${regId}/versions`) as any;
+  // 在首次异步等待前建立服务端基线，避免加载中的数据回显被误判成用户草稿。
+  captureCategoryBaseline();
+  captureConfigBaseline();
+  captureScopeBaseline();
+  await loadVersions();
   const tree: any = await http.get('/departments/tree');
   deptTree.value = tree.list;
-  nextTick(() => {
-    (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds);
-  });
+  await nextTick();
+  (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds);
+  scope.departmentIds = currentScopeDepartmentIds();
+  captureScopeBaseline();
+}
+
+async function loadVersions() {
+  versions.value = await http.get(`/regulations/${regId}/versions`) as any;
+}
+
+function currentScopeDepartmentIds(): string[] {
+  if (scope.is_all) return [];
+  const tree = scopeTreeRef.value as any;
+  if (!tree) return normalizeDepartmentIds(scope.departmentIds);
+  return normalizeDepartmentIds([...(tree.getCheckedKeys?.() || []), ...(tree.getHalfCheckedKeys?.() || [])]);
+}
+
+function onScopeCheck(_data: unknown, state: { checkedKeys?: unknown[]; halfCheckedKeys?: unknown[] }) {
+  scope.departmentIds = normalizeDepartmentIds([...(state.checkedKeys || []), ...(state.halfCheckedKeys || [])]);
 }
 
 async function loadCategoryOptions() {
@@ -160,8 +252,10 @@ async function loadCategoryOptions() {
 
 async function saveCategory() {
   await http.put(`/regulations/${regId}`, { category_id: categoryId.value || null });
+  if (reg.value) reg.value.category_id = categoryId.value || null;
+  captureCategoryBaseline();
+  categoryUnsaved.markClean();
   ElMessage.success(categoryId.value ? '培训类别已保存' : '已清除培训类别关联');
-  await load();
 }
 
 async function handleUpload(file: File) {
@@ -195,7 +289,7 @@ async function pollVersions(versionId: number) {
 async function switchVersion(row: any) {
   await http.put(`/regulations/${regId}/current-version`, { version_id: String(row.id) });
   ElMessage.success(`已切换生效版本至 v${row.version_no}`);
-  await load();
+  await loadVersions();
 }
 
 async function retryParse(row: any) {
@@ -208,28 +302,37 @@ async function saveConfig() {
   // el-input-number 聚焦期间不改写 model（显示与实际值会短暂脱节），保存前先失焦提交
   (document.activeElement as HTMLElement | null)?.blur?.();
   await http.put(`/regulations/${regId}/learning-config`, { ...config });
+  if (reg.value) {
+    reg.value.required_minutes = config.required_minutes;
+    reg.value.scroll_segments = config.scroll_segments;
+  }
+  captureConfigBaseline();
+  configUnsaved.markClean();
   ElMessage.success('学习要求已保存（已达标员工不回退）');
-  await load();
 }
 
 async function saveScope() {
-  const checked = scope.is_all ? [] : scopeTreeRef.value.getCheckedKeys().concat(scopeTreeRef.value.getHalfCheckedKeys());
-  await http.put(`/regulations/${regId}/scope`, { is_all: scope.is_all, department_ids: checked });
+  scope.departmentIds = currentScopeDepartmentIds();
+  const snapshot = scopeSnapshot();
+  await http.put(`/regulations/${regId}/scope`, { is_all: snapshot.is_all, department_ids: snapshot.departmentIds });
+  if (reg.value) reg.value.scope = { is_all: snapshot.is_all, department_ids: [...snapshot.departmentIds] };
+  captureScopeBaseline();
+  scopeUnsaved.markClean();
   ElMessage.success('发布范围已保存');
 }
 
 async function onPublish() {
   await ElMessageBox.confirm('发布前置：存在已解析的生效版本且已配置发布范围。确认发布？', '发布制度', { type: 'warning' });
   await http.post(`/regulations/${regId}/publish`);
+  if (reg.value) reg.value.status = 'published';
   ElMessage.success('发布成功，范围内员工已可见');
-  await load();
 }
 
 async function onArchive() {
   await ElMessageBox.confirm('归档后员工端不可见、不可再学习与考试，历史数据保留并计入统计。确认归档？', '归档', { type: 'warning' });
   await http.post(`/regulations/${regId}/archive`);
+  if (reg.value) reg.value.status = 'archived';
   ElMessage.success('已归档');
-  await load();
 }
 
 async function preview(row?: any) {
@@ -253,10 +356,6 @@ onMounted(async () => {
   await loadCategoryOptions();
   await load();
   await preview();
-  // 树渲染后回显已圈定部门（仅勾选自身节点，父级由半选态呈现）
-  nextTick(() => {
-    (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds);
-  });
 });
 
 onBeforeUnmount(() => {

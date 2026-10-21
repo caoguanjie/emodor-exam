@@ -9,6 +9,7 @@ const webRoot = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const previewClientId = '\0question-preview-client-test';
 const editorClientId = '\0question-editor-client-test';
 const questionsClientId = '\0questions-client-test';
+const regulationClientId = '\0regulation-detail-client-test';
 const mediaStubId = '\0question-media-test';
 const httpStubId = '\0question-http-test';
 const authStubId = '\0question-auth-test';
@@ -17,6 +18,9 @@ const elementStubId = '\0question-element-test';
 const editorStubId = '\0question-editor-child-test';
 const previewStubId = '\0question-preview-child-test';
 const mediaUploadStubId = '\0question-media-upload-test';
+const unsavedStubId = '\0question-unsaved-test';
+const routeStubId = '\0question-route-test';
+const iconsStubId = '\0question-icons-test';
 const clientCode = new Map();
 const virtualStubs = new Map([
   ['virtual:question-media-test', mediaStubId],
@@ -27,6 +31,9 @@ const virtualStubs = new Map([
   ['virtual:question-editor-child-test', editorStubId],
   ['virtual:question-preview-child-test', previewStubId],
   ['virtual:question-media-upload-test', mediaUploadStubId],
+  ['virtual:question-unsaved-test', unsavedStubId],
+  ['virtual:question-route-test', routeStubId],
+  ['virtual:question-icons-test', iconsStubId],
 ]);
 
 const context = {
@@ -38,6 +45,9 @@ const context = {
   mediaCalls: [],
   conceptTotal: 41,
   historyTotal: 41,
+  unsavedSources: [],
+  confirmDecisions: [],
+  regulation: null,
   http: null,
 };
 
@@ -56,6 +66,7 @@ const stubs = new Map([
       post(url, body, config) { return context.http('post', url, body, config); },
       put(url, body, config) { return context.http('put', url, body, config); },
     };
+    export function upload(url, file, field, fields) { return context.http('upload', url, { file, field, fields }); }
   `],
   [authStubId, `
     const context = globalThis.__questionBankUiTest;
@@ -100,12 +111,37 @@ const stubs = new Map([
     import { h } from 'vue';
     export default { props: ['modelValue'], setup() { return () => h('media-upload-stub'); } };
   `],
+  [unsavedStubId, `
+    const context = globalThis.__questionBankUiTest;
+    export function useUnsavedChanges(dirty, options = {}) {
+      const source = {
+        dirty,
+        options,
+        markClean() { dirty.value = false; },
+        async confirmDiscard() {
+          if (!dirty.value) return true;
+          const decision = context.confirmDecisions.shift();
+          if (!decision) return false;
+          await options.onDiscard?.();
+          return true;
+        },
+      };
+      context.unsavedSources.push(source);
+      return { markClean: source.markClean, confirmDiscard: source.confirmDiscard };
+    }
+  `],
+  [routeStubId, `export function useRoute() { return { fullPath: '/admin/regulations/99', params: { id: '99' } }; }`],
+  [iconsStubId, `
+    import { h } from 'vue';
+    export const ArrowLeft = { setup() { return () => h('arrow-left'); } };
+  `],
 ]);
 
 let vite;
 let QuestionPreview;
 let QuestionEditor;
 let Questions;
+let RegulationDetail;
 let trainingTypes;
 
 function plugin() {
@@ -125,6 +161,16 @@ function plugin() {
         if (source === '../../utils/format' || source === '/src/utils/format.ts') return formatStubId;
         if (source === '../../components/QuestionEditor.vue' || source === '/src/components/QuestionEditor.vue') return editorStubId;
         if (source === '../../components/QuestionPreview.vue' || source === '/src/components/QuestionPreview.vue') return previewStubId;
+        if (source === '../../composables/useUnsavedChanges' || source === '/src/composables/useUnsavedChanges.ts') return unsavedStubId;
+      }
+      if (owner.includes('regulation-detail-client-test')) {
+        if (source === 'element-plus') return elementStubId;
+        if (source === '@element-plus/icons-vue') return iconsStubId;
+        if (source === '../../api/http' || source === '/src/api/http.ts') return httpStubId;
+        if (source === '../../stores/auth' || source === '/src/stores/auth.ts') return authStubId;
+        if (source === '../../utils/format' || source === '/src/utils/format.ts') return formatStubId;
+        if (source === 'vue-router' || source.includes('vue-router')) return routeStubId;
+        if (source === '../../composables/useUnsavedChanges' || source === '/src/composables/useUnsavedChanges.ts') return unsavedStubId;
       }
       return undefined;
     },
@@ -150,7 +196,17 @@ function stripViteClientGlue(code, path) {
       .replace(/from "\/src\/stores\/auth\.ts"/g, 'from "virtual:question-auth-test"')
       .replace(/from "\/src\/utils\/format\.ts"/g, 'from "virtual:question-format-test"')
       .replace(/from "\/src\/components\/QuestionEditor\.vue"/g, 'from "virtual:question-editor-child-test"')
-      .replace(/from "\/src\/components\/QuestionPreview\.vue"/g, 'from "virtual:question-preview-child-test"');
+      .replace(/from "\/src\/components\/QuestionPreview\.vue"/g, 'from "virtual:question-preview-child-test"')
+      .replace(/from "\/src\/composables\/useUnsavedChanges\.ts"/g, 'from "virtual:question-unsaved-test"');
+  } else if (path.endsWith('/RegulationDetail.vue')) {
+    output = output
+      .replace(/from "\/node_modules\/\.vite\/deps\/element-plus\.js[^"]*"/g, 'from "virtual:question-element-test"')
+      .replace(/from "\/node_modules\/\.vite\/deps\/@element-plus_icons-vue\.js[^"]*"/g, 'from "virtual:question-icons-test"')
+      .replace(/from "\/node_modules\/\.vite\/deps\/vue-router\.js[^"]*"/g, 'from "virtual:question-route-test"')
+      .replace(/from "\/src\/api\/http\.ts"/g, 'from "virtual:question-http-test"')
+      .replace(/from "\/src\/stores\/auth\.ts"/g, 'from "virtual:question-auth-test"')
+      .replace(/from "\/src\/utils\/format\.ts"/g, 'from "virtual:question-format-test"')
+      .replace(/from "\/src\/composables\/useUnsavedChanges\.ts"/g, 'from "virtual:question-unsaved-test"');
   }
   return output;
 }
@@ -210,9 +266,11 @@ const Button = {
 };
 const Dialog = {
   inheritAttrs: false,
-  props: { modelValue: Boolean },
+  props: { modelValue: Boolean, beforeClose: Function },
   setup(props, { attrs, slots }) {
-    return () => props.modelValue ? h('dialog', attrs, [...(slots.default?.() || []), ...(slots.footer?.() || [])]) : null;
+    return () => props.modelValue
+      ? h('dialog', { ...attrs, beforeClose: props.beforeClose }, [...(slots.default?.() || []), ...(slots.footer?.() || [])])
+      : null;
   },
 };
 const Table = {
@@ -243,12 +301,32 @@ const Pagination = {
     ]);
   },
 };
+const Tree = {
+  inheritAttrs: false,
+  setup(_props, { attrs, expose }) {
+    let checkedKeys = [];
+    let halfCheckedKeys = [];
+    expose({
+      setCheckedKeys(keys) { checkedKeys = [...keys].map(String); halfCheckedKeys = []; },
+      getCheckedKeys() { return [...checkedKeys]; },
+      getHalfCheckedKeys() { return [...halfCheckedKeys]; },
+    });
+    return () => h('tree', {
+      ...attrs,
+      triggerCheck(nextChecked, nextHalf = []) {
+        checkedKeys = [...nextChecked].map(String);
+        halfCheckedKeys = [...nextHalf].map(String);
+        attrs.onCheck?.({}, { checkedKeys: [...checkedKeys], halfCheckedKeys: [...halfCheckedKeys] });
+      },
+    });
+  },
+};
 
 function registerUi(app) {
   const wrappers = [
     'el-alert', 'el-empty', 'el-tag', 'el-input', 'el-form', 'el-form-item', 'el-select', 'el-option',
     'el-input-number', 'el-checkbox', 'el-radio-group', 'el-radio', 'el-text', 'el-divider', 'el-timeline',
-    'el-timeline-item', 'el-result',
+    'el-timeline-item', 'el-result', 'el-tabs', 'el-tab-pane', 'el-upload', 'el-icon',
   ];
   for (const name of wrappers) app.component(name, Wrapper);
   app.component('el-button', Button);
@@ -256,6 +334,7 @@ function registerUi(app) {
   app.component('el-table', Table);
   app.component('el-table-column', TableColumn);
   app.component('el-pagination', Pagination);
+  app.component('el-tree', Tree);
 }
 
 function mount(Component, props = {}) {
@@ -264,8 +343,8 @@ function mount(Component, props = {}) {
   const app = host.createApp(Component, props);
   registerUi(app);
   app.directive('loading', {});
-  app.mount(root);
-  return { root, unmount: () => app.unmount() };
+  const instance = app.mount(root);
+  return { root, instance, unmount: () => app.unmount() };
 }
 
 function walk(node, predicate, output = []) {
@@ -454,6 +533,11 @@ function setHttp() {
   context.http = async (method, url, body, config) => {
     context.calls.push({ method, url, body, config });
     if (method === 'get' && url.includes('category-')) return { items: [{ id: '7', name: '安全培训' }], total: 1, page: 1, page_size: 20 };
+    if (method === 'get' && url === '/regulations/category-options') return { items: [{ id: '7', name: '安全培训' }, { id: '8', name: '管理培训' }], total: 2, page: 1, page_size: 100 };
+    if (method === 'get' && url === '/regulations/99') return JSON.parse(JSON.stringify(context.regulation));
+    if (method === 'get' && url === '/regulations/99/versions') return [{ id: '501', version_no: 1, parse_status: 'parsed', is_current: true }];
+    if (method === 'get' && url === '/departments/tree') return { list: [{ id: '1', name: '总部', children: [{ id: '2', name: '研发', children: [] }] }] };
+    if (method === 'get' && url.startsWith('/regulations/99/preview')) return { content_html: '<p>制度内容</p>', file_type: 'pdf', parse_status: 'parsed' };
     if (method === 'get' && url === '/regulations') return { list: [] };
     if (method === 'get' && url === '/ai/questions') return { list: context.row ? [context.row] : [], total: context.row ? 1 : 0 };
     if (method === 'get' && url === '/ai/question-concepts') {
@@ -469,6 +553,7 @@ function setHttp() {
       return { items: [{ id: `v${page}`, revision: page, status: 'pending', created_at: '2026-10-21T00:00:00Z' }], total: context.historyTotal, page, page_size: 20 };
     }
     if (method === 'get' && url.includes('/versions')) return { items: [], total: 0, page: 1, page_size: 20 };
+    if (method === 'upload') return { version_id: '502', duplicate_hint: null };
     return {};
   };
 }
@@ -478,7 +563,7 @@ before(async () => {
   vite = await createServer({
     root: webRoot,
     configFile: resolve(webRoot, 'vite.config.ts'),
-    server: { middlewareMode: true, hmr: false },
+    server: { middlewareMode: true, hmr: false, ws: false },
     appType: 'custom',
     plugins: [plugin()],
   });
@@ -486,6 +571,7 @@ before(async () => {
   QuestionPreview = await loadClientSfc('/src/components/QuestionPreview.vue', previewClientId);
   QuestionEditor = await loadClientSfc('/src/components/QuestionEditor.vue', editorClientId);
   Questions = await loadClientSfc('/src/views/admin/Questions.vue', questionsClientId);
+  RegulationDetail = await loadClientSfc('/src/views/admin/RegulationDetail.vue', regulationClientId);
 });
 
 after(async () => {
@@ -502,6 +588,12 @@ beforeEach(() => {
   context.mediaCalls = [];
   context.conceptTotal = 41;
   context.historyTotal = 41;
+  context.unsavedSources = [];
+  context.confirmDecisions = [];
+  context.regulation = {
+    id: '99', title: '安全制度', category: '旧分类', category_id: '7', status: 'draft',
+    required_minutes: 10, scroll_segments: 10, scope: { is_all: false, department_ids: ['2'] },
+  };
   setHttp();
 });
 
@@ -696,5 +788,205 @@ test('uses the history Page endpoint and requests later history pages', async ()
   assert.deepEqual(first.config.params, { page: 1, page_size: 20 });
   await click(button(mounted.root, `page-${context.historyTotal}-2`));
   await waitFor(() => context.calls.some((call) => call.url.endsWith('/history') && call.config?.params?.page === 2), 'second history page');
+  mounted.unmount();
+});
+
+test('protects the real question edit draft across cancel, stale failure, discard, and save', async () => {
+  context.row = legacyRow({ current_version_id: '900719925474099312345', revision: 3, difficulty: 'medium' });
+  const mounted = mount(Questions);
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
+  await click(button(mounted.root, '修订'));
+  await click(button(mounted.root, 'choose-hard'));
+  await nextTick();
+
+  assert.equal(context.unsavedSources.length, 1, 'question page should register one editor draft source');
+  const source = context.unsavedSources[0];
+  assert.equal(source.dirty.value, true);
+
+  const normalHttp = context.http;
+  context.http = async (method, url, body, config) => {
+    if (method === 'put' && url === `/ai/questions/${context.row.question_id}`) {
+      throw Object.assign(new Error('题目版本已变化'), { code: 40940 });
+    }
+    return normalHttp(method, url, body, config);
+  };
+  await assert.rejects(
+    () => button(mounted.root, '保存为待审核版本').props.onClick(),
+    (error) => error?.code === 40940,
+  );
+  await nextTick();
+  assert.equal(source.dirty.value, true, 'stale save must keep the draft dirty');
+  assert.ok(button(mounted.root, '保存为待审核版本'), 'stale save must keep the editor open');
+
+  context.confirmDecisions.push(false);
+  await click(button(mounted.root, '取消'));
+  assert.equal(source.dirty.value, true);
+  assert.ok(button(mounted.root, '保存为待审核版本'), 'cancelled discard must retain the editor');
+  assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'hard');
+
+  context.confirmDecisions.push(true);
+  await click(button(mounted.root, '取消'));
+  assert.equal(source.dirty.value, false);
+  assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'medium');
+  assert.equal(mounted.instance.$.setupState.editingExpectedVersionId, '900719925474099312345');
+  assert.equal(mounted.instance.$.setupState.editorVisible, false);
+
+  context.http = normalHttp;
+  await click(button(mounted.root, '修订'));
+  await click(button(mounted.root, 'choose-hard'));
+  await click(button(mounted.root, '保存为待审核版本'));
+  assert.equal(source.dirty.value, false, 'successful save must clean only the editor source');
+  assert.equal(mounted.instance.$.setupState.editorVisible, false);
+  const saved = context.calls.findLast((call) => call.method === 'put' && call.url === `/ai/questions/${context.row.question_id}`);
+  assert.equal(saved.body.expected_version_id, '900719925474099312345');
+  mounted.unmount();
+});
+
+test('tracks a new manual question draft but not list filters or preview state', async () => {
+  const mounted = mount(Questions);
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
+  assert.equal(context.unsavedSources.length, 1);
+  const source = context.unsavedSources[0];
+
+  const keyword = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '搜索题干')[0];
+  keyword.props['onUpdate:modelValue']?.('只改筛选');
+  await nextTick();
+  assert.equal(source.dirty.value, false, 'filters are not persisted drafts');
+
+  await click(button(mounted.root, '人工录题'));
+  assert.equal(source.dirty.value, false, 'opening a new baseline is clean');
+  await click(button(mounted.root, 'choose-hard'));
+  assert.equal(source.dirty.value, true);
+
+  const dialog = walk(mounted.root, (node) => node.type === 'dialog')[0];
+  assert.equal(typeof dialog.props.beforeClose, 'function', 'the real dialog template must wire its close hook');
+  let closed = 0;
+  context.confirmDecisions.push(false);
+  await dialog.props.beforeClose(() => { closed += 1; });
+  assert.equal(closed, 0, 'cancelled title-bar close must keep the editor open');
+  assert.equal(source.dirty.value, true);
+  assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'hard');
+
+  context.confirmDecisions.push(true);
+  await dialog.props.beforeClose(() => {
+    closed += 1;
+    mounted.instance.$.setupState.editorVisible = false;
+  });
+  await nextTick();
+  assert.equal(closed, 1, 'confirmed title-bar close should finish the dialog close');
+  assert.equal(source.dirty.value, false);
+  assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'easy');
+  assert.equal(mounted.instance.$.setupState.editorVisible, false);
+  mounted.unmount();
+});
+
+test('keeps regulation draft sections independent and never reloads over sibling edits', async () => {
+  context.permissions = new Set(['regulations:read', 'regulations:write', 'regulations:publish']);
+  const mounted = mount(RegulationDetail);
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url.startsWith('/regulations/99/preview')), 'regulation detail');
+  await nextTick();
+  assert.equal(context.unsavedSources.length, 3, 'category, config, and scope need independent sources');
+  const [categorySource, configSource, scopeSource] = context.unsavedSources;
+  assert.deepEqual(context.unsavedSources.map((source) => source.dirty.value), [false, false, false]);
+
+  const setup = mounted.instance.$.setupState;
+  setup.categoryId = '8';
+  await nextTick();
+  assert.deepEqual(context.unsavedSources.map((source) => source.dirty.value), [true, false, false]);
+
+  setup.config.required_minutes = 20;
+  await nextTick();
+  assert.deepEqual(context.unsavedSources.map((source) => source.dirty.value), [true, true, false]);
+
+  const tree = walk(mounted.root, (node) => node.type === 'tree')[0];
+  assert.ok(tree);
+  tree.props.triggerCheck(['2'], ['1']);
+  await nextTick();
+  assert.deepEqual(context.unsavedSources.map((source) => source.dirty.value), [true, true, true]);
+
+  const detailReads = context.calls.filter((call) => call.method === 'get' && call.url === '/regulations/99').length;
+  await setup.saveCategory();
+  await nextTick();
+  assert.equal(categorySource.dirty.value, false);
+  assert.equal(configSource.dirty.value, true);
+  assert.equal(scopeSource.dirty.value, true);
+  assert.equal(setup.config.required_minutes, 20, 'saving category must preserve the config draft');
+  assert.equal(context.calls.filter((call) => call.method === 'get' && call.url === '/regulations/99').length, detailReads, 'section save must not full reload');
+
+  const normalHttp = context.http;
+  context.http = async (method, url, body, config) => {
+    if (method === 'put' && url === '/regulations/99/learning-config') {
+      throw Object.assign(new Error('conflict'), { code: 40940 });
+    }
+    return normalHttp(method, url, body, config);
+  };
+  const originalDocument = globalThis.document;
+  globalThis.document = { activeElement: null };
+  try {
+    await assert.rejects(() => setup.saveConfig(), (error) => error?.code === 40940);
+    assert.equal(configSource.dirty.value, true);
+    assert.equal(setup.config.required_minutes, 20);
+    context.http = normalHttp;
+    await setup.saveConfig();
+  } finally {
+    context.http = normalHttp;
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+  }
+  await nextTick();
+  assert.equal(configSource.dirty.value, false);
+  assert.equal(scopeSource.dirty.value, true);
+
+  setup.config.required_minutes = 25;
+  await nextTick();
+  context.confirmDecisions.push(false);
+  assert.equal(await configSource.confirmDiscard(), false);
+  assert.equal(setup.config.required_minutes, 25, 'cancelled config discard must retain the draft');
+  context.confirmDecisions.push(true);
+  assert.equal(await configSource.confirmDiscard(), true);
+  await nextTick();
+  assert.equal(setup.config.required_minutes, 20, 'confirmed config discard restores its saved baseline');
+  assert.equal(configSource.dirty.value, false);
+
+  setup.categoryId = null;
+  await nextTick();
+  assert.equal(categorySource.dirty.value, true);
+  await setup.switchVersion({ id: '502', version_no: 2 });
+  await nextTick();
+  assert.equal(categorySource.dirty.value, true, 'immediate version switch must not clean metadata draft');
+  assert.equal(setup.categoryId, null);
+  await setup.onPublish();
+  assert.equal(categorySource.dirty.value, true, 'publishing must not clean an unrelated metadata draft');
+  assert.equal(setup.reg.status, 'published');
+  await setup.onArchive();
+  assert.equal(categorySource.dirty.value, true, 'archiving must not clean an unrelated metadata draft');
+  assert.equal(setup.reg.status, 'archived');
+  assert.equal(context.calls.filter((call) => call.method === 'get' && call.url === '/regulations/99').length, detailReads, 'immediate writes must not full reload over sibling drafts');
+
+  context.confirmDecisions.push(false);
+  assert.equal(await categorySource.confirmDiscard(), false);
+  assert.equal(setup.categoryId, null);
+  context.confirmDecisions.push(true);
+  assert.equal(await categorySource.confirmDiscard(), true);
+  await nextTick();
+  assert.equal(setup.categoryId, '8', 'confirmed discard restores the last saved category baseline');
+  assert.equal(categorySource.dirty.value, false);
+
+  context.confirmDecisions.push(false);
+  assert.equal(await scopeSource.confirmDiscard(), false);
+  assert.equal(scopeSource.dirty.value, true, 'cancelled scope discard must retain the tree draft');
+  context.confirmDecisions.push(true);
+  assert.equal(await scopeSource.confirmDiscard(), true);
+  await nextTick();
+  assert.deepEqual(setup.scope.departmentIds, ['2'], 'confirmed scope discard restores its server baseline');
+  assert.equal(scopeSource.dirty.value, false);
+
+  tree.props.triggerCheck(['2'], ['1']);
+  await nextTick();
+  assert.equal(scopeSource.dirty.value, true);
+  await setup.saveScope();
+  await nextTick();
+  assert.equal(scopeSource.dirty.value, false);
+  assert.deepEqual(context.unsavedSources.map((source) => source.dirty.value), [false, false, false]);
   mounted.unmount();
 });
