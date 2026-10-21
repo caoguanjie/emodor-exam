@@ -42,6 +42,7 @@ export const Errors = {
   categoryInactive: (msg = '培训类别不存在或已停用') => new BizError(40910, 409, msg),
   importBatchConflict: (msg = '导入批次已确认，不能更换行集合') => new BizError(40911, 409, msg),
   mediaReferenced: (msg = '媒体仍被业务引用，不能删除') => new BizError(40913, 409, msg),
+  mediaRangeInvalid: (msg = '媒体 Range 无效') => new BizError(41601, 416, msg),
   fileFormat: (msg = '文件格式不支持') => new BizError(42201, 422, msg),
   fileTooLarge: (msg = '文件超过大小上限') => new BizError(42202, 422, msg),
   publishCheckFailed: (msg = '发布校验未通过') => new BizError(42203, 422, msg),

@@ -1,14 +1,17 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
 @Entity('media_asset')
+@Index('uk_media_asset_storage_key', ['storageKey'], { unique: true })
+@Index('idx_media_asset_owner_purpose', ['ownerId', 'purpose'])
+@Index('idx_media_asset_status', ['status'])
 export class MediaAsset {
-  @PrimaryGeneratedColumn({ type: 'bigint' })
+  @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })
   id: string;
 
-  @Column({ name: 'owner_id', type: 'bigint' })
+  @Column({ name: 'owner_id', type: 'bigint', unsigned: true })
   ownerId: string;
 
-  @Column({ name: 'uploaded_by', type: 'bigint' })
+  @Column({ name: 'uploaded_by', type: 'bigint', unsigned: true })
   uploadedBy: string;
 
   @Column({ type: 'varchar', length: 32 })
@@ -33,7 +36,7 @@ export class MediaAsset {
   sha256: string;
 
   @Column({ type: 'varchar', length: 16, default: 'processing' })
-  status: 'processing' | 'ready' | 'failed';
+  status: 'processing' | 'ready' | 'failed' | 'deleting';
 
   @Column({ name: 'duration_ms', type: 'bigint', unsigned: true, nullable: true })
   durationMs: string | null;

@@ -1,7 +1,10 @@
 import { Errors } from '../../common/errors';
 
-export const MEDIA_PURPOSES = ['avatar', 'course_cover', 'video', 'question', 'branding'] as const;
+/** Internal purpose union. `answer` is intentionally unavailable to the generic HTTP DTO. */
+export const MEDIA_PURPOSES = ['avatar', 'course_cover', 'video', 'question', 'answer', 'branding'] as const;
 export type MediaPurpose = (typeof MEDIA_PURPOSES)[number];
+export const MEDIA_UPLOAD_PURPOSES = ['avatar', 'course_cover', 'video', 'question', 'branding'] as const;
+export type MediaUploadPurpose = (typeof MEDIA_UPLOAD_PURPOSES)[number];
 export type MediaKind = 'image' | 'video';
 export const DEFAULT_MEDIA_IMAGE_MAX_PIXELS = 25_000_000;
 
@@ -25,6 +28,12 @@ export type MediaLimits = {
 
 export function assertMediaPurpose(value: unknown): asserts value is MediaPurpose {
   if (typeof value !== 'string' || !MEDIA_PURPOSES.includes(value as MediaPurpose)) {
+    throw Errors.param('媒体用途不支持；answer 必须由考试答案专用接口包装');
+  }
+}
+
+export function assertPublicMediaPurpose(value: unknown): asserts value is MediaUploadPurpose {
+  if (typeof value !== 'string' || !MEDIA_UPLOAD_PURPOSES.includes(value as MediaUploadPurpose)) {
     throw Errors.param('媒体用途不支持；answer 必须由考试答案专用接口包装');
   }
 }

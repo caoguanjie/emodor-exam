@@ -1,19 +1,17 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Errors } from '../../common/errors';
 import { AppConfig } from '../../config/configuration';
-import { AccessService } from '../access/access.service';
 import { MediaAsset } from '../../entities/media-asset.entity';
 import { MediaReference } from '../../entities/media-reference.entity';
 import {
   assertMediaPurpose,
   assertMediaSize,
-  assertOwnerTypeRegistered,
   DEFAULT_MEDIA_LIMITS,
   mediaKindForPurpose,
   parseRange,
@@ -21,7 +19,12 @@ import {
   type MediaLimits,
   type MediaPurpose,
 } from './media-policy';
-import { MediaProbeService, type ImageProbeResult, type VideoProbeResult } from './media-probe.service';
+import {
+  MediaProbeService,
+  MediaProbeUnavailableError,
+  type ImageProbeResult,
+  type VideoProbeResult,
+} from './media-probe.service';
 
 export type MediaId = string;
 export type MediaUploadPurpose = MediaPurpose;
@@ -41,6 +44,15 @@ export interface ContentDescriptor {
   range: ByteRange | null;
 }
 
+export interface MediaOwnerPolicy {
+  allowedPurposes: readonly MediaPurpose[];
+  authorizeRead: (actorId: MediaId, businessId: MediaId) => boolean | Promise<boolean>;
+  validateBinding?: (manager: EntityManager, asset: MediaAsset, businessId: MediaId) => void | Promise<void>;
+}
+
+const MEDIA_DELETING_STATUS = 'deleting';
+const MEDIA_TEMP_FILENAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.upload$/i;
+
 function idOf(value: string | number): string {
   return String(value);
 }
@@ -58,9 +70,15 @@ function extensionForMime(mime: string): string {
   return '.jpg';
 }
 
+function isProbeUnavailable(error: unknown): error is MediaProbeUnavailableError {
+  return error instanceof MediaProbeUnavailableError;
+}
+
 @Injectable()
 export class MediaService {
-  private readonly ownerAuthorizers = new Map<string, MediaOwnerAuthorizer>();
+  private readonly logger = new Logger(MediaService.name);
+  private readonly ownerPolicies = new Map<string, MediaOwnerPolicy>();
+  private readonly activeTempPaths = new Set<string>();
 
   constructor(
     @InjectRepository(MediaAsset) private readonly assetRepo: Repository<MediaAsset>,
@@ -68,19 +86,7 @@ export class MediaService {
     private readonly dataSource: DataSource,
     private readonly config: AppConfig,
     private readonly probe: MediaProbeService,
-    private readonly access?: AccessService,
   ) {
-    // Self-owned avatars are the only owner type implemented in A4. All future
-    // course/exam answer owners must register their own business checker.
-    this.registerOwnerType('user_avatar', async (actorId, ownerId) => {
-      if (actorId === ownerId) return true;
-      // A managed-student avatar can be previewed by an authenticated staff
-      // member with student read/write authority; future business references
-      // still need to register their own authorizer explicitly.
-      if (!this.access) return false;
-      const permissions = await this.access.permissions(actorId);
-      return permissions.includes('students:read') || permissions.includes('students:write');
-    });
   }
 
   limits(): Record<string, unknown> {
@@ -95,13 +101,34 @@ export class MediaService {
     };
   }
 
-  registerOwnerType(ownerType: string, authorizer: MediaOwnerAuthorizer): void {
-    if (!ownerType || typeof authorizer !== 'function') throw Errors.param('媒体业务归属注册无效');
-    this.ownerAuthorizers.set(ownerType, authorizer);
+  registerOwnerPolicy(ownerType: string, policy: MediaOwnerPolicy): void {
+    if (!ownerType || !policy || typeof policy.authorizeRead !== 'function' || !Array.isArray(policy.allowedPurposes) || !policy.allowedPurposes.length) {
+      throw Errors.param('媒体业务归属注册无效');
+    }
+    for (const purpose of policy.allowedPurposes) assertMediaPurpose(purpose);
+    this.ownerPolicies.set(ownerType, {
+      allowedPurposes: [...new Set(policy.allowedPurposes)],
+      authorizeRead: policy.authorizeRead,
+      validateBinding: policy.validateBinding,
+    });
+  }
+
+  registerOwnerType(ownerType: string, policy: MediaOwnerPolicy | MediaOwnerAuthorizer): void {
+    if (typeof policy === 'function') {
+      this.registerOwnerPolicy(ownerType, { allowedPurposes: ['avatar', 'course_cover', 'video', 'question', 'answer', 'branding'], authorizeRead: policy });
+      return;
+    }
+    this.registerOwnerPolicy(ownerType, policy);
   }
 
   registerOwnerAuthorizer(ownerType: string, authorizer: MediaOwnerAuthorizer): void {
     this.registerOwnerType(ownerType, authorizer);
+  }
+
+  private ownerPolicy(ownerType: string): MediaOwnerPolicy {
+    const policy = this.ownerPolicies.get(ownerType);
+    if (!policy) throw Errors.forbidden('媒体业务归属类型未注册');
+    return policy;
   }
 
   private mediaLimits(): MediaLimits {
@@ -114,6 +141,55 @@ export class MediaService {
       allowedImageTypes: config.allowedImageTypes,
       allowedVideoTypes: config.allowedVideoTypes,
     } : DEFAULT_MEDIA_LIMITS;
+  }
+
+  /** The interceptor uses the largest configured media limit for disk Multer. */
+  uploadByteLimit(): number {
+    const limits = this.mediaLimits();
+    return Math.max(limits.videoMaxBytes, limits.imageMaxBytes);
+  }
+
+  private managedTempPath(value: string): string | null {
+    const root = resolve(this.storageRoot(), 'tmp', 'media');
+    const candidate = resolve(value);
+    const rel = relative(root, candidate);
+    if (!rel || rel.startsWith('..') || rel.includes(`..${sep}`) || dirname(candidate) !== root || !MEDIA_TEMP_FILENAME.test(basename(candidate))) return null;
+    return candidate;
+  }
+
+  markTempPath(value: string): void {
+    const path = this.managedTempPath(value);
+    if (path) this.activeTempPaths.add(path);
+  }
+
+  async cleanupTempPath(value: string | undefined): Promise<void> {
+    if (!value) return;
+    const path = this.managedTempPath(value);
+    if (!path) return;
+    this.activeTempPaths.delete(path);
+    await rm(path, { force: true }).catch(() => undefined);
+  }
+
+  private async cleanupStaleTempFiles(graceMs = 24 * 60 * 60 * 1000): Promise<number> {
+    const root = resolve(this.storageRoot(), 'tmp', 'media');
+    const cutoff = Date.now() - Math.max(60_000, graceMs);
+    let names: string[];
+    try { names = await readdir(root); } catch { return 0; }
+    let removed = 0;
+    for (const name of names) {
+      if (!MEDIA_TEMP_FILENAME.test(name)) continue;
+      const path = this.managedTempPath(join(root, name));
+      if (!path || this.activeTempPaths.has(path)) continue;
+      const fileStat = await stat(path).catch(() => null);
+      if (!fileStat?.isFile() || fileStat.mtimeMs >= cutoff) continue;
+      try {
+        await rm(path, { force: true });
+        removed += 1;
+      } catch (error) {
+        this.logger.warn('媒体临时文件清理失败');
+      }
+    }
+    return removed;
   }
 
   private storageRoot(): string {
@@ -139,16 +215,16 @@ export class MediaService {
       // The HTTP interceptor creates this path under the private media temp
       // root. Do not let a caller smuggle an arbitrary local path through the
       // Express.Multer.File-compatible service boundary.
-      const tempRoot = resolve(this.storageRoot(), 'tmp', 'media');
       const candidate = resolve(file.path);
-      const rel = relative(tempRoot, candidate);
-      if (!rel || rel.startsWith('..') || rel.includes(`..${sep}`)) throw Errors.param('媒体临时路径无效');
+      if (this.managedTempPath(candidate) !== candidate) throw Errors.param('媒体临时路径无效');
       const fileStat = await stat(candidate);
+      this.markTempPath(candidate);
       return { path: candidate, size: fileStat.size, cleanup: true };
     }
     if (file?.buffer) {
       const path = await this.tempPath();
       await writeFile(path, file.buffer);
+      this.markTempPath(path);
       return { path, size: file.buffer.length, cleanup: true };
     }
     throw Errors.param('缺少媒体文件');
@@ -183,6 +259,7 @@ export class MediaService {
       finalPath = this.storagePath(key);
       await mkdir(join(finalPath, '..'), { recursive: true });
       await rename(materialized.path, finalPath);
+      this.activeTempPaths.delete(materialized.path);
       materialized.cleanup = false;
 
       const asset = await this.assetRepo.save(this.assetRepo.create({
@@ -217,17 +294,18 @@ export class MediaService {
         return { assetId: String(asset.id), status: asset.status, durationMs: asset.durationMs === null ? null : Number(asset.durationMs) };
       } catch (error) {
         asset.status = 'failed';
-        // ffprobe diagnostics can contain the generated private path; keep only
-        // a stable user-facing summary and never persist filesystem details.
-        asset.probeError = '媒体内容校验失败';
+        // Probe diagnostics can contain the generated private path; keep only
+        // a stable summary and map missing tools to a deployment error.
+        asset.probeError = isProbeUnavailable(error) ? '媒体探测工具不可用' : '媒体内容校验失败';
         await this.assetRepo.save(asset);
+        if (isProbeUnavailable(error)) throw Errors.serviceUnavailable('媒体探测工具不可用');
         throw Errors.param(asset.probeError);
       }
     } catch (error) {
       if (finalPath) await rm(finalPath, { force: true }).catch(() => undefined);
       throw error;
     } finally {
-      if (materialized.cleanup) await rm(materialized.path, { force: true }).catch(() => undefined);
+      if (materialized.cleanup) await this.cleanupTempPath(materialized.path);
     }
   }
 
@@ -241,19 +319,20 @@ export class MediaService {
   async assertUsable(actorId: string | number, assetId: MediaId, purpose: string, ownerId?: string | number): Promise<void> {
     assertMediaPurpose(purpose);
     const asset = await this.findAsset(String(assetId));
-    if (asset.status !== 'ready') throw Errors.param('媒体尚未就绪');
+    if (String(asset.status) !== 'ready') throw Errors.param('媒体尚未就绪');
     if (asset.purpose !== purpose) throw Errors.dataForbidden('媒体用途不匹配');
     if (asset.ownerId !== idOf(ownerId ?? actorId)) throw Errors.dataForbidden();
   }
 
   async bind(manager: EntityManager, assetId: MediaId, ownerType: string, ownerId: MediaId): Promise<void> {
-    assertOwnerTypeRegistered(this.ownerAuthorizers, ownerType);
+    const policy = this.ownerPolicy(ownerType);
     const asset = await manager.getRepository(MediaAsset).findOne({
       where: { id: String(assetId) },
       lock: { mode: 'pessimistic_write' },
     });
-    if (!asset || asset.status !== 'ready') throw Errors.notFound('媒体不存在或尚未就绪');
-    if (asset.ownerId !== String(ownerId)) throw Errors.dataForbidden();
+    if (!asset || String(asset.status) !== 'ready') throw Errors.notFound('媒体不存在或尚未就绪');
+    if (!policy.allowedPurposes.includes(asset.purpose as MediaPurpose)) throw Errors.dataForbidden('媒体用途不匹配');
+    await policy.validateBinding?.(manager, asset, String(ownerId));
     const existing = await manager.getRepository(MediaReference).findOne({ where: { assetId: String(assetId), ownerType, ownerId: String(ownerId) } });
     if (!existing) {
       await manager.getRepository(MediaReference).insert({ assetId: String(assetId), ownerType, ownerId: String(ownerId) });
@@ -268,15 +347,16 @@ export class MediaService {
     if (asset.ownerId === actorId) return true;
     const refs = await this.referenceRepo.find({ where: { assetId: String(asset.id) } });
     for (const ref of refs) {
-      const authorizer = this.ownerAuthorizers.get(ref.ownerType);
-      if (!authorizer) continue;
-      if (await authorizer(actorId, String(ref.ownerId))) return true;
+      const policy = this.ownerPolicies.get(ref.ownerType);
+      if (!policy || !policy.allowedPurposes.includes(asset.purpose as MediaPurpose)) continue;
+      if (await policy.authorizeRead(actorId, String(ref.ownerId))) return true;
     }
     return false;
   }
 
   async metadata(actorId: string | number, assetId: MediaId) {
     const asset = await this.findAsset(String(assetId));
+    if (String(asset.status) === MEDIA_DELETING_STATUS) throw Errors.notFound('媒体不存在');
     if (!await this.canRead(idOf(actorId), asset)) throw Errors.dataForbidden();
     return this.view(asset);
   }
@@ -299,57 +379,92 @@ export class MediaService {
 
   async openContent(actorId: string | number, assetId: MediaId, rangeHeader?: string): Promise<ContentDescriptor> {
     const asset = await this.findAsset(String(assetId));
-    if (asset.status !== 'ready') throw Errors.notFound('媒体不存在或尚未就绪');
+    if (String(asset.status) !== 'ready') throw Errors.notFound('媒体不存在或尚未就绪');
     if (!await this.canRead(idOf(actorId), asset)) throw Errors.dataForbidden();
     const path = this.storagePath(asset.storageKey);
     const fileStat = await stat(path).catch(() => null);
     if (!fileStat?.isFile()) throw Errors.notFound('媒体不存在');
     let range: ByteRange | null = null;
-    try { range = parseRange(rangeHeader, fileStat.size); } catch { throw Errors.param('媒体 Range 无效'); }
+    try { range = parseRange(rangeHeader, fileStat.size); } catch { throw Errors.mediaRangeInvalid(); }
     return { asset, path, size: fileStat.size, range };
   }
 
   async remove(actorId: string | number, assetId: MediaId): Promise<void> {
     let key: string | null = null;
     await this.dataSource.transaction(async (manager) => {
-      const asset = await manager.getRepository(MediaAsset).findOne({ where: { id: String(assetId) }, lock: { mode: 'pessimistic_write' } });
+      const repo = manager.getRepository(MediaAsset);
+      const asset = await repo.findOne({ where: { id: String(assetId) }, lock: { mode: 'pessimistic_write' } });
       if (!asset) throw Errors.notFound('媒体不存在');
       if (asset.ownerId !== idOf(actorId)) throw Errors.dataForbidden();
-      const count = await manager.getRepository(MediaReference).count({ where: { assetId: String(assetId) } });
-      if (count > 0) throw Errors.mediaReferenced();
+      if (String(asset.status) !== MEDIA_DELETING_STATUS) {
+        const count = await manager.getRepository(MediaReference).count({ where: { assetId: String(assetId) } });
+        if (count > 0) throw Errors.mediaReferenced();
+        (asset as any).status = MEDIA_DELETING_STATUS;
+        await repo.save(asset);
+      }
       key = asset.storageKey;
-      await manager.getRepository(MediaAsset).delete({ id: String(assetId) });
     });
-    if (key) await rm(this.storagePath(key), { force: true }).catch(() => undefined);
+    if (!key) return;
+    try {
+      await rm(this.storagePath(key), { force: true });
+    } catch (error) {
+      this.logger.warn('媒体文件清理失败');
+      throw Errors.serviceUnavailable('媒体文件清理失败');
+    }
+    try {
+      await this.deleteDeletingAsset(String(assetId));
+    } catch (error) {
+      if ((error as any)?.code === 40913) throw error;
+      this.logger.warn('媒体删除记录清理失败');
+      throw Errors.serviceUnavailable('媒体删除记录清理失败');
+    }
   }
 
   /** Delete only stale unreferenced files; a reference row always wins the race. */
   async cleanupOrphans(graceMs = 24 * 60 * 60 * 1000): Promise<number> {
     const cutoff = new Date(Date.now() - Math.max(60_000, graceMs));
     const candidates = await this.assetRepo.createQueryBuilder('asset')
-      .where('asset.updated_at < :cutoff', { cutoff })
+      .where('(asset.updated_at < :cutoff OR asset.status = :deleting)', { cutoff, deleting: MEDIA_DELETING_STATUS })
       .getMany();
     let removed = 0;
     for (const candidate of candidates) {
       let key: string | null = null;
-      let deleted = false;
       await this.dataSource.transaction(async (manager) => {
+        const repo = manager.getRepository(MediaAsset);
         const asset = await manager.getRepository(MediaAsset).findOne({
           where: { id: String(candidate.id) },
           lock: { mode: 'pessimistic_write' },
         });
         if (!asset) return;
         const count = await manager.getRepository(MediaReference).count({ where: { assetId: String(asset.id) } });
-        if (count > 0 || asset.updatedAt >= cutoff) return;
+        if (count > 0 || (String(asset.status) !== MEDIA_DELETING_STATUS && asset.updatedAt >= cutoff)) return;
+        if (String(asset.status) !== MEDIA_DELETING_STATUS) {
+          (asset as any).status = MEDIA_DELETING_STATUS;
+          await repo.save(asset);
+        }
         key = asset.storageKey;
-        await manager.getRepository(MediaAsset).delete({ id: String(asset.id) });
-        deleted = true;
       });
-      if (deleted && key) {
-        await rm(this.storagePath(key), { force: true }).catch(() => undefined);
+      if (!key) continue;
+      try {
+        await rm(this.storagePath(key), { force: true });
+        await this.deleteDeletingAsset(String(candidate.id));
         removed += 1;
+      } catch (error) {
+        this.logger.warn('媒体孤儿清理失败');
       }
     }
-    return removed;
+    return removed + await this.cleanupStaleTempFiles();
+  }
+
+  private async deleteDeletingAsset(assetId: string): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(MediaAsset);
+      const asset = await repo.findOne({ where: { id: String(assetId) }, lock: { mode: 'pessimistic_write' } });
+      if (!asset) return;
+      if (String(asset.status) !== MEDIA_DELETING_STATUS) return;
+      const count = await manager.getRepository(MediaReference).count({ where: { assetId: String(assetId) } });
+      if (count > 0) throw Errors.mediaReferenced();
+      await repo.delete({ id: String(assetId) });
+    });
   }
 }

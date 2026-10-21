@@ -32,7 +32,29 @@ export class UsersService {
     private readonly sessions: SessionService,
     private readonly access: AccessService,
     private readonly media: MediaService,
-  ) {}
+  ) {
+    // Keep avatar business authorization in the users domain so media does
+    // not import the managed-student boundary back through AccessService.
+    this.media.registerOwnerPolicy('user_avatar', {
+      allowedPurposes: ['avatar'],
+      authorizeRead: (actorId, businessId) => this.canReadAvatar(actorId, businessId),
+      validateBinding: async (_manager, asset, businessId) => {
+        if (asset.ownerId !== String(businessId) || asset.purpose !== 'avatar' || asset.mediaKind !== 'image') {
+          throw Errors.dataForbidden('媒体不是可绑定的头像');
+        }
+      },
+    });
+  }
+
+  private async canReadAvatar(actorId: string, businessId: string): Promise<boolean> {
+    if (actorId === businessId) return true;
+    const permissions = await this.access.permissions(actorId);
+    if (!permissions.includes('students:read') && !permissions.includes('students:write')) return false;
+    const target = await this.userRepo.findOne({ where: { id: String(businessId), role: RoleEnum.EMPLOYEE } });
+    if (!target) return false;
+    const link = await this.userRepo.manager.getRepository(SysUserRole).findOne({ where: { userId: String(businessId) } });
+    return !link;
+  }
 
   private authVersion(u: SysUser): number {
     return Number.isInteger(Number(u.authVersion)) ? Number(u.authVersion) : 0;

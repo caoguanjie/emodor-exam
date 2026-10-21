@@ -46,7 +46,7 @@
       <el-empty v-if="!studentLoading && students.length === 0" description="暂无学员" />
       <el-pagination v-model:current-page="studentQuery.page" style="margin-top:16px; justify-content:flex-end" layout="total, prev, pager, next" :total="studentTotal" :page-size="studentQuery.page_size" @current-change="loadStudents" />
 
-      <el-dialog v-model="studentDialog" :title="studentForm.id ? '编辑学员' : '新增学员'" width="500px">
+      <el-dialog v-model="studentDialog" :title="studentForm.id ? '编辑学员' : '新增学员'" width="500px" destroy-on-close>
         <el-form label-width="88px">
           <el-form-item label="用户名"><el-input v-model="studentForm.username" :disabled="!!studentForm.id" maxlength="64" /></el-form-item>
           <el-form-item label="姓名"><el-input v-model="studentForm.real_name" maxlength="64" /></el-form-item>
@@ -61,7 +61,7 @@
             <MediaUpload v-model="studentForm.avatar_id" purpose="avatar" :owner-id="String(studentForm.id)" :disabled="studentForm.status === 0" @update:model-value="onStudentAvatarChange" />
           </el-form-item>
         </el-form>
-        <template #footer><el-button @click="studentDialog = false">取消</el-button><el-button v-if="auth.can('students:write')" type="primary" @click="saveStudent">保存</el-button></template>
+        <template #footer><el-button @click="cancelStudentDialog">取消</el-button><el-button v-if="auth.can('students:write')" type="primary" @click="saveStudent">保存</el-button></template>
       </el-dialog>
 
       <el-dialog v-model="previewVisible" title="导入预览" width="650px">
@@ -198,6 +198,7 @@ const studentLoading = ref(false);
 const categories = ref<any[]>([]);
 const studentDialog = ref(false);
 const studentForm = reactive<any>({});
+const studentAvatarOriginalId = ref<string | null>(null);
 const studentQuery = reactive<any>({ page: 1, page_size: 20, keyword: '', category_id: '', source: '' });
 const studentImportDefaults = reactive<{ source: string; category_id: string }>({ source: '', category_id: '' });
 const studentPreview = ref<ImportPreviewData | null>(null);
@@ -261,27 +262,37 @@ function toTree(nodes: any[]): any[] {
 
 function openStudentCreate() {
   Object.keys(studentForm).forEach((key) => delete studentForm[key]);
+  studentAvatarOriginalId.value = null;
   Object.assign(studentForm, { source: 'institution', category_id: categories.value[0]?.id || '', department_id: '' });
   studentDialog.value = true;
 }
 function openStudentEdit(row: any) {
   Object.keys(studentForm).forEach((key) => delete studentForm[key]);
   Object.assign(studentForm, row, { department_id: row.department_id || '', category_id: row.category_id || '', employee_no: row.employee_no || '' });
+  studentAvatarOriginalId.value = row.avatar_id ? String(row.avatar_id) : null;
   studentDialog.value = true;
 }
 
-async function onStudentAvatarChange(assetId: string | null) {
+function onStudentAvatarChange(assetId: string | null) {
+  // Uploading creates an unbound asset. Keep the id in the dialog only; the
+  // final bind is performed by updateStudentAvatar after the user saves.
+  // Cancelling therefore never mutates the managed student row.
   if (!studentForm.id) return;
   studentForm.avatar_id = assetId;
-  await http.put(`/admin/students/${studentForm.id}/avatar`, { avatar_id: assetId });
-  ElMessage.success(assetId ? '头像已更新' : '头像已清除');
-  await loadStudents();
+}
+
+function cancelStudentDialog() {
+  studentDialog.value = false;
+  studentAvatarOriginalId.value = null;
 }
 async function saveStudent() {
   if (!studentForm.username || !studentForm.real_name || !studentForm.source || !studentForm.category_id || (!studentForm.id && !studentForm.password)) {
     ElMessage.warning('请填写用户名、姓名、来源、培训类别和密码'); return;
   }
   if (studentForm.id) {
+    const studentId = String(studentForm.id);
+    const nextAvatarId = studentForm.avatar_id ? String(studentForm.avatar_id) : null;
+    const avatarChanged = nextAvatarId !== studentAvatarOriginalId.value;
     await http.put(`/admin/students/${studentForm.id}`, {
       real_name: studentForm.real_name,
       employee_no: studentForm.employee_no,
@@ -291,6 +302,29 @@ async function saveStudent() {
       phone: studentForm.phone,
       email: studentForm.email,
     });
+    if (avatarChanged) {
+      try {
+        await http.put(`/admin/students/${studentId}/avatar`, { avatar_id: nextAvatarId });
+        studentAvatarOriginalId.value = nextAvatarId;
+      } catch {
+        // The avatar endpoint re-checks the managed-student boundary in its
+        // own transaction. Re-read once so a failed bind never leaves a stale
+        // optimistic id in this dialog; any retry is an explicit user action.
+        try {
+          const current: any = await http.get('/admin/students', { params: { page: 1, page_size: 100, keyword: studentForm.username } });
+          const row = (current.items || []).find((item: any) => String(item.id) === studentId);
+          if (row) {
+            studentForm.avatar_id = row.avatar_id ? String(row.avatar_id) : null;
+            studentAvatarOriginalId.value = studentForm.avatar_id;
+          }
+        } catch {
+          studentForm.avatar_id = studentAvatarOriginalId.value;
+        }
+        ElMessage.error('资料已保存，但头像未更新，请确认后重试');
+        await loadStudents();
+        return;
+      }
+    }
   } else {
     await http.post('/admin/students', {
       username: studentForm.username,
@@ -304,7 +338,7 @@ async function saveStudent() {
       email: studentForm.email,
     });
   }
-  ElMessage.success('已保存'); studentDialog.value = false; await loadStudents();
+  ElMessage.success('已保存'); studentDialog.value = false; studentAvatarOriginalId.value = null; await loadStudents();
 }
 async function toggleStudentStatus(row: any) {
   await ElMessageBox.confirm(row.status === 1 ? '停用后该学员旧令牌立即失效，确认停用？' : '确认启用该学员？', '确认', { type: 'warning' });

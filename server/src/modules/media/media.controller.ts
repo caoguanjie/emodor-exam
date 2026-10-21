@@ -1,11 +1,6 @@
 import {
   Body, Controller, Delete, Get, Param, Post, Req, Res, UploadedFile, UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { Request, Response } from 'express';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
@@ -14,10 +9,12 @@ import { SkipEnvelope } from '../../common/response.interceptor';
 import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { Errors } from '../../common/errors';
 import { AccessService } from '../access/access.service';
-import { MediaService, type MediaUploadPurpose } from './media.service';
+import { MediaService } from './media.service';
+import { MEDIA_UPLOAD_PURPOSES, type MediaUploadPurpose } from './media-policy';
+import { MediaUploadInterceptor } from './media-upload.interceptor';
 
 class MediaUploadDto {
-  @IsString() @IsIn(['avatar', 'course_cover', 'video', 'question', 'branding']) purpose!: MediaUploadPurpose;
+  @IsString() @IsIn([...MEDIA_UPLOAD_PURPOSES]) purpose!: MediaUploadPurpose;
   @IsOptional() @IsString() @MaxLength(32) owner_id?: string;
 }
 
@@ -25,13 +22,6 @@ function assertBodyKeys(body: unknown): void {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw Errors.param('上传参数必须是对象');
   const unknown = Object.keys(body as object).filter((key) => !['purpose', 'owner_id'].includes(key));
   if (unknown.length) throw Errors.param(`上传请求包含不支持的字段：${unknown.join(',')}`);
-}
-
-function uploadTempRoot(): string {
-  const root = process.env.UPLOAD_DIR || './data/uploads';
-  const path = join(root, 'tmp', 'media');
-  mkdirSync(path, { recursive: true });
-  return path;
 }
 
 @Controller('media')
@@ -47,15 +37,7 @@ export class MediaController {
   }
 
   @Post('upload')
-  @UseInterceptors(FileInterceptor('file', {
-    storage: diskStorage({
-      destination: (_req, _file, callback) => callback(null, uploadTempRoot()),
-      filename: (_req, _file, callback) => callback(null, `${randomUUID()}.upload`),
-    }),
-    // The service applies the configured image limit and the exact video limit.
-    // Multer itself stays bounded at the maximum supported video size.
-    limits: { fileSize: 512 * 1024 * 1024 },
-  }))
+  @UseInterceptors(MediaUploadInterceptor())
   async upload(
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body(new StrictDtoValidationPipe(['purpose', 'owner_id'])) dto: MediaUploadDto,

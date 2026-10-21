@@ -3,17 +3,21 @@ import { deflateSync } from 'node:zlib';
 import {
   DEFAULT_MEDIA_LIMITS,
   MEDIA_PURPOSES,
+  MEDIA_UPLOAD_PURPOSES,
   mediaKindForPurpose,
   assertMediaPurpose,
+  assertPublicMediaPurpose,
   assertOwnerTypeRegistered,
   parseRange,
 } from '../src/modules/media/media-policy';
 import { MediaProbeService } from '../src/modules/media/media-probe.service';
 
 describe('media policy', () => {
-  it('rejects the generic answer purpose until the answer wrapper exists', () => {
-    expect(MEDIA_PURPOSES).not.toContain('answer');
-    expect(() => assertMediaPurpose('answer')).toThrowError();
+  it('keeps answer available internally but rejects it on the generic public upload contract', () => {
+    expect(MEDIA_PURPOSES).toContain('answer');
+    expect(() => assertMediaPurpose('answer')).not.toThrow();
+    expect(MEDIA_UPLOAD_PURPOSES).not.toContain('answer');
+    expect(() => assertPublicMediaPurpose('answer')).toThrowError();
   });
 
   it('keeps the configured upload limits bounded and reports media kinds', () => {

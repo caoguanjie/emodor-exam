@@ -65,6 +65,19 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
   return Math.min(max, Math.max(min, value));
 }
 
+function mediaEnvInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  if (!/^(0|[1-9]\d*)$/.test(raw)) {
+    throw new Error(`环境变量 ${name} 必须是整数`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`环境变量 ${name} 超出支持范围`);
+  }
+  return value;
+}
+
 export function loadConfig(): AppConfig {
   const env = process.env.NODE_ENV || 'development';
   const isProd = env === 'production';
@@ -113,12 +126,12 @@ export function loadConfig(): AppConfig {
       maxImportRows: 1000,
     },
     media: {
-      // Multer and nginx are deliberately bounded to the same 512 MiB media
-      // contract; a larger env value must not advertise an unreachable limit.
-      videoMaxBytes: envInt('MEDIA_VIDEO_MAX_BYTES', 512 * 1024 * 1024, 1, 512 * 1024 * 1024),
-      imageMaxBytes: envInt('MEDIA_IMAGE_MAX_BYTES', 10 * 1024 * 1024, 1, 100 * 1024 * 1024),
-      imageMaxPixels: envInt('MEDIA_IMAGE_MAX_PIXELS', 25_000_000, 1, 100_000_000),
-      probeTimeoutMs: envInt('MEDIA_PROBE_TIMEOUT_MS', 30_000, 1_000, 120_000),
+      // Media overrides reject malformed/unsupported values. The upload transport
+      // uses max(image, video); deploy/check-media-limits.mjs enforces the nginx +1 MiB margin.
+      videoMaxBytes: mediaEnvInt('MEDIA_VIDEO_MAX_BYTES', 512 * 1024 * 1024, 1, 512 * 1024 * 1024),
+      imageMaxBytes: mediaEnvInt('MEDIA_IMAGE_MAX_BYTES', 10 * 1024 * 1024, 1, 100 * 1024 * 1024),
+      imageMaxPixels: mediaEnvInt('MEDIA_IMAGE_MAX_PIXELS', 25_000_000, 1, 100_000_000),
+      probeTimeoutMs: mediaEnvInt('MEDIA_PROBE_TIMEOUT_MS', 30_000, 1_000, 120_000),
       ffprobePath: process.env.FFPROBE_PATH || 'ffprobe',
       ffmpegPath: process.env.FFMPEG_PATH || 'ffmpeg',
       allowedImageTypes: ['image/jpeg', 'image/png', 'image/webp'],

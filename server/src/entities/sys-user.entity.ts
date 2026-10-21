@@ -40,7 +40,7 @@ export class SysUser {
   email: string | null;
 
   /** 受控媒体头像资源；本人资料与学员管理只保存 media_asset.id。 */
-  @Column({ name: 'avatar_id', type: 'bigint', nullable: true })
+  @Column({ name: 'avatar_id', type: 'bigint', unsigned: true, nullable: true })
   avatarId: string | null;
 
   /** 1=启用（在职），0=停用 */

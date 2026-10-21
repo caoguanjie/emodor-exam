@@ -2,7 +2,7 @@ import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import {
@@ -30,6 +30,7 @@ const databases = new Set();
 
 before(async () => {
   services = await createEphemeralServices();
+  console.log(`[owned-ephemeral] root=${services.root} mysqlPid=${services.mysqlPid} redisPid=${services.redisPid}`);
   admin = await mysql.createConnection({
     host: services.mysql.host,
     port: services.mysql.port,
@@ -40,12 +41,38 @@ before(async () => {
 });
 
 after(async () => {
+  const owned = services && {
+    root: services.root,
+    mysqlPid: services.mysqlPid,
+    redisPid: services.redisPid,
+  };
   for (const database of databases) {
     await admin?.query(`DROP DATABASE IF EXISTS \`${database}\``).catch(() => undefined);
   }
   await admin?.end().catch(() => undefined);
+  await services?.stopProcesses();
+  if (owned) {
+    for (const [name, pid] of [['mysql', owned.mysqlPid], ['redis', owned.redisPid]]) {
+      assert.equal(isProcessRunning(pid), false, `owned ephemeral ${name} process ${pid} must stop before cleanup`);
+    }
+  }
   await services?.cleanup();
+  if (owned) {
+    assert.equal(existsSync(owned.root), false, `owned ephemeral root must be removed exactly: ${owned.root}`);
+    console.log(`[owned-ephemeral] stopped mysqlPid=${owned.mysqlPid} redisPid=${owned.redisPid}; removed exact root=${owned.root}`);
+  }
 });
+
+function isProcessRunning(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ESRCH') return false;
+    throw error;
+  }
+}
 
 async function createDatabase(suffix = randomBytes(5).toString('hex')) {
   const database = `ruleexam_test_${suffix}`;
@@ -72,6 +99,40 @@ async function migration(id = '000_migration_registry') {
 function fixtureMigration(id, text) {
   return parseMigrationText(id, text);
 }
+
+const correctMediaAssetFixture = `CREATE TABLE media_asset (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  owner_id BIGINT UNSIGNED NOT NULL,
+  uploaded_by BIGINT UNSIGNED NOT NULL,
+  purpose VARCHAR(32) NOT NULL,
+  media_kind VARCHAR(16) NOT NULL,
+  original_name VARCHAR(255) NULL,
+  mime_type VARCHAR(128) NOT NULL,
+  storage_key VARCHAR(512) NOT NULL,
+  size_bytes BIGINT UNSIGNED NOT NULL,
+  sha256 CHAR(64) NOT NULL,
+  status VARCHAR(16) NOT NULL DEFAULT 'processing',
+  duration_ms BIGINT UNSIGNED NULL,
+  probe_error VARCHAR(512) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_media_asset_storage_key (storage_key),
+  KEY idx_media_asset_owner_purpose (owner_id, purpose),
+  KEY idx_media_asset_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`;
+
+const correctMediaReferenceFixture = `CREATE TABLE media_reference (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  asset_id BIGINT UNSIGNED NOT NULL,
+  owner_type VARCHAR(64) NOT NULL,
+  owner_id BIGINT UNSIGNED NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_media_reference_owner (asset_id, owner_type, owner_id),
+  KEY idx_media_reference_asset (asset_id),
+  KEY idx_media_reference_owner (owner_type, owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`;
 
 test('active in-progress exam records block check and apply before registry writes', async () => {
   const database = await createDatabase();
@@ -186,6 +247,119 @@ test('upgrade preserves existing rows and converges INFORMATION_SCHEMA with init
   const [upgradeIndexes] = await admin.query(`SELECT ${indexShape} FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`, [upgradeDb]);
   assert.deepEqual(upgradeIndexes, initIndexes);
   await upgrade.end();
+});
+
+test('media migration completion checks reject same-count schema drift without destroying rows', async () => {
+  const base = await migration();
+  const media = await migration('003_media');
+  const variants = [
+    {
+      name: 'asset_wrong_field',
+      stepId: 'create_media_asset',
+      assetSql: correctMediaAssetFixture.replace('probe_error VARCHAR(512)', 'probe_failure VARCHAR(512)'),
+      referenceSql: correctMediaReferenceFixture,
+      markerTable: 'media_asset',
+    },
+    {
+      name: 'asset_wrong_type',
+      stepId: 'create_media_asset',
+      assetSql: correctMediaAssetFixture.replace('mime_type VARCHAR(128)', 'mime_type VARCHAR(127)'),
+      referenceSql: correctMediaReferenceFixture,
+      markerTable: 'media_asset',
+    },
+    {
+      name: 'asset_missing_index',
+      stepId: 'create_media_asset',
+      assetSql: correctMediaAssetFixture.replace(',\n  KEY idx_media_asset_status (status)', ''),
+      referenceSql: correctMediaReferenceFixture,
+      markerTable: 'media_asset',
+    },
+    {
+      name: 'asset_wrong_index_shape',
+      stepId: 'create_media_asset',
+      assetSql: correctMediaAssetFixture.replace('idx_media_asset_owner_purpose (owner_id, purpose)', 'idx_media_asset_owner_purpose (purpose, owner_id)'),
+      referenceSql: correctMediaReferenceFixture,
+      markerTable: 'media_asset',
+    },
+    {
+      name: 'reference_wrong_unsigned',
+      stepId: 'create_media_reference',
+      assetSql: correctMediaAssetFixture,
+      referenceSql: correctMediaReferenceFixture.replace('asset_id BIGINT UNSIGNED', 'asset_id BIGINT'),
+      markerTable: 'media_reference',
+    },
+    {
+      name: 'asset_wrong_default',
+      stepId: 'create_media_asset',
+      assetSql: correctMediaAssetFixture.replace("DEFAULT 'processing'", "DEFAULT 'ready'"),
+      referenceSql: correctMediaReferenceFixture,
+      markerTable: 'media_asset',
+    },
+    {
+      name: 'reference_wrong_precision',
+      stepId: 'create_media_reference',
+      assetSql: correctMediaAssetFixture,
+      referenceSql: correctMediaReferenceFixture.replace(
+        'created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)',
+        'created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
+      ),
+      markerTable: 'media_reference',
+    },
+    {
+      name: 'asset_wrong_engine',
+      stepId: 'create_media_asset',
+      assetSql: correctMediaAssetFixture.replace(
+        'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci',
+        'ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci',
+      ),
+      referenceSql: correctMediaReferenceFixture,
+      markerTable: 'media_asset',
+    },
+  ];
+
+  for (const variant of variants) {
+    const database = await createDatabase(`${variant.name}_${randomBytes(3).toString('hex')}`);
+    const conn = await connectionFor(database);
+    try {
+      await conn.query(`CREATE TABLE sys_user (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        avatar_id BIGINT UNSIGNED NULL,
+        PRIMARY KEY (id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`);
+      await conn.query(`CREATE TABLE sys_permission (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        code VARCHAR(128) NOT NULL,
+        name VARCHAR(128) NOT NULL,
+        created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+        PRIMARY KEY (id),
+        UNIQUE KEY uk_sys_permission_code (code)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`);
+      await conn.query(variant.assetSql);
+      await conn.query(variant.referenceSql);
+      await conn.execute(`INSERT INTO media_asset
+        (id, owner_id, uploaded_by, purpose, media_kind, original_name, mime_type, storage_key, size_bytes, sha256)
+        VALUES (1, 1, 1, 'avatar', 'image', 'preserved.png', 'image/png', ?, 1, ?)`,
+      [`drift/${variant.name}`, 'a'.repeat(64)]);
+      await conn.execute("INSERT INTO media_reference (id, asset_id, owner_type, owner_id) VALUES (1, 1, 'user_avatar', 1)");
+
+      const step = media.steps.find((item) => item.id === variant.stepId);
+      assert.ok(step, `missing media migration step ${variant.stepId}`);
+      const [[completion]] = await conn.execute(step.checkSql);
+      assert.equal(Number(completion.complete), 0, `${variant.name} must fail its completion check`);
+      await assert.rejects(
+        () => applyMigrations({ connection: conn, database, migrations: [base, media] }),
+        /003_media|create_media_(?:asset|reference)|probe|invariant|incomplete/i,
+        `${variant.name} must reject apply instead of recording completion`,
+      );
+      const [[registry]] = await conn.query(`SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = ?`, [media.id]);
+      assert.equal(registry.status, 'failed');
+      assert.equal(Array.isArray(registry.progress) && registry.progress.includes(variant.stepId), false);
+      const [[preserved]] = await conn.query(`SELECT COUNT(*) AS count FROM \`${variant.markerTable}\` WHERE id = 1`);
+      assert.equal(Number(preserved.count), 1, `${variant.name} must preserve pre-existing rows`);
+    } finally {
+      await conn.end();
+    }
+  }
 });
 
 test('two actual connections cannot apply the same database concurrently', async () => {

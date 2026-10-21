@@ -102,7 +102,7 @@
 | /auth | 1. 组织权限模块 | 5 | 登录、刷新、个人信息、改密、登出 |
 | /users | 1. 组织权限模块 | 8 | 员工 CRUD、重置密码、批量导入、启停 |
 | /admin/training-categories | 1. 组织权限模块（A2） | 6 | 培训类别分页、详情、增改、启停、引用保护删除 |
-| /admin/students | 1. 组织权限模块（A2） | 10 | 学员分页、CRUD、启停、重置密码、xlsx 模板/预检/批次确认 |
+| /admin/students | 1. 组织权限模块（A2/A4） | 11 | 学员分页、CRUD、头像、启停、重置密码、xlsx 模板/预检/批次确认 |
 | /me | 1. 组织权限模块（A2/A4） | 2 | 本人资料查询与姓名/联系方式/头像修改 |
 | /media | 1. 组织权限模块（A4） | 5 | 受控上传、限制查询、状态/Range 读取、引用保护删除 |
 | /departments | 1. 组织权限模块 | 5 | 部门树、CRUD、层级调整 |
@@ -113,7 +113,7 @@
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**合计 93 个接口（92 个业务接口 + 1 个健康检查，含 A2/A4 增量；媒体内容流不包统一信封）。**
+**合计 94 个接口（93 个业务接口 + 1 个健康检查，含 A2/A4 增量；媒体内容流不包统一信封）。**
 
 ---
 
@@ -192,13 +192,14 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 3 | POST | /admin/students | body：`username`、`password`、`real_name`、`category_id`、`source` 必填；可选 `employee_no/department_id/phone/email` | `Student`，role 固定 employee |
 | 4 | PUT | /admin/students/{id} | body：`real_name/employee_no/department_id/category_id/source/phone/email` 可选；不接受 username/password/role | `Student` |
 | 5 | PUT | /admin/students/{id}/status | body：`status`（0/1） | `Student`；停用同时吊销既有令牌 |
-| 6 | PUT | /admin/students/{id}/password | body：`password`（≥8 位，含字母与数字） | `null`；旧令牌吊销并回到首登改密 |
-| 7 | GET | /admin/students/import-template | — | `.xlsx` 二进制；表头为 `用户名/姓名/工号/手机号/邮箱/来源/培训类别ID/初始密码` |
-| 8 | POST | /admin/students/import-preview | JSON `rows` 数组，或 multipart `file`；可选 `defaults:{source?,category_id?}` | `ImportPreview` |
-| 9 | GET | /admin/students/import-batches/{id} | —；仅批次 owner 可读 | 未提交批次为 `ImportPreview`，已提交批次为 `ImportResult` |
-| 10 | POST | /admin/students/import-batches/{id}/commit | body：`row_numbers` 为非空整数数组；仅批次 owner | `ImportResult` |
+| 6 | PUT | /admin/students/{id}/avatar | body：`avatar_id`（ready 的 avatar 图片资源 ID）或 null | `Student`；同一用户行锁事务内重查 managed-student 边界并更新引用 |
+| 7 | PUT | /admin/students/{id}/password | body：`password`（≥8 位，含字母与数字） | `null`；旧令牌吊销并回到首登改密 |
+| 8 | GET | /admin/students/import-template | — | `.xlsx` 二进制；表头为 `用户名/姓名/工号/手机号/邮箱/来源/培训类别ID/初始密码` |
+| 9 | POST | /admin/students/import-preview | JSON `rows` 数组，或 multipart `file`；可选 `defaults:{source?,category_id?}` | `ImportPreview` |
+| 10 | GET | /admin/students/import-batches/{id} | —；仅批次 owner 可读 | 未提交批次为 `ImportPreview`，已提交批次为 `ImportResult` |
+| 11 | POST | /admin/students/import-batches/{id}/commit | body：`row_numbers` 为非空整数数组；仅批次 owner | `ImportResult` |
 
-`Student` 字段为 `{ id, username, real_name, employee_no, department_id, category_id, source, role, phone, email, status, last_login_at, created_at }`。列表默认 page=1/page_size=20，page_size 范围 1—100；未知 query/body 字段、非整数分页、非法枚举均返回 40001。本人资料接口见 3.2.3，不允许通过学员接口修改 role。
+`Student` 字段为 `{ id, username, real_name, employee_no, department_id, category_id, source, role, phone, email, avatar_id, status, last_login_at, created_at }`，其中 `avatar_id` 可为 null。列表默认 page=1/page_size=20，page_size 范围 1—100；未知 query/body 字段、非整数分页、非法枚举均返回 40001。本人资料接口见 3.2.3，不允许通过学员接口修改 role。
 
 导入预检逐行返回 `ImportPreview = { batch_id, valid_rows, errors:[{row,message}], duplicates }`；模板行号从 2 开始。预检会按数据库 `utf8mb4_0900_ai_ci` 规则识别大小写/重音重复，并检查现存 username/employee_no、启用类别、来源和口令策略。确认只消费服务端规范化行，批次按 owner+id 隔离；首次确认固定合法行集合，同集合重试返回原 `created_ids`，更换集合返回 40911。确认事务按类别 ID 加锁并重新检查类别存在且启用；类别在预检后被停用或删除时返回 40910，不创建悬挂学员。任何响应、错误明细和审计记录不得包含导入明文口令或 `password_hash`；`import_batch.normalized_rows` 只保存不可逆的 `password_hash`，不保存明文口令。
 
@@ -216,12 +217,12 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 方法 | 路径 | 权限 | 请求与响应 |
 |---|---|---|---|
 | GET | `/media/limits` | 登录 | 返回 `video_max_bytes`（默认 536870912，服务端/网关硬上限一致）、`image_max_bytes`（默认 10485760）、`image_max_pixels`（默认 25000000）、`probe_timeout_ms`（默认 30000）及允许类型；不返回路径/密钥 |
-| POST | `/media/upload` | 登录；非头像用途需 `media:write` | multipart `file` + `purpose`（avatar/course_cover/video/question/branding），可选头像 `owner_id`；`answer` 直接 400 拒绝。成功 `data={asset_id,status,duration_ms}`（A1 新接口 ID 均为字符串），视频实际探测后才为 ready |
-| GET | `/media/{id}` | 资源拥有者/已注册 owner authorizer | 查询 `asset_id/purpose/media_kind/mime_type/size_bytes/status/duration_ms`；processing/failed 不可读取文件 |
-| GET | `/media/{id}/content` | 资源拥有者/已注册 owner authorizer | 私有流，支持单一 `Range: bytes=start-end`，命中返回 206 与 `Content-Range`；文件流跳过统一信封 |
-| DELETE | `/media/{id}` | 资源拥有者 | 有任何 `media_reference` 时返回 40913，不删除已引用文件；孤儿文件按延迟清理策略处理 |
+| POST | `/media/upload` | 登录；非头像用途需 `media:write` | multipart `file` + `purpose`（avatar/course_cover/video/question/branding），可选头像 `owner_id`；公开 DTO 不接受 `answer`，返回 40001。内部 `MediaService` 保留 image-only `answer` 能力，只有未来 C3 专用路由可在校验题单归属和截止时间后调用。成功 `data={asset_id,status,duration_ms}`（A1 新接口 ID 均为字符串），视频实际探测后才为 ready |
+| GET | `/media/{id}` | 资源拥有者/已注册 owner authorizer | 查询 `asset_id/purpose/media_kind/mime_type/size_bytes/status/duration_ms`；公开 status 仅为 `processing/ready/failed`，内部 `deleting` 按 40401 不存在处理 |
+| GET | `/media/{id}/content` | 资源拥有者/已注册 owner authorizer | 私有流，支持单一 `Range: bytes=start-end`，命中返回 206 与 `Content-Range`；无效或不可满足 Range 返回 41601/HTTP 416；文件流跳过统一信封 |
+| DELETE | `/media/{id}` | 资源拥有者 | 有任何 `media_reference` 时返回 40913；无引用后先落内部 `deleting` 再删除物理文件，失败保留行供重试并返回 50004/HTTP 503，成功或文件已不存在才删数据库行 |
 
-管理端头像绑定 `PUT /admin/students/{id}/avatar` 只接受 `avatar_id`，在同一用户行锁事务内重复 `lockManagedStudent` 最终检查并 bind；拥有任何 `sys_user_role` 链接的员工仍不属于学员管理范围。
+管理端头像绑定 `PUT /admin/students/{id}/avatar` 只接受 `avatar_id`，在同一用户行锁事务内重复 `lockManagedStudent` 最终检查并 bind；拥有任何 `sys_user_role` 链接的员工仍不属于学员管理范围。PC 选择新头像时只把上传结果暂存在当前表单，点击“保存”后才调用既有资料更新与独立头像绑定接口；取消不绑定该上传，任一保存请求失败后以详情 GET 对账并保留重试入口，不能把上传成功误当成资料已保存。
 
 ### 3.2.5 A2 导入错误与恢复语义
 
@@ -733,7 +734,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 分段 | 含义 | HTTP 状态码 |
 |---|---|---|
 | 0 | 成功 | 200 / 201 |
-| 40xxx | 客户端错误 | 400 / 401 / 403 / 404 / 409 / 422 / 429 |
+| 40xxx | 客户端错误 | 400 / 401 / 403 / 404 / 409 / 416 / 422 / 429 |
 | 50xxx | 服务端错误 | 500 / 502 / 503 |
 
 业务码前 3 位与 HTTP 状态码保持段内一致（如 409xx → HTTP 409、401xx → HTTP 401），例外（如 40105 映射 403）在明细表逐条标注。
@@ -768,13 +769,14 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 40912 | 409 | 至少保留一名启用的超级管理员 | 尝试删除/停用/清空最高管理员保护权限 |
 | 40913 | 409 | 媒体仍被业务引用，不能删除 | `media_reference` 存在时删除媒体资源 |
 | 42201 | 422 | 文件格式不支持 | 上传非 pdf/docx（含魔法数不符） |
-| 42202 | 422 | 文件超过大小上限 | 上传超过 50MB |
+| 41601 | 416 | 请求的媒体范围无效 | `Range` 语法非法、多段范围或起止超出文件边界 |
+| 42202 | 422 | 文件超过大小上限 | 制度文件超过 50MB，或媒体图片/视频超过当前配置限制；Multer 拦截与业务层统一此码 |
 | 42203 | 422 | 发布校验未通过 | 制度发布缺前置（无生效版本/未配要求或范围）；试卷发布总分 ≠ 100 |
 | 42901 | 429 | 请求过于频繁 | 普通心跳超过 30 秒节拍窗口的异常高频（限流丢弃不影响时长正确性——credited 封顶 45 秒；pause/resume 不适用节拍丢弃，另见 6.2） |
 | 50001 | 500 | 服务器内部错误 | 未分类异常（附 trace_id 供日志追踪） |
 | 50002 | 502 | AI 服务调用失败 | 大模型超时/重试后仍失败（任务置 failed，可重新发起） |
 | 50003 | 500 | 文件解析失败 | 解析流水线异常（parse_status = failed，可重试） |
-| 50004 | 503 | 服务暂不可用 | 依赖（MySQL/Redis）故障降级中 |
+| 50004 | 503 | 服务暂不可用 | MySQL/Redis 故障、媒体探测工具缺失/不可执行，或媒体物理删除失败等待重试；响应不暴露本地路径 |
 | 50005 | 502 | AI 连通性测试失败 | POST /ai/config/test 以已保存配置发起测试未通过（message 为脱敏错误摘要） |
 
 ---

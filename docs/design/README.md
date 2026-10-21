@@ -34,7 +34,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | 考试与成绩 | 旧固定卷下发、服务端计时、自动客观评分、最高分口径 | 固定/随机发布快照、个人题单、持久草稿、图片题单题最多 9 张；图片题可受控逐题评分，服务端聚合，最终总分只读 |
 | 统计与监控 | 原制度/部门/个人报表 | 按场次/难度、已完成批改个人最高分、当前应考集合交集统计；5 秒轮询，90 秒无心跳仅“连接待确认” |
 
-**实现状态规则**：目标表、字段、DTO、路由由 A1—C7 在相应 migration、entity、controller 存在后补入对应分册；未具备源码与验收证据时只写“计划”。当前 12 张业务表保持不变；A1 `schema_migration` 元数据表已完成源码集成、39 项基础验证与独立审查，精确 DDL 与升级边界见 [03-数据库设计.md](03-数据库设计.md) 1.10，验收记录见 [A1 基础验收](../../review/2026-10-21-training-a1-foundation.md)。这不代表已对开发库或生产库执行升级。A2 以后新增业务表继续遵循 DDL/init/migration/entity/设计同步政策。
+**实现状态规则**：目标表、字段、DTO、路由由 A1—C7 在相应 migration、entity、controller 存在后补入对应分册；未具备源码与验收证据时只写“计划”。当前源码已包含 12 张 legacy 业务表、A2 两张培训身份/导入表、A3 五张权限/会话表与 A4 两张受控媒体表，共 21 张业务表；另有 A1 `schema_migration` 元数据表，合计 22 张物理表。精确 DDL 与升级边界见 [03-数据库设计.md](03-数据库设计.md) 1.10，验收记录见 [A1 基础验收](../../review/2026-10-21-training-a1-foundation.md)。这不代表已对开发库或生产库执行升级。B1 以后新增业务表继续遵循 DDL/init/migration/entity/设计同步政策。
 
 ### 1.4 A1—C7 模块与验收进度映射
 
@@ -117,7 +117,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 
 ### 3.3 核心实体清单
 
-当前实现基线有 12 张业务表，表名及其字段在本步骤**逐字固定**（完整字段定义见 [03-数据库设计.md](03-数据库设计.md)）；培训融合新增表不在本清单中凭空预设，须由对应 migration、`database/init.sql`、entity、设计分册和 API/controller 同步后再登记。当前 12 张表在本 docs 步骤保持不变：
+当前源码有 21 张业务表，表名及其字段必须与 migration、`database/init.sql`、entities 和 [03-数据库设计.md](03-数据库设计.md) 同步；另有不计入业务表清单的 A1 `schema_migration` 元数据表。以下 12 张 legacy 表保持兼容，A2—A4 已实现增量按实际源码登记，B1 以后不得在未实现前凭空预设。
 
 **组织权限域（2 张）**
 
@@ -151,22 +151,46 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | exam_record | 考试记录：用户第 N 次作答（attempt_no）、状态（in_progress/submitted/passed/failed/timeout）、得分与切屏次数（switch_count）、交卷截止时刻快照（deadline_at）。 |
 | exam_answer | 答题明细：考试记录内逐题的所选选项（selected）、判对（is_correct）与得分（gained_score）。 |
 
+**培训身份与导入域（2 张，A2）**
+
+| 表名 | 一句话职责 |
+|---|---|
+| training_category | 培训类别：名称唯一、启停保留历史引用，供学员资料与后续培训业务归类。 |
+| import_batch | 可恢复导入批次：保存脱敏输入指纹、规范化行、预检错误及首次确认结果；不保存明文口令。 |
+
+**可配置权限与会话域（5 张，A3）**
+
+| 表名 | 一句话职责 |
+|---|---|
+| sys_role | 机构业务角色目录；系统角色受保护。 |
+| sys_permission | 服务端注册的权限代码白名单。 |
+| sys_role_permission | 业务角色与权限的复合唯一关系。 |
+| sys_user_role | 用户与业务角色的复合唯一关系；与 `sys_user.role` 系统身份分离。 |
+| auth_session | 可吊销浏览器会话，保存 sid、活动时间、到期时间与吊销状态。 |
+
+**受控媒体域（2 张，A4）**
+
+| 表名 | 一句话职责 |
+|---|---|
+| media_asset | 私有媒体资源：服务端存储键、实际类型/大小/哈希/时长、处理与内部删除重试状态。 |
+| media_reference | 媒体业务引用：按已注册 owner type 关联业务实体并保护在用资源。 |
+
 ### 3.4 统一命名规范
 
 **数据库命名**
 
 - 表名与字段名一律使用小写 snake_case。
-- 当前基线表名严格使用 3.3 节清单中的 12 个名称，不在本步骤改名或删改。A1 `schema_migration` 是不计入业务表清单的元数据表，精确结构见 03 册 1.10；其 DDL 已完成根集成与 A1 验收。A2 以后新增培训表遵循“迁移脚本 → `database/init.sql` → entities → 03 册/相关分册 → API/controller”同步政策，不能由文档另造第二定义。
+- 当前表名严格使用 3.3 节清单中的 21 个名称；12 张 legacy 表不改名或删改，A2—A4 增量按版本化 migration 演进。A1 `schema_migration` 是不计入业务表清单的元数据表，精确结构见 03 册 1.10。B1 以后新增培训表继续遵循“迁移脚本 → `database/init.sql` → entities → 03 册/相关分册 → API/controller”同步政策，不能由文档另造第二定义。
 
 **API 命名**
 
 - REST 风格，统一前缀 `/api/v1`。
-- 模块路由：`/auth`、`/users`、`/departments`、`/regulations`、`/learning`、`/exams`、`/statistics`、`/ai`。
+- legacy 模块路由：`/auth`、`/users`、`/departments`、`/regulations`、`/learning`、`/exams`、`/statistics`、`/ai`；已实现增量另含 `/admin/training-categories`、`/admin/students`、`/admin` 权限/会话路由、`/me` 与 `/media`。
 - 路由与模块的对应关系固定如下：
 
 | 模块（固定名称） | 路由前缀 |
 |---|---|
-| 1. 组织权限模块 | `/auth`、`/users`、`/departments` |
+| 1. 组织权限模块 | `/auth`、`/users`、`/departments`、`/admin/training-categories`、`/admin/students`、`/admin`、`/me`、`/media` |
 | 2. 制度文件管理模块 | `/regulations` |
 | 3. AI 出题模块 | `/ai` |
 | 4. 学习行为管控模块 | `/learning` |
@@ -198,8 +222,9 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | question.source | ai / manual | 试题来源：AI 生成 / 人工录入 |
 | exam_paper.status | draft / published / archived | 试卷状态：草稿 / 已发布 / 已归档 |
 | exam_record.status | in_progress / submitted / passed / failed / timeout | 考试状态：进行中 / 已交卷 / 已通过 / 未通过 / 超时自动交卷 |
+| media_asset.status | processing / ready / failed / deleting | 媒体状态；`deleting` 仅供物理删除失败重试，公开 API 按不存在处理 |
 
-> 上表是当前 legacy 基线枚举。计划中的四题型、难度、来源快照、发布/个人题单、草稿与阅卷状态属于增量契约；后续任务在实际 migration/entity/controller 落地后补入，不把“计划枚举”冒充当前 API 或数据库事实。
+> 上表以 legacy 基线枚举为主，并登记 A4 已实现的媒体持久状态。计划中的四题型、难度、来源快照、发布/个人题单、草稿与阅卷状态属于后续增量契约；只有实际 migration/entity/controller 落地后才补入，不把“计划枚举”冒充当前 API 或数据库事实。
 
 ---
 

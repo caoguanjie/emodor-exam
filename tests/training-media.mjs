@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -67,21 +67,54 @@ function pngFixture() {
 async function ffmpegFixture(extension = '.mp4') {
   const root = await mkdtemp(join(tmpdir(), 'ruleexam-media-fixture-'));
   const output = join(root, `silent-h264${extension}`);
-  const executable = process.env.FFMPEG_PATH || '/opt/homebrew/bin/ffmpeg';
-  await new Promise((resolve, reject) => {
-    const args = [
-      '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=32x32:d=1',
-      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an',
-    ];
-    if (extension === '.mp4') args.push('-movflags', '+faststart');
-    args.push('-y', output);
-    const child = spawn(executable, args, { shell: false, stdio: ['ignore', 'ignore', 'pipe'] });
-    let stderr = '';
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    child.once('error', reject);
-    child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg failed: ${stderr.slice(0, 200)}`)));
-  });
-  try { return await readFile(output); } finally { await rm(root, { recursive: true, force: true }); }
+  const executable = process.env.FFMPEG_PATH || 'ffmpeg';
+  try {
+    await new Promise((resolve, reject) => {
+      const args = [
+        '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=32x32:d=1',
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an',
+      ];
+      if (extension === '.mp4') args.push('-movflags', '+faststart');
+      args.push('-y', output);
+      const child = spawn(executable, args, { shell: false, stdio: ['ignore', 'ignore', 'pipe'] });
+      let stderr = '';
+      let stderrBytes = 0;
+      let settled = false;
+      let timer;
+      const stop = (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        child.kill('SIGKILL');
+        reject(error);
+      };
+      child.stderr.on('data', (chunk) => {
+        stderrBytes += chunk.length;
+        if (stderrBytes > 256 * 1024) {
+          stop(new Error('ffmpeg fixture output exceeded limit'));
+          return;
+        }
+        stderr += chunk.toString();
+      });
+      child.once('error', stop);
+      child.once('close', (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (code === 0) resolve();
+        else reject(new Error(`ffmpeg failed: ${stderr.slice(0, 200)}`));
+      });
+      timer = setTimeout(() => stop(new Error('ffmpeg fixture timed out')), 15_000);
+    });
+    return await readFile(output);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+async function tempNames(ctx) {
+  try { return (await readdir(join(ctx.uploadDir, 'tmp', 'media'))).sort(); }
+  catch { return []; }
 }
 
 async function createStudent(ctx, admin, categoryId, label) {
@@ -107,7 +140,7 @@ export async function run(ctx) {
   const png = pngFixture();
 
   const own = await upload(ctx, studentA.actor, { purpose: 'avatar' }, png, 'avatar.png', 'image/png');
-  assert(own.status === 200 && own.data?.asset_id && own.data.status === 'ready', `avatar upload failed: ${own.status}`);
+  assert(own.status === 200 && own.data?.asset_id && own.data.status === 'ready', `avatar upload failed: ${own.status} ${JSON.stringify(own.json || own.body)}`);
   assert(own.data.duration_ms === null, 'image duration should be null');
   const profile = await ctx.request(studentA.actor, 'PATCH', '/me/profile', { avatar_id: String(own.data.asset_id) });
   assert(profile.status === 200 && profile.data.avatar_id === String(own.data.asset_id), `avatar bind failed: ${profile.status}`);
@@ -116,33 +149,81 @@ export async function run(ctx) {
 
   const range = await ctx.request(studentA.actor, 'GET', `/media/${own.data.asset_id}/content`, undefined, { Range: 'bytes=0-7' });
   assert(range.status === 206 && range.headers['content-range']?.startsWith('bytes 0-7/'), `range read failed: ${range.status}`);
+  assert(Buffer.isBuffer(range.body) && range.body.equals(png.subarray(0, 8)), 'range body did not match stored bytes');
   const denied = await ctx.request(studentB.actor, 'GET', `/media/${own.data.asset_id}/content`);
   assert(denied.status === 403, `cross-user media read unexpectedly allowed: ${denied.status}`);
   const deleteReferenced = await ctx.request(studentA.actor, 'DELETE', `/media/${own.data.asset_id}`);
   assert(deleteReferenced.status === 409, `referenced media delete expected 409: ${deleteReferenced.status}`);
 
+  const beforeRejectedMultipart = await tempNames(ctx);
   const fake = await upload(ctx, admin, { purpose: 'video' }, Buffer.from('not an mp4'), 'fake.mp4', 'video/mp4');
   assert(fake.status === 400, `fake mp4 expected 400: ${fake.status}`);
+  const missingPurpose = await upload(ctx, studentA.actor, {}, png, 'missing-purpose.png', 'image/png');
+  assert(missingPurpose.status === 400, `missing purpose expected 400: ${missingPurpose.status}`);
+  const unknownField = await upload(ctx, studentA.actor, { purpose: 'avatar', unexpected: 'x' }, png, 'unknown-field.png', 'image/png');
+  assert(unknownField.status === 400, `unknown multipart field expected 400: ${unknownField.status}`);
+  const afterRejectedMultipart = await tempNames(ctx);
+  assert(JSON.stringify(afterRejectedMultipart) === JSON.stringify(beforeRejectedMultipart), 'rejected multipart left a temporary file');
   const answer = await upload(ctx, studentA.actor, { purpose: 'answer' }, png, 'answer.png', 'image/png');
   assert(answer.status === 400, `generic answer upload expected 400: ${answer.status}`);
   const oversized = await upload(ctx, studentA.actor, { purpose: 'avatar' }, Buffer.alloc(10 * 1024 * 1024 + 1), 'oversize.png', 'image/png');
   assert(oversized.status === 422, `oversize image expected 422: ${oversized.status}`);
 
   const delegated = await upload(ctx, admin, { purpose: 'avatar', owner_id: studentB.id }, png, 'student-avatar.png', 'image/png');
-  assert(delegated.status === 200 && delegated.data?.asset_id, `delegated avatar upload failed: ${delegated.status}`);
+  assert(delegated.status === 200 && delegated.data?.asset_id, `delegated avatar upload failed: ${delegated.status} ${JSON.stringify(delegated.json || delegated.body)}`);
   const delegatedBind = await ctx.request(admin, 'PUT', `/admin/students/${studentB.id}/avatar`, { avatar_id: String(delegated.data.asset_id) });
   assert(delegatedBind.status === 200 && delegatedBind.data.avatar_id === String(delegated.data.asset_id), `delegated avatar bind failed: ${delegatedBind.status}`);
   const delegatedMetadata = await ctx.request(admin, 'GET', `/media/${delegated.data.asset_id}`);
   assert(delegatedMetadata.status === 200 && delegatedMetadata.data.asset_id === String(delegated.data.asset_id), 'student avatar manager read failed');
+  const stopStudent = await ctx.request(admin, 'PUT', `/admin/students/${studentB.id}/status`, { status: 0 });
+  assert(stopStudent.status === 200, `inactive managed student setup failed: ${stopStudent.status}`);
+  const inactiveMetadata = await ctx.request(admin, 'GET', `/media/${delegated.data.asset_id}`);
+  assert(inactiveMetadata.status === 200, `inactive managed student avatar read denied: ${inactiveMetadata.status}`);
+  await ctx.request(admin, 'PUT', `/admin/students/${studentB.id}/status`, { status: 1 });
+
+  const role = await ctx.request(admin, 'POST', '/admin/roles', {
+    code: `media_role_${randomBytes(4).toString('hex')}`,
+    name: '媒体业务角色',
+    permissions: ['statistics:read'],
+  });
+  assert(role.status === 200 && role.data?.id, `media business role create failed: ${role.status}`);
+  const businessUsername = `media_business_${randomBytes(4).toString('hex')}`;
+  const businessPassword = randomStrongPassword(businessUsername, 'business-role');
+  const business = await ctx.request(admin, 'POST', '/users', {
+    username: businessUsername,
+    password: businessPassword,
+    real_name: '媒体业务账号',
+    role: 'employee',
+  });
+  assert(business.status === 200 && business.data?.id, `media business account create failed: ${business.status}`);
+  const assigned = await ctx.request(admin, 'PUT', `/admin/administrators/${business.data.id}/roles`, {
+    role_ids: [String(role.data.id)],
+  });
+  assert(assigned.status === 200, `media business role assignment failed: ${assigned.status}`);
+  const businessAsset = await upload(ctx, admin, { purpose: 'avatar', owner_id: String(business.data.id) }, png, 'business-avatar.png', 'image/png');
+  assert(businessAsset.status === 200, `business-role avatar upload failed: ${businessAsset.status}`);
+  await ctx.queryTestDb(
+    'INSERT INTO media_reference (asset_id, owner_type, owner_id) VALUES (?, ?, ?)',
+    [String(businessAsset.data.asset_id), 'user_avatar', String(business.data.id)],
+  );
+  const businessRead = await ctx.request(admin, 'GET', `/media/${businessAsset.data.asset_id}`);
+  assert(businessRead.status === 403, `business-role avatar read unexpectedly allowed: ${businessRead.status}`);
 
   const wrongContainer = await upload(ctx, admin, { purpose: 'video' }, await ffmpegFixture('.mkv'), 'lesson.mkv', 'video/mp4');
   assert(wrongContainer.status === 400, `non-MP4 container expected 400: ${wrongContainer.status}`);
   const quickTime = await upload(ctx, admin, { purpose: 'video' }, await ffmpegFixture('.mov'), 'lesson.mov', 'video/mp4');
   assert(quickTime.status === 400, `QuickTime container expected 400: ${quickTime.status}`);
-  const video = await upload(ctx, admin, { purpose: 'video' }, await ffmpegFixture(), 'lesson.mp4', 'video/mp4');
+  const videoBytes = await ffmpegFixture();
+  const video = await upload(ctx, admin, { purpose: 'video' }, videoBytes, 'lesson.mp4', 'video/mp4');
   assert(video.status === 200 && video.data.status === 'ready' && video.data.duration_ms > 0, `real video probe failed: ${video.status}`);
   const videoOwner = await ctx.request(admin, 'GET', `/media/${video.data.asset_id}`);
   assert(videoOwner.status === 200 && videoOwner.data.duration_ms > 0, 'video metadata duration missing');
+  const videoAvatar = await upload(ctx, admin, { purpose: 'avatar' }, videoBytes, 'video-avatar.png', 'image/png');
+  assert(videoAvatar.status === 400, `video-as-avatar expected 400: ${videoAvatar.status}`);
+  const videoRange = await ctx.request(admin, 'GET', `/media/${video.data.asset_id}/content`, undefined, { Range: 'bytes=0-31' });
+  assert(videoRange.status === 206 && Buffer.isBuffer(videoRange.body) && videoRange.body.equals(videoBytes.subarray(0, 32)), 'video range body did not match stored bytes');
+  const invalidRange = await ctx.request(admin, 'GET', `/media/${video.data.asset_id}/content`, undefined, { Range: 'bytes=999999999-' });
+  assert(invalidRange.status === 416 && invalidRange.code === 41601, `invalid media range expected 41601: ${invalidRange.status}/${invalidRange.code}`);
 
   const orphan = await upload(ctx, studentA.actor, { purpose: 'avatar' }, png, 'orphan.png', 'image/png');
   assert(orphan.status === 200, `orphan upload failed: ${orphan.status}`);
