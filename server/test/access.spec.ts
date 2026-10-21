@@ -35,6 +35,25 @@ describe('A3 captcha and access contracts', () => {
     expect(await service.verify(issued.captcha_id, answer)).toBe(false);
   });
 
+  it('consumes only the previous captcha when a new challenge refreshes it', async () => {
+    const redis = redisStub();
+    const service = new CaptchaService(redis as any);
+
+    const previous = await service.issue('same-ip');
+    const unrelated = await service.issue('same-ip');
+    const previousAnswer = redis.values.get(`auth:captcha:${previous.captcha_id}`);
+    const unrelatedAnswer = redis.values.get(`auth:captcha:${unrelated.captcha_id}`);
+    expect(previousAnswer).toBeTruthy();
+    expect(unrelatedAnswer).toBeTruthy();
+
+    const refreshed = await service.issue('same-ip', previous.captcha_id);
+    const refreshedAnswer = redis.values.get(`auth:captcha:${refreshed.captcha_id}`);
+    expect(refreshedAnswer).toBeTruthy();
+    expect(await service.verify(previous.captcha_id, previousAnswer!)).toBe(false);
+    expect(await service.verify(refreshed.captcha_id, refreshedAnswer!)).toBe(true);
+    expect(await service.verify(unrelated.captcha_id, unrelatedAnswer!)).toBe(true);
+  });
+
   it('only allows a registered permission code and invalidates a removed grant', async () => {
     const service = new AccessService({} as any, {} as any, {} as any, {} as any, {} as any, redisStub() as any);
     (service as any).permissions = async () => ['statistics:read'];

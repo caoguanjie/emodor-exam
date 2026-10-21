@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
+const mysql = require('mysql2/promise');
 const { JwtService } = require('@nestjs/jwt');
 const fixtureJwt = new JwtService({});
 
@@ -20,14 +21,7 @@ function randomStrongPassword(...personalValues) {
   }
 }
 
-async function captchaLogin(ctx, username, password) {
-  // The API intentionally limits source IP login attempts to ten/minute. The
-  // fixture exercises many independent accounts in one run, so give each
-  // attempt an RFC 5737 test source through the harness' trusted XFF hop.
-  const sourceIp = `198.51.100.${(captchaLogin.sequence = (captchaLogin.sequence || 0) + 1)}`;
-  const sourceHeaders = { 'X-Forwarded-For': sourceIp };
-  const issued = await ctx.request(null, 'POST', '/auth/captcha', undefined, sourceHeaders);
-  assert(issued.status === 200 && issued.data?.captcha_id, `captcha issue failed: ${issued.status}`);
+async function readCaptchaAnswer(ctx, captchaId) {
   const redis = new Redis({
     host: ctx.env.REDIS_HOST || '127.0.0.1',
     port: Number(ctx.env.REDIS_PORT || 6379),
@@ -36,18 +30,71 @@ async function captchaLogin(ctx, username, password) {
   });
   try {
     const prefix = ctx.env.REDIS_KEY_PREFIX || '';
-    const answer = await redis.get(`${prefix}auth:captcha:${issued.data.captcha_id}`);
-    assert(answer, 'captcha fixture answer missing from run-owned Redis');
-    const actor = {};
-    const result = await ctx.request(actor, 'POST', '/auth/login', {
-      username, password, captcha_id: issued.data.captcha_id, captcha_code: answer,
-    }, sourceHeaders);
-    assert(result.status === 200, `admin login failed: ${result.status}`);
-    actor.accessToken = result.data.access_token;
-    return { actor, result };
+    return await redis.get(`${prefix}auth:captcha:${captchaId}`);
   } finally {
     await redis.quit();
   }
+}
+
+async function captchaLogin(ctx, username, password) {
+  // The API intentionally limits source IP login attempts to ten/minute. The
+  // fixture exercises many independent accounts in one run, so give each
+  // attempt an RFC 5737 test source through the harness' trusted XFF hop.
+  const sourceIp = `198.51.100.${(captchaLogin.sequence = (captchaLogin.sequence || 0) + 1)}`;
+  const sourceHeaders = { 'X-Forwarded-For': sourceIp };
+  const issued = await ctx.request(null, 'POST', '/auth/captcha', undefined, sourceHeaders);
+  assert(issued.status === 200 && issued.data?.captcha_id, `captcha issue failed: ${issued.status}`);
+  const answer = await readCaptchaAnswer(ctx, issued.data.captcha_id);
+  assert(answer, 'captcha fixture answer missing from run-owned Redis');
+  const actor = {};
+  const result = await ctx.request(actor, 'POST', '/auth/login', {
+    username, password, captcha_id: issued.data.captcha_id, captcha_code: answer,
+  }, sourceHeaders);
+  assert(result.status === 200, `admin login failed: ${result.status}`);
+  actor.accessToken = result.data.access_token;
+  return { actor, result };
+}
+
+async function openTestDb(ctx) {
+  return mysql.createConnection({
+    host: ctx.env.DB_HOST || '127.0.0.1',
+    port: Number(ctx.env.DB_PORT || 3306),
+    user: ctx.env.DB_USERNAME || 'root',
+    password: ctx.env.DB_PASSWORD || undefined,
+    database: ctx.env.DB_DATABASE,
+  });
+}
+
+async function holdRowLock(ctx, sql, params) {
+  const connection = await openTestDb(ctx);
+  await connection.beginTransaction();
+  await connection.execute(sql, params);
+  return connection;
+}
+
+async function waitForLockWaits(ctx, minimum, label) {
+  const observer = await openTestDb(ctx);
+  const started = Date.now();
+  try {
+    while (Date.now() - started < 8_000) {
+      const [rows] = await observer.query(
+        'SELECT COUNT(*) AS count FROM performance_schema.data_lock_waits',
+      );
+      const count = Number(rows[0]?.count || 0);
+      if (count >= minimum) return count;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  } finally {
+    await observer.end();
+  }
+  throw new Error(`${label} did not reach ${minimum} owned lock waits`);
+}
+
+async function closeLock(connection, commit = false) {
+  if (!connection) return;
+  if (commit) await connection.commit();
+  else await connection.rollback().catch(() => undefined);
+  await connection.end();
 }
 async function completeFirstLogin(ctx, login, username, oldPassword, suffix) {
   if (!login.result.data?.force_change_password) return { ...login, password: oldPassword };
@@ -56,7 +103,7 @@ async function completeFirstLogin(ctx, login, username, oldPassword, suffix) {
   const changed = await ctx.request(login.actor, 'PUT', '/auth/password', {
     old_password: oldPassword, new_password: newPassword,
   });
-  assert(changed.status === 200, `first login password change failed: ${changed.status}`);
+  assert(changed.status === 200, `first login password change failed: ${changed.status}/${changed.code}/${changed.message}`);
   login.actor.accessToken = changed.data.access_token;
   return { ...(await captchaLogin(ctx, username, newPassword)), password: newPassword };
 }
@@ -84,8 +131,54 @@ function signLegacyNoSidAccessToken(ctx, user, authVersion) {
   }, { secret: ctx.env.JWT_SECRET, expiresIn: '1h' });
 }
 
+function signEqualIatAccessToken(ctx, user, authVersion, iat, sid) {
+  const payload = {
+    sub: String(user.id), username: user.username, role: 'employee',
+    auth_version: Number(authVersion), type: 'access', jti: randomBytes(16).toString('hex'), iat,
+  };
+  if (sid) payload.sid = sid;
+  return fixtureJwt.sign(payload, { secret: ctx.env.JWT_SECRET, expiresIn: '1h' });
+}
+
 export async function run(ctx) {
-  const adminInitialLogin = await captchaLogin(ctx, 'admin', ctx.adminPassword);
+  const refreshIp = '198.51.100.240';
+  const refreshHeaders = { 'X-Forwarded-For': refreshIp };
+  const previousCaptcha = await ctx.request(null, 'POST', '/auth/captcha', undefined, refreshHeaders);
+  assert(previousCaptcha.status === 200 && previousCaptcha.data?.captcha_id, `initial captcha issue failed: ${previousCaptcha.status}`);
+  const previousAnswer = await readCaptchaAnswer(ctx, previousCaptcha.data.captcha_id);
+  assert(previousAnswer, 'previous captcha fixture answer missing');
+  const unrelatedCaptcha = await ctx.request(null, 'POST', '/auth/captcha', undefined, refreshHeaders);
+  assert(unrelatedCaptcha.status === 200 && unrelatedCaptcha.data?.captcha_id, `unrelated captcha issue failed: ${unrelatedCaptcha.status}`);
+  const unrelatedAnswer = await readCaptchaAnswer(ctx, unrelatedCaptcha.data.captcha_id);
+  assert(unrelatedAnswer, 'unrelated captcha fixture answer missing');
+  const malformedRefresh = await ctx.request(null, 'POST', '/auth/captcha', { previous_captcha_id: 'not-a-captcha-id' }, refreshHeaders);
+  assert(malformedRefresh.status === 400, `malformed captcha refresh expected 400, got ${malformedRefresh.status}`);
+  const refreshedCaptcha = await ctx.request(null, 'POST', '/auth/captcha', {
+    previous_captcha_id: previousCaptcha.data.captcha_id,
+  }, refreshHeaders);
+  assert(refreshedCaptcha.status === 200 && refreshedCaptcha.data?.captcha_id, `captcha refresh failed: ${refreshedCaptcha.status}`);
+  const refreshedAnswer = await readCaptchaAnswer(ctx, refreshedCaptcha.data.captcha_id);
+  assert(refreshedAnswer, 'refreshed captcha fixture answer missing');
+  const oldCaptchaLogin = await ctx.request(null, 'POST', '/auth/login', {
+    username: 'admin', password: ctx.adminPassword,
+    captcha_id: previousCaptcha.data.captcha_id, captcha_code: previousAnswer,
+  }, refreshHeaders);
+  assert(oldCaptchaLogin.status === 400, `captcha refresh accepted previous challenge: ${oldCaptchaLogin.status}`);
+  const unrelatedActor = {};
+  const unrelatedLogin = await ctx.request(unrelatedActor, 'POST', '/auth/login', {
+    username: 'admin', password: ctx.adminPassword,
+    captcha_id: unrelatedCaptcha.data.captcha_id, captcha_code: unrelatedAnswer,
+  }, refreshHeaders);
+  assert(unrelatedLogin.status === 200, `same-IP unrelated captcha was invalidated: ${unrelatedLogin.status}`);
+  unrelatedActor.accessToken = unrelatedLogin.data.access_token;
+  const refreshedActor = {};
+  const refreshedLogin = await ctx.request(refreshedActor, 'POST', '/auth/login', {
+    username: 'admin', password: ctx.adminPassword,
+    captcha_id: refreshedCaptcha.data.captcha_id, captcha_code: refreshedAnswer,
+  }, refreshHeaders);
+  assert(refreshedLogin.status === 200, `refreshed captcha did not work: ${refreshedLogin.status}`);
+  refreshedActor.accessToken = refreshedLogin.data.access_token;
+  const adminInitialLogin = { actor: refreshedActor, result: refreshedLogin };
   const adminPendingToken = adminInitialLogin.actor.accessToken;
   const admin = await completeFirstLogin(
     ctx,
@@ -196,7 +289,7 @@ export async function run(ctx) {
   const employeePasswordChange = await ctx.request(employeeAdminLogin.actor, 'PUT', '/auth/password', {
     old_password: employeeAdminLogin.password, new_password: rotatedEmployeePassword,
   });
-  assert(employeePasswordChange.status === 200, `employee password rotation failed: ${employeePasswordChange.status}`);
+  assert(employeePasswordChange.status === 200, `employee password rotation failed: ${employeePasswordChange.status}/${employeePasswordChange.code}/${employeePasswordChange.message}`);
   employeeAdminLogin.actor.accessToken = employeePasswordChange.data.access_token;
   employeeAdminLogin.password = rotatedEmployeePassword;
   const secondSessionAfterPasswordChange = await ctx.request(secondEmployeeSession.actor, 'GET', '/statistics/regulations');
@@ -208,35 +301,167 @@ export async function run(ctx) {
   const raceEmployee = await ctx.request(admin.actor, 'POST', '/users', {
     username: raceUsername, password: racePassword, real_name: '并发员工', role: 'employee',
   });
-  assert(raceEmployee.status === 200 && raceEmployee.data?.id, `concurrent login fixture create failed: ${raceEmployee.status}`);
-  const [raceAssignment, raceLogin] = await Promise.all([
-    ctx.request(admin.actor, 'PUT', `/admin/administrators/${raceEmployee.data.id}/roles`, { role_ids: [String(role.data.id)] }),
-    ctx.request(null, 'POST', '/auth/login', { username: raceUsername, password: racePassword }),
-  ]);
-  assert(raceAssignment.status === 200, `concurrent role assignment failed: ${raceAssignment.status}`);
-  if (raceLogin.status === 200) {
-    const raceTokenAfterGrant = await ctx.request({ accessToken: raceLogin.data.access_token }, 'GET', '/statistics/regulations');
-    assert(raceTokenAfterGrant.status === 401, `concurrent pre-grant login minted a surviving privileged session: ${raceTokenAfterGrant.status}`);
-  } else {
-    assert(raceLogin.status === 400, `concurrent login should require captcha after grant, got ${raceLogin.status}`);
+  assert(raceEmployee.status === 200 && raceEmployee.data?.id, `concurrent login fixture create failed: ${raceEmployee.status}/${raceEmployee.code}/${raceEmployee.message}`);
+  const raceInitialActor = {};
+  const raceInitial = await ctx.request(raceInitialActor, 'POST', '/auth/login', {
+    username: raceUsername, password: racePassword,
+  });
+  assert(raceInitial.status === 200, `concurrent login fixture initial login failed: ${raceInitial.status}`);
+  raceInitialActor.accessToken = raceInitial.data.access_token;
+  const raceReady = await completeFirstLogin(
+    ctx, { actor: raceInitialActor, result: raceInitial }, raceUsername, racePassword, 'RaceEmployee',
+  );
+  const warmedRaceProfile = await ctx.request(raceReady.actor, 'GET', '/auth/profile');
+  assert(warmedRaceProfile.status === 200, `race permission cache warmup failed: ${warmedRaceProfile.status}`);
+  const raceBlocker = await holdRowLock(ctx, 'SELECT id FROM sys_user WHERE id = ? FOR UPDATE', [String(raceEmployee.data.id)]);
+  let raceReleased = false;
+  try {
+    const raceAssignmentPromise = ctx.request(admin.actor, 'PUT', `/admin/administrators/${raceEmployee.data.id}/roles`, {
+      role_ids: [String(role.data.id)],
+    });
+    await waitForLockWaits(ctx, 1, 'login/grant assignment');
+    const raceLoginPromise = ctx.request(null, 'POST', '/auth/login', {
+      username: raceUsername, password: raceReady.password,
+    });
+    await waitForLockWaits(ctx, 2, 'login/grant classification');
+    await closeLock(raceBlocker, true);
+    raceReleased = true;
+    const [raceAssignment, raceLogin] = await Promise.all([raceAssignmentPromise, raceLoginPromise]);
+    assert(raceAssignment.status === 200, `deterministic role assignment failed: ${raceAssignment.status}`);
+    assert(raceLogin.status === 400, `deterministic post-grant login should require captcha, got ${raceLogin.status}`);
+  } finally {
+    if (!raceReleased) await closeLock(raceBlocker);
   }
-  const versionBeforeConcurrentAssignments = await ctx.queryTestDb(
+
+  const roleBarrierLogin = await captchaLogin(ctx, employee.data.username, employeeAdminLogin.password);
+  const roleVersionBefore = await ctx.queryTestDb(
     'SELECT auth_version FROM sys_user WHERE id = ?', [String(employee.data.id)],
   );
-  const [assignmentA, assignmentB] = await Promise.all([
-    ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, { role_ids: [String(role.data.id)] }),
-    ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, { role_ids: [String(employeeRole.data.id)] }),
-  ]);
-  assert(assignmentA.status === 200 && assignmentB.status === 200, `concurrent role assignments failed: ${assignmentA.status}/${assignmentB.status}`);
-  const versionAfterConcurrentAssignments = await ctx.queryTestDb(
+  const roleBlocker = await holdRowLock(ctx, 'SELECT id FROM sys_role WHERE id = ? FOR UPDATE', [String(employeeRole.data.id)]);
+  let roleReleased = false;
+  try {
+    const roleUpdatePromise = ctx.request(admin.actor, 'PUT', `/admin/roles/${employeeRole.data.id}`, {
+      name: `员工运营管理员 barrier ${randomBytes(3).toString('hex')}`,
+      permissions: employeeRole.data.permissions,
+    });
+    await waitForLockWaits(ctx, 1, 'role update');
+    const roleAssignmentPromise = ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, {
+      role_ids: [String(employeeRole.data.id)],
+    });
+    await waitForLockWaits(ctx, 2, 'role update/assignment');
+    await closeLock(roleBlocker, true);
+    roleReleased = true;
+    const [roleUpdate, roleAssignment] = await Promise.all([roleUpdatePromise, roleAssignmentPromise]);
+    assert(roleUpdate.status === 200 && roleAssignment.status === 200, `role update/assignment barrier failed: ${roleUpdate.status}/${roleAssignment.status}`);
+  } finally {
+    if (!roleReleased) await closeLock(roleBlocker);
+  }
+  const roleVersionAfter = await ctx.queryTestDb(
     'SELECT auth_version FROM sys_user WHERE id = ?', [String(employee.data.id)],
   );
   assert(
-    Number(versionAfterConcurrentAssignments[0]?.auth_version || 0) >= Number(versionBeforeConcurrentAssignments[0]?.auth_version || 0) + 2,
-    'concurrent role assignments collapsed auth_version increments',
+    Number(roleVersionAfter[0]?.auth_version || 0) >= Number(roleVersionBefore[0]?.auth_version || 0) + 2,
+    'role update/assignment barrier collapsed security-generation increments',
   );
-  const restoreEmployeeAdmin = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, { role_ids: [String(employeeRole.data.id)] });
-  assert(restoreEmployeeAdmin.status === 200, `employee role restore failed: ${restoreEmployeeAdmin.status}`);
+  const oldRoleBarrierToken = await ctx.request({ accessToken: roleBarrierLogin.actor.accessToken }, 'GET', '/auth/profile');
+  assert(oldRoleBarrierToken.status === 401, `role update/assignment left an old session active: ${oldRoleBarrierToken.status}`);
+
+  const passwordRaceUsername = `password_race_${randomBytes(4).toString('hex')}`;
+  const passwordRacePassword = randomStrongPassword(passwordRaceUsername, '并发改密');
+  const passwordRaceUser = await ctx.request(admin.actor, 'POST', '/users', {
+    username: passwordRaceUsername, password: passwordRacePassword, real_name: '并发改密', role: 'employee',
+  });
+  assert(passwordRaceUser.status === 200 && passwordRaceUser.data?.id, `password race fixture create failed: ${passwordRaceUser.status}`);
+  const passwordRaceLogin = await completeFirstLogin(
+    ctx,
+    await (async () => {
+      const actor = {};
+      const result = await ctx.request(actor, 'POST', '/auth/login', { username: passwordRaceUsername, password: passwordRacePassword });
+      assert(result.status === 200, `password race initial login failed: ${result.status}`);
+      actor.accessToken = result.data.access_token;
+      return { actor, result };
+    })(),
+    passwordRaceUsername, passwordRacePassword, 'PasswordRace',
+  );
+  const passwordRaceVersionBefore = await ctx.queryTestDb(
+    'SELECT auth_version FROM sys_user WHERE id = ?', [String(passwordRaceUser.data.id)],
+  );
+  const passwordRaceResetPassword = randomStrongPassword(passwordRaceUsername, '重置后');
+  const passwordRaceBlocker = await holdRowLock(ctx, 'SELECT id FROM sys_user WHERE id = ? FOR UPDATE', [String(passwordRaceUser.data.id)]);
+  let passwordRaceReleased = false;
+  let resetPromise;
+  try {
+    resetPromise = ctx.request(admin.actor, 'PUT', `/users/${passwordRaceUser.data.id}/password`, { password: passwordRaceResetPassword });
+    try {
+      await waitForLockWaits(ctx, 1, 'password reset');
+    } catch (error) {
+      const earlyReset = await resetPromise;
+      throw new Error(`${error.message}; reset=${earlyReset.status}/${earlyReset.code}/${earlyReset.message}`);
+    }
+    const changePromise = ctx.request(passwordRaceLogin.actor, 'PUT', '/auth/password', {
+      old_password: passwordRaceLogin.password, new_password: randomStrongPassword(passwordRaceUsername, '并发改密后'),
+    });
+    await waitForLockWaits(ctx, 2, 'password reset/change');
+    await closeLock(passwordRaceBlocker, true);
+    passwordRaceReleased = true;
+    const [resetResult, changeResult] = await Promise.all([resetPromise, changePromise]);
+    assert(resetResult.status === 200, `deterministic password reset failed: ${resetResult.status}`);
+    assert(changeResult.status !== 200, `old-password change raced through reset: ${changeResult.status}`);
+  } finally {
+    if (!passwordRaceReleased) await closeLock(passwordRaceBlocker);
+  }
+  const passwordRaceVersionAfter = await ctx.queryTestDb(
+    'SELECT auth_version FROM sys_user WHERE id = ?', [String(passwordRaceUser.data.id)],
+  );
+  assert(
+    Number(passwordRaceVersionAfter[0]?.auth_version || 0) === Number(passwordRaceVersionBefore[0]?.auth_version || 0) + 1,
+    'password reset/change race produced more than one generation increment',
+  );
+  const passwordRaceSessions = await ctx.queryTestDb(
+    'SELECT COUNT(*) AS count FROM auth_session WHERE user_id = ? AND revoked_at IS NULL', [String(passwordRaceUser.data.id)],
+  );
+  assert(Number(passwordRaceSessions[0]?.count || 0) === 0, 'old-password race created a current session after reset');
+
+  const equalIatUsername = `equal_iat_${randomBytes(4).toString('hex')}`;
+  const equalIatPassword = randomStrongPassword(equalIatUsername, '同秒令牌');
+  const equalIatUser = await ctx.request(admin.actor, 'POST', '/users', {
+    username: equalIatUsername, password: equalIatPassword, real_name: '同秒令牌', role: 'employee',
+  });
+  assert(equalIatUser.status === 200 && equalIatUser.data?.id, `equal-iat fixture create failed: ${equalIatUser.status}`);
+  const equalIatInitial = await ctx.request(null, 'POST', '/auth/login', {
+    username: equalIatUsername, password: equalIatPassword,
+  });
+  assert(equalIatInitial.status === 200, `equal-iat initial login failed: ${equalIatInitial.status}`);
+  const equalIatReady = await completeFirstLogin(
+    ctx,
+    { actor: { accessToken: equalIatInitial.data.access_token }, result: equalIatInitial },
+    equalIatUsername, equalIatPassword, 'EqualIat',
+  );
+  const equalIatA = await captchaLogin(ctx, equalIatUsername, equalIatReady.password);
+  const equalIatB = await captchaLogin(ctx, equalIatUsername, equalIatReady.password);
+  const equalIatSessions = await ctx.queryTestDb(
+    'SELECT sid FROM auth_session WHERE user_id = ? AND revoked_at IS NULL ORDER BY id DESC LIMIT 2',
+    [String(equalIatUser.data.id)],
+  );
+  assert(equalIatSessions.length === 2, 'equal-iat fixture did not retain two owned session IDs');
+  const equalIatVersionRows = await ctx.queryTestDb(
+    'SELECT auth_version FROM sys_user WHERE id = ?', [String(equalIatUser.data.id)],
+  );
+  const equalIat = Math.floor(Date.now() / 1000) - 5;
+  const equalIatSidTokenA = signEqualIatAccessToken(ctx, equalIatUser.data, equalIatVersionRows[0].auth_version, equalIat, equalIatSessions[0].sid);
+  const equalIatSidTokenB = signEqualIatAccessToken(ctx, equalIatUser.data, equalIatVersionRows[0].auth_version, equalIat, equalIatSessions[1].sid);
+  const equalIatNoSidToken = signEqualIatAccessToken(ctx, equalIatUser.data, equalIatVersionRows[0].auth_version, equalIat);
+  assert(fixtureJwt.verify(equalIatSidTokenA, { secret: ctx.env.JWT_SECRET }).iat === equalIat, 'equal-iat sid A fixture drifted');
+  assert(fixtureJwt.verify(equalIatSidTokenB, { secret: ctx.env.JWT_SECRET }).iat === equalIat, 'equal-iat sid B fixture drifted');
+  assert(fixtureJwt.verify(equalIatNoSidToken, { secret: ctx.env.JWT_SECRET }).iat === equalIat, 'equal-iat no-sid fixture drifted');
+  const equalIatReset = await ctx.request(admin.actor, 'PUT', `/users/${equalIatUser.data.id}/password`, {
+    password: randomStrongPassword(equalIatUsername, '重置同秒'),
+  });
+  assert(equalIatReset.status === 200, `equal-iat reset failed: ${equalIatReset.status}`);
+  for (const token of [equalIatSidTokenA, equalIatSidTokenB, equalIatNoSidToken]) {
+    const rejected = await ctx.request({ accessToken: token }, 'GET', '/auth/profile');
+    assert(rejected.status === 401, `equal-iat token survived user invalidation: ${rejected.status}`);
+  }
   const refreshedEmployeeAdmin = await captchaLogin(ctx, employee.data.username, employeeAdminLogin.password);
   employeeAdminLogin.actor = refreshedEmployeeAdmin.actor;
   const delegatedRegulation = await ctx.request(employeeAdminLogin.actor, 'POST', '/regulations', {
@@ -419,6 +644,22 @@ export async function run(ctx) {
     await captchaLogin(ctx, restricted.data.username, restrictedLogin.password),
     restricted.data.username, restrictedLogin.password, 'RestrictedAfterRemoval',
   );
+  const deniedRemovedGeneration = await ctx.request(postRemovalLogin.actor, 'POST', '/ai/generate-questions', {
+    regulation_id: scopedRegulationId, question_count_single: 1, question_count_multiple: 0,
+    score_single: 100, score_multiple: 1,
+  });
+  assert(deniedRemovedGeneration.status === 403, `removed role AI generation expected 403, got ${deniedRemovedGeneration.status}`);
+  const deniedRemovedQuestionRead = await ctx.request(postRemovalLogin.actor, 'GET', '/ai/questions');
+  assert(deniedRemovedQuestionRead.status === 403, `removed role question read expected 403, got ${deniedRemovedQuestionRead.status}`);
+  const deniedRemovedQuestionWrite = await ctx.request(postRemovalLogin.actor, 'POST', '/ai/questions', {
+    regulation_id: scopedRegulationId, type: 'single', stem: 'removed role question',
+    options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], answer: [0], score: 10,
+  });
+  assert(deniedRemovedQuestionWrite.status === 403, `removed role question write expected 403, got ${deniedRemovedQuestionWrite.status}`);
+  const deniedRemovedPaperWrite = await ctx.request(postRemovalLogin.actor, 'POST', '/ai/papers', {
+    regulation_id: scopedRegulationId, title: 'removed role paper', pass_score: 60,
+  });
+  assert(deniedRemovedPaperWrite.status === 403, `removed role paper write expected 403, got ${deniedRemovedPaperWrite.status}`);
   const scopedContentAfterRoleRemoval = await ctx.request(postRemovalLogin.actor, 'GET', `/regulations/${scopedRegulationId}/content`);
   assert(scopedContentAfterRoleRemoval.status === 404 && scopedContentAfterRoleRemoval.code === 40402, `cleared role content scope expected hidden 40402, got ${scopedContentAfterRoleRemoval.status}/${scopedContentAfterRoleRemoval.code}`);
 

@@ -122,7 +122,7 @@
 
 | # | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|---|
-| 1 | POST | /auth/captcha | 公开 | 生成管理员登录验证码（120 秒、一次消费） |
+| 1 | POST | /auth/captcha | 公开 | 生成管理员登录验证码（120 秒、一次消费）；可用 `previous_captcha_id` 只废弃当前已展示验证码 |
 | 2 | POST | /auth/login | 公开 | 员工兼容 username/password；管理员额外提交 captcha_id/captcha_code，签发带 sid 的双令牌 |
 | 3 | POST | /auth/refresh | 公开（需 refresh token） | 刷新令牌（轮换并废弃前一枚；refresh token 经 HttpOnly Cookie 读取，不走 body） |
 | 4 | GET | /auth/profile | 登录 | 当前用户信息（含角色、部门、有效权限） |
@@ -137,6 +137,8 @@
 | password | body | string | 是 | 密码（明文传输依赖 HTTPS） |
 | captcha_id | body | string | 管理员必填 | /auth/captcha 返回的短期标识 |
 | captcha_code | body | string | 管理员必填 | 验证码答案；服务端一次消费，不在响应回显 |
+
+**POST /auth/captcha**：body 可选 `previous_captcha_id`（32 位小写十六进制字符串）。刷新成功后只消费该标识对应的旧验证码；不传时保持首次发码兼容，同 IP 的其他验证码不受影响。
 
 规则：凭据校验 → `status = 0` 拒绝 →「用户不存在」与「密码错误」返回同一错误码 40104（不泄露区别，05 册 2.4.1）；每次真实密码成功登录（包括 pending 阶段）递增 `login_count` 并更新 `last_login_at` / `last_login_ip`，refresh 不更新这些统计。`force_password_change = 1` 时签发**受限令牌**（payload 含 `pwd_pending: true`），响应携带 `force_change_password: true`；该状态与登录统计分离。
 
@@ -781,7 +783,7 @@
 
 | 接口 | 限流/约束 | 机制 |
 |---|---|---|
-| POST /auth/captcha | source_ip 每分钟最多 10 次；答案 120 秒 TTL 且一次消费 | Redis 短期键；生产响应不返回答案 |
+| POST /auth/captcha | source_ip 每分钟最多 10 次；答案 120 秒 TTL 且一次消费；刷新只消费 `previous_captcha_id` | Redis 短期键；生产响应不返回答案 |
 | POST /auth/login | username 维度：连续失败 5 次锁定 10 分钟（40106，message 含剩余秒数）；source_ip 维度：10 次/分钟 | 双计数防爆破（07 册 2.2.2）；Redis 故障时降级为仅 IP 维度进程内计数 + 登录接口 sys_user.status 校验兜底 |
 | POST /learning/heartbeat | 节拍窗口限流：30 秒周期内异常高频丢弃（42901） | 丢弃不影响时长正确性（服务端时钟差结算、credited 封顶 45 秒，天然幂等） |
 | POST /learning/heartbeat/pause、resume | 同一 session_id 每分钟最多 60 次；重复 pause / 重复 resume 幂等（第二次直接返回当前状态，不重复结算） | 事件驱动端点不适用 30 秒节拍窗口——丢弃 pause/resume 会破坏失焦语义（resume 被丢弃 → 下拍 diff 含整段失焦时间、pause 被丢弃 → 失焦期间照常计费，虚增最多 45 秒/次，故单独限流） |

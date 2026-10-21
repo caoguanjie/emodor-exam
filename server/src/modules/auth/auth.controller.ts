@@ -1,6 +1,6 @@
 import { Body, Controller, Get, HttpCode, Post, Put, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { IsOptional, IsString, MinLength, MaxLength } from 'class-validator';
+import { IsOptional, IsString, Matches, MinLength, MaxLength } from 'class-validator';
 import { AuthService } from './auth.service';
 import { CaptchaService } from './captcha.service';
 import { Public } from '../../common/guards/public.decorator';
@@ -20,6 +20,10 @@ class ChangePasswordDto {
   @IsString() @MinLength(8) @MaxLength(128) new_password!: string;
 }
 
+class CaptchaRequestDto {
+  @IsOptional() @IsString() @Matches(/^[a-f0-9]{32}$/) previous_captcha_id?: string;
+}
+
 /** /auth 认证模块（04 册 3.1）：登录、刷新、个人信息、改密、登出 */
 @Controller('auth')
 export class AuthController {
@@ -28,8 +32,8 @@ export class AuthController {
   @Public()
   @HttpCode(200)
   @Post('captcha')
-  async captchaImage(@Req() req: Request) {
-    return this.captcha.issue(req.ip || 'unknown');
+  async captchaImage(@Body(new DtoValidationPipe()) dto: CaptchaRequestDto | undefined, @Req() req: Request) {
+    return this.captcha.issue(req.ip || 'unknown', dto?.previous_captcha_id);
   }
 
   @Public()

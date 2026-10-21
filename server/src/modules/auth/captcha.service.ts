@@ -46,12 +46,16 @@ export class CaptchaService {
     return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
   }
 
-  async issue(_scope = 'anonymous'): Promise<CaptchaIssue> {
-    const count = await this.redis.incr(`auth:captcha:ip:${_scope || 'anonymous'}`, 60);
+  async issue(scope = 'anonymous', previousCaptchaId?: string): Promise<CaptchaIssue> {
+    if (previousCaptchaId !== undefined && !/^[a-f0-9]{32}$/.test(String(previousCaptchaId))) {
+      throw Errors.param('验证码标识非法');
+    }
+    const count = await this.redis.incr(`auth:captcha:ip:${scope || 'anonymous'}`, 60);
     if (count > 10) throw Errors.tooManyRequests('验证码请求过于频繁');
     const captchaId = randomBytes(16).toString('hex');
     const answer = this.code();
     await this.redis.set(this.key(captchaId), answer, CAPTCHA_TTL_SECONDS);
+    if (previousCaptchaId) await this.redis.del(this.key(previousCaptchaId));
     return { captcha_id: captchaId, image: this.image(answer), expires_in: CAPTCHA_TTL_SECONDS };
   }
 

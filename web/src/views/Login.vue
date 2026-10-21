@@ -83,7 +83,10 @@ const captchaCode = ref('');
 const loading = ref(false);
 
 async function loadCaptcha() {
-  const issued: any = await http.post('/auth/captcha');
+  const issued: any = await http.post(
+    '/auth/captcha',
+    captchaId.value ? { previous_captcha_id: captchaId.value } : undefined,
+  );
   captchaId.value = issued.captcha_id;
   captchaImage.value = issued.image;
   captchaCode.value = '';

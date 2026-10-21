@@ -179,7 +179,9 @@ export class AccessService {
       if (input.permissions) this.assertPermissionCodes(input.permissions);
       const userRoleRepo = manager.getRepository(SysUserRole);
       const affected = await userRoleRepo.find({ where: { roleId: id }, order: { userId: 'ASC' } });
-      const ids = [...new Set(affected.map((link) => String(link.userId)))].sort((a, b) => Number(a) - Number(b));
+      const ids = [...new Set(affected.map((link) => String(link.userId)))].sort((a, b) => (
+        a.length - b.length || a.localeCompare(b)
+      ));
       const userRepo = manager.getRepository(SysUser);
       const users = ids.length
         ? await userRepo.createQueryBuilder('u')
