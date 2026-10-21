@@ -103,7 +103,7 @@ async function completeFirstLogin(ctx, login, username, oldPassword, suffix) {
   const changed = await ctx.request(login.actor, 'PUT', '/auth/password', {
     old_password: oldPassword, new_password: newPassword,
   });
-  assert(changed.status === 200, `first login password change failed: ${changed.status}/${changed.code}/${changed.message}`);
+  assert(changed.status === 200, `first login password change failed: ${changed.status}/${changed.code}/${JSON.stringify(changed.json || changed.data)}`);
   login.actor.accessToken = changed.data.access_token;
   return { ...(await captchaLogin(ctx, username, newPassword)), password: newPassword };
 }
@@ -289,7 +289,7 @@ export async function run(ctx) {
   const employeePasswordChange = await ctx.request(employeeAdminLogin.actor, 'PUT', '/auth/password', {
     old_password: employeeAdminLogin.password, new_password: rotatedEmployeePassword,
   });
-  assert(employeePasswordChange.status === 200, `employee password rotation failed: ${employeePasswordChange.status}/${employeePasswordChange.code}/${employeePasswordChange.message}`);
+  assert(employeePasswordChange.status === 200, `employee password rotation failed: ${employeePasswordChange.status}/${employeePasswordChange.code}/${JSON.stringify(employeePasswordChange.json || employeePasswordChange.data)}`);
   employeeAdminLogin.actor.accessToken = employeePasswordChange.data.access_token;
   employeeAdminLogin.password = rotatedEmployeePassword;
   const secondSessionAfterPasswordChange = await ctx.request(secondEmployeeSession.actor, 'GET', '/statistics/regulations');
@@ -485,6 +485,67 @@ export async function run(ctx) {
     score_single: 100, score_multiple: 1,
   });
   assert(delegatedGeneration.status !== 403, `employee custom AI generation permission denied: ${delegatedGeneration.status}`);
+  const taskOnlyConfigRead = await ctx.request(employeeAdminLogin.actor, 'GET', '/ai/config');
+  assert(taskOnlyConfigRead.status === 403, `AI-task-only role read config unexpectedly allowed: ${taskOnlyConfigRead.status}`);
+  const taskOnlyConfigWrite = await ctx.request(employeeAdminLogin.actor, 'PUT', '/ai/config', {
+    base_url: 'http://127.0.0.1:9/v1', api_key: `task_only_${randomBytes(8).toString('hex')}`, model: 'task-only',
+  });
+  assert(taskOnlyConfigWrite.status === 403, `AI-task-only role write config unexpectedly allowed: ${taskOnlyConfigWrite.status}`);
+  const taskOnlyConfigTest = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/config/test');
+  assert(taskOnlyConfigTest.status === 403, `AI-task-only role test config unexpectedly allowed: ${taskOnlyConfigTest.status}`);
+
+  const configWriterRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
+    code: `ai_config_writer_${randomBytes(4).toString('hex')}`,
+    name: 'AI 配置写入者', permissions: ['ai_config:write'],
+  });
+  assert(configWriterRole.status === 200 && configWriterRole.data?.id, `AI config writer role create failed: ${configWriterRole.status}`);
+  const configReaderRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
+    code: `ai_config_reader_${randomBytes(4).toString('hex')}`,
+    name: 'AI 配置读取者', permissions: ['ai_config:read'],
+  });
+  assert(configReaderRole.status === 200 && configReaderRole.data?.id, `AI config reader role create failed: ${configReaderRole.status}`);
+
+  const configWriterAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, {
+    role_ids: [String(configWriterRole.data.id)],
+  });
+  assert(configWriterAssigned.status === 200, `AI config writer assignment failed: ${configWriterAssigned.status}`);
+  const configWriterLogin = await completeFirstLogin(
+    ctx,
+    await captchaLogin(ctx, employee.data.username, employeeAdminLogin.password),
+    employee.data.username, employeeAdminLogin.password, 'AiConfigWriter',
+  );
+  const configWriterRead = await ctx.request(configWriterLogin.actor, 'GET', '/ai/config');
+  assert(configWriterRead.status === 403, `AI config writer read unexpectedly allowed: ${configWriterRead.status}`);
+  const ownedConfigKey = `run_${randomBytes(16).toString('hex')}`;
+  const ownedConfigWrite = await ctx.request(configWriterLogin.actor, 'PUT', '/ai/config', {
+    base_url: 'http://127.0.0.1:9/v1', api_key: ownedConfigKey, model: 'run-owned-config',
+  });
+  assert(ownedConfigWrite.status === 200 && ownedConfigWrite.data?.api_key_masked, `AI config writer write failed: ${ownedConfigWrite.status}`);
+
+  const configReaderAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, {
+    role_ids: [String(configReaderRole.data.id)],
+  });
+  assert(configReaderAssigned.status === 200, `AI config reader assignment failed: ${configReaderAssigned.status}`);
+  const configReaderLogin = await completeFirstLogin(
+    ctx,
+    await captchaLogin(ctx, employee.data.username, configWriterLogin.password),
+    employee.data.username, configWriterLogin.password, 'AiConfigReader',
+  );
+  const configReaderGet = await ctx.request(configReaderLogin.actor, 'GET', '/ai/config');
+  assert(configReaderGet.status === 200 && configReaderGet.data?.api_key_masked && !('api_key' in (configReaderGet.data || {})), `AI config reader masked read failed: ${configReaderGet.status}`);
+  const configReaderPut = await ctx.request(configReaderLogin.actor, 'PUT', '/ai/config', {
+    base_url: 'http://127.0.0.1:9/v1', api_key: `reader_${randomBytes(8).toString('hex')}`, model: 'reader-denied',
+  });
+  assert(configReaderPut.status === 403, `AI config reader write unexpectedly allowed: ${configReaderPut.status}`);
+  const configReaderTest = await ctx.request(configReaderLogin.actor, 'POST', '/ai/config/test');
+  assert(configReaderTest.status === 403, `AI config reader test unexpectedly allowed: ${configReaderTest.status}`);
+  const restoredEmployee = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, {
+    role_ids: [String(employeeRole.data.id)],
+  });
+  assert(restoredEmployee.status === 200, `employee AI config fixture role restore failed: ${restoredEmployee.status}`);
+  const restoredEmployeeLogin = await captchaLogin(ctx, employee.data.username, configReaderLogin.password);
+  employeeAdminLogin.actor = restoredEmployeeLogin.actor;
+  employeeAdminLogin.password = configReaderLogin.password;
   const employeeStatsRows = await ctx.queryTestDb(
     'SELECT login_count, force_password_change, last_login_at, last_login_ip FROM sys_user WHERE id = ?',
     [String(employee.data.id)],
@@ -513,13 +574,20 @@ export async function run(ctx) {
   assert(Number(createdStudentFacts[0]?.login_count || 0) === 0 && !createdStudentFacts[0]?.last_login_at, 'manual student create changed login facts');
   const studentLogin = await ctx.request(null, 'POST', '/auth/login', { username: studentUsername, password: studentPassword });
   assert(studentLogin.status === 200 && studentLogin.data?.force_change_password === true, `manual student first login flag missing: ${studentLogin.status}`);
+  const studentChangedPassword = randomStrongPassword(studentUsername, '培训学员改密');
+  const studentChange = await ctx.request({ accessToken: studentLogin.data.access_token }, 'PUT', '/auth/password', {
+    old_password: studentPassword, new_password: studentChangedPassword,
+  });
+  assert(studentChange.status === 200 && studentChange.data?.access_token, `manual student password change failed: ${studentChange.status}`);
+  const studentBeforeReset = await ctx.request({ accessToken: studentChange.data.access_token }, 'GET', '/auth/profile');
+  assert(studentBeforeReset.status === 200, `manual student pre-reset profile failed: ${studentBeforeReset.status}`);
 
   const importedUsername = `training_import_${randomBytes(4).toString('hex')}`;
   const importedPassword = randomStrongPassword(importedUsername, '导入学员');
   const importPreview = await ctx.request(employeeAdminLogin.actor, 'POST', '/admin/students/import-preview', {
     rows: [{ username: importedUsername, real_name: '导入学员', source: 'external', category_id: String(createdCategory.data.id), password: importedPassword }],
   });
-  assert(importPreview.status === 200 && importPreview.data?.batch_id && importPreview.data?.valid_rows?.length === 1, `student import preview denied: ${importPreview.status}`);
+  assert(importPreview.status === 200 && importPreview.data?.batch_id && importPreview.data?.valid_rows?.length === 1, `student import preview denied: ${importPreview.status}/${JSON.stringify(importPreview.json || importPreview.data)}`);
   const importCommit = await ctx.request(employeeAdminLogin.actor, 'POST', `/admin/students/import-batches/${importPreview.data.batch_id}/commit`, {
     row_numbers: importPreview.data.valid_rows,
   });
@@ -534,8 +602,12 @@ export async function run(ctx) {
   const studentResetPassword = randomStrongPassword(studentUsername, '培训学员重置');
   const studentReset = await ctx.request(employeeAdminLogin.actor, 'PUT', `/admin/students/${createdStudent.data.id}/password`, { password: studentResetPassword });
   assert(studentReset.status === 200, `delegated student reset denied: ${studentReset.status}`);
-  const studentOldToken = await ctx.request({ accessToken: studentLogin.data.access_token }, 'GET', '/auth/profile');
-  assert(studentOldToken.status === 401, `student token after reset expected 401, got ${studentOldToken.status}`);
+  const studentResetFacts = await ctx.queryTestDb(
+    'SELECT force_password_change FROM sys_user WHERE id = ?', [String(createdStudent.data.id)],
+  );
+  assert(Number(studentResetFacts[0]?.force_password_change || 0) === 1, 'student reset did not set force_password_change');
+  const studentOldToken = await ctx.request({ accessToken: studentChange.data.access_token }, 'GET', '/auth/profile');
+  assert(studentOldToken.status === 401 && studentOldToken.code === 40107, `student token after reset expected 40107, got ${studentOldToken.status}/${studentOldToken.code}`);
 
   const importedLogin = await ctx.request(null, 'POST', '/auth/login', { username: importedUsername, password: importedPassword });
   assert(importedLogin.status === 200 && importedLogin.data?.force_change_password === true, `imported student first login flag missing: ${importedLogin.status}`);
@@ -544,10 +616,12 @@ export async function run(ctx) {
     old_password: importedPassword, new_password: importedChangedPassword,
   });
   assert(importedChange.status === 200 && importedChange.data?.access_token, `imported student password change failed: ${importedChange.status}`);
+  const importedBeforeDisable = await ctx.request({ accessToken: importedChange.data.access_token }, 'GET', '/auth/profile');
+  assert(importedBeforeDisable.status === 200, `imported student pre-disable profile failed: ${importedBeforeDisable.status}`);
   const disabledStudent = await ctx.request(employeeAdminLogin.actor, 'PUT', `/admin/students/${importedStudentFacts[0].id}/status`, { status: 0 });
   assert(disabledStudent.status === 200, `delegated student disable denied: ${disabledStudent.status}`);
   const disabledStudentToken = await ctx.request({ accessToken: importedChange.data.access_token }, 'GET', '/auth/profile');
-  assert(disabledStudentToken.status === 403, `disabled student live session expected 403, got ${disabledStudentToken.status}`);
+  assert(disabledStudentToken.status === 403 && disabledStudentToken.code === 40105, `disabled student live session expected 40105/403, got ${disabledStudentToken.status}/${disabledStudentToken.code}`);
 
   const oldUsersDenied = await ctx.request(employeeAdminLogin.actor, 'GET', '/users');
   assert(oldUsersDenied.status === 403, `delegated manager reached legacy users API: ${oldUsersDenied.status}`);
@@ -589,6 +663,8 @@ export async function run(ctx) {
   assert(employeeStatsRows[0]?.last_login_at && employeeStatsRows[0]?.last_login_ip, 'successful login stats missing timestamp or IP');
 
   const employeeTokenBeforeReset = employeeAdminLogin.actor.accessToken;
+  const employeeBeforeResetProfile = await ctx.request(employeeAdminLogin.actor, 'GET', '/auth/profile');
+  assert(employeeBeforeResetProfile.status === 200, `employee pre-reset profile failed: ${employeeBeforeResetProfile.status}`);
   const employeeResetPassword = randomStrongPassword(employee.data.username, '临时员工');
   const employeeBeforeResetRows = await ctx.queryTestDb('SELECT login_count FROM sys_user WHERE id = ?', [String(employee.data.id)]);
   const employeeReset = await ctx.request(admin.actor, 'PUT', `/users/${employee.data.id}/password`, { password: employeeResetPassword });
@@ -600,7 +676,7 @@ export async function run(ctx) {
   assert(Number(employeeAfterResetRows[0]?.login_count) === Number(employeeBeforeResetRows[0]?.login_count), 'password reset changed truthful login_count');
   assert(Number(employeeAfterResetRows[0]?.force_password_change || 0) === 1, 'password reset did not set force_password_change');
   const employeeOldToken = await ctx.request({ accessToken: employeeTokenBeforeReset }, 'GET', '/statistics/regulations');
-  assert(employeeOldToken.status === 401, `employee token after reset expected 401, got ${employeeOldToken.status}`);
+  assert(employeeOldToken.status === 401 && employeeOldToken.code === 40107, `employee token after reset expected 40107, got ${employeeOldToken.status}/${employeeOldToken.code}`);
 
   const restrictedUsername = `restricted_${randomBytes(4).toString('hex')}`;
   const restrictedPassword = randomStrongPassword(restrictedUsername, '受限管理员');

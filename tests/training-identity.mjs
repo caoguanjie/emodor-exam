@@ -171,10 +171,19 @@ export async function run(ctx) {
   assert.equal(owner2Commit.status, 404, `owner2Commit ${JSON.stringify(owner2Commit)}`);
 
   const disabledLogin = await login(ctx, institution.data.username, institutionPassword, { captcha: false });
+  const disabledReadyPassword = password('Qx');
+  const disabledChanged = await ctx.request(disabledLogin.actor, 'PUT', '/auth/password', {
+    old_password: institutionPassword, new_password: disabledReadyPassword,
+  });
+  assert.equal(disabledChanged.status, 200, `disabled fixture password change ${JSON.stringify(disabledChanged)}`);
+  disabledLogin.actor.accessToken = disabledChanged.data.access_token;
+  const beforeDisabled = await ctx.request(disabledLogin.actor, 'GET', '/auth/profile');
+  assert.equal(beforeDisabled.status, 200, `disabled fixture profile before status change ${JSON.stringify(beforeDisabled)}`);
   const disabled = await ctx.request(admin, 'PUT', `/admin/students/${institution.data.id}/status`, { status: 0 });
   assert.equal(disabled.status, 200);
   const revoked = await ctx.request(disabledLogin.actor, 'GET', '/auth/profile');
   assert.equal(revoked.status, 403);
+  assert.equal(revoked.code, 40105);
 
   const referencedDelete = await ctx.request(admin, 'DELETE', `/admin/training-categories/${categoryId}`);
   assert.equal(referencedDelete.status, 409);

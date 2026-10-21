@@ -87,7 +87,7 @@ class SetPaperQuestionsDto {
 
 const REG_ADMIN = [RoleEnum.SUPER_ADMIN, RoleEnum.REGULATION_ADMIN] as const;
 
-/** /ai AI 出题模块（04 册 3.5；/ai/config 三接口仅 super_admin） */
+/** /ai AI 出题模块（04 册 3.5；/ai/config 由 ai_config:read/write 细权限控制） */
 @Controller('ai')
 export class AiController {
   constructor(
@@ -98,7 +98,7 @@ export class AiController {
     private readonly papers: PaperService,
   ) {}
 
-  // ---- AI 配置（super_admin 专属）----
+  // ---- AI 配置（ai_config:read/write；super_admin 天然拥有全部权限）----
 
   @Get('config')
   @Roles(RoleEnum.SUPER_ADMIN)

@@ -54,7 +54,7 @@ const permissions = [
   ['students:read', '查看学员'], ['students:write', '维护学员'],
   ['departments:read', '查看部门'], ['departments:write', '维护部门'],
   ['regulations:read', '查看制度'], ['regulations:write', '维护制度'], ['regulations:publish', '发布制度'],
-  ['ai:read', '查看 AI 配置与任务'], ['ai:write', '维护 AI 配置与任务'], ['ai:publish', '发布 AI 题目'], ['ai:review', '审核 AI 题目'],
+  ['ai:read', '查看 AI 任务'], ['ai:write', '发起 AI 出题任务'], ['ai_config:read', '查看 AI 服务配置'], ['ai_config:write', '维护 AI 服务配置'], ['ai:publish', '发布 AI 题目'], ['ai:review', '审核 AI 题目'],
   ['questions:read', '查看题库'], ['questions:write', '维护题库'], ['questions:publish', '发布题库'], ['questions:review', '审核题目'], ['questions:export', '导出题库'],
   ['papers:read', '查看试卷'], ['papers:write', '维护试卷'], ['papers:publish', '发布试卷'], ['papers:review', '审核试卷'], ['papers:export', '导出试卷'],
   ['statistics:read', '查看统计'], ['statistics:export', '导出统计'],

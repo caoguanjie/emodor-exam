@@ -106,7 +106,7 @@
 | /me | 1. 组织权限模块（A2） | 2 | 本人资料查询与姓名/联系方式修改 |
 | /departments | 1. 组织权限模块 | 5 | 部门树、CRUD、层级调整 |
 | /regulations | 2. 制度文件管理模块 | 15 | 制度 CRUD、版本上传与历史回看、管理端预览、范围与学习要求配置、发布、阅读内容 |
-| /ai | 3. AI 出题模块 | 16 | AI 配置（super_admin 专属）、出题任务、题目审核编辑、人工录入、试卷管理与组卷 |
+| /ai | 3. AI 出题模块 | 16 | AI 配置（`ai_config:read/write`；super_admin 天然拥有）、出题任务、题目审核编辑、人工录入、试卷管理与组卷 |
 | /learning | 4. 学习行为管控模块 | 7 | 学习列表、会话生命周期、心跳、进度 |
 | /exams | 5. 考试评分模块 | 8 | 可考列表、开考、心跳、切屏、交卷、成绩 |
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
@@ -282,7 +282,7 @@
 
 规则：可见性校验链——制度 `status = published` + 本人属于发布范围（regulation_scope 部门含本部门或 is_all）；返回当前生效版本（current_version_id）的产物；同时返回学习要求（required_minutes / scroll_segments）供前端渲染进度。
 
-### 3.5 AI 出题模块 /ai（权限：制度管理；例外：/ai/config 三个接口为 管理）
+### 3.5 AI 出题模块 /ai（任务权限：`ai:read/write`；配置权限：`ai_config:read/write`）
 
 | # | 方法 | 路径 | 说明 |
 |---|---|---|---|
@@ -299,9 +299,9 @@
 | 11 | PUT | /ai/papers/{id} | 修改策略字段（pass_score / duration_minutes / max_attempts / partial_credit_ratio） |
 | 12 | PUT | /ai/papers/{id}/questions | 组卷（题目增删、sort、score；发布后锁定） |
 | 13 | POST | /ai/papers/{id}/publish | 发布试卷（校验 SUM(score) = 100） |
-| 14 | GET | /ai/config | 读取 AI 配置（管理：仅 super_admin；api_key 掩码回显 sk-****xxxx） |
-| 15 | PUT | /ai/config | 保存 AI 配置（管理：base_url / api_key / model；AES-256-GCM 加密落配置文件，Redis 仅缓存） |
-| 16 | POST | /ai/config/test | AI 连通性测试（管理：返回成功/失败与脱敏错误摘要） |
+| 14 | GET | /ai/config | 读取 AI 配置（`ai_config:read`；api_key 掩码回显 sk-****xxxx） |
+| 15 | PUT | /ai/config | 保存 AI 配置（`ai_config:write`；base_url / api_key / model；AES-256-GCM 加密落配置文件，Redis 仅缓存） |
+| 16 | POST | /ai/config/test | AI 连通性测试（`ai_config:write`；返回成功/失败与脱敏错误摘要） |
 
 **试卷路由归属说明**：试卷的创建/组卷/发布属于「题目审核 → 组卷 → 发布」的出题工作流（05 册 4.4.7 组卷服务隶属 AI 出题模块），故管理侧归 `/ai/papers`；面向员工的考试执行（可考列表、开考、交卷）归 `/exams`（考试评分模块）——同一资源的管理面与执行面分离，与模块边界一致。
 
@@ -317,7 +317,7 @@
 
 校验规则：① AI 配置已保存且完整（base_url / api_key / model 齐备，否则 40909）；② 生效版本 `parse_status = parsed`；③ `question_count_single × score_single + question_count_multiple × score_multiple = 100.00`，否则 40001（附差距说明）。通过后创建异步任务（长文本分块：4000 字符/块 + 200 重叠，05 册 4.4.2），响应回显生效分值策略（question_count_single / question_count_multiple / score_single / score_multiple，未显式传值时回显默认值）并返回 `task_id`。任务状态：`queued / running / completed / failed`（AI 调用失败重试后仍失败 → failed，可重新发起）。
 
-**GET /ai/config**（super_admin）：读取 AI 服务配置，`api_key` 掩码回显（如 `sk-****xxxx`，完整键值永不返回，07 册 4.2）。**PUT /ai/config**（super_admin）：保存 `base_url` / `api_key` / `model`——权威副本为 AES-256-GCM 加密后的配置文件，Redis 仅作缓存（07 册 4.2）。**POST /ai/config/test**（super_admin）：以已保存配置发起一次连通性测试，返回成功 / 失败与脱敏错误摘要（失败 → 50005）。
+**GET /ai/config**（`ai_config:read`）：读取 AI 服务配置，`api_key` 掩码回显（如 `sk-****xxxx`，完整键值永不返回，07 册 4.2）。**PUT /ai/config**（`ai_config:write`）：保存 `base_url` / `api_key` / `model`——权威副本为 AES-256-GCM 加密后的配置文件，Redis 仅作缓存（07 册 4.2）。**POST /ai/config/test**（`ai_config:write`）：以已保存配置发起一次连通性测试，返回成功 / 失败与脱敏错误摘要（失败 → 50005）。`ai:read/write` 仅代表出题任务/题库工作流，不自动授予配置权限；`super_admin` 天然拥有全部注册权限。
 
 **POST /ai/questions**（制度管理）：人工录入题目（type / stem / options / answer / analysis / score）——`source = manual`、`status` 直接 `approved`（免审核），可直接进入组卷。
 
@@ -772,7 +772,7 @@
 | /me | — | GET/PATCH 本人资料 | — | 同左 |
 | /departments | tree（登录） | — | — | 其余 5 个 |
 | /regulations | — | content | 其余 14 个 | 同左 |
-| /ai | — | — | 其余 13 个 | config 三接口（GET/PUT /ai/config、POST /ai/config/test 仅 super_admin） |
+| /ai | — | — | 其余 13 个 | 出题任务/题库工作流按 `ai:read/write` 等权限；config 三接口分别使用 `ai_config:read`（GET）和 `ai_config:write`（PUT/test），不自动授予 legacy `regulation_admin` |
 | /learning | — | 全部 7 个 | — | — |
 | /exams | — | 全部 8 个 | — | — |
 | /statistics | — | — | 全部 6 个 | 同左 |

@@ -27,8 +27,8 @@ export function legacyPermissionForRequest(req: any): PermissionCode | undefined
   }
 
   if (path === '/ai' || path.startsWith('/ai/')) {
-    if (path === '/ai/config' && method === 'GET') return 'ai:read';
-    if (path.startsWith('/ai/config')) return 'ai:write';
+    if (path === '/ai/config' && method === 'GET') return 'ai_config:read';
+    if (path.startsWith('/ai/config')) return 'ai_config:write';
     if (path.includes('/review')) return 'questions:review';
     if (path.includes('/regenerate') || path === '/ai/questions' && method !== 'GET') return 'questions:write';
     if (path.startsWith('/ai/questions')) return method === 'GET' ? 'questions:read' : 'questions:write';

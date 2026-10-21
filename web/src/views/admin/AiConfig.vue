@@ -10,18 +10,18 @@
     </div>
     <el-form label-width="110px">
       <el-form-item label="base_url">
-        <el-input v-model="form.base_url" :disabled="!auth.can('ai:write')" placeholder="如 https://open.bigmodel.cn/api/paas/v4" />
+        <el-input v-model="form.base_url" :disabled="!auth.can('ai_config:write')" placeholder="如 https://open.bigmodel.cn/api/paas/v4" />
       </el-form-item>
       <el-form-item label="api_key">
-        <el-input v-model="form.api_key" :disabled="!auth.can('ai:write')" :placeholder="masked ? `已保存：${masked}（留空保持不变）` : '请输入 api_key'" show-password />
+        <el-input v-model="form.api_key" :disabled="!auth.can('ai_config:write')" :placeholder="masked ? `已保存：${masked}（留空保持不变）` : '请输入 api_key'" show-password />
       </el-form-item>
       <el-form-item label="model">
-        <el-input v-model="form.model" :disabled="!auth.can('ai:write')" placeholder="如 glm-4-flash / deepseek-chat / qwen-plus" />
+        <el-input v-model="form.model" :disabled="!auth.can('ai_config:write')" placeholder="如 glm-4-flash / deepseek-chat / qwen-plus" />
       </el-form-item>
       <el-form-item>
-        <el-button v-if="auth.can('ai:write')" type="primary" @click="onSave">保存配置</el-button>
-        <el-button v-if="auth.can('ai:write')" @click="onTest" :loading="testing">连通性测试</el-button>
-        <el-button v-if="auth.can('ai:write')" @click="onTestVision" :loading="testingVision">多模态测试</el-button>
+        <el-button v-if="auth.can('ai_config:write')" type="primary" @click="onSave">保存配置</el-button>
+        <el-button v-if="auth.can('ai_config:write')" @click="onTest" :loading="testing">连通性测试</el-button>
+        <el-button v-if="auth.can('ai_config:write')" @click="onTestVision" :loading="testingVision">多模态测试</el-button>
       </el-form-item>
     </el-form>
   </div>

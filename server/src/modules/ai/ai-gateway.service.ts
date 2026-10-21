@@ -21,7 +21,7 @@ export interface ChatMessage {
  * POST {base_url}/chat/completions（Authorization: Bearer {api_key}）；
  * 120 秒硬超时（NFR-05）；可重试错误（网络/5xx/429）指数退避重试 ≤ 2 次（2s、8s）；
  * 4xx 立即报错不消耗重试；非流式（stream=false，结果整体校验后落库）。
- * base_url 为 super_admin 显式配置的受信内网端点（仅允许 http/https 协议）。
+ * base_url 为具备 ai_config:write 权限的管理端显式配置的受信端点（仅允许 http/https 协议）。
  */
 @Injectable()
 export class AiGatewayService {
