@@ -491,6 +491,22 @@ CREATE TABLE IF NOT EXISTS `exam_answer` (
   KEY `idx_question` (`question_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='答题明细';
 
+CREATE TABLE IF NOT EXISTS `exam_review_event` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `exam_record_id` BIGINT UNSIGNED NOT NULL,
+  `record_question_id` BIGINT UNSIGNED NOT NULL,
+  `reviewer_id` BIGINT UNSIGNED NOT NULL,
+  `before_score` DECIMAL(5,2) NULL,
+  `after_score` DECIMAL(5,2) NOT NULL,
+  `before_comment` TEXT NULL,
+  `after_comment` TEXT NULL,
+  `grading_version` INT UNSIGNED NOT NULL,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_exam_review_event_version` (`exam_record_id`, `record_question_id`, `grading_version`),
+  KEY `idx_exam_review_event_record_created` (`exam_record_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='图片题逐次人工评分不可变审计';
+
 -- ---------------------------------------------------------------------
 -- 5. 受控媒体域（2 张，A4）
 -- ---------------------------------------------------------------------
@@ -715,6 +731,10 @@ INSERT INTO `site_setting` (`id`, `setting_key`, `value_json`, `updated_by`) VAL
   (2,'banners','[]',NULL)
 ON DUPLICATE KEY UPDATE `id` = `id`;
 
+INSERT INTO `sys_permission` (`code`, `name`) VALUES
+  ('exam_records:review', '人工阅卷')
+ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
+
 INSERT INTO `sys_menu` (`id`, `parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`) VALUES
   (1,NULL,'管理台','directory',NULL,NULL,'Grid',10,1),
   (2,NULL,'系统治理','directory',NULL,NULL,'Setting',20,1),
@@ -736,6 +756,11 @@ INSERT INTO `sys_menu` (`id`, `parent_id`, `name`, `type`, `route_path`, `permis
   (25,2,'网站配置','menu','/admin/system/site-settings','system_settings:read','Picture',60,1),
   (26,2,'审计日志','menu','/admin/system/audit-logs','system_settings:read','DocumentChecked',70,1)
 ON DUPLICATE KEY UPDATE `id` = `id`;
+
+INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
+SELECT 1, '人工阅卷', 'menu', '/admin/grading', 'exam_records:review', 'EditPen', 37, 1
+WHERE EXISTS (SELECT 1 FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory')
+  AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/grading');
 
 -- ---------------------------------------------------------------------
 -- 8. 迁移元数据（由 database/migrate.mjs 管理；不属于业务表数量）

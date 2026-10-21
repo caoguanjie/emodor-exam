@@ -9,6 +9,8 @@ import { AnswerDraftService } from './answer-draft.service';
 import { AttemptHeartbeatDto, DraftInputDto, SubmitAttemptDto } from './attempt.dto';
 import { AttemptService } from './attempt.service';
 import { SubmissionService } from './submission.service';
+import { ExamHistoryService } from './exam-history.service';
+import { HistoryPageDto } from './grading.dto';
 
 class AttemptPageDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1)
@@ -24,6 +26,7 @@ export class TrainingExamsController {
     private readonly attempts: AttemptService,
     private readonly drafts: AnswerDraftService,
     private readonly submissions: SubmissionService,
+    private readonly history: ExamHistoryService,
   ) {}
 
   @Get('exams')
@@ -38,6 +41,24 @@ export class TrainingExamsController {
   @Post('exams/:id/start')
   start(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.attempts.start(String(user.id), String(id));
+  }
+
+  @Get('exam-records')
+  historyList(@CurrentUser() user: AuthUser, @Query(new DtoValidationPipe()) query: HistoryPageDto) {
+    return this.history.history(
+      String(user.id),
+      query.page || 1,
+      query.page_size || TRAINING_DEFAULTS.pageSize,
+    );
+  }
+
+  @Get('wrong-questions')
+  wrongQuestions(@CurrentUser() user: AuthUser, @Query(new DtoValidationPipe()) query: HistoryPageDto) {
+    return this.history.wrongItems(
+      String(user.id),
+      query.page || 1,
+      query.page_size || TRAINING_DEFAULTS.pageSize,
+    );
   }
 
   @Get('exam-records/:id')
@@ -81,6 +102,6 @@ export class TrainingExamsController {
 
   @Get('exam-records/:id/result')
   result(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.submissions.result(String(user.id), String(id));
+    return this.history.result(String(user.id), String(id));
   }
 }

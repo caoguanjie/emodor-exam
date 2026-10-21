@@ -447,3 +447,41 @@ export interface FinalResult {
   correct_rate: number | null;
   items: FinalResultItem[];
 }
+
+export interface ExamHistoryItem {
+  record_id: Id;
+  paper_id: Id;
+  paper_title: string | null;
+  attempt_no: number;
+  status: string;
+  grading_state: GradeState;
+  submission_method: SubmissionMethod | null;
+  legacy: boolean;
+  source: LearnerSource | null;
+  difficulty: ExamDifficulty;
+  score: number | null;
+  started_at: string;
+  submitted_at: string | null;
+  graded_at: string | null;
+}
+
+export interface WrongItem extends FinalResultItem {
+  record_id: Id;
+  submitted_at: string;
+}
+
+export interface GradingQueueItem {
+  record_id: Id;
+  paper_id: Id;
+  paper_title: string;
+  user_id: Id;
+  user_name: string;
+  source: LearnerSource | null;
+  grading_state: GradeState;
+  submitted_at: string;
+  graded_at: string | null;
+  score: number | null;
+  pending_items: number;
+  graded_items: number;
+  image_items: number;
+}

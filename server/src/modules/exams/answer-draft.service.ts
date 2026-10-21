@@ -10,6 +10,7 @@ import { ExamRecord } from '../../entities/exam-record.entity';
 import { ExamRecordQuestion } from '../../entities/exam-record-question.entity';
 import { MediaReference } from '../../entities/media-reference.entity';
 import { SysUser } from '../../entities/sys-user.entity';
+import { AccessService } from '../access/access.service';
 import { MediaService, type MediaUploadResult } from '../media/media.service';
 
 export const ANSWER_MEDIA_OWNER = 'exam_answer_item';
@@ -82,6 +83,7 @@ export class AnswerDraftService implements OnModuleInit {
     @InjectRepository(SysUser) private readonly userRepo: Repository<SysUser>,
     private readonly dataSource: DataSource,
     private readonly media: MediaService,
+    private readonly access: AccessService,
   ) {}
 
   onModuleInit(): void {
@@ -113,7 +115,15 @@ export class AnswerDraftService implements OnModuleInit {
   private async canReadAnswer(actorId: Id, itemId: Id, assetId?: Id): Promise<boolean> {
     if (!assetId) return false;
     const resolved = await this.itemAndRecord(String(itemId));
-    return Boolean(resolved && String(resolved.record.userId) === String(actorId));
+    if (!resolved) return false;
+    if (String(resolved.record.userId) === String(actorId)) return true;
+    if (resolved.record.status === ExamStatus.IN_PROGRESS) return false;
+    const permissions = await this.access.permissions(String(actorId));
+    if (!permissions.includes('exam_records:review')) return false;
+    const answer = await this.answerRepo.findOne({
+      where: { examRecordId: String(resolved.record.id), recordQuestionId: String(resolved.item.id) },
+    });
+    return Boolean(Array.isArray(answer?.assetIds) && answer.assetIds.map(String).includes(String(assetId)));
   }
 
   private async validateAnswerBinding(manager: EntityManager, asset: any, itemId: Id): Promise<void> {

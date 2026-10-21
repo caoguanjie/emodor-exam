@@ -3,13 +3,14 @@ import { DataSource, EntityManager } from 'typeorm';
 import { AuditService } from '../../common/audit.service';
 import { Errors, ExamStatus } from '../../common/errors';
 import { RedisService } from '../../common/redis.service';
-import type { DraftInput, FinalResult, FinalResultItem, Id, SubmissionMethod } from '../../common/training-contracts';
+import type { DraftInput, FinalResult, Id, SubmissionMethod } from '../../common/training-contracts';
 import { ExamAnswer } from '../../entities/exam-answer.entity';
 import { ExamRecord } from '../../entities/exam-record.entity';
 import { SysUser } from '../../entities/sys-user.entity';
 import { StatisticsService } from '../statistics/statistics.service';
-import { AttemptReaderService, attemptQuestionView, type GradingSnapshot } from './attempt-reader.service';
+import { AttemptReaderService, type GradingSnapshot } from './attempt-reader.service';
 import { AnswerDraftService } from './answer-draft.service';
+import { ExamHistoryService } from './exam-history.service';
 
 export interface SubmissionGradeDetail {
   itemId: string;
@@ -90,27 +91,13 @@ type FinalizationOutcome = {
   effect: FinalizationEffect | null;
 };
 
-function answerView(row: ExamAnswer | undefined, item: GradingSnapshot['items'][number]) {
-  if (!row) return null;
-  const selected = Array.isArray(row.selected)
-    ? row.selected.map(Number).map((original) => item.displayToOriginal.indexOf(original))
-      .filter((display) => display >= 0).sort((left, right) => left - right)
-    : [];
-  const assetIds = Array.isArray(row.assetIds) ? row.assetIds.map(String) : [];
-  if (!selected.length && !assetIds.length) return null;
-  return {
-    item_id: String(item.itemId),
-    ...(selected.length ? { selected } : {}),
-    ...(assetIds.length ? { asset_ids: assetIds } : {}),
-  };
-}
-
 @Injectable()
 export class SubmissionService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly drafts: AnswerDraftService,
     private readonly reader: AttemptReaderService,
+    private readonly history: ExamHistoryService,
     private readonly statistics: StatisticsService,
     private readonly audit: AuditService,
     private readonly redis: RedisService,
@@ -146,7 +133,7 @@ export class SubmissionService {
       if (!record) throw Errors.notFound('考试记录不存在');
       if (String(record.userId) !== String(userId)) throw Errors.dataForbidden();
       if (record.status !== ExamStatus.IN_PROGRESS || record.gradingState !== 'not_submitted') {
-        return { outcome: { result: await this.resultInTransaction(manager, record), effect: null }, actorName: user.username };
+          return { outcome: { result: await this.history.resultInTransaction(manager, record), effect: null }, actorName: user.username };
       }
       const expired = new Date(record.deadlineAt).getTime() <= Date.now();
       if (input && !expired) {
@@ -173,7 +160,7 @@ export class SubmissionService {
       if (!record) throw Errors.notFound('考试记录不存在');
       if (String(record.userId) !== String(userId)) throw Errors.dataForbidden();
       if (record.status !== ExamStatus.IN_PROGRESS || record.gradingState !== 'not_submitted') {
-        return { outcome: { result: await this.resultInTransaction(manager, record), effect: null }, actorName: user.username };
+        return { outcome: { result: await this.history.resultInTransaction(manager, record), effect: null }, actorName: user.username };
       }
       if (new Date(record.deadlineAt).getTime() <= Date.now()) {
         return { outcome: await this.finalize(manager, recordId, 'timeout', record), actorName: user.username };
@@ -283,15 +270,7 @@ export class SubmissionService {
   }
 
   async result(userId: Id, recordId: Id): Promise<FinalResult> {
-    return this.dataSource.transaction(async (manager) => {
-      const record = await manager.getRepository(ExamRecord).findOne({ where: { id: String(recordId) } }) as ResultRecord | null;
-      if (!record) throw Errors.notFound('考试记录不存在');
-      if (String(record.userId) !== String(userId)) throw Errors.dataForbidden();
-      if (record.status === ExamStatus.IN_PROGRESS && record.gradingState === 'not_submitted') {
-        throw Errors.submitConflict('考试进行中，结果不可查');
-      }
-      return this.resultInTransaction(manager, record);
-    });
+    return this.history.result(userId, recordId);
   }
 
   async finalize(
@@ -306,7 +285,7 @@ export class SubmissionService {
     }) as ResultRecord | null;
     if (!record) throw Errors.notFound('考试记录不存在');
     if (record.status !== ExamStatus.IN_PROGRESS || record.gradingState !== 'not_submitted') {
-      return { result: await this.resultInTransaction(manager, record), effect: null };
+      return { result: await this.history.resultInTransaction(manager, record), effect: null };
     }
     const snapshot = await this.reader.forGrading(manager, String(recordId));
     const answerRepo = manager.getRepository(ExamAnswer);
@@ -347,7 +326,7 @@ export class SubmissionService {
       : grade.totalCents >= Number(snapshot.rule.passCents) ? ExamStatus.PASSED : ExamStatus.FAILED;
     const saved = await recordRepo.save(record) as ResultRecord;
     return {
-      result: await this.resultInTransaction(manager, saved, snapshot, persisted),
+      result: await this.history.resultInTransaction(manager, saved, snapshot, persisted),
       effect: {
         recordId: String(saved.id),
         regulationId: saved.regulationId ? String(saved.regulationId) : null,
@@ -359,48 +338,4 @@ export class SubmissionService {
     };
   }
 
-  private async resultInTransaction(
-    manager: EntityManager,
-    record: ResultRecord,
-    suppliedSnapshot?: GradingSnapshot,
-    suppliedRows?: ExamAnswer[],
-  ): Promise<FinalResult> {
-    if (!record.submittedAt) throw Errors.internal('历史考试结果缺少交卷时间');
-    const snapshot = suppliedSnapshot || await this.reader.forGrading(manager, String(record.id));
-    const rows = suppliedRows || await manager.getRepository(ExamAnswer).find({ where: { examRecordId: String(record.id) } });
-    const byItem = new Map(rows.filter((row) => row.recordQuestionId).map((row) => [String(row.recordQuestionId), row]));
-    const finalized = record.gradingState === 'finalized';
-    const items: FinalResultItem[] = snapshot.items.map((item) => {
-      const row = byItem.get(String(item.itemId));
-      const question = attemptQuestionView({
-        id: String(item.itemId), recordId: String(record.id), questionId: String(item.questionId),
-        type: item.type, scoreCents: Number(item.scoreCents), position: Number(item.position),
-        displayToOriginal: [...item.displayToOriginal], snapshotJson: item,
-      } as any);
-      return {
-        ...question,
-        answer: answerView(row, item),
-        correct_answer: item.type === 'image' ? null : item.answer.map((original) => item.displayToOriginal.indexOf(Number(original))),
-        analysis: item.analysis ?? null,
-        rubric: item.rubric ?? null,
-        gained_score: row?.gainedScore === null || row?.gainedScore === undefined ? null : Number(row.gainedScore),
-        comment: row?.comment || null,
-        grading_version: Number(row?.gradingVersion || 0),
-      };
-    });
-    const fullScore = rows.filter((row) => row.isCorrect === 1).length;
-    return {
-      record_id: String(record.id),
-      grading_state: record.gradingState || (record.score === null ? 'not_submitted' : 'finalized'),
-      grading_revision: Number(record.gradingRevision || 0),
-      submission_method: record.submissionMethod || null,
-      legacy: !record.submissionMethod,
-      submitted_at: new Date(record.submittedAt).toISOString(),
-      graded_at: record.gradedAt ? new Date(record.gradedAt).toISOString() : null,
-      score: finalized && record.score !== null ? Number(record.score) : null,
-      passed: finalized ? record.status === ExamStatus.PASSED : null,
-      correct_rate: finalized ? (snapshot.items.length ? fullScore / snapshot.items.length : 0) : null,
-      items,
-    };
-  }
 }
