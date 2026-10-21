@@ -14,6 +14,7 @@ const REGISTRY_MIGRATION_ID = '000_migration_registry';
 const SAFE_DATABASE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const SAFE_MIGRATION_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SAFE_STEP_ID = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/;
+const REPLACEMENT_TARGET = /^([A-Za-z0-9][A-Za-z0-9_.-]{0,127})\/([A-Za-z][A-Za-z0-9_.-]{0,127})$/;
 const MIGRATION_FILE = /^\d{3}[_-][A-Za-z0-9_-]+\.sql$/;
 const SYSTEM_DATABASES = new Set(['mysql', 'sys', 'information_schema', 'performance_schema', 'ndbinfo']);
 // Probe expressions stay deliberately small: these built-ins are read-only and
@@ -305,6 +306,14 @@ function normalizeMigrationSql(sql, migrationId, stepId) {
   return statement;
 }
 
+function normalizeReplacementTarget(value, migrationId, stepId) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !REPLACEMENT_TARGET.test(value)) {
+    throw new Error(`migration ${migrationId}/${stepId} has an invalid @replaces-check target`);
+  }
+  return value;
+}
+
 export function parseMigrationText(id, sql, filename = undefined) {
   if (typeof id !== 'string' || !SAFE_MIGRATION_ID.test(id)) throw new Error(`invalid migration id: ${id}`);
   if (typeof sql !== 'string' || !sql.trim()) throw new Error(`migration ${id} is empty`);
@@ -320,11 +329,31 @@ export function parseMigrationText(id, sql, filename = undefined) {
     const bodyStart = marker.index + marker[0].length;
     const bodyEnd = index + 1 < markers.length ? markers[index + 1].index : sql.length;
     const body = sql.slice(bodyStart, bodyEnd);
+    const directives = [...body.matchAll(/^[ \t]*--\s*@([^\s]+)(?:[ \t]+[^\r\n]*)?[ \t]*$/gim)];
+    for (const directive of directives) {
+      const name = directive[1].toLowerCase();
+      if (!['check', 'replaces-check'].includes(name)) {
+        throw new Error(`migration ${id}/${stepId} has an unknown @${directive[1]} directive`);
+      }
+    }
     const checks = [...body.matchAll(/^[ \t]*--\s*@check\s+(.+)$/gim)];
     if (checks.length !== 1) throw new Error(`migration ${id}/${stepId} must declare exactly one @check probe`);
+    const replacementDirectives = directives.filter((directive) => directive[1].toLowerCase() === 'replaces-check');
+    if (replacementDirectives.length > 1) {
+      throw new Error(`migration ${id}/${stepId} must declare at most one @replaces-check target`);
+    }
+    let replacesCheck;
+    if (replacementDirectives.length === 1) {
+      const replacement = replacementDirectives[0][0].match(/^[ \t]*--\s*@replaces-check[ \t]+(\S+)[ \t]*$/i);
+      if (!replacement) throw new Error(`migration ${id}/${stepId} has a malformed @replaces-check directive`);
+      replacesCheck = normalizeReplacementTarget(replacement[1], id, stepId);
+    }
     const checkSql = normalizeCheckSql(checks[0][1], id, stepId);
-    const stepSql = normalizeMigrationSql(body.replace(checks[0][0], ''), id, stepId);
-    steps.push({ id: stepId, sql: stepSql, checkSql });
+    const withoutDirectives = body
+      .replace(checks[0][0], '')
+      .replace(replacementDirectives[0]?.[0] || '', '');
+    const stepSql = normalizeMigrationSql(withoutDirectives, id, stepId);
+    steps.push({ id: stepId, sql: stepSql, checkSql, ...(replacesCheck ? { replacesCheck } : {}) });
   }
   return {
     id,
@@ -349,10 +378,12 @@ function validateMigrationDefinition(definition) {
     if (!step || typeof step.id !== 'string' || !SAFE_STEP_ID.test(step.id)) {
       throw new Error(`migration ${definition.id} has an invalid step id`);
     }
+    const replacesCheck = normalizeReplacementTarget(step.replacesCheck, definition.id, step.id);
     return {
       id: step.id,
       sql: normalizeMigrationSql(step.sql, definition.id, step.id),
       checkSql: normalizeCheckSql(step.checkSql, definition.id, step.id),
+      ...(replacesCheck ? { replacesCheck } : {}),
     };
   });
   const ids = new Set();
@@ -366,15 +397,69 @@ function validateMigrationDefinition(definition) {
   return { ...parsed, steps };
 }
 
+function validateReplacementChains(definitions) {
+  const migrationPositions = new Map(definitions.map((definition, index) => [definition.id, index]));
+  const stepsByKey = new Map();
+  for (const migration of definitions) {
+    for (const step of migration.steps) stepsByKey.set(`${migration.id}/${step.id}`, { migration, step });
+  }
+
+  const targetsBySuccessor = new Map();
+  const successorsByTarget = new Map();
+  for (const migration of definitions) {
+    for (const step of migration.steps) {
+      if (!step.replacesCheck) continue;
+      const successorKey = `${migration.id}/${step.id}`;
+      if (!stepsByKey.has(step.replacesCheck)) {
+        throw new Error(`migration ${successorKey} has unknown @replaces-check target: ${step.replacesCheck}`);
+      }
+      const existingSuccessor = successorsByTarget.get(step.replacesCheck);
+      if (existingSuccessor) {
+        throw new Error(`migration check replacement fork: ${step.replacesCheck} is replaced by both ${existingSuccessor} and ${successorKey}`);
+      }
+      targetsBySuccessor.set(successorKey, step.replacesCheck);
+      successorsByTarget.set(step.replacesCheck, successorKey);
+    }
+  }
+
+  for (const start of targetsBySuccessor.keys()) {
+    const visited = new Set();
+    let current = start;
+    while (targetsBySuccessor.has(current)) {
+      if (visited.has(current)) throw new Error(`migration check replacement cycle includes ${current}`);
+      visited.add(current);
+      current = targetsBySuccessor.get(current);
+    }
+  }
+
+  for (const [successorKey, targetKey] of targetsBySuccessor) {
+    const successor = stepsByKey.get(successorKey);
+    const target = stepsByKey.get(targetKey);
+    const successorPosition = migrationPositions.get(successor.migration.id);
+    const targetPosition = migrationPositions.get(target.migration.id);
+    if (successorPosition === targetPosition) {
+      throw new Error(`migration ${successorKey} @replaces-check target must be in an earlier migration, not the same migration`);
+    }
+    if (targetPosition > successorPosition) {
+      throw new Error(`migration ${successorKey} @replaces-check target must be in an earlier migration: ${targetKey}`);
+    }
+    if (target.migration.id >= successor.migration.id) {
+      throw new Error(`migration ${successorKey} @replaces-check target migration id must sort earlier: ${target.migration.id}`);
+    }
+  }
+  return definitions;
+}
+
 function validateMigrationDefinitions(migrations) {
   if (!Array.isArray(migrations) || migrations.length === 0) throw new Error('no migration definitions found');
   const ids = new Set();
-  return migrations.map((migration) => {
+  const definitions = migrations.map((migration) => {
     const definition = validateMigrationDefinition(migration);
     if (ids.has(definition.id)) throw new Error(`duplicate migration id: ${definition.id}`);
     ids.add(definition.id);
     return definition;
   });
+  return validateReplacementChains(definitions);
 }
 
 async function migrationFiles() {
@@ -585,6 +670,48 @@ async function probeStep(connection, migration, step) {
   return Number(value) === 1;
 }
 
+function createProbeContext(migrations, rowsById) {
+  const stepsByKey = new Map();
+  const successorsByTarget = new Map();
+  for (const migration of migrations) {
+    for (const step of migration.steps) {
+      const stepKey = `${migration.id}/${step.id}`;
+      stepsByKey.set(stepKey, { migration, step });
+      if (step.replacesCheck) successorsByTarget.set(step.replacesCheck, stepKey);
+    }
+  }
+  return { rowsById, stepsByKey, successorsByTarget };
+}
+
+async function probeEffectiveStep(connection, migration, step, context, ancestors = new Set()) {
+  const stepKey = `${migration.id}/${step.id}`;
+  if (ancestors.has(stepKey)) throw new Error(`migration check replacement cycle includes ${stepKey}`);
+  const successorKey = context.successorsByTarget.get(stepKey);
+  if (!successorKey) return probeStep(connection, migration, step);
+
+  const successor = context.stepsByKey.get(successorKey);
+  if (!successor) throw new Error(`migration ${stepKey} has unknown replacement successor: ${successorKey}`);
+  const nextAncestors = new Set(ancestors);
+  nextAncestors.add(stepKey);
+  const successorComplete = await probeEffectiveStep(
+    connection,
+    successor.migration,
+    successor.step,
+    context,
+    nextAncestors,
+  );
+  if (successorComplete) return true;
+
+  const successorRow = context.rowsById.get(successor.migration.id);
+  const successorProgress = successorRow
+    ? decodeProgress(successorRow.progress, successor.migration.id)
+    : [];
+  if (successorProgress.includes(successor.step.id)) {
+    throw new Error(`migration ${stepKey} has confirmed successor ${successorKey} whose invariant is false`);
+  }
+  return probeStep(connection, migration, step);
+}
+
 async function checkpoint(onCheckpoint, event, migration, step) {
   if (typeof onCheckpoint === 'function') {
     await onCheckpoint({ event, migrationId: migration.id, stepId: step?.id || null });
@@ -627,7 +754,7 @@ async function markApplied(connection, migration, progress, startedAt) {
   );
 }
 
-async function bootstrapRegistry(connection, migration, existingRow, onCheckpoint) {
+async function bootstrapRegistry(connection, migration, existingRow, onCheckpoint, probeContext) {
   const tableBefore = await tableExists(connection, REGISTRY_TABLE);
   const columnsBefore = tableBefore ? await readRegistryColumns(connection) : new Set();
   if (tableBefore && columnsBefore.has('progress')) return false;
@@ -643,14 +770,14 @@ async function bootstrapRegistry(connection, migration, existingRow, onCheckpoin
   try {
     for (const step of migration.steps) {
       if (progress.includes(step.id)) {
-        if (!await probeStep(connection, migration, step)) throw new Error(`migration ${migration.id}/${step.id} progress is not complete`);
+        if (!await probeEffectiveStep(connection, migration, step, probeContext)) throw new Error(`migration ${migration.id}/${step.id} progress is not complete`);
         continue;
       }
-      if (!await probeStep(connection, migration, step)) {
+      if (!await probeEffectiveStep(connection, migration, step, probeContext)) {
         await checkpoint(onCheckpoint, 'before-step', migration, step);
         await connection.execute(step.sql);
         await checkpoint(onCheckpoint, 'after-step-sql', migration, step);
-        if (!await probeStep(connection, migration, step)) throw new Error(`migration probe ${migration.id}/${step.id} remained incomplete`);
+        if (!await probeEffectiveStep(connection, migration, step, probeContext)) throw new Error(`migration probe ${migration.id}/${step.id} remained incomplete`);
       }
       await checkpoint(onCheckpoint, 'before-progress', migration, step);
       progress.push(step.id);
@@ -669,12 +796,12 @@ async function bootstrapRegistry(connection, migration, existingRow, onCheckpoin
   }
 }
 
-async function runMigration(connection, migration, row, onCheckpoint) {
+async function runMigration(connection, migration, row, onCheckpoint, probeContext) {
   const progress = row ? decodeProgress(row.progress, migration.id) : [];
   assertProgressBelongs(progress, migration);
   if (row?.status === 'applied' && isComplete(progress, migration)) {
     for (const step of migration.steps) {
-      if (!await probeStep(connection, migration, step)) throw new Error(`migration ${migration.id}/${step.id} is recorded complete but its invariant is false`);
+      if (!await probeEffectiveStep(connection, migration, step, probeContext)) throw new Error(`migration ${migration.id}/${step.id} is recorded complete but its invariant is false`);
     }
     return false;
   }
@@ -683,15 +810,15 @@ async function runMigration(connection, migration, row, onCheckpoint) {
   try {
     for (const step of migration.steps) {
       if (progress.includes(step.id)) {
-        if (!await probeStep(connection, migration, step)) throw new Error(`migration ${migration.id}/${step.id} progress is not complete`);
+        if (!await probeEffectiveStep(connection, migration, step, probeContext)) throw new Error(`migration ${migration.id}/${step.id} progress is not complete`);
         continue;
       }
-      const completeBefore = await probeStep(connection, migration, step);
+      const completeBefore = await probeEffectiveStep(connection, migration, step, probeContext);
       if (!completeBefore) {
         await checkpoint(onCheckpoint, 'before-step', migration, step);
         await connection.execute(step.sql);
         await checkpoint(onCheckpoint, 'after-step-sql', migration, step);
-        if (!await probeStep(connection, migration, step)) throw new Error(`migration probe ${migration.id}/${step.id} remained incomplete`);
+        if (!await probeEffectiveStep(connection, migration, step, probeContext)) throw new Error(`migration probe ${migration.id}/${step.id} remained incomplete`);
       }
       await checkpoint(onCheckpoint, 'before-progress', migration, step);
       progress.push(step.id);
@@ -714,22 +841,33 @@ export async function applyMigrations({ connection, database, migrations, onChec
   try {
     await readPreflight(connection, database);
     const initialPlan = await inspectMigrations({ connection, database, migrations: definitions, allowApplying: true });
+    const initialRowsById = new Map(initialPlan.rows.map((row) => [row.migration_id, row]));
+    const initialProbeContext = createProbeContext(definitions, initialRowsById);
     const registryMigration = definitions.find((migration) => migration.id === REGISTRY_MIGRATION_ID);
     if (!registryMigration && !await tableExists(connection, REGISTRY_TABLE)) {
       throw new Error(`${REGISTRY_MIGRATION_ID}.sql is required to bootstrap the registry`);
     }
     const initialRegistryRow = initialPlan.rows.find((row) => row.migration_id === REGISTRY_MIGRATION_ID);
     let bootstrapped = false;
-    if (registryMigration) bootstrapped = await bootstrapRegistry(connection, registryMigration, initialRegistryRow, onCheckpoint);
+    if (registryMigration) {
+      bootstrapped = await bootstrapRegistry(
+        connection,
+        registryMigration,
+        initialRegistryRow,
+        onCheckpoint,
+        initialProbeContext,
+      );
+    }
     await readPreflight(connection, database);
     const plan = await inspectMigrations({ connection, database, migrations: definitions, allowApplying: true });
     const rowsById = new Map(plan.rows.map((row) => [row.migration_id, row]));
+    const probeContext = createProbeContext(definitions, rowsById);
     const applied = [];
     if (bootstrapped) applied.push(REGISTRY_MIGRATION_ID);
     for (const migration of definitions) {
       if (migration.id === REGISTRY_MIGRATION_ID && bootstrapped) continue;
       const row = rowsById.get(migration.id);
-      const changed = await runMigration(connection, migration, row, onCheckpoint);
+      const changed = await runMigration(connection, migration, row, onCheckpoint, probeContext);
       if (changed) applied.push(migration.id);
       const [freshRows] = await connection.execute(`SELECT migration_id, checksum, status, started_at, applied_at, attempts, error_message, progress FROM \`${REGISTRY_TABLE}\``);
       rowsById.set(migration.id, freshRows.find((item) => item.migration_id === migration.id));
