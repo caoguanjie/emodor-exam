@@ -88,3 +88,29 @@ test('A2 upgrades accepted A1 schema, preserves legacy null provenance, and conv
   await initialized.end();
   await legacy.end();
 });
+
+test('A2 migration refuses wrong primary/auto-increment and composite-index drift', async () => {
+  const legacySql = execFileSync('git', ['show', `${BASE}:database/init.sql`], { cwd: ROOT, encoding: 'utf8' });
+  const wrongCategoryDatabase = await createDatabase('a2_drift_category');
+  await admin.query(renderSchemaForDatabase(legacySql, wrongCategoryDatabase));
+  const wrongCategory = await connectionFor(wrongCategoryDatabase);
+  await wrongCategory.execute(
+    "CREATE TABLE training_category (id BIGINT UNSIGNED NOT NULL, name VARCHAR(128) NOT NULL, description TEXT NULL, status TINYINT NOT NULL DEFAULT 1, created_by BIGINT UNSIGNED NOT NULL, created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  );
+  await assert.rejects(
+    () => applyMigrations({ connection: wrongCategory, database: wrongCategoryDatabase }),
+    /migration probe .*create_training_category .*incomplete|remained incomplete/,
+  );
+  await wrongCategory.end();
+
+  const wrongIndexDatabase = await createDatabase('a2_drift_index');
+  const currentSql = await readFile(join(ROOT, 'database', 'init.sql'), 'utf8');
+  await admin.query(renderSchemaForDatabase(currentSql, wrongIndexDatabase));
+  const wrongIndex = await connectionFor(wrongIndexDatabase);
+  await wrongIndex.execute('ALTER TABLE import_batch DROP INDEX idx_import_batch_owner_kind, ADD INDEX idx_import_batch_owner_only (owner_id)');
+  await assert.rejects(
+    () => applyMigrations({ connection: wrongIndex, database: wrongIndexDatabase }),
+    /migration probe .*create_import_batch .*incomplete|remained incomplete/,
+  );
+  await wrongIndex.end();
+});

@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-21）**：本册现有 70 个接口是当前 legacy 制度/AI/阅读/旧固定卷 API 基线，不等于融合目标 API 已实现。新培训的类别/学员、课程视频、题库版本、发布/个人题单、持久草稿、图片答案/阅卷、监控和场次统计接口由 A1—C6 在实际 migration/entity/controller 存在后分别补入；本步骤只标出边界，不预先发明 DTO 或路由。所有新增接口继续使用 `/api/v1`、`{code,message,data}`、`DtoValidationPipe`、所有权校验和 HttpOnly refresh Cookie。
+> **状态边界（2026-10-21）**：本册 70 个接口是当前 legacy 制度/AI/阅读/旧固定卷 API 基线；A2 已追加培训类别、学员来源、可恢复导入与本人资料的精确 DTO/错误/分页契约。课程视频、题库版本、发布/个人题单、持久草稿、图片答案/阅卷、监控和场次统计接口仍由后续任务在实际 migration/entity/controller 存在后补入。所有接口继续使用 `/api/v1`、`{code,message,data}`、DTO 校验、所有权校验和 HttpOnly refresh Cookie。
 
 ---
 
@@ -95,12 +95,15 @@
 
 ## 2. 模块与路由总览
 
-当前 legacy 基线的八大路由前缀对应六大模块（README 3.4 固定映射）；培训增量路由由后续任务按同一 `/api/v1` 前缀追加，未在本表冒充当前接口：
+当前 legacy 基线的八大路由前缀对应六大模块（README 3.4 固定映射）；A2 培训增量路由已按同一 `/api/v1` 前缀注册：
 
 | 路由前缀 | 所属模块（固定名称） | 接口数 | 说明 |
 |---|---|---|---|
 | /auth | 1. 组织权限模块 | 5 | 登录、刷新、个人信息、改密、登出 |
 | /users | 1. 组织权限模块 | 8 | 员工 CRUD、重置密码、批量导入、启停 |
+| /admin/training-categories | 1. 组织权限模块（A2） | 6 | 培训类别分页、详情、增改、启停、引用保护删除 |
+| /admin/students | 1. 组织权限模块（A2） | 10 | 学员分页、CRUD、启停、重置密码、xlsx 模板/预检/批次确认 |
+| /me | 1. 组织权限模块（A2） | 2 | 本人资料查询与姓名/联系方式修改 |
 | /departments | 1. 组织权限模块 | 5 | 部门树、CRUD、层级调整 |
 | /regulations | 2. 制度文件管理模块 | 15 | 制度 CRUD、版本上传与历史回看、管理端预览、范围与学习要求配置、发布、阅读内容 |
 | /ai | 3. AI 出题模块 | 16 | AI 配置（super_admin 专属）、出题任务、题目审核编辑、人工录入、试卷管理与组卷 |
@@ -109,7 +112,7 @@
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**合计 70 个接口（69 个业务接口 + 1 个健康检查）。**
+**合计 88 个接口（87 个业务接口 + 1 个健康检查，含 A2 增量）。**
 
 ---
 
@@ -154,6 +157,60 @@
 **员工不提供物理删除**——员工关联 learning_record / exam_record 等历史数据，物理删除将破坏统计口径与审计链路，退出语义由停用（PUT /users/{id}/status, status=0）承载（01 册 FR-ORG-03）。
 
 > **路由声明顺序**：Controller 中静态路由（`import-template` / `import`）必须先于参数路由（`:id`）声明，否则 `GET /users/import-template` 会被 `/users/:id` 匹配吞掉（NestJS 按声明顺序匹配）——纳入代码评审检查项。
+
+### 3.2.1 培训类别 /admin/training-categories（A2）
+
+当前候选实现以 `super_admin` 作为管理边界；A3 集成时映射为 `training_categories:read`（GET）和 `training_categories:write`（POST/PUT/DELETE）。类别只做业务归类，不授予任何角色权限。列表响应使用通用分页结构 `data.items/total/page/page_size`，类别 ID 和 `created_by` 均为字符串 ID。
+
+| # | 方法 | 路径 | 请求 | 成功 data |
+|---|---|---|---|---|
+| 1 | GET | /admin/training-categories | query：`page`（默认 1）、`page_size`（默认 20，1—100）、`keyword`、`status`（0/1） | `Page<Category>` |
+| 2 | GET | /admin/training-categories/{id} | — | `Category` |
+| 3 | POST | /admin/training-categories | body：`name`（必填，1—128）、`description`（可选，≤2000） | `Category`，创建时 status=1 |
+| 4 | PUT | /admin/training-categories/{id} | body：`name?`、`description?` | `Category` |
+| 5 | PUT | /admin/training-categories/{id}/status | body：`status`（0/1） | `Category` |
+| 6 | DELETE | /admin/training-categories/{id} | — | `null`；已被 `sys_user.category_id` 引用时拒绝硬删除 |
+
+`Category` 字段为 `{ id, name, description, status, created_by, created_at, updated_at }`。查询、分页、状态和 body 中的未知字段及非法数字（包括 NaN）均返回 40001；名称唯一冲突返回 40001。类别状态/删除与学员引用写入在同一事务中锁定类别行并重查，删除使用中的类别返回 40910。
+
+### 3.2.2 培训学员 /admin/students（A2）
+
+当前候选实现以 `super_admin` 作为管理边界；A3 集成时映射为 `students:read`（GET）和 `students:write`（POST/PUT/批次确认/启停/重置）。新学员固定 role=`employee`，`category_id` 与 `source` 必填；`source` 只影响后续抽题策略，不等于权限。旧 `/users` 不补默认来源/类别，原返回结构不变。
+
+| # | 方法 | 路径 | 请求与约束 | 成功 data |
+|---|---|---|---|---|
+| 1 | GET | /admin/students | query：`page`、`page_size`、`keyword`、`category_id`、`source`（institution/external）、`status`（0/1） | `Page<Student>`；ID 均为字符串 |
+| 2 | GET | /admin/students/{id} | — | `Student`，不含 password_hash |
+| 3 | POST | /admin/students | body：`username`、`password`、`real_name`、`category_id`、`source` 必填；可选 `employee_no/department_id/phone/email` | `Student`，role 固定 employee |
+| 4 | PUT | /admin/students/{id} | body：`real_name/employee_no/department_id/category_id/source/phone/email` 可选；不接受 username/password/role | `Student` |
+| 5 | PUT | /admin/students/{id}/status | body：`status`（0/1） | `Student`；停用同时吊销既有令牌 |
+| 6 | PUT | /admin/students/{id}/password | body：`password`（≥8 位，含字母与数字） | `null`；旧令牌吊销并回到首登改密 |
+| 7 | GET | /admin/students/import-template | — | `.xlsx` 二进制；表头为 `用户名/姓名/工号/手机号/邮箱/来源/培训类别ID/初始密码` |
+| 8 | POST | /admin/students/import-preview | JSON `rows` 数组，或 multipart `file`；可选 `defaults:{source?,category_id?}` | `ImportPreview` |
+| 9 | GET | /admin/students/import-batches/{id} | —；仅批次 owner 可读 | 未提交批次为 `ImportPreview`，已提交批次为 `ImportResult` |
+| 10 | POST | /admin/students/import-batches/{id}/commit | body：`row_numbers` 为非空整数数组；仅批次 owner | `ImportResult` |
+
+`Student` 字段为 `{ id, username, real_name, employee_no, department_id, category_id, source, role, phone, email, status, last_login_at, created_at }`。列表默认 page=1/page_size=20，page_size 范围 1—100；未知 query/body 字段、非整数分页、非法枚举均返回 40001。本人资料接口见 3.2.3，不允许通过学员接口修改 role。
+
+导入预检逐行返回 `ImportPreview = { batch_id, valid_rows, errors:[{row,message}], duplicates }`；模板行号从 2 开始。预检会按数据库 `utf8mb4_0900_ai_ci` 规则识别大小写/重音重复，并检查现存 username/employee_no、启用类别、来源和口令策略。确认只消费服务端规范化行，批次按 owner+id 隔离；首次确认固定合法行集合，同集合重试返回原 `created_ids`，更换集合返回 40911。确认事务按类别 ID 加锁并重新检查类别存在且启用；类别在预检后被停用或删除时返回 40910，不创建悬挂学员。任何响应、`import_batch`、审计记录不得包含导入明文口令或 password_hash；数据库仅保存规范化行中的 password_hash。
+
+### 3.2.3 本人资料 /me/profile（A2）
+
+| # | 方法 | 路径 | 请求 | 成功 data |
+|---|---|---|---|---|
+| 1 | GET | /me/profile | — | 当前用户资料（含 `category_id/source`，旧用户可为 null） |
+| 2 | PATCH | /me/profile | 仅允许 `real_name?`、`phone?`、`email?` | 更新后的资料 |
+
+`source/category_id/role/avatar_id/avatarId/username/department_id` 等未知或越权字段均返回 40001，不静默丢弃；头像字段待 A4 接入后另行扩展。
+
+### 3.2.4 A2 导入错误与恢复语义
+
+| code | HTTP | message（示例） | 触发场景 |
+|---|---|---|---|
+| 40910 | 409 | 培训类别不存在或已停用 | 新学员/类别引用写入或导入确认时类别行锁重查失败；引用类别硬删除 |
+| 40911 | 409 | 导入批次已确认，不能更换行集合 | 已提交批次使用不同合法行集合重试，或批次正被另一确认请求处理 |
+
+导入批次的 `owner_id` 是服务端从当前令牌取得，客户端不能指定；未提交批次保留预检结果供查询/恢复，确认成功后保存 `committed_rows/created_ids`。这套批次事实可由 B4 注册题库适配器复用，但通用服务不依赖 AI。
 
 ### 3.3 部门管理 /departments（权限：管理）
 
@@ -671,6 +728,8 @@
 | 40907 | 409 | 题目组成不可变更 | 修改已发布试卷的 paper_question |
 | 40908 | 409 | 题目正在考试中使用，禁止编辑 | 题目被 in_progress 考试记录引用时修改 stem/options/answer/type（仅允许 analysis，05 册 4.4.6） |
 | 40909 | 409 | AI 服务未配置或配置不完整 | 未配置 base_url/api_key/model 即发起出题或连通性测试（FR-AIQ-01 验收③） |
+| 40910 | 409 | 培训类别不存在或已停用 | 学员/导入确认引用不存在或已停用类别；删除仍被学员引用的类别 |
+| 40911 | 409 | 导入批次已确认，不能更换行集合 | 批次确认重试更换合法行集合，或确认事务正在处理 |
 | 42201 | 422 | 文件格式不支持 | 上传非 pdf/docx（含魔法数不符） |
 | 42202 | 422 | 文件超过大小上限 | 上传超过 50MB |
 | 42203 | 422 | 发布校验未通过 | 制度发布缺前置（无生效版本/未配要求或范围）；试卷发布总分 ≠ 100 |
@@ -691,6 +750,9 @@
 |---|---|---|---|---|
 | /auth | login、refresh | profile、password、logout | 同左 | 同左 |
 | /users | — | — | — | 全部 8 个 |
+| /admin/training-categories | — | — | — | A2 候选实现全部 6 个；A3 映射 training_categories:read/write |
+| /admin/students | — | — | — | A2 候选实现全部 10 个；A3 映射 students:read/write |
+| /me | — | GET/PATCH 本人资料 | — | 同左 |
 | /departments | tree（登录） | — | — | 其余 5 个 |
 | /regulations | — | content | 其余 14 个 | 同左 |
 | /ai | — | — | 其余 13 个 | config 三接口（GET/PUT /ai/config、POST /ai/config/test 仅 super_admin） |
@@ -726,7 +788,7 @@
 
 | 校验项 | 结果 |
 |---|---|
-| 当前八大路由前缀与 README 3.4 模块映射 | 一致（/auth /users /departments /regulations /ai /learning /exams /statistics）；培训增量路由待后续 controller 落地 |
+| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；A2 增量 `/admin/training-categories`、`/admin/students`、`/me` 已由 migration/entity/controller/UI 同步落地 |
 | 当前表名/字段名（snake_case）与 03 册 | 一致（learning_record.total_seconds、exam_paper.partial_credit_ratio 等）；新增字段以迁移/entity/API 同步为准 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
 | 心跳/失焦/乱序/超时/切屏行为与 05 册 | 一致（5.4.2/5.4.3/6.4.1~6.4.5 逐条对应） |

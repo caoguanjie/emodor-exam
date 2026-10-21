@@ -4,7 +4,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response, Request } from 'express';
 import { Transform } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
+import { ArrayMinSize, IsArray, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { UsersService } from './users.service';
 import { UserImportService } from './user-import.service';
 import { ImportBatchService } from '../imports/import-batch.service';
@@ -12,10 +12,12 @@ import { Roles } from '../../common/guards/roles.guard';
 import { SkipEnvelope } from '../../common/response.interceptor';
 import { Errors, RoleEnum } from '../../common/errors';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
-import { DtoValidationPipe } from '../../common/dto-validation.pipe';
+import { DtoValidationPipe, StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
+import type { LearnerSource } from '../../common/training-contracts';
 
 // 部门 id 统一按字符串校验；列表接口返回 number（sanitize Number()），容忍客户端原样回传
 const NormalizeDeptId = () => Transform(({ value }) => (value === undefined || value === null || value === '' ? value : String(value)));
+const QueryNumber = () => Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)));
 
 // 初始/重置口令与首次改密策略对齐（07 册 2.2.3）：≥8 位且同时包含字母与数字，
 // 避免出现「初始口令可登录却永远通不过强制改密校验」的口径裂缝
@@ -83,6 +85,76 @@ class SelfProfileDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(64) real_name?: string;
   @IsOptional() @IsString() @MaxLength(20) phone?: string;
   @IsOptional() @IsString() @MaxLength(128) email?: string;
+}
+
+class StudentListQueryDto {
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(1_000_000) page?: number;
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
+  @IsOptional() @IsString() @MaxLength(64) keyword?: string;
+  @IsOptional() @IsString() @MaxLength(32) category_id?: string;
+  @IsOptional() @IsIn(['institution', 'external']) source?: LearnerSource;
+  @IsOptional() @QueryNumber() @IsInt() @IsIn([0, 1]) status?: number;
+}
+
+class StudentImportCommitDto {
+  @IsArray() @ArrayMinSize(1) @IsInt({ each: true }) row_numbers!: number[];
+}
+
+interface StudentImportDefaults {
+  source?: LearnerSource;
+  category_id?: string;
+}
+
+interface StudentImportPreviewBody {
+  rows?: unknown[] | string;
+  defaults?: StudentImportDefaults | string;
+}
+
+const STUDENT_IMPORT_ROW_KEYS = [
+  'row', 'username', 'real_name', 'realName', 'employee_no', 'employeeNo', 'phone', 'email',
+  'source', 'category_id', 'categoryId', 'category', 'password', 'initial_password',
+  '用户名', '姓名', '工号', '手机号', '邮箱', '来源', '培训类别ID', '初始密码',
+] as const;
+
+function assertImportObject(value: unknown, allowed: readonly string[], label: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw Errors.param(`${label} 必须是对象`);
+  const record = value as Record<string, unknown>;
+  const unknown = Object.keys(record).filter((key) => !allowed.includes(key));
+  if (unknown.length) throw Errors.param(`${label} 包含不支持的字段：${unknown.join(',')}`);
+  return record;
+}
+
+function parseImportRows(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      throw Errors.param('rows 必须是合法 JSON 数组');
+    }
+  }
+  throw Errors.param('rows 必须是数组');
+}
+
+function parseImportDefaults(value: unknown): StudentImportDefaults {
+  if (value === undefined || value === null || value === '') return {};
+  let parsed: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      throw Errors.param('defaults 必须是合法 JSON 对象');
+    }
+  }
+  const record = assertImportObject(parsed, ['source', 'category_id'], 'defaults');
+  if (record.source !== undefined && record.source !== 'institution' && record.source !== 'external') {
+    throw Errors.param('defaults.source 来源枚举非法');
+  }
+  if (record.category_id !== undefined && typeof record.category_id !== 'string') {
+    throw Errors.param('defaults.category_id 必须是字符串');
+  }
+  return record as StudentImportDefaults;
 }
 
 /** /users 员工管理（04 册 3.2，全部 super_admin） */
@@ -157,7 +229,8 @@ export class StudentsController {
   }
 
   @Get()
-  list(@Query() query: any) {
+  list(@Query(new StrictDtoValidationPipe(['page', 'page_size', 'keyword', 'category_id', 'source', 'status'])) query: StudentListQueryDto, @Req() req: Request) {
+    assertImportObject(req.query, ['page', 'page_size', 'keyword', 'category_id', 'source', 'status'], '查询参数');
     return this.users.listStudents(query);
   }
 
@@ -179,36 +252,27 @@ export class StudentsController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
   async preview(
     @UploadedFile() file: Express.Multer.File | undefined,
-    @Body() body: any,
+    @Body() body: StudentImportPreviewBody,
     @CurrentUser() user: AuthUser,
   ) {
-    let rows: unknown[];
-    if (file) rows = await this.importer.parseStudentWorkbook(file.buffer);
-    else {
-      try {
-        rows = Array.isArray(body?.rows) ? body.rows : typeof body?.rows === 'string' ? JSON.parse(body.rows) : [];
-      } catch {
-        throw Errors.param('rows 必须是合法 JSON 数组');
-      }
-    }
-    if (!Array.isArray(rows)) throw Errors.param('rows 必须是数组');
-    let defaults: any;
-    try {
-      defaults = typeof body?.defaults === 'string' ? JSON.parse(body.defaults) : body?.defaults || {};
-    } catch {
-      throw Errors.param('defaults 必须是合法 JSON 对象');
-    }
-    const withDefaults = rows.map((row: any) => ({
-      ...(row && typeof row === 'object' ? row : {}),
-      source: row?.source || defaults.source,
-      category_id: row?.category_id || defaults.category_id,
-    }));
-    return this.importer.preview(String(user.id), 'students', withDefaults);
+    const bodyRecord = assertImportObject(body || {}, ['rows', 'defaults'], '导入请求');
+    let rows: unknown[] = file ? await this.importer.parseStudentWorkbook(file.buffer) : parseImportRows(bodyRecord.rows);
+    const defaults = parseImportDefaults(bodyRecord.defaults);
+    rows = rows.map((row: unknown) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
+      const rowRecord = assertImportObject(row, STUDENT_IMPORT_ROW_KEYS, '导入行');
+      return {
+        ...rowRecord,
+        source: rowRecord.source || defaults.source,
+        category_id: rowRecord.category_id || defaults.category_id,
+      };
+    });
+    return this.importer.preview(String(user.id), 'students', rows);
   }
 
   @Post('import-batches/:id/commit')
-  async commit(@Param('id') id: string, @Body() body: any, @CurrentUser() user: AuthUser) {
-    if (!Array.isArray(body?.row_numbers)) throw Errors.param('row_numbers 必须是数组');
+  async commit(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['row_numbers'])) body: StudentImportCommitDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertImportObject(req.body, ['row_numbers'], '导入确认请求');
     return this.importer.commit(String(user.id), id, body.row_numbers);
   }
 
@@ -218,25 +282,27 @@ export class StudentsController {
   }
 
   @Post()
-  create(@Body(new DtoValidationPipe()) dto: CreateStudentDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'role')) throw Errors.param('学员角色固定为 employee');
+  create(@Body(new StrictDtoValidationPipe(['username', 'password', 'real_name', 'category_id', 'source', 'employee_no', 'department_id', 'phone', 'email'])) dto: CreateStudentDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertImportObject(req.body, ['username', 'password', 'real_name', 'category_id', 'source', 'employee_no', 'department_id', 'phone', 'email'], '学员请求');
     return this.users.createStudent({ ...dto, department_id: dto.department_id || null }, this.actor(user), req.ip || null);
   }
 
   @Put(':id')
-  update(@Param('id') id: string, @Body(new DtoValidationPipe()) dto: UpdateStudentDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'role')) throw Errors.param('学员角色不可修改');
+  update(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['real_name', 'employee_no', 'department_id', 'category_id', 'source', 'phone', 'email'])) dto: UpdateStudentDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertImportObject(req.body, ['real_name', 'employee_no', 'department_id', 'category_id', 'source', 'phone', 'email'], '学员请求');
     return this.users.updateStudent(id, dto, this.actor(user), req.ip || null);
   }
 
   @Put(':id/status')
-  status(@Param('id') id: string, @Body(new DtoValidationPipe()) dto: StudentStatusDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+  status(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['status'])) dto: StudentStatusDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertImportObject(req.body, ['status'], '学员状态请求');
     if (dto.status !== 0 && dto.status !== 1) throw Errors.param('status 取值非法');
     return this.users.setStudentStatus(id, dto.status as 0 | 1, this.actor(user), req.ip || null);
   }
 
   @Put(':id/password')
-  async resetPassword(@Param('id') id: string, @Body(new DtoValidationPipe()) dto: StudentResetPasswordDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+  async resetPassword(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['password'])) dto: StudentResetPasswordDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertImportObject(req.body, ['password'], '学员密码请求');
     await this.users.resetStudentPassword(id, dto.password, this.actor(user), req.ip || null);
     return null;
   }
@@ -254,14 +320,11 @@ export class MeProfileController {
 
   @Patch('profile')
   update(
-    @Body(new DtoValidationPipe()) dto: SelfProfileDto,
+    @Body(new StrictDtoValidationPipe(['real_name', 'phone', 'email'])) dto: SelfProfileDto,
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
-    const forbidden = ['source', 'category_id', 'categoryId', 'role', 'avatar_id', 'avatarId'];
-    if (forbidden.some((key) => Object.prototype.hasOwnProperty.call(req.body || {}, key))) {
-      throw Errors.param('本人资料不允许修改来源、培训类别、角色或头像');
-    }
+    assertImportObject(req.body, ['real_name', 'phone', 'email'], '本人资料请求');
     return this.users.updateSelfProfile(String(user.id), dto);
   }
 }

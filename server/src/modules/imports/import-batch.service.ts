@@ -11,6 +11,7 @@ import { ImportPreview, ImportResult, Id, LearnerSource } from '../../common/tra
 import { Errors } from '../../common/errors';
 import { validatePasswordStrength } from '../../common/password-policy';
 import { AuditService } from '../../common/audit.service';
+import { CategoryService } from '../training/category.service';
 
 export type ImportKind = 'students' | 'questions';
 
@@ -77,6 +78,7 @@ export class ImportBatchService {
     @InjectRepository(TrainingCategory) private readonly categoryRepo: Repository<TrainingCategory>,
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
+    private readonly categories: CategoryService,
   ) {}
 
   /** B4 registers its question adapter without making this service depend on AI/question modules. */
@@ -192,16 +194,29 @@ export class ImportBatchService {
     return this.categoryRepo.findOne({ where: { name: value } });
   }
 
+  /** Match the schema's utf8mb4_0900_ai_ci equality, including case/accent rules. */
+  private async duplicateRowsByDbCollation(rows: StudentRow[], field: 'username' | 'employee_no'): Promise<Set<number>> {
+    const candidates = rows.filter((row) => Boolean(row[field]));
+    if (candidates.length < 2) return new Set();
+    const selects = candidates.map(() => 'SELECT CAST(? AS CHAR CHARACTER SET utf8mb4) AS candidate_value, CAST(? AS UNSIGNED) AS row_no').join(' UNION ALL ');
+    const params = candidates.flatMap((row) => [row[field], row.row]);
+    const duplicateRows = await this.dataSource.query(
+      `SELECT row_no FROM (SELECT row_no, COUNT(*) OVER (PARTITION BY candidate_value COLLATE utf8mb4_0900_ai_ci) AS duplicate_count FROM (${selects}) AS candidates) AS grouped WHERE duplicate_count > 1`,
+      params,
+    );
+    return new Set(duplicateRows.map((row: { row_no: number | string }) => Number(row.row_no)));
+  }
+
   private async previewStudents(ownerId: Id, rows: unknown[]): Promise<ImportPreview> {
     const errors: Array<{ row: number; message: string }> = [];
     const duplicates: number[] = [];
     const validRows: number[] = [];
     const normalizedRows: Record<string, unknown>[] = [];
-    const seenUsernames = new Set<string>();
-    const seenEmployeeNos = new Set<string>();
+    const studentRows = rows.map((raw, index) => this.toStudentRow(raw, index));
+    const duplicateUsernames = await this.duplicateRowsByDbCollation(studentRows, 'username');
+    const duplicateEmployeeNos = await this.duplicateRowsByDbCollation(studentRows, 'employee_no');
 
-    for (let index = 0; index < rows.length; index += 1) {
-      const row = this.toStudentRow(rows[index], index);
+    for (const row of studentRows) {
       const reasons: string[] = [];
       if (!row.username) reasons.push('用户名必填');
       else if (row.username.length > 64) reasons.push('用户名超长');
@@ -222,16 +237,9 @@ export class ImportBatchService {
           reasons.push(error?.message || '初始密码不符合要求');
         }
       }
-      if (row.username && seenUsernames.has(row.username)) {
-        reasons.push('用户名在文件内重复');
-        duplicates.push(row.row);
-      }
-      if (row.employee_no && seenEmployeeNos.has(row.employee_no)) {
-        reasons.push('工号在文件内重复');
-        if (!duplicates.includes(row.row)) duplicates.push(row.row);
-      }
-      seenUsernames.add(row.username);
-      if (row.employee_no) seenEmployeeNos.add(row.employee_no);
+      if (duplicateUsernames.has(row.row)) reasons.push('用户名在文件内重复');
+      if (duplicateEmployeeNos.has(row.row)) reasons.push('工号在文件内重复');
+      if ((duplicateUsernames.has(row.row) || duplicateEmployeeNos.has(row.row)) && !duplicates.includes(row.row)) duplicates.push(row.row);
 
       let category: TrainingCategory | null = null;
       if (row.category_id) {
@@ -316,6 +324,8 @@ export class ImportBatchService {
         if (locked.status === 'committing') throw Errors.importBatchConflict('导入批次正在确认，请稍后查询状态');
         const rows = (locked.normalizedRows || []).filter((row) => requested.includes(Number(row.row)));
         if (rows.length !== requested.length) throw Errors.importBatchConflict('导入批次数据已不完整');
+        const categoryIds = [...new Set(rows.map((row) => String(row.category_id)))].sort((left, right) => left.localeCompare(right));
+        for (const categoryId of categoryIds) await this.categories.lockActive(manager, categoryId);
         locked.status = 'committing';
         await manager.save(locked);
         const repo = manager.getRepository(SysUser);

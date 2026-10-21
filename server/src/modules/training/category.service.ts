@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { TrainingCategory } from '../../entities/training-category.entity';
 import { SysUser } from '../../entities/sys-user.entity';
 import { Errors } from '../../common/errors';
@@ -34,6 +34,29 @@ export class CategoryService {
   async assertActive(id: string): Promise<void> {
     const category = await this.categoryRepo.findOne({ where: { id: String(id) } });
     if (!category || Number(category.status) !== 1) throw Errors.categoryInactive();
+  }
+
+  /**
+   * Lock the category row and recheck availability in the caller's transaction.
+   * All new category references must use this helper before writing their row;
+   * the lock order is category id ascending when several are needed.
+   */
+  async lockActive(manager: EntityManager, id: string): Promise<TrainingCategory> {
+    const category = await manager.findOne(TrainingCategory, {
+      where: { id: String(id) },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!category || Number(category.status) !== 1) throw Errors.categoryInactive();
+    return category;
+  }
+
+  private async lockExisting(manager: EntityManager, id: string): Promise<TrainingCategory> {
+    const category = await manager.findOne(TrainingCategory, {
+      where: { id: String(id) },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!category) throw Errors.notFound('培训类别不存在');
+    return category;
   }
 
   async list(query: { page?: number; page_size?: number; keyword?: string; status?: number }) {
@@ -83,12 +106,14 @@ export class CategoryService {
   }
 
   async update(id: string, input: { name?: string; description?: string | null }, actor: CategoryActor, ip: string | null) {
-    const category = await this.categoryRepo.findOne({ where: { id: String(id) } });
-    if (!category) throw Errors.notFound('培训类别不存在');
-    if (input.name !== undefined) category.name = this.validateName(input.name);
-    if (input.description !== undefined) category.description = input.description?.trim() || null;
+    let category: TrainingCategory;
     try {
-      await this.categoryRepo.save(category);
+      category = await this.categoryRepo.manager.transaction(async (manager) => {
+        const locked = await this.lockExisting(manager, id);
+        if (input.name !== undefined) locked.name = this.validateName(input.name);
+        if (input.description !== undefined) locked.description = input.description?.trim() || null;
+        return manager.getRepository(TrainingCategory).save(locked);
+      });
     } catch (error: any) {
       if (String(error?.code) === 'ER_DUP_ENTRY') throw Errors.param('培训类别名称已存在');
       throw error;
@@ -101,10 +126,11 @@ export class CategoryService {
   }
 
   async setStatus(id: string, status: 0 | 1, actor: CategoryActor, ip: string | null) {
-    const category = await this.categoryRepo.findOne({ where: { id: String(id) } });
-    if (!category) throw Errors.notFound('培训类别不存在');
-    category.status = status;
-    await this.categoryRepo.save(category);
+    const category = await this.categoryRepo.manager.transaction(async (manager) => {
+      const locked = await this.lockExisting(manager, id);
+      locked.status = status;
+      return manager.getRepository(TrainingCategory).save(locked);
+    });
     this.audit.log({
       actor_id: Number(actor.id), actor_name: actor.name, action: 'training_category.status',
       object_type: 'training_category', object_id: id, detail: { status }, result: 'success', source_ip: ip,
@@ -113,11 +139,12 @@ export class CategoryService {
   }
 
   async remove(id: string, actor: CategoryActor, ip: string | null) {
-    const category = await this.categoryRepo.findOne({ where: { id: String(id) } });
-    if (!category) throw Errors.notFound('培训类别不存在');
-    const referenced = await this.userRepo.count({ where: { categoryId: String(id) } });
-    if (referenced > 0) throw Errors.categoryInactive('培训类别已被学员引用，不能删除');
-    await this.categoryRepo.remove(category);
+    await this.categoryRepo.manager.transaction(async (manager) => {
+      const category = await this.lockExisting(manager, id);
+      const referenced = await manager.getRepository(SysUser).count({ where: { categoryId: String(id) } });
+      if (referenced > 0) throw Errors.categoryInactive('培训类别已被学员引用，不能删除');
+      await manager.getRepository(TrainingCategory).remove(category);
+    });
     this.audit.log({
       actor_id: Number(actor.id), actor_name: actor.name, action: 'training_category.delete',
       object_type: 'training_category', object_id: id, detail: {}, result: 'success', source_ip: ip,

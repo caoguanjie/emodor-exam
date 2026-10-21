@@ -4,13 +4,13 @@ import { DataSource, In, Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { SysUser } from '../../entities/sys-user.entity';
 import { SysDepartment } from '../../entities/sys-department.entity';
-import { TrainingCategory } from '../../entities/training-category.entity';
 import { Errors, RoleEnum, Role } from '../../common/errors';
 import { DepartmentService } from '../departments/department.service';
 import { RedisService } from '../../common/redis.service';
 import { AuditService } from '../../common/audit.service';
 import { AppConfig } from '../../config/configuration';
 import { validatePasswordStrength } from '../../common/password-policy';
+import { CategoryService } from '../training/category.service';
 
 const VALID_ROLES: Role[] = [RoleEnum.SUPER_ADMIN, RoleEnum.REGULATION_ADMIN, RoleEnum.EMPLOYEE];
 
@@ -19,12 +19,12 @@ const VALID_ROLES: Role[] = [RoleEnum.SUPER_ADMIN, RoleEnum.REGULATION_ADMIN, Ro
 export class UsersService {
   constructor(
     @InjectRepository(SysUser) private readonly userRepo: Repository<SysUser>,
-    @InjectRepository(TrainingCategory) private readonly categoryRepo: Repository<TrainingCategory>,
     private readonly dataSource: DataSource,
     private readonly departments: DepartmentService,
     private readonly redis: RedisService,
     private readonly audit: AuditService,
     private readonly config: AppConfig,
+    private readonly categories: CategoryService,
   ) {}
 
   sanitize(u: SysUser) {
@@ -138,39 +138,36 @@ export class UsersService {
     return this.sanitizeStudent(user);
   }
 
-  private async assertStudentCategory(categoryId: string) {
-    const category = await this.categoryRepo.findOne({ where: { id: String(categoryId) } });
-    if (!category || Number(category.status) !== 1) throw Errors.categoryInactive();
-    return category;
-  }
-
   private assertLearnerSource(source: string): asserts source is 'institution' | 'external' {
     if (source !== 'institution' && source !== 'external') throw Errors.param('来源必须是 institution 或 external');
   }
 
   async createStudent(input: { username: string; password: string; real_name: string; category_id: string; source: 'institution' | 'external'; employee_no?: string | null; department_id?: string | null; phone?: string | null; email?: string | null }, actor: { id: number; name: string }, ip: string | null) {
     this.assertLearnerSource(input.source);
-    await this.assertStudentCategory(input.category_id);
     validatePasswordStrength(input.password, { username: input.username, employeeNo: input.employee_no, realName: input.real_name }, '初始密码');
-    if (input.department_id) {
-      const dept = await this.dataSource.getRepository(SysDepartment).findOne({ where: { id: input.department_id } });
-      if (!dept) throw Errors.param('部门不存在');
-    }
+    const passwordHash = await bcrypt.hash(input.password, 12);
     try {
-      const user = await this.userRepo.save(this.userRepo.create({
-        username: input.username,
-        passwordHash: await bcrypt.hash(input.password, 12),
-        realName: input.real_name,
-        employeeNo: input.employee_no || null,
-        departmentId: input.department_id || null,
-        categoryId: String(input.category_id),
-        source: input.source,
-        role: RoleEnum.EMPLOYEE,
-        phone: input.phone || null,
-        email: input.email || null,
-        status: 1,
-        lastLoginAt: null,
-      }));
+      const user = await this.dataSource.transaction(async (manager) => {
+        await this.categories.lockActive(manager, input.category_id);
+        if (input.department_id) {
+          const dept = await manager.getRepository(SysDepartment).findOne({ where: { id: input.department_id } });
+          if (!dept) throw Errors.param('部门不存在');
+        }
+        return manager.getRepository(SysUser).save(manager.getRepository(SysUser).create({
+          username: input.username,
+          passwordHash,
+          realName: input.real_name,
+          employeeNo: input.employee_no || null,
+          departmentId: input.department_id || null,
+          categoryId: String(input.category_id),
+          source: input.source,
+          role: RoleEnum.EMPLOYEE,
+          phone: input.phone || null,
+          email: input.email || null,
+          status: 1,
+          lastLoginAt: null,
+        }));
+      });
       this.audit.log({
         actor_id: actor.id, actor_name: actor.name, action: 'student.create', object_type: 'sys_user',
         object_id: user.id, detail: { username: user.username, category_id: user.categoryId, source: user.source }, result: 'success', source_ip: ip,
@@ -186,25 +183,32 @@ export class UsersService {
   }
 
   async updateStudent(id: string, patch: { real_name?: string; employee_no?: string | null; department_id?: string | null; category_id?: string; source?: 'institution' | 'external'; phone?: string | null; email?: string | null }, actor: { id: number; name: string }, ip: string | null) {
-    const user = await this.userRepo.findOne({ where: { id: String(id), role: RoleEnum.EMPLOYEE } });
-    if (!user) throw Errors.notFound('学员不存在');
     if (patch.source !== undefined) this.assertLearnerSource(patch.source);
-    if (patch.category_id !== undefined) await this.assertStudentCategory(patch.category_id);
-    if (patch.real_name !== undefined) user.realName = patch.real_name;
-    if (patch.employee_no !== undefined) user.employeeNo = patch.employee_no || null;
-    if (patch.department_id !== undefined) {
-      if (patch.department_id) {
-        const dept = await this.dataSource.getRepository(SysDepartment).findOne({ where: { id: patch.department_id } });
-        if (!dept) throw Errors.param('部门不存在');
-      }
-      user.departmentId = patch.department_id || null;
-    }
-    if (patch.category_id !== undefined) user.categoryId = String(patch.category_id);
-    if (patch.source !== undefined) user.source = patch.source;
-    if (patch.phone !== undefined) user.phone = patch.phone || null;
-    if (patch.email !== undefined) user.email = patch.email || null;
+    let user: SysUser;
     try {
-      await this.userRepo.save(user);
+      user = await this.dataSource.transaction(async (manager) => {
+        const repo = manager.getRepository(SysUser);
+        const lockedUser = await manager.findOne(SysUser, {
+          where: { id: String(id), role: RoleEnum.EMPLOYEE },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!lockedUser) throw Errors.notFound('学员不存在');
+        if (patch.category_id !== undefined) await this.categories.lockActive(manager, patch.category_id);
+        if (patch.real_name !== undefined) lockedUser.realName = patch.real_name;
+        if (patch.employee_no !== undefined) lockedUser.employeeNo = patch.employee_no || null;
+        if (patch.department_id !== undefined) {
+          if (patch.department_id) {
+            const dept = await manager.getRepository(SysDepartment).findOne({ where: { id: patch.department_id } });
+            if (!dept) throw Errors.param('部门不存在');
+          }
+          lockedUser.departmentId = patch.department_id || null;
+        }
+        if (patch.category_id !== undefined) lockedUser.categoryId = String(patch.category_id);
+        if (patch.source !== undefined) lockedUser.source = patch.source;
+        if (patch.phone !== undefined) lockedUser.phone = patch.phone || null;
+        if (patch.email !== undefined) lockedUser.email = patch.email || null;
+        return repo.save(lockedUser);
+      });
     } catch (error: any) {
       if (String(error?.code) === 'ER_DUP_ENTRY') throw Errors.param('工号已存在');
       throw error;
