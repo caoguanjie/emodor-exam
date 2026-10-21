@@ -150,6 +150,7 @@ export async function createTrainingHarness({
   apiEntry = DEFAULT_API_ENTRY,
   apiArgs = [],
   apiCwd = PROJECT_ROOT,
+  lifecycleProbe = undefined,
 } = {}) {
   const ownsRoot = !root;
   const ownedRoot = root || await mkdtemp(join(tmpdir(), 'ruleexam-training-'));
@@ -205,31 +206,48 @@ export async function createTrainingHarness({
   };
   let api;
   let cleaned = false;
+  let stopping = false;
+  let processesStopped = false;
   let restartPromise;
+  let restartCount = 0;
+  let stopProcessesPromise;
+  let cleanupPromise;
 
   async function restartApi() {
-    if (cleaned) throw new Error('training harness has already been cleaned up');
+    if (cleaned || stopping) throw new Error('training harness cleanup has started');
     if (restartPromise) return restartPromise;
     if (!isSafeTestDatabase(testDatabase)) {
       throw new Error('restartApi only permits ruleexam_test_<suffix> databases');
     }
     restartPromise = (async () => {
-      await stopApi(api);
-      api = spawn(process.execPath, [apiEntry, ...apiArgs], {
+      const restartNo = ++restartCount;
+      const previousApi = api;
+      await stopApi(previousApi);
+      if (api === previousApi) api = undefined;
+      await lifecycleProbe?.({
+        stage: 'api-ready-to-spawn',
+        restartNo,
+        previousPid: previousApi?.pid ?? null,
+      });
+      if (cleaned || stopping) throw new Error('training harness cleanup started during API restart');
+      const child = spawn(process.execPath, [apiEntry, ...apiArgs], {
         cwd: apiCwd,
         env: { ...env, PORT: String(apiPort) },
         stdio: ['ignore', 'inherit', 'inherit'],
       });
+      api = child;
       let spawnError;
-      api.once('error', (error) => { spawnError = error; });
+      child.once('error', (error) => { spawnError = error; });
       try {
-        await waitForApi(apiBaseUrl, api, () => spawnError);
+        await lifecycleProbe?.({ stage: 'api-spawned', restartNo, pid: child.pid });
+        if (cleaned || stopping) throw new Error('training harness cleanup started during API restart');
+        await waitForApi(apiBaseUrl, child, () => spawnError);
       } catch (error) {
-        await stopApi(api);
-        api = undefined;
+        await stopApi(child);
+        if (api === child) api = undefined;
         throw error;
       }
-      return { pid: api.pid, baseUrl: apiBaseUrl };
+      return { pid: child.pid, baseUrl: apiBaseUrl };
     })();
     try {
       return await restartPromise;
@@ -292,6 +310,58 @@ export async function createTrainingHarness({
     }
   }
 
+  async function stopProcesses() {
+    if (processesStopped) return;
+    if (stopProcessesPromise) return stopProcessesPromise;
+    stopping = true;
+    const task = (async () => {
+      const errors = [];
+      const firstApi = api;
+      try {
+        await stopApi(firstApi);
+      } catch (error) {
+        errors.push(error);
+      }
+      const pendingRestart = restartPromise;
+      if (pendingRestart) {
+        await pendingRestart.catch(() => undefined);
+      }
+      const currentApi = api;
+      if (currentApi) {
+        try {
+          await stopApi(currentApi);
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (api && (api.exitCode !== null || api.signalCode !== null)) api = undefined;
+      if (errors.length) throw new AggregateError(errors, 'API process cleanup failed');
+      processesStopped = true;
+    })();
+    stopProcessesPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (stopProcessesPromise === task) stopProcessesPromise = undefined;
+    }
+  }
+
+  async function cleanup() {
+    if (cleanupPromise) return cleanupPromise;
+    if (cleaned && processesStopped) return;
+    cleaned = true;
+    const task = (async () => {
+      await stopProcesses();
+      if (ownsRoot) await rm(ownedRoot, { recursive: true, force: true });
+    })();
+    cleanupPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (cleanupPromise === task) cleanupPromise = undefined;
+    }
+  }
+
   return {
     root: ownedRoot,
     dataDir,
@@ -311,11 +381,7 @@ export async function createTrainingHarness({
     upload,
     restartApi,
     queryTestDb,
-    async cleanup() {
-      if (cleaned) return;
-      cleaned = true;
-      await stopApi(api);
-      if (ownsRoot) await rm(ownedRoot, { recursive: true, force: true });
-    },
+    stopProcesses,
+    cleanup,
   };
 }

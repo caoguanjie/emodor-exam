@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { createEphemeralServices, getFreePort } from './support/ephemeral-services.mjs';
@@ -19,6 +20,47 @@ const API_ENTRY = join(ROOT, 'server', 'dist', 'main.js');
 let services;
 let harness;
 let database;
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function waitForPidExit(pid, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error?.code !== 'EPERM') return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail(`process ${pid} is still alive`);
+}
+
+async function createProbeHarness(lifecycleProbe) {
+  const port = await getFreePort();
+  return createTrainingHarness({
+    port,
+    database,
+    db: services.mysql,
+    redis: services.redis,
+    apiEntry: API_ENTRY,
+    lifecycleProbe,
+    env: {
+      DB_HOST: services.mysql.host,
+      DB_PORT: String(services.mysql.port),
+      DB_USERNAME: services.mysql.user,
+      DB_PASSWORD: services.mysql.password,
+      DB_DATABASE: database,
+      REDIS_HOST: services.redis.host,
+      REDIS_PORT: String(services.redis.port),
+      REDIS_PASSWORD: '',
+    },
+  });
+}
 
 before(async () => {
   services = await createEphemeralServices();
@@ -149,5 +191,60 @@ test('harness database helpers reject a development target before connecting', a
     await assert.rejects(() => unsafe.restartApi(), /ruleexam_test/);
   } finally {
     await unsafe.cleanup();
+  }
+});
+
+test('cleanup serializes with a real API startup and leaves no late process or directory', { concurrency: false }, async () => {
+  const spawned = deferred();
+  const release = deferred();
+  let probe;
+  try {
+    probe = await createProbeHarness(async (event) => {
+      if (event.stage === 'api-spawned' && event.restartNo === 1) {
+        spawned.resolve(event);
+        await release.promise;
+      }
+    });
+    const restart = probe.restartApi();
+    const event = await spawned.promise;
+    assert.ok(event.pid > 0);
+    const cleanup = probe.cleanup();
+    release.resolve();
+    await assert.rejects(restart, /cleanup started|exited before becoming ready/);
+    await cleanup;
+    await waitForPidExit(event.pid);
+    assert.equal(probe.apiPid, null);
+    assert.equal(existsSync(probe.root), false);
+  } finally {
+    await probe?.cleanup().catch(() => undefined);
+  }
+});
+
+test('cleanup serializes with a second restart after the old API exits', { concurrency: false }, async () => {
+  const readyToSpawn = deferred();
+  const release = deferred();
+  let probe;
+  try {
+    probe = await createProbeHarness(async (event) => {
+      if (event.stage === 'api-ready-to-spawn' && event.restartNo === 2) {
+        readyToSpawn.resolve(event);
+        await release.promise;
+      }
+    });
+    await probe.restartApi();
+    const oldPid = probe.apiPid;
+    assert.ok(oldPid > 0);
+    const restart = probe.restartApi();
+    const event = await readyToSpawn.promise;
+    assert.equal(event.previousPid, oldPid);
+    const cleanup = probe.cleanup();
+    release.resolve();
+    await assert.rejects(restart, /cleanup started/);
+    await cleanup;
+    await waitForPidExit(oldPid);
+    assert.equal(probe.apiPid, null);
+    assert.equal(existsSync(probe.root), false);
+  } finally {
+    await probe?.cleanup().catch(() => undefined);
   }
 });

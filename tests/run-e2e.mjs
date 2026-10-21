@@ -71,6 +71,7 @@ export async function run() {
   let interrupted = false;
   let cleanupPromise;
   let releaseLifecycleProbe;
+  let resourceGeneration = 0;
   const ownedChildren = new Set();
   const trackChild = (child) => {
     ownedChildren.add(child);
@@ -120,10 +121,17 @@ export async function run() {
     const task = (async () => {
       const attempted = new Set();
       const errors = [];
+      const pendingResources = (seen) => [harness, services]
+        .filter((resource) => resource && !seen.has(resource));
       while (true) {
         const children = [...ownedChildren].filter((child) => !attempted.has(child));
-        const resources = [harness, services].filter((resource) => resource && !attempted.has(resource));
-        if (!children.length && !resources.length) break;
+        const resources = pendingResources(attempted);
+        const generation = resourceGeneration;
+        if (!children.length && !resources.length) {
+          await Promise.resolve();
+          if (generation === resourceGeneration && !pendingResources(attempted).length) break;
+          continue;
+        }
         for (const child of children) {
           attempted.add(child);
           try {
@@ -135,15 +143,27 @@ export async function run() {
         for (const resource of resources) {
           attempted.add(resource);
           try {
-            await resource.cleanup();
-            if (resource === harness) harness = undefined;
-            if (resource === services) services = undefined;
+            await resource.stopProcesses();
           } catch (error) {
             errors.push(error);
           }
         }
       }
       if (errors.length) throw new AggregateError(errors, 'owned runtime cleanup failed');
+      const cleanedResources = new Set();
+      while (true) {
+        const resources = pendingResources(cleanedResources);
+        const generation = resourceGeneration;
+        if (!resources.length) {
+          await Promise.resolve();
+          if (generation === resourceGeneration && !pendingResources(cleanedResources).length) break;
+          continue;
+        }
+        for (const resource of resources) {
+          cleanedResources.add(resource);
+          await resource.cleanup();
+        }
+      }
     })();
     cleanupPromise = task;
     try {
@@ -179,6 +199,7 @@ export async function run() {
     };
     if (ephemeral) {
       services = await createEphemeralServices();
+      resourceGeneration += 1;
       await waitForLifecycleProbe('services-ready');
       if (interrupted) return;
       database = `ruleexam_test_${randomBytes(6).toString('hex')}`;
@@ -212,6 +233,7 @@ export async function run() {
     });
     await waitForLifecycleProbe('harness-created', { harnessRoot: createdHarness.root });
     harness = createdHarness;
+    resourceGeneration += 1;
     if (interrupted) return;
     console.log(`[1/4] 创建隔离测试库（${database}）`);
     await resetSchema({ ...db, database });

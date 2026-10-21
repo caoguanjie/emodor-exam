@@ -118,14 +118,47 @@ export async function createEphemeralServices() {
   let mysqlProcess;
   let redisProcess;
   let cleaned = false;
+  let processesStopped = false;
+  let stopProcessesPromise;
+  let cleanupPromise;
+
+  const stopProcesses = async () => {
+    if (processesStopped) return;
+    if (stopProcessesPromise) return stopProcessesPromise;
+    const task = (async () => {
+      const errors = [];
+      for (const process of [redisProcess, mysqlProcess, bootstrap]) {
+        try {
+          await stopProcess(process);
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length) throw new AggregateError(errors, 'ephemeral process cleanup failed');
+      processesStopped = true;
+    })();
+    stopProcessesPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (stopProcessesPromise === task) stopProcessesPromise = undefined;
+    }
+  };
 
   const cleanup = async () => {
-    if (cleaned) return;
+    if (cleanupPromise) return cleanupPromise;
+    if (cleaned && processesStopped) return;
     cleaned = true;
-    await stopProcess(redisProcess);
-    await stopProcess(mysqlProcess);
-    await stopProcess(bootstrap);
-    await rm(root, { recursive: true, force: true });
+    const task = (async () => {
+      await stopProcesses();
+      await rm(root, { recursive: true, force: true });
+    })();
+    cleanupPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (cleanupPromise === task) cleanupPromise = undefined;
+    }
   };
 
   try {
@@ -175,6 +208,7 @@ export async function createEphemeralServices() {
       redis: { host: '127.0.0.1', port: redisPort },
       mysqlPid: mysqlProcess.pid,
       redisPid: redisProcess.pid,
+      stopProcesses,
       cleanup,
     };
   } catch (error) {

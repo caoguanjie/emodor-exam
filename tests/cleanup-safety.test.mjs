@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { existsSync } from 'node:fs';
 
 import { stopApi, waitForChildExit } from './support/training-harness.mjs';
 import { stopProcess, waitForProcessExit } from './support/ephemeral-services.mjs';
+import { cleanupOwnedProcessDirectory, createOwnedAliveChild } from './support/runtime-cleanup.mjs';
 
 function liveFakeChild({ onKill = () => false } = {}) {
   const child = new EventEmitter();
@@ -43,4 +45,36 @@ test('live ephemeral process prevents cleanup from removing its directory', asyn
     stopProcess(child, { termTimeoutMs: 5, killTimeoutMs: 5 }),
     /refusing to remove its task directory/,
   );
+});
+
+test('real owned process failure keeps its PID alive and directory present until recovery', async () => {
+  const fixture = await createOwnedAliveChild();
+  try {
+    await assert.rejects(
+      cleanupOwnedProcessDirectory({
+        child: fixture.child,
+        root: fixture.root,
+        stop: stopApi,
+        stopOptions: { termTimeoutMs: 5, killTimeoutMs: 5 },
+      }),
+      /refusing to remove its task directory/,
+    );
+    assert.equal(existsSync(fixture.root), true);
+    assert.doesNotThrow(() => process.kill(fixture.child.pid, 0));
+    fixture.restoreKill();
+    await cleanupOwnedProcessDirectory({
+      child: fixture.child,
+      root: fixture.root,
+      stop: stopApi,
+      stopOptions: { termTimeoutMs: 5_000, killTimeoutMs: 5_000 },
+    });
+    assert.equal(existsSync(fixture.root), false);
+  } finally {
+    fixture.restoreKill();
+    if (fixture.child.exitCode === null && fixture.child.signalCode === null) {
+      fixture.child.kill('SIGKILL');
+      await waitForChildExit(fixture.child, 2_000).catch(() => undefined);
+    }
+    if (existsSync(fixture.root)) await fixture.removeDirectory();
+  }
 });
