@@ -587,7 +587,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 进行中记录的 `last_heartbeat_at` 为空或距 `server_now` **超过** 90 秒时 `connection_state=uncertain`，恰好 90 秒仍为 `connected`；终态为 `ended`。连接待确认只作提示，不触发作弊判断、扣分或交卷。PC `/admin/exam-monitor` 每 5 秒轮询；自动 tick 遇到仍在途的上一请求时跳过，换卷/手动刷新才取消旧请求并以请求代次拒绝迟到响应，离页同时清理请求和定时器。试卷选择使用服务端关键字和 1—100 分页，可继续加载后续页并保留当前选择；选项失败与监控数据失败分别重试。强制交卷不在本期，也不放置可点击占位。
 
-`GET /admin/exam-records/{id}/result` 由 C4 统一历史/阅卷 reader 负责，C5 不复制评分或结果投影。普通 `exam_records:read` 不自动取得答题图片；图片仍只允许本人或 C4 的阅卷权限精确读取。
+`GET /admin/exam-records/{id}/result` 由 C4 统一历史/阅卷 reader 负责，C5 不复制评分或结果投影。PC 记录详情先读取安全元数据：进行中记录不请求 result；终态才读取统一结果并只读展示冻结题目、作答、判分与评语。普通 `exam_records:read` 可读取终态题干/选项/解析中的受控题目图片，但不自动取得学员上传的答题图片；页面只提示需 `exam_records:review` 并引导至人工阅卷，不发起答题图片下载。
 
 ### 3.8 统计模块 /statistics（权限：制度管理）
 
