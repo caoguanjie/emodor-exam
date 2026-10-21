@@ -635,13 +635,18 @@ async function runBody(ctx, mockPort) {
     category: 'A3', description: 'delegated write fixture',
   });
   assert(delegatedRegulation.status === 200 && delegatedRegulation.data?.id, `employee custom regulation write denied: ${delegatedRegulation.status}`);
+  const categoryName = `培训类别_${randomBytes(4).toString('hex')}`;
+  const createdCategory = await ctx.request(employeeAdminLogin.actor, 'POST', '/admin/training-categories', {
+    name: categoryName, description: 'delegated training category',
+  });
+  assert(createdCategory.status === 200 && createdCategory.data?.id, `delegated category write denied: ${createdCategory.status}`);
   const delegatedQuestion = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/questions', {
-    regulation_id: scopedRegulationId,
+    regulation_id: scopedRegulationId, category_id: String(createdCategory.data.id), difficulty: 'easy',
     type: 'single', stem: 'A3 delegated question',
     options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }],
     answer: [0], score: 10,
   });
-  assert(delegatedQuestion.status === 200 && delegatedQuestion.data?.id, `employee custom question write denied: ${delegatedQuestion.status}`);
+  assert(delegatedQuestion.status === 200 && delegatedQuestion.data?.id, `employee custom question write denied: ${delegatedQuestion.status}/${delegatedQuestion.code}/${delegatedQuestion.message}`);
   const delegatedPaper = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/papers', {
     regulation_id: scopedRegulationId, title: 'A3 delegated paper', pass_score: 60,
   });
@@ -656,7 +661,8 @@ async function runBody(ctx, mockPort) {
     `run-owned AI config setup failed: ${ownedAiConfig.status}/${ownedAiConfig.code}`,
   );
   const delegatedGeneration = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/generate-questions', {
-    regulation_id: scopedRegulationId, question_count_single: 1, question_count_multiple: 0,
+    regulation_id: scopedRegulationId, category_id: String(createdCategory.data.id), difficulty: 'easy',
+    question_count_single: 1, question_count_multiple: 0,
     score_single: 100, score_multiple: 1,
   });
   assert(
@@ -737,11 +743,6 @@ async function runBody(ctx, mockPort) {
     [String(employee.data.id)],
   );
 
-  const categoryName = `培训类别_${randomBytes(4).toString('hex')}`;
-  const createdCategory = await ctx.request(employeeAdminLogin.actor, 'POST', '/admin/training-categories', {
-    name: categoryName, description: 'delegated training category',
-  });
-  assert(createdCategory.status === 200 && createdCategory.data?.id, `delegated category write denied: ${createdCategory.status}`);
   const categoryList = await ctx.request(employeeAdminLogin.actor, 'GET', '/admin/training-categories');
   assert(categoryList.status === 200 && categoryList.data?.items?.some((item) => item.id === createdCategory.data.id), `delegated category read denied: ${categoryList.status}`);
 
@@ -907,14 +908,16 @@ async function runBody(ctx, mockPort) {
     restricted.data.username, restrictedLogin.password, 'RestrictedAfterRemoval',
   );
   const deniedRemovedGeneration = await ctx.request(postRemovalLogin.actor, 'POST', '/ai/generate-questions', {
-    regulation_id: scopedRegulationId, question_count_single: 1, question_count_multiple: 0,
+    regulation_id: scopedRegulationId, category_id: String(createdCategory.data.id), difficulty: 'easy',
+    question_count_single: 1, question_count_multiple: 0,
     score_single: 100, score_multiple: 1,
   });
   assert(deniedRemovedGeneration.status === 403, `removed role AI generation expected 403, got ${deniedRemovedGeneration.status}`);
   const deniedRemovedQuestionRead = await ctx.request(postRemovalLogin.actor, 'GET', '/ai/questions');
   assert(deniedRemovedQuestionRead.status === 403, `removed role question read expected 403, got ${deniedRemovedQuestionRead.status}`);
   const deniedRemovedQuestionWrite = await ctx.request(postRemovalLogin.actor, 'POST', '/ai/questions', {
-    regulation_id: scopedRegulationId, type: 'single', stem: 'removed role question',
+    regulation_id: scopedRegulationId, category_id: String(createdCategory.data.id), difficulty: 'easy',
+    type: 'single', stem: 'removed role question',
     options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], answer: [0], score: 10,
   });
   assert(deniedRemovedQuestionWrite.status === 403, `removed role question write expected 403, got ${deniedRemovedQuestionWrite.status}`);
