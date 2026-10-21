@@ -1,8 +1,16 @@
+import 'reflect-metadata';
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import { CaptchaService } from '../src/modules/auth/captcha.service';
 import { AccessService } from '../src/modules/access/access.service';
 import { SessionService } from '../src/modules/auth/session.service';
+import { DtoValidationPipe } from '../src/common/dto-validation.pipe';
 import { legacyPermissionForRequest } from '../src/common/guards/permissions.guard';
+
+const require = createRequire(import.meta.url);
+const { AuthController } = require('../dist/modules/auth/auth.controller.js') as {
+  AuthController: Function;
+};
 
 function redisStub() {
   const values = new Map<string, string>();
@@ -52,6 +60,34 @@ describe('A3 captcha and access contracts', () => {
     expect(await service.verify(previous.captcha_id, previousAnswer!)).toBe(false);
     expect(await service.verify(refreshed.captcha_id, refreshedAnswer!)).toBe(true);
     expect(await service.verify(unrelated.captcha_id, unrelatedAnswer!)).toBe(true);
+  });
+
+  it('rejects non-string previous captcha ids before regex coercion', async () => {
+    const redis = redisStub();
+    const service = new CaptchaService(redis as any);
+    const validId = 'a'.repeat(32);
+
+    for (const malformed of [[validId], { toString: () => validId }, 7, null]) {
+      await expect(service.issue('same-ip', malformed as any)).rejects.toMatchObject({ code: 40001 });
+    }
+  });
+
+  it('keeps captcha body metadata typed so malformed fields reach validation', async () => {
+    const paramTypes = Reflect.getMetadata('design:paramtypes', AuthController.prototype, 'captchaImage');
+    expect(paramTypes?.[0]?.name).toBe('CaptchaRequestDto');
+    expect(paramTypes?.[0]).not.toBe(Object);
+
+    const pipe = new DtoValidationPipe();
+    for (const malformed of [[ 'a'.repeat(32) ], { toString: () => 'a'.repeat(32) }, 7, null]) {
+      await expect(pipe.transform(
+        { previous_captcha_id: malformed },
+        { type: 'body', metatype: paramTypes[0] },
+      )).rejects.toMatchObject({ response: { fields: { previous_captcha_id: expect.any(Array) } } });
+    }
+    await expect(pipe.transform(
+      {},
+      { type: 'body', metatype: paramTypes[0] },
+    )).resolves.toEqual({});
   });
 
   it('only allows a registered permission code and invalidates a removed grant', async () => {

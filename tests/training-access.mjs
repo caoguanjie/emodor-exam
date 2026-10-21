@@ -153,6 +153,15 @@ export async function run(ctx) {
   assert(unrelatedAnswer, 'unrelated captcha fixture answer missing');
   const malformedRefresh = await ctx.request(null, 'POST', '/auth/captcha', { previous_captcha_id: 'not-a-captcha-id' }, refreshHeaders);
   assert(malformedRefresh.status === 400, `malformed captcha refresh expected 400, got ${malformedRefresh.status}`);
+  for (const malformed of [
+    [previousCaptcha.data.captcha_id],
+    { toString: previousCaptcha.data.captcha_id },
+    7,
+    null,
+  ]) {
+    const malformedField = await ctx.request(null, 'POST', '/auth/captcha', { previous_captcha_id: malformed }, refreshHeaders);
+    assert(malformedField.status === 400, `typed malformed captcha refresh expected 400, got ${malformedField.status}`);
+  }
   const refreshedCaptcha = await ctx.request(null, 'POST', '/auth/captcha', {
     previous_captcha_id: previousCaptcha.data.captcha_id,
   }, refreshHeaders);

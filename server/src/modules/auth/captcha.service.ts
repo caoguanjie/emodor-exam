@@ -47,7 +47,8 @@ export class CaptchaService {
   }
 
   async issue(scope = 'anonymous', previousCaptchaId?: string): Promise<CaptchaIssue> {
-    if (previousCaptchaId !== undefined && !/^[a-f0-9]{32}$/.test(String(previousCaptchaId))) {
+    if (previousCaptchaId !== undefined
+      && (typeof previousCaptchaId !== 'string' || !/^[a-f0-9]{32}$/.test(previousCaptchaId))) {
       throw Errors.param('验证码标识非法');
     }
     const count = await this.redis.incr(`auth:captcha:ip:${scope || 'anonymous'}`, 60);
