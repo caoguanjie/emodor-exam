@@ -40,6 +40,12 @@ export function resolveSuitePaths(selector, registry = SUITE_REGISTRY) {
   return [registry[selector]];
 }
 
+export function suiteRuntimeEnvOverrides(suitePath) {
+  return suitePath === SUITE_REGISTRY['training-video-learning']
+    ? { DB_POOL_SIZE: '2' }
+    : {};
+}
+
 export async function runSelectedSuites(suitePaths, { isInterrupted = () => false, runSuite } = {}) {
   if (typeof runSuite !== 'function') throw new TypeError('runSelectedSuites requires runSuite');
   for (const suitePath of suitePaths) {
@@ -258,6 +264,7 @@ export async function runSuiteInRuntime(suitePath, ephemeral, runState = { inter
         REDIS_PASSWORD: redis.password || '',
         API_PORT: String(apiPort),
         ...(ephemeral ? { MOCK_AI_PORT: '0', MOCK_AI_PORT_MODE: 'ephemeral' } : {}),
+        ...suiteRuntimeEnvOverrides(suitePath),
       },
     });
     await waitForLifecycleProbe('harness-created', { harnessRoot: createdHarness.root });
