@@ -54,6 +54,15 @@ node --input-type=module -e "import path from 'node:path'; import { runSuiteInRu
 - 角色赋值先取得用户行锁后提交，再并发 reset：观察到至少 2 个 `performance_schema.data_lock_waits` 后放行；角色赋值成功、reset 返回 40401，密码不变，仅角色赋值递增一代。
 - 学员 status 先取得用户行锁后提交，再并发角色赋值：观察到至少 2 个真实 lock waits 后放行；status 与角色赋值均成功，认证世代递增两次，link 落库。两种结果均符合用户行锁线性化，不引入角色预占状态。
 
+## Token / session 补充验收
+
+独立 review 指出初版只验证了数据库字段，未证明目标账号的真实会话边界。本次仅扩展 focused suite，未改生产源：
+
+- 空权限 link 与停用角色 link 账号均真实登录并完成首登改密；detail/update/status/reset 每个请求前后都用同一持久 access token 请求 `/auth/profile`，均为 200，且 `password_hash/status/auth_version` 不变。
+- 普通学员 update 前后旧 token 的 `/auth/profile` 均为 200，且 `auth_version` 不变；status 前 profile 为 200，之后为 403/40105（或等价 401/40107），状态为 0 且认证世代递增；reset 前 profile 为 200，之后为 401/40107，密码 hash 改变且认证世代递增。
+
+补充后再次运行同一 ephemeral focused suite，仍为 `4/4 测试完成`；运行期数据库、Redis、API 与凭据均为 run-owned。
+
 ## 边界与未覆盖
 
 本次只证明服务端单测、构建及隔离 API/数据库场景；未声称 PC 浏览器、H5、真实设备、生产部署或独立 review 已通过。没有运行开发库、浏览器或真实凭据，也未 push。
