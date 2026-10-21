@@ -14,6 +14,12 @@ import {
 const SUITE_A = '/owned/suite-a.mjs';
 const SUITE_B = '/owned/suite-b.mjs';
 
+test('student administrator boundary suite is registered once in aggregate selection', () => {
+  const expected = fileURLToPath(new URL('./training-student-admin-boundary.mjs', import.meta.url));
+  assert.deepEqual(resolveSuitePaths('training-student-admin-boundary'), [expected]);
+  assert.equal(resolveSuitePaths('all').filter((path) => path === expected).length, 1);
+});
+
 test('all is an aggregate selector and aliases deduplicate explicit module paths', () => {
   const registry = {
     smoke: SUITE_A,
