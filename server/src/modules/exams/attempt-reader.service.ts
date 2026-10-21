@@ -7,6 +7,7 @@ import { ExamAnswer } from '../../entities/exam-answer.entity';
 import { ExamRecord } from '../../entities/exam-record.entity';
 import { ExamRecordQuestion } from '../../entities/exam-record-question.entity';
 import { MediaService } from '../media/media.service';
+import { AccessService } from '../access/access.service';
 import { controlledQuestionMediaIds } from '../questions/question-validator';
 import type { PublishedQuestionSnapshot } from './paper-release.service';
 
@@ -35,6 +36,10 @@ export function promptMediaIds(snapshot: PublishedQuestionSnapshot): string[] {
   ]);
 }
 
+export function resultMediaIds(snapshot: PublishedQuestionSnapshot): string[] {
+  return controlledQuestionMediaIds([snapshot.analysis, snapshot.rubric]);
+}
+
 /** Public in-progress view. Standard answers, analysis and rubric never cross this boundary. */
 export function attemptQuestionView(row: AttemptQuestionRow): AttemptQuestion {
   const snapshot = row.snapshotJson;
@@ -56,13 +61,14 @@ export class AttemptReaderService implements OnModuleInit {
     @InjectRepository(ExamAnswer) private readonly answerRepo: Repository<ExamAnswer>,
     private readonly media: MediaService,
     private readonly dataSource: DataSource,
+    private readonly access: AccessService,
   ) {}
 
   onModuleInit(): void {
     this.media.registerOwnerPolicy('exam_record_question', {
       allowedPurposes: ['question'],
-      authorizeRead: (actorId, itemId, assetId) => this.canReadPromptMedia(actorId, itemId, assetId),
-      validateBinding: (manager, asset, itemId) => this.validatePromptBinding(manager, itemId, String(asset.id)),
+      authorizeRead: (actorId, itemId, assetId) => this.canReadQuestionMedia(actorId, itemId, assetId),
+      validateBinding: (manager, asset, itemId) => this.validateQuestionBinding(manager, itemId, String(asset.id)),
     });
   }
 
@@ -78,21 +84,27 @@ export class AttemptReaderService implements OnModuleInit {
     return record ? { item, record } : null;
   }
 
-  private async canReadPromptMedia(actorId: string, itemId: string, assetId?: string): Promise<boolean> {
+  private async canReadQuestionMedia(actorId: string, itemId: string, assetId?: string): Promise<boolean> {
     if (!assetId) return false;
     const resolved = await this.itemWithRecord(itemId);
-    return Boolean(
-      resolved
-      && String(resolved.record.userId) === String(actorId)
-      && promptMediaIds(resolved.item.snapshotJson).includes(String(assetId)),
-    );
+    if (!resolved) return false;
+    const prompt = promptMediaIds(resolved.item.snapshotJson).includes(String(assetId));
+    const resultOnly = resultMediaIds(resolved.item.snapshotJson).includes(String(assetId));
+    if (!prompt && !resultOnly) return false;
+    const terminal = resolved.record.status !== ExamStatus.IN_PROGRESS && Boolean(resolved.record.submittedAt);
+    if (String(resolved.record.userId) === String(actorId)) return prompt || (resultOnly && terminal);
+    const permissions = await this.access.permissions(String(actorId));
+    const canReadRecord = permissions.includes('exam_records:review') || permissions.includes('exam_records:read');
+    return canReadRecord && (prompt || (resultOnly && terminal));
   }
 
-  private async validatePromptBinding(manager: EntityManager, itemId: string, assetId: string): Promise<void> {
+  private async validateQuestionBinding(manager: EntityManager, itemId: string, assetId: string): Promise<void> {
     const resolved = await this.itemWithRecord(itemId, manager);
-    if (!resolved || !promptMediaIds(resolved.item.snapshotJson).includes(String(assetId))) {
-      throw Errors.dataForbidden('媒体不属于本次题单的题干或选项');
-    }
+    if (!resolved) throw Errors.dataForbidden('媒体不属于本次冻结题目');
+    if (promptMediaIds(resolved.item.snapshotJson).includes(String(assetId))) return;
+    const terminal = resolved.record.status !== ExamStatus.IN_PROGRESS && Boolean(resolved.record.submittedAt);
+    if (terminal && resultMediaIds(resolved.item.snapshotJson).includes(String(assetId))) return;
+    throw Errors.dataForbidden('媒体不属于当前可读的冻结题目内容');
   }
 
   private async confirmedAnswers(manager: EntityManager, recordId: string, items: ExamRecordQuestion[]): Promise<AnswerInput[]> {

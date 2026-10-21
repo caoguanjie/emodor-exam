@@ -48,6 +48,10 @@ function draftFixture(overrides: Record<string, unknown> = {}) {
     findOne: vi.fn(async ({ where }: any) => items.find((item) => String(item.id) === String(where.id)) || null),
   };
   const answerRepo: any = {
+    findOne: vi.fn(async ({ where }: any) => answers.find((answer) => (
+      String(answer.examRecordId) === String(where.examRecordId)
+      && String(answer.recordQuestionId) === String(where.recordQuestionId)
+    )) || null),
     find: vi.fn(async ({ where }: any) => answers.filter((answer) => String(answer.examRecordId) === String(where.examRecordId))),
     create: vi.fn((value: any) => ({ ...value })),
     save: vi.fn(async (values: any | any[]) => {
@@ -85,8 +89,11 @@ function draftFixture(overrides: Record<string, unknown> = {}) {
     uploadAnswer: vi.fn(async () => ({ assetId: '799', status: 'ready', durationMs: null })),
     remove: vi.fn(async () => undefined),
   };
-  const service = new AnswerDraftService(recordRepo, answerRepo, itemRepo, referenceRepo, {} as any, dataSource, media);
-  return { service, record, items, answers, references, manager, media };
+  const access: any = { permissions: vi.fn(async (actorId: string) => (
+    actorId === '8' ? ['exam_records:review'] : actorId === '10' ? ['exam_records:read'] : []
+  )) };
+  const service = new AnswerDraftService(recordRepo, answerRepo, itemRepo, referenceRepo, {} as any, dataSource, media, access);
+  return { service, record, items, answers, references, manager, media, access };
 }
 
 describe('AnswerDraftService persistent full drafts', () => {
@@ -163,7 +170,8 @@ describe('AnswerDraftService persistent full drafts', () => {
   });
 
   it('registers a distinct answer policy and rejects owner or attempt mismatches while binding', async () => {
-    const { service, media, manager, references } = draftFixture();
+    const fixture = draftFixture();
+    const { service, media, manager, references } = fixture;
     service.onModuleInit();
     expect(media.registerOwnerPolicy).toHaveBeenCalledTimes(1);
     expect(media.registerOwnerPolicy.mock.calls[0][0]).toBe('exam_answer_item');
@@ -171,10 +179,18 @@ describe('AnswerDraftService persistent full drafts', () => {
     expect(policy.allowedPurposes).toEqual(['answer']);
     await expect(policy.authorizeRead('9', '504', '701')).resolves.toBe(true);
     await expect(policy.authorizeRead('8', '504', '701')).resolves.toBe(false);
+    fixture.answers.push({
+      id: '1', examRecordId: '41', recordQuestionId: '504', questionId: '104',
+      selected: null, assetIds: ['701'], gainedScore: null, gradingVersion: 0,
+    });
+    fixture.record.status = 'submitted';
+    await expect(policy.authorizeRead('8', '504', '701')).resolves.toBe(true);
+    await expect(policy.authorizeRead('10', '504', '701')).resolves.toBe(false);
     await expect(policy.validateBinding(manager, {
       id: '701', purpose: 'answer', ownerId: '9', uploadedBy: '8', mediaKind: 'image', status: 'ready',
     }, '504')).rejects.toMatchObject({ code: 40302 });
 
+    fixture.record.status = 'in_progress';
     references.push({ assetId: '799', ownerType: 'exam_answer_item', ownerId: 'other-attempt-item' });
     await expect(policy.validateBinding(manager, {
       id: '799', purpose: 'answer', ownerId: '9', uploadedBy: '9', mediaKind: 'image', status: 'ready',
@@ -199,7 +215,7 @@ describe('AttemptReaderService persistent recovery', () => {
       [ExamRecord, txRecordRepo], [ExamRecordQuestion, txItemRepo], [ExamAnswer, txAnswerRepo],
     ]).get(entity) };
     const dataSource: any = { transaction: vi.fn(async (_isolation: string, work: any) => work(txManager)) };
-    const reader = new (AttemptReaderService as any)(recordRepo, itemRepo, answerRepo, fixture.media, dataSource) as AttemptReaderService;
+    const reader = new (AttemptReaderService as any)(recordRepo, itemRepo, answerRepo, fixture.media, dataSource, fixture.access) as AttemptReaderService;
 
     const recovered = await reader.forStudent('9', '41');
 
@@ -209,6 +225,35 @@ describe('AttemptReaderService persistent recovery', () => {
     expect(recordRepo.findOne).not.toHaveBeenCalled();
     expect(itemRepo.find).not.toHaveBeenCalled();
     expect(answerRepo.find).not.toHaveBeenCalled();
+  });
+
+  it('keeps prompt and result-only question media separated by terminal state and record permissions', async () => {
+    const fixture = draftFixture();
+    fixture.items[0].snapshotJson = {
+      type: 'single', stem: '<p>题干<img data-media-id="801"></p>',
+      options: [{ key: 'A', text: '甲' }], answer: [0],
+      analysis: '<p>解析<img data-media-id="802"></p>', rubric: null,
+    };
+    const reader = new (AttemptReaderService as any)(
+      fixture.manager.getRepository(ExamRecord), fixture.manager.getRepository(ExamRecordQuestion),
+      fixture.manager.getRepository(ExamAnswer), fixture.media, { transaction: vi.fn() }, fixture.access,
+    ) as AttemptReaderService;
+    reader.onModuleInit();
+    const policy = fixture.media.registerOwnerPolicy.mock.calls.at(-1)[1];
+
+    await expect(policy.authorizeRead('9', '501', '801')).resolves.toBe(true);
+    await expect(policy.authorizeRead('9', '501', '802')).resolves.toBe(false);
+    await expect(policy.authorizeRead('8', '501', '801')).resolves.toBe(true);
+    await expect(policy.authorizeRead('8', '501', '802')).resolves.toBe(false);
+    await expect(policy.validateBinding(fixture.manager, { id: '802' }, '501')).rejects.toMatchObject({ code: 40302 });
+
+    fixture.record.status = 'submitted';
+    fixture.record.submittedAt = new Date();
+    await expect(policy.authorizeRead('9', '501', '802')).resolves.toBe(true);
+    await expect(policy.authorizeRead('8', '501', '802')).resolves.toBe(true);
+    await expect(policy.authorizeRead('10', '501', '802')).resolves.toBe(true);
+    await expect(policy.authorizeRead('11', '501', '802')).resolves.toBe(false);
+    await expect(policy.validateBinding(fixture.manager, { id: '802' }, '501')).resolves.toBeUndefined();
   });
 });
 
