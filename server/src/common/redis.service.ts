@@ -188,6 +188,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.set(`auth:blacklist:${jti}`, '1', ttlSeconds);
   }
 
+  /** 原子领取 refresh JTI；同一枚 refresh 并发只能有一个请求继续签发。 */
+  async claimRefreshJti(jti: string, ttlSeconds: number): Promise<boolean> {
+    return this.setNx(`auth:refresh:claim:${jti}`, '1', ttlSeconds);
+  }
+
   /** 登出吊销：EXISTS auth:blacklist:{jti}（jti 已由调用方白名单校验） */
   async isTokenBlacklisted(jti: string): Promise<boolean> {
     return this.exists(`auth:blacklist:${jti}`);

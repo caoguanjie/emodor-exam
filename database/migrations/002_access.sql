@@ -68,3 +68,33 @@ CREATE TABLE IF NOT EXISTS `auth_session` (
   KEY `idx_auth_session_user_active` (`user_id`, `revoked_at`),
   KEY `idx_auth_session_last_seen` (`last_seen_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='认证会话';
+
+-- Authentication generation/password state/login facts stay in the same
+-- A3 migration as the access/session tables so an accepted A1 install has one
+-- ordered, resumable upgrade and no second migration ownership boundary.
+
+-- @step add_auth_version
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sys_user' AND COLUMN_NAME = 'auth_version' AND COLUMN_TYPE = 'int unsigned' AND IS_NULLABLE = 'NO' AND COLUMN_DEFAULT = '0') THEN 1 ELSE 0 END AS complete;
+ALTER TABLE `sys_user` ADD COLUMN `auth_version` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `status`;
+
+-- @step add_force_password_change
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sys_user' AND COLUMN_NAME = 'force_password_change' AND COLUMN_TYPE = 'tinyint' AND IS_NULLABLE = 'NO' AND COLUMN_DEFAULT = '0') THEN 1 ELSE 0 END AS complete;
+ALTER TABLE `sys_user` ADD COLUMN `force_password_change` TINYINT NOT NULL DEFAULT 0 AFTER `auth_version`;
+
+-- @step add_login_count
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sys_user' AND COLUMN_NAME = 'login_count' AND COLUMN_TYPE = 'int unsigned' AND IS_NULLABLE = 'NO' AND COLUMN_DEFAULT = '0') THEN 1 ELSE 0 END AS complete;
+ALTER TABLE `sys_user` ADD COLUMN `login_count` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `force_password_change`;
+
+-- @step add_last_login_ip
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sys_user' AND COLUMN_NAME = 'last_login_ip' AND COLUMN_TYPE = 'varchar(64)' AND IS_NULLABLE = 'YES' AND COLUMN_DEFAULT IS NULL) THEN 1 ELSE 0 END AS complete;
+ALTER TABLE `sys_user` ADD COLUMN `last_login_ip` VARCHAR(64) NULL AFTER `last_login_at`;
+
+-- @step add_roles_configured
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sys_user' AND COLUMN_NAME = 'roles_configured' AND COLUMN_TYPE = 'tinyint' AND IS_NULLABLE = 'NO' AND COLUMN_DEFAULT = '0') THEN 1 ELSE 0 END AS complete;
+ALTER TABLE `sys_user` ADD COLUMN `roles_configured` TINYINT NOT NULL DEFAULT 0 AFTER `last_login_ip`;
+
+-- @step backfill_force_password_change
+-- @check SELECT CASE WHEN COUNT(*) = 0 THEN 1 ELSE 0 END AS complete FROM `sys_user` WHERE `force_password_change` <> CASE WHEN `last_login_at` IS NULL THEN 1 ELSE 0 END;
+UPDATE `sys_user`
+SET `force_password_change` = CASE WHEN `last_login_at` IS NULL THEN 1 ELSE 0 END
+WHERE `force_password_change` <> CASE WHEN `last_login_at` IS NULL THEN 1 ELSE 0 END;

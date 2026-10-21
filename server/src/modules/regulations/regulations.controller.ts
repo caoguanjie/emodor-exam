@@ -18,6 +18,7 @@ import { DtoValidationPipe } from '../../common/dto-validation.pipe';
 import { SysUser } from '../../entities/sys-user.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { AccessService } from '../access/access.service';
 
 class CreateRegulationDto {
   @IsString() @MinLength(1) @MaxLength(128) title!: string;
@@ -58,14 +59,22 @@ export class RegulationsController {
     private readonly content: ContentService,
     private readonly parsePipeline: ParsePipelineService,
     @InjectRepository(SysUser) private readonly userRepo: Repository<SysUser>,
+    private readonly access: AccessService,
   ) {}
 
   private async withDepartment(user: AuthUser): Promise<{ id: number; role: string; departmentId: string | null }> {
-    if (user.role !== RoleEnum.EMPLOYEE) {
+    const permissions = await this.access.permissions(user.id);
+    const canReadAsAdmin = user.role === RoleEnum.SUPER_ADMIN
+      || (user.role === RoleEnum.REGULATION_ADMIN && permissions.includes('regulations:read'));
+    if (canReadAsAdmin) {
       return { id: user.id, role: user.role, departmentId: null };
     }
     const u = await this.userRepo.findOne({ where: { id: String(user.id) } });
-    return { id: user.id, role: user.role, departmentId: u?.departmentId ?? null };
+    // A regulation_admin with explicit business roles cleared is still a
+    // legacy system identity, but it must not retain the unrestricted content
+    // data scope. ContentService uses employee semantics for this path so the
+    // published scope is enforced from the current account/department state.
+    return { id: user.id, role: RoleEnum.EMPLOYEE, departmentId: u?.departmentId ?? null };
   }
 
   // ---- 3.4.1 管理侧（制度管理角色）----

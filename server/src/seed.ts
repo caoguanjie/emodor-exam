@@ -44,7 +44,12 @@ export async function ensureSeedData(ds: DataSource): Promise<void> {
         departmentId: null,
         role: 'super_admin',
         status: 1,
+        authVersion: 0,
+        forcePasswordChange: 1,
+        loginCount: 0,
         lastLoginAt: null,
+        lastLoginIp: null,
+        rolesConfigured: 0,
       });
       console.log('[seed] 超级管理员 admin 已创建（首登强制改密）；初始口令仅经环境变量注入，不落日志');
     }

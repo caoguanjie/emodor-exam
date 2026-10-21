@@ -43,8 +43,8 @@ await conn.execute(
    ON DUPLICATE KEY UPDATE id = id`,
 );
 await conn.execute(
-  `INSERT INTO sys_user (id, username, password_hash, real_name, employee_no, department_id, role, status, last_login_at)
-   VALUES (1, 'admin', ?, '超级管理员', NULL, NULL, 'super_admin', 1, NULL)
+  `INSERT INTO sys_user (id, username, password_hash, real_name, employee_no, department_id, role, status, auth_version, force_password_change, login_count, last_login_at, last_login_ip, roles_configured)
+   VALUES (1, 'admin', ?, '超级管理员', NULL, NULL, 'super_admin', 1, 0, 1, 0, NULL, NULL, 0)
    ON DUPLICATE KEY UPDATE id = id`,
   [hash],
 );

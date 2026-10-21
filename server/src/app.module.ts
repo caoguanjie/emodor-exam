@@ -106,10 +106,10 @@ const config = loadConfig();
     AiConfigService, AiGatewayService, PdfVisionService, QuestionGenerationService, QuestionReviewService, PaperService,
     LearningSessionService, ExamService, ShuffleService, GradingService, StatisticsService,
     RedisService, AuditService, TasksService,
-    // 守卫链（07 册 2.3.2）：① JWT 认证 → ② RBAC 角色（全局顺序注册）
+    // 守卫链（07 册 2.3.2）：① JWT 认证 → ② 细权限映射 → ③ 兼容角色边界
     { provide: APP_GUARD, useClass: JwtAuthGuard },
-    { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
     // 统一响应信封 { code, message, data }（README 3.4）
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
     // DTO 校验（class-validator 白名单 → 40001）

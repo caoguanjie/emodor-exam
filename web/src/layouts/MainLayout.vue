@@ -79,7 +79,9 @@ const router = useRouter();
 const auth = useAuthStore();
 
 const roleLabel = computed(
-  () => ({ super_admin: '超级管理员', regulation_admin: '制度管理员', employee: '员工' }[auth.user?.role || 'employee'] || '员工'),
+  () => auth.user?.role === 'super_admin' ? '超级管理员'
+    : auth.user?.role === 'regulation_admin' ? '制度管理员'
+      : auth.user?.permissions?.length ? '业务管理员' : '员工',
 );
 
 const avatarChar = computed(() => (auth.user?.real_name || '用').slice(0, 1));

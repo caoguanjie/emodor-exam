@@ -53,6 +53,16 @@ router.beforeEach(async (to) => {
     const restored = await auth.restore();
     if (!restored) return { path: '/login', query: to.fullPath !== '/' ? { redirect: to.fullPath } : {} };
   }
+  // sessionStorage can contain a principal from before a role/permission
+  // change. Re-read the server-authoritative profile on navigation so menus
+  // and write controls do not outlive the current token's permissions.
+  if (auth.isLoggedIn && !auth.needChangePassword) {
+    try {
+      await auth.fetchProfile();
+    } catch {
+      if (!auth.isLoggedIn) return { path: '/login', query: { redirect: to.fullPath } };
+    }
+  }
   if (auth.needChangePassword && to.path !== '/change-password') return '/change-password';
   if (to.meta.admin && !auth.isAdmin) return '/my/regulations';
   if (to.meta.superOnly && !auth.isSuperAdmin) return '/my/regulations';

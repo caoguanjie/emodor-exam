@@ -27,8 +27,8 @@
         <el-option label="多选" value="multiple" />
       </el-select>
       <div style="flex:1" />
-      <el-button @click="manualVisible = true">人工录入题目</el-button>
-        <el-button type="primary" :disabled="!regulations.length" @click="genVisible = true">发起 AI 出题</el-button>
+      <el-button v-if="auth.can('questions:write')" @click="manualVisible = true">人工录入题目</el-button>
+        <el-button v-if="auth.can('ai:write')" type="primary" :disabled="!regulations.length" @click="genVisible = true">发起 AI 出题</el-button>
     </div>
 
     <el-table v-loading="loading" :data="list">
@@ -54,10 +54,10 @@
       <el-table-column label="操作" width="230" fixed="right">
         <template #default="{ row }">
           <el-button text size="small" type="primary" @click="openView(row)">查看</el-button>
-          <el-button v-if="row.status === 'pending'" text size="small" type="success" @click="review(row, 'approved')">通过</el-button>
-          <el-button v-if="row.status !== 'rejected'" text size="small" type="warning" @click="review(row, 'rejected')">驳回</el-button>
-          <el-button text size="small" @click="openEdit(row)">编辑</el-button>
-          <el-button v-if="row.source === 'ai'" text size="small" @click="regenerate(row)">重新生成</el-button>
+          <el-button v-if="row.status === 'pending' && auth.can('questions:review')" text size="small" type="success" @click="review(row, 'approved')">通过</el-button>
+          <el-button v-if="row.status !== 'rejected' && auth.can('questions:review')" text size="small" type="warning" @click="review(row, 'rejected')">驳回</el-button>
+          <el-button v-if="auth.can('questions:write')" text size="small" @click="openEdit(row)">编辑</el-button>
+          <el-button v-if="row.source === 'ai' && auth.can('questions:write')" text size="small" @click="regenerate(row)">重新生成</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -90,7 +90,7 @@
       </el-form>
       <template #footer>
         <el-button @click="genVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="sumScore !== 100 || !genForm.regulation_id" @click="startGenerate">发起出题</el-button>
+        <el-button v-if="auth.can('ai:write')" type="primary" :disabled="sumScore !== 100 || !genForm.regulation_id" @click="startGenerate">发起出题</el-button>
       </template>
     </el-dialog>
 
@@ -115,23 +115,23 @@
       <el-form label-width="80px">
         <el-form-item label="题型"><el-input :value="editForm.type === 'single' ? '单选' : '多选'" disabled /></el-form-item>
         <el-form-item label="题干">
-          <el-input v-model="editForm.stem" type="textarea" :rows="3" :disabled="editMode === 'view' || inUseLocked" />
+          <el-input v-model="editForm.stem" type="textarea" :rows="3" :disabled="editMode === 'view' || inUseLocked || !auth.can('questions:write')" />
         </el-form-item>
         <el-form-item v-for="(o, i) in editForm.options" :key="i" :label="`选项 ${o.key || String.fromCharCode(65 + i)}`">
           <div style="display:flex; gap:8px; width:100%">
-            <el-input v-model="o.text" :disabled="editMode === 'view' || inUseLocked" />
+            <el-input v-model="o.text" :disabled="editMode === 'view' || inUseLocked || !auth.can('questions:write')" />
             <el-checkbox :model-value="(editForm.answer || []).includes(i)"
-              :disabled="editMode === 'view' || inUseLocked"
+              :disabled="editMode === 'view' || inUseLocked || !auth.can('questions:write')"
               @update:model-value="(v: any) => toggleAnswer(i, v)">正确</el-checkbox>
           </div>
         </el-form-item>
-        <el-form-item label="解析"><el-input v-model="editForm.analysis" type="textarea" :rows="2" /></el-form-item>
-        <el-form-item label="建议分值"><el-input-number v-model="editForm.score" :min="0.5" :max="100" :step="0.5" :disabled="editMode === 'view' || inUseLocked" /></el-form-item>
+        <el-form-item label="解析"><el-input v-model="editForm.analysis" type="textarea" :rows="2" :disabled="editMode === 'view' || !auth.can('questions:write')" /></el-form-item>
+        <el-form-item label="建议分值"><el-input-number v-model="editForm.score" :min="0.5" :max="100" :step="0.5" :disabled="editMode === 'view' || inUseLocked || !auth.can('questions:write')" /></el-form-item>
         <el-alert v-if="inUseLocked" type="warning" :closable="false" title="该题目正被进行中的考试引用，仅允许修改解析（防判分依据漂移）" />
       </el-form>
       <template #footer>
         <el-button @click="editVisible = false">关闭</el-button>
-        <el-button v-if="editMode === 'edit'" type="primary" @click="saveEdit">保存</el-button>
+        <el-button v-if="editMode === 'edit' && auth.can('questions:write')" type="primary" @click="saveEdit">保存</el-button>
       </template>
     </el-dialog>
 
@@ -161,7 +161,7 @@
       </el-form>
       <template #footer>
         <el-button @click="manualVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveManual">保存（source=manual）</el-button>
+        <el-button v-if="auth.can('questions:write')" type="primary" @click="saveManual">保存（source=manual）</el-button>
       </template>
     </el-dialog>
   </div>
@@ -171,7 +171,9 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
+import { useAuthStore } from '../../stores/auth';
 
+const auth = useAuthStore();
 const list = ref<any[]>([]);
 const total = ref(0);
 const loading = ref(false);

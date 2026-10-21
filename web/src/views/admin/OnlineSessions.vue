@@ -9,7 +9,7 @@
       <el-table-column prop="created_at" label="登录时间" min-width="170" />
       <el-table-column prop="last_seen_at" label="最近活动" min-width="170" />
       <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'info'">{{ row.status === 'active' ? '在线' : '已下线' }}</el-tag></template></el-table-column>
-      <el-table-column label="操作" width="110" fixed="right"><template #default="{ row }"><el-button v-if="row.status === 'active'" text type="danger" @click="revoke(row)">强制下线</el-button></template></el-table-column>
+      <el-table-column label="操作" width="110" fixed="right"><template #default="{ row }"><el-button v-if="row.status === 'active' && auth.can('sessions:write')" text type="danger" @click="revoke(row)">强制下线</el-button></template></el-table-column>
     </el-table>
     <el-pagination style="margin-top:16px; justify-content:flex-end" layout="total, prev, pager, next" :total="total" :page-size="pageSize" v-model:current-page="page" @current-change="load" />
   </div>
@@ -19,7 +19,9 @@
 import { onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
+import { useAuthStore } from '../../stores/auth';
 
+const auth = useAuthStore();
 const rows = ref<any[]>([]);
 const total = ref(0);
 const page = ref(1);

@@ -90,7 +90,7 @@ test('ended exam records do not block registry bootstrap', async () => {
   const conn = await connectionFor(database);
   await conn.query('CREATE TABLE exam_record (id INT PRIMARY KEY, status VARCHAR(16) NOT NULL)');
   await conn.execute("INSERT INTO exam_record (id, status) VALUES (1, 'submitted')");
-  await applyMigrations({ connection: conn, database });
+  await applyMigrations({ connection: conn, database, migrations: [await migration()] });
   const [[registry]] = await conn.query(`SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${REGISTRY_TABLE}'`);
   assert.equal(Number(registry.count), 1);
   await conn.end();
@@ -112,7 +112,7 @@ test('legacy registry without progress is upgraded before normal step bookkeepin
     KEY idx_schema_migration_status (status)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`);
   await conn.execute(`INSERT INTO \`${migrationTable}\` (migration_id, checksum, status, attempts) VALUES (?, ?, 'applied', 1)`, [base.id, base.checksum]);
-  await applyMigrations({ connection: conn, database });
+  await applyMigrations({ connection: conn, database, migrations: [await migration()] });
   const [[column]] = await conn.query(`SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${migrationTable}' AND COLUMN_NAME = 'progress'`);
   assert.equal(column.DATA_TYPE, 'json');
   const [[row]] = await conn.query(`SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = ?`, [base.id]);
@@ -145,7 +145,7 @@ test('registry shape drift is rejected by check and apply before changing regist
     await conn.execute(`INSERT INTO \`${migrationTable}\` (migration_id, checksum, status, attempts, progress) VALUES (?, ?, 'applied', 7, ?)`, [base.id, base.checksum, variant.progressValue]);
     const [[before]] = await conn.query(`SELECT status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id = ?`, [base.id]);
     await assert.rejects(() => inspectMigrations({ connection: conn, database }), /schema_migration|progress|nullable|incompatible|drift/i);
-    await assert.rejects(() => applyMigrations({ connection: conn, database }), /schema_migration|progress|nullable|incompatible|drift/i);
+    await assert.rejects(() => applyMigrations({ connection: conn, database, migrations: [base] }), /schema_migration|progress|nullable|incompatible|drift/i);
     const [[after]] = await conn.query(`SELECT status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id = ?`, [base.id]);
     assert.deepEqual(after, before);
     await conn.end();
@@ -169,7 +169,11 @@ test('upgrade preserves existing rows and converges INFORMATION_SCHEMA with init
   assert.equal(row.name, '保留数据');
   const [[accessMigration]] = await upgrade.query(`SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = '002_access'`);
   assert.equal(accessMigration.status, 'applied');
-  assert.deepEqual(accessMigration.progress, ['create_sys_role', 'create_sys_permission', 'create_sys_role_permission', 'create_sys_user_role', 'create_auth_session']);
+  assert.deepEqual(accessMigration.progress, [
+    'create_sys_role', 'create_sys_permission', 'create_sys_role_permission', 'create_sys_user_role',
+    'create_auth_session', 'add_auth_version', 'add_force_password_change', 'add_login_count',
+    'add_last_login_ip', 'add_roles_configured', 'backfill_force_password_change',
+  ]);
   const [initTables] = await admin.query('SELECT TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME', [initDb]);
   const [upgradeTables] = await admin.query('SELECT TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME', [upgradeDb]);
   assert.deepEqual(upgradeTables, initTables);
@@ -380,10 +384,11 @@ ALTER TABLE killed_owner_fixture ADD COLUMN marker INT NOT NULL DEFAULT 0;
 test('checksum conflict and malformed or multi-statement definitions reject before writes', async () => {
   const database = await createDatabase();
   const conn = await connectionFor(database);
-  await applyMigrations({ connection: conn, database });
+  const base = await migration();
+  await applyMigrations({ connection: conn, database, migrations: [base] });
   const [[before]] = await conn.query(`SELECT status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id = '000_migration_registry'`);
   await conn.execute(`UPDATE \`${migrationTable}\` SET checksum = ? WHERE migration_id = '000_migration_registry'`, ['0'.repeat(64)]);
-  await assert.rejects(() => applyMigrations({ connection: conn, database }), /checksum|校验/i);
+  await assert.rejects(() => applyMigrations({ connection: conn, database, migrations: [base] }), /checksum|校验/i);
   const [[after]] = await conn.query(`SELECT status, attempts, progress FROM \`${migrationTable}\` WHERE migration_id = '000_migration_registry'`);
   assert.deepEqual(after, before);
   assert.throws(() => parseMigrationText('001_unprobed', 'CREATE TABLE x (id INT);'), /step|check|probe/i);
@@ -519,13 +524,18 @@ test('formal CLI check is read-only and apply upgrades a non-test fixture databa
   databases.add(formalDatabase);
   validateMigrationTarget(formalDatabase);
   await admin.query(`CREATE DATABASE \`${formalDatabase}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`);
+  const acceptedA1Sql = execFileSync('git', ['show', 'a5955da4bf8022757008322d49b2db58d15aef74:database/init.sql'], { cwd: ROOT, encoding: 'utf8' });
+  const formalSchema = acceptedA1Sql
+    .replace('CREATE DATABASE IF NOT EXISTS `ruleexam`', `CREATE DATABASE IF NOT EXISTS \`${formalDatabase}\``)
+    .replace('USE `ruleexam`', `USE \`${formalDatabase}\``);
+  await admin.query(formalSchema);
   const credentials = { DB_HOST: services.mysql.host, DB_PORT: String(services.mysql.port), DB_USERNAME: services.mysql.user, DB_PASSWORD: services.mysql.password };
   const env = { ...process.env, ...credentials, DB_DATABASE: formalDatabase };
   try {
     const check = spawnSync(process.execPath, ['database/migrate.mjs', '--check'], { cwd: ROOT, env, encoding: 'utf8' });
     assert.equal(check.status, 0, check.stderr);
     const [[before]] = await admin.query('SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?', [formalDatabase, migrationTable]);
-    assert.equal(Number(before.count), 0);
+    assert.equal(Number(before.count), 1);
 
     const apply = spawnSync(process.execPath, ['database/migrate.mjs', '--apply'], { cwd: ROOT, env, encoding: 'utf8' });
     assert.equal(apply.status, 0, apply.stderr);

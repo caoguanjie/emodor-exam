@@ -42,7 +42,7 @@ function parseExpirySeconds(expr: string): number {
 /**
  * 认证服务（05 册 2.4.1 / 07 册 2.1 - 2.2）：
  * 双令牌（access 2h / refresh 7d 轮换）、bcrypt cost=12、
- * 登录失败双计数防爆破、首次登录强制改密（last_login_at IS NULL → 受限令牌 pwd_pending）。
+ * 登录失败双计数防爆破、独立 force_password_change 强制改密与认证世代吊销。
  */
 @Injectable()
 export class AuthService {
@@ -64,12 +64,13 @@ export class AuthService {
     this.refreshTtlDays = this.config.jwt.refreshExpiresDays;
   }
 
-  private sign(user: { id: number; username: string; role: string }, type: 'access' | 'refresh', opts?: { pwdPending?: boolean; sid?: string }) {
+  private sign(user: { id: number; username: string; role: string; authVersion?: number }, type: 'access' | 'refresh', opts?: { pwdPending?: boolean; sid?: string }) {
     const ttl = type === 'access' ? this.accessTtl : this.refreshTtlDays * 86400;
     const payload: Record<string, unknown> = {
       sub: String(user.id),
       username: user.username,
       role: user.role,
+      auth_version: Number(user.authVersion || 0),
       type,
       jti: randomBytes(16).toString('hex'),
     };
@@ -91,6 +92,18 @@ export class AuthService {
   /** 密码强度策略（07 册 2.2.2）：≥8 位、含字母与数字、不含个人信息 ≥3 字符子串、非常见弱口令 */
   validatePasswordStrength(password: string, user?: { username?: string; employeeNo?: string | null; realName?: string }) {
     assertPasswordStrength(password, user, '新密码');
+  }
+
+  private passwordChangeRequired(user: SysUser): boolean {
+    // A1 rows are backfilled by 002_access; retain the NULL fallback for
+    // a short compatibility window when a legacy entity is read during rollout.
+    return user.forcePasswordChange === undefined
+      ? user.lastLoginAt === null
+      : Number(user.forcePasswordChange) === 1;
+  }
+
+  private authVersion(user: SysUser): number {
+    return Number.isInteger(Number(user.authVersion)) ? Number(user.authVersion) : 0;
   }
 
   async login(username: string, password: string, ip: string | null, req: Request, res: Response, captchaId?: string, captchaCode?: string) {
@@ -138,26 +151,32 @@ export class AuthService {
     }
 
     await this.redis.clearLoginFail(username);
-    const firstLogin = user.lastLoginAt === null;
-    const core = { id: Number(user.id), username: user.username, role: user.role };
-    const session = await this.sessions.create(user.id, ip, req.get('user-agent') || null);
+    // 真实密码登录（包括首次 pending 登录）都计入成功统计；refresh
+    // 不经过这里，因此不会伪造登录次数/IP/时间。
+    const loggedInUser = await this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(SysUser);
+      const current = await repo.findOne({ where: { id: String(user.id) } });
+      if (!current || current.status === 0) throw Errors.accountDisabled();
+      current.loginCount = Number(current.loginCount || 0) + 1;
+      current.lastLoginAt = new Date();
+      current.lastLoginIp = ip;
+      return repo.save(current);
+    });
+    const firstLogin = this.passwordChangeRequired(loggedInUser);
+    const core = { id: Number(loggedInUser.id), username: loggedInUser.username, role: loggedInUser.role, authVersion: this.authVersion(loggedInUser) };
+    const session = await this.sessions.create(loggedInUser.id, ip, req.get('user-agent') || null);
     const access = this.sign(core, 'access', { pwdPending: firstLogin, sid: session.sid });
     const refresh = this.sign(core, 'refresh', { sid: session.sid });
     this.setRefreshCookie(res, refresh);
-
-    // 首次登录（受限令牌阶段）不写 last_login_at（07 册 2.2.3，防绕过强制改密）
-    if (!firstLogin) {
-      await this.userRepo.update(user.id, { lastLoginAt: new Date() });
-    }
     this.audit.log({
-      actor_id: Number(user.id), actor_name: username, action: 'auth.login', object_type: 'sys_user',
-      object_id: user.id, detail: { first_login: firstLogin }, result: 'success', source_ip: ip,
+      actor_id: Number(loggedInUser.id), actor_name: username, action: 'auth.login', object_type: 'sys_user',
+      object_id: loggedInUser.id, detail: { first_login: firstLogin }, result: 'success', source_ip: ip,
     });
     return {
       access_token: access,
       expires_in: this.accessTtl,
       force_change_password: firstLogin,
-      user: { ...this.sanitize(user), permissions: await this.access.permissions(user.id) },
+      user: { ...this.sanitize(loggedInUser), permissions: await this.access.permissions(loggedInUser.id) },
     };
   }
 
@@ -175,27 +194,28 @@ export class AuthService {
     if (!KEY_COMPONENT_PATTERN.test(refreshJti)) throw Errors.refreshTokenInvalid();
     if (await this.redis.isTokenBlacklisted(refreshJti)) throw Errors.tokenRevoked();
     const sid = typeof payload.sid === 'string' ? payload.sid : undefined;
-    if (sid && await this.sessions.isRevoked(sid)) throw Errors.tokenRevoked();
+    if (sid && (!/^[a-f0-9]{48}$/.test(sid) || await this.sessions.isRevoked(sid))) throw Errors.tokenRevoked();
     const userId = Number(payload.sub);
     const user = await this.userRepo.findOne({ where: { id: String(userId) } });
     if (!user || user.status === 0) throw Errors.refreshTokenInvalid();
+    if (Number(payload.auth_version ?? 0) !== this.authVersion(user)) throw Errors.tokenRevoked();
     // 用户级封禁同样适用于 refresh 轮换路径（07 册 2.1.4）
     const blockTs = await this.redis.getTokenBlockTs(userId);
     if (blockTs && Number(payload.iat) < Number(blockTs)) throw Errors.tokenRevoked();
 
-    const core = { id: Number(user.id), username: user.username, role: user.role };
-    const firstLogin = user.lastLoginAt === null;
+    const core = { id: Number(user.id), username: user.username, role: user.role, authVersion: this.authVersion(user) };
+    const firstLogin = this.passwordChangeRequired(user);
+    const refreshRemaining = Math.max(1, this.refreshTtlDays * 86400 - (Math.floor(Date.now() / 1000) - Number(payload.iat || 0)));
+    // Claim before minting either successor. This closes the GET/SET race in
+    // which two simultaneous refresh requests both passed the blacklist read.
+    if (!await this.redis.claimRefreshJti(refreshJti, refreshRemaining)) throw Errors.tokenRevoked();
     const session = sid ? { sid } : await this.sessions.create(user.id, ip, null);
     if (sid) await this.sessions.touch(sid);
     const access = this.sign(core, 'access', { pwdPending: firstLogin, sid: session.sid });
     const newRefresh = this.sign(core, 'refresh', { sid: session.sid });
     // 轮换必须废弃前一个 refresh，不能等到自然过期。
-    const refreshRemaining = Math.max(1, this.refreshTtlDays * 86400 - (Math.floor(Date.now() / 1000) - Number(payload.iat || 0)));
     await this.redis.blacklistJti(refreshJti, refreshRemaining);
     this.setRefreshCookie(res, newRefresh);
-    if (!firstLogin) {
-      await this.userRepo.update(user.id, { lastLoginAt: new Date() });
-    }
     return { access_token: access, expires_in: this.accessTtl, force_change_password: firstLogin };
   }
 
@@ -214,15 +234,21 @@ export class AuthService {
     this.validatePasswordStrength(newPassword, user);
 
     const hash = await bcrypt.hash(newPassword, 12);
-    // 同一事务：覆写哈希 + 收口 last_login_at（首次登录强制改密的收口点，07 册 2.2.3）
-    await this.dataSource.transaction(async (m) => {
+    // 同一事务：覆写哈希、清除独立强制改密标志、递增认证世代、吊销
+    // durable sessions，并创建新会话；提交后才写 Redis 快速吊销标记。
+    const changed = await this.dataSource.transaction(async (m) => {
       const repo = m.getRepository(SysUser);
       const u = await repo.findOne({ where: { id: String(userId) } });
       if (!u) throw Errors.notFound();
       u.passwordHash = hash;
-      if (u.lastLoginAt === null) u.lastLoginAt = new Date();
+      u.forcePasswordChange = 0;
+      u.authVersion = this.authVersion(u) + 1;
+      const oldSids = await this.sessions.invalidateUser(m, userId);
+      const session = await this.sessions.create(userId, ip, req?.get('user-agent') || null, m);
       await repo.save(u);
+      return { user: u, oldSids, session };
     });
+    await this.sessions.markRevoked(changed.oldSids);
     // 写用户级封禁键：iat 早于封禁时刻的旧令牌（access 与 refresh）全部失效（07 册 2.1.4）
     await this.redis.setUserBlock(userId, Math.floor(Date.now() / 1000), this.refreshTtlDays * 86400);
     if (currentUser?.jti && KEY_COMPONENT_PATTERN.test(currentUser.jti)) {
@@ -237,16 +263,13 @@ export class AuthService {
         }
       } catch { /* 无效旧 Cookie 不影响已完成的密码更新 */ }
     }
-    if (currentUser?.sid) await this.sessions.revokeBySid(currentUser.sid, userId);
-
-    const core = { id: userId, username: user.username, role: user.role };
-    const session = await this.sessions.create(userId, ip, req?.get('user-agent') || null);
-    const access = this.sign(core, 'access', { sid: session.sid });
-    const refresh = this.sign(core, 'refresh', { sid: session.sid });
+    const core = { id: userId, username: changed.user.username, role: changed.user.role, authVersion: this.authVersion(changed.user) };
+    const access = this.sign(core, 'access', { sid: changed.session.sid });
+    const refresh = this.sign(core, 'refresh', { sid: changed.session.sid });
     this.setRefreshCookie(res, refresh);
     this.audit.log({
-      actor_id: userId, actor_name: user.username, action: 'auth.password.change', object_type: 'sys_user',
-      object_id: user.id, detail: {}, result: 'success', source_ip: ip,
+      actor_id: userId, actor_name: changed.user.username, action: 'auth.password.change', object_type: 'sys_user',
+      object_id: changed.user.id, detail: {}, result: 'success', source_ip: ip,
     });
     return { access_token: access, expires_in: this.accessTtl };
   }
@@ -292,7 +315,11 @@ export class AuthService {
       phone: user.phone,
       email: user.email,
       status: user.status,
+      auth_version: this.authVersion(user),
+      force_password_change: this.passwordChangeRequired(user),
+      login_count: Number(user.loginCount || 0),
       last_login_at: user.lastLoginAt,
+      last_login_ip: user.lastLoginIp,
       created_at: user.createdAt,
     };
   }

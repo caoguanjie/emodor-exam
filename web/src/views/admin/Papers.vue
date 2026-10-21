@@ -15,7 +15,7 @@
         <el-option label="已归档" value="archived" />
       </el-select>
       <div style="flex:1" />
-      <el-button type="primary" @click="createVisible = true">创建试卷</el-button>
+      <el-button v-if="auth.can('papers:write')" type="primary" @click="createVisible = true">创建试卷</el-button>
     </div>
 
     <el-table v-loading="loading" :data="list">
@@ -61,7 +61,7 @@
       </el-form>
       <template #footer>
         <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" @click="onCreate">创建（草稿）</el-button>
+          <el-button v-if="auth.can('papers:write')" type="primary" @click="onCreate">创建（草稿）</el-button>
       </template>
     </el-dialog>
   </div>
@@ -71,8 +71,10 @@
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import http from '../../api/http';
+import { useAuthStore } from '../../stores/auth';
 
 const list = ref<any[]>([]);
+const auth = useAuthStore();
 const total = ref(0);
 const loading = ref(false);
 const regulations = ref<any[]>([]);

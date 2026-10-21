@@ -81,11 +81,11 @@
       </el-select>
       <el-button type="primary" @click="load">查询</el-button>
       <div style="flex:1" />
-      <el-button @click="downloadTemplate">下载导入模板</el-button>
-      <el-upload :show-file-list="false" accept=".xlsx" :before-upload="onImport" :auto-upload="false" :on-change="onImport">
+      <el-button v-if="auth.can('students:write')" @click="downloadTemplate">下载导入模板</el-button>
+      <el-upload v-if="auth.can('students:write')" :show-file-list="false" accept=".xlsx" :before-upload="onImport" :auto-upload="false" :on-change="onImport">
         <el-button type="success">Excel 批量导入</el-button>
       </el-upload>
-      <el-button type="primary" @click="openCreate">新增员工</el-button>
+      <el-button v-if="auth.can('students:write')" type="primary" @click="openCreate">新增员工</el-button>
     </div>
 
     <el-table v-loading="loading" :data="list">
@@ -108,11 +108,13 @@
       </el-table-column>
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
-          <el-button text size="small" type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button text size="small" :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStatus(row)">
-            {{ row.status === 1 ? '停用' : '启用' }}
-          </el-button>
-          <el-button text size="small" type="danger" @click="openReset(row)">重置密码</el-button>
+          <template v-if="auth.can('students:write')">
+            <el-button text size="small" type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button text size="small" :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStatus(row)">
+              {{ row.status === 1 ? '停用' : '启用' }}
+            </el-button>
+            <el-button text size="small" type="danger" @click="openReset(row)">重置密码</el-button>
+          </template>
         </template>
       </el-table-column>
     </el-table>
@@ -142,7 +144,7 @@
       </el-form>
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" @click="onSave">保存</el-button>
+        <el-button v-if="auth.can('students:write')" type="primary" @click="onSave">保存</el-button>
       </template>
     </el-dialog>
 
@@ -167,6 +169,7 @@ import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { UploadFile } from 'element-plus';
 import http, { download, upload } from '../../api/http';
+import { useAuthStore } from '../../stores/auth';
 import { formatDateTime } from '../../utils/format';
 import ImportPreview from '../../components/ImportPreview.vue';
 import type { ImportPreview as ImportPreviewData } from '../../api/training-types';
@@ -175,6 +178,7 @@ const route = useRoute();
 const isStudentPage = computed(() => route.path === '/admin/students');
 
 const list = ref<any[]>([]);
+const auth = useAuthStore();
 const total = ref(0);
 const loading = ref(false);
 const deptTree = ref<any[]>([]);

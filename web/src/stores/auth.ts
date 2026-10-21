@@ -9,6 +9,10 @@ export interface AuthUser {
   department_id: number | null;
   role: 'super_admin' | 'regulation_admin' | 'employee';
   permissions?: string[];
+  force_password_change?: boolean;
+  login_count?: number;
+  last_login_at?: string | null;
+  last_login_ip?: string | null;
 }
 
 /** 会话状态（双令牌：access 内存持有，refresh 经 HttpOnly Cookie） */
@@ -20,7 +24,7 @@ export const useAuthStore = defineStore('auth', {
   }),
   getters: {
     isLoggedIn: (s) => !!s.accessToken,
-    isAdmin: (s) => !!s.user && (s.user.role === 'super_admin' || s.user.role === 'regulation_admin'),
+    isAdmin: (s) => !!s.user && (s.user.role === 'super_admin' || s.user.role === 'regulation_admin' || (s.user.permissions?.length || 0) > 0),
     isSuperAdmin: (s) => !!s.user && s.user.role === 'super_admin',
     can: (s) => (code: string) => s.user?.role === 'super_admin' || !!s.user?.permissions?.includes(code),
   },

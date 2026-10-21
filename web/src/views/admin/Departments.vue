@@ -6,7 +6,7 @@
       <p class="desc">部门是发布范围圈定与统计维度的组织基础</p>
     </div>
     <div class="toolbar">
-      <el-button type="primary" @click="openCreate(null)">新建根级部门</el-button>
+      <el-button v-if="auth.can('departments:write')" type="primary" @click="openCreate(null)">新建根级部门</el-button>
       <span style="color:#909399; font-size:13px">停用部门保留为历史统计维度，删除受引用约束</span>
     </div>
     <el-tree :data="tree" node-key="id" default-expand-all :expand-on-click-node="false">
@@ -18,11 +18,13 @@
             <el-tag v-else-if="data.id === '1'" size="small">根</el-tag>
           </span>
           <span class="node-actions">
-            <el-button text size="small" type="primary" @click="openCreate(data)">添加子部门</el-button>
-            <el-button text size="small" @click="openEdit(data)">编辑</el-button>
-            <el-button text size="small" type="warning" @click="openMove(data)">移动</el-button>
-            <el-button v-if="data.status === 0" text size="small" type="success" @click="onEnable(data)">启用</el-button>
-            <el-button text size="small" type="danger" @click="onDelete(data)">删除</el-button>
+            <template v-if="auth.can('departments:write')">
+              <el-button text size="small" type="primary" @click="openCreate(data)">添加子部门</el-button>
+              <el-button text size="small" @click="openEdit(data)">编辑</el-button>
+              <el-button text size="small" type="warning" @click="openMove(data)">移动</el-button>
+              <el-button v-if="data.status === 0" text size="small" type="success" @click="onEnable(data)">启用</el-button>
+              <el-button text size="small" type="danger" @click="onDelete(data)">删除</el-button>
+            </template>
           </span>
         </div>
       </template>
@@ -39,7 +41,7 @@
       </el-form>
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" @click="onSave">保存</el-button>
+        <el-button v-if="auth.can('departments:write')" type="primary" @click="onSave">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -49,7 +51,9 @@
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
+import { useAuthStore } from '../../stores/auth';
 
+const auth = useAuthStore();
 const tree = ref<any[]>([]);
 const dialog = ref(false);
 const form = reactive<any>({ id: null, parentId: null, parentName: '', name: '', sort: 0 });

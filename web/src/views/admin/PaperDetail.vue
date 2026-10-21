@@ -11,9 +11,9 @@
         <el-tag :type="sumScore === 100 ? 'success' : 'danger'" size="small">分值合计 {{ sumScore }} / 100</el-tag>
       </div>
       <div style="flex:1" />
-      <el-button v-if="paper.status === 'draft'" type="success" :disabled="sumScore !== 100 || sumScore !== persistedSum"
+      <el-button v-if="paper.status === 'draft' && auth.can('papers:publish')" type="success" :disabled="sumScore !== 100 || sumScore !== persistedSum"
         @click="onPublish">发布试卷（SUM=100）</el-button>
-      <el-button v-if="paper.status === 'published'" type="warning" plain @click="onArchive">归档</el-button>
+      <el-button v-if="paper.status === 'published' && auth.can('papers:write')" type="warning" plain @click="onArchive">归档</el-button>
     </div>
 
     <el-alert v-if="paper.status !== 'draft'" type="info" :closable="false" style="margin-bottom:14px"
@@ -23,19 +23,19 @@
       <template #header>考试策略</template>
       <el-form inline label-width="130px">
         <el-form-item label="及格线">
-          <el-input-number v-model="strategy.pass_score" :min="1" :max="100" :disabled="strategyLocked" />
+            <el-input-number v-model="strategy.pass_score" :min="1" :max="100" :disabled="strategyLocked || !auth.can('papers:write')" />
         </el-form-item>
         <el-form-item label="限时（分钟）">
-          <el-input-number v-model="strategy.duration_minutes" :min="1" :max="300" :disabled="strategyLocked" />
+            <el-input-number v-model="strategy.duration_minutes" :min="1" :max="300" :disabled="strategyLocked || !auth.can('papers:write')" />
         </el-form-item>
         <el-form-item label="最大作答次数">
-          <el-input-number v-model="strategy.max_attempts" :min="1" :max="10" :disabled="strategyLocked" />
+            <el-input-number v-model="strategy.max_attempts" :min="1" :max="10" :disabled="strategyLocked || !auth.can('papers:write')" />
         </el-form-item>
         <el-form-item label="漏选部分分比例">
-          <el-input-number v-model="strategy.partial_credit_ratio" :min="0" :max="1" :step="0.1" :disabled="strategyLocked" />
+            <el-input-number v-model="strategy.partial_credit_ratio" :min="0" :max="1" :step="0.1" :disabled="strategyLocked || !auth.can('papers:write')" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" :disabled="strategyLocked" @click="saveStrategy">保存策略</el-button>
+          <el-button v-if="auth.can('papers:write')" type="primary" :disabled="strategyLocked" @click="saveStrategy">保存策略</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -44,7 +44,7 @@
       <template #header>
         <div style="display:flex; justify-content:space-between; align-items:center">
           <span>题目组成（{{ paper.questions?.length || 0 }} 题，{{ sumScore }} 分）</span>
-          <el-button v-if="paper.status === 'draft'" type="primary" @click="pickVisible = true">选题入卷</el-button>
+          <el-button v-if="paper.status === 'draft' && auth.can('papers:write')" type="primary" @click="pickVisible = true">选题入卷</el-button>
         </div>
       </template>
       <el-table :data="paper.questions || []">
@@ -56,16 +56,16 @@
         <el-table-column label="分值" width="180">
           <template #default="{ row }">
             <el-input-number v-model="row.score" :min="0.5" :max="100" :step="0.5" size="small"
-              :disabled="paper.status !== 'draft'" @change="dirty = true" />
+              :disabled="paper.status !== 'draft' || !auth.can('papers:write')" @change="dirty = true" />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="90" fixed="right">
           <template #default="{ row }">
-            <el-button v-if="paper.status === 'draft'" text size="small" type="danger" @click="removeOne(row)">移除</el-button>
+            <el-button v-if="paper.status === 'draft' && auth.can('papers:write')" text size="small" type="danger" @click="removeOne(row)">移除</el-button>
           </template>
         </el-table-column>
       </el-table>
-      <el-button v-if="paper.status === 'draft' && (dirty || sumScore !== persistedSum)" type="primary" style="margin-top:14px"
+      <el-button v-if="paper.status === 'draft' && auth.can('papers:write') && (dirty || sumScore !== persistedSum)" type="primary" style="margin-top:14px"
         @click="saveQuestions">保存题目组成</el-button>
     </el-card>
 
@@ -81,7 +81,7 @@
       </el-table>
       <template #footer>
         <el-button @click="pickVisible = false">取消</el-button>
-        <el-button type="primary" @click="addPicked">加入试卷（默认带出建议分值）</el-button>
+        <el-button v-if="auth.can('papers:write')" type="primary" @click="addPicked">加入试卷（默认带出建议分值）</el-button>
       </template>
     </el-dialog>
   </div>
@@ -93,9 +93,11 @@ import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import http from '../../api/http';
+import { useAuthStore } from '../../stores/auth';
 
 const route = useRoute();
 const paperId = String(route.params.id);
+const auth = useAuthStore();
 
 const paper = ref<any>(null);
 const strategy = reactive<any>({});

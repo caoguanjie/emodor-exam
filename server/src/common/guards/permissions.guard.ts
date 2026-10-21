@@ -48,6 +48,8 @@ export function legacyPermissionForRequest(req: any): PermissionCode | undefined
   return undefined;
 }
 
+export const PERMISSION_AUTHORIZED_KEY = 'permission_authorized';
+
 @Injectable()
 export class PermissionsGuard implements CanActivate {
   constructor(private readonly reflector: Reflector, private readonly access: AccessService) {}
@@ -64,6 +66,10 @@ export class PermissionsGuard implements CanActivate {
     const user = req.user as { id: number } | undefined;
     if (!user) throw Errors.unauthenticated();
     for (const code of required) await this.access.assertAllowed(String(user.id), code);
+    // RolesGuard runs after this guard. Mark only successfully mapped/declared
+    // fine-permission routes so custom business admins can use legacy AI,
+    // regulation and statistics APIs without opening system identity APIs.
+    (req as any)[PERMISSION_AUTHORIZED_KEY] = true;
     return true;
   }
 }

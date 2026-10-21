@@ -8,14 +8,14 @@
         <el-tag :type="statusType(reg.status)" size="small">{{ statusLabel(reg.status) }}</el-tag>
       </div>
       <div style="flex:1" />
-      <el-button v-if="reg.status !== 'archived'" type="success" @click="onPublish">发布制度</el-button>
-      <el-button v-if="reg.status !== 'archived'" type="warning" plain @click="onArchive">归档</el-button>
+      <el-button v-if="reg.status !== 'archived' && auth.can('regulations:publish')" type="success" @click="onPublish">发布制度</el-button>
+      <el-button v-if="reg.status !== 'archived' && auth.can('regulations:write')" type="warning" plain @click="onArchive">归档</el-button>
     </div>
 
     <el-tabs>
       <el-tab-pane label="制度版本">
         <div class="toolbar">
-          <el-upload :show-file-list="false" accept=".pdf,.docx" :auto-upload="false" :on-change="onUploadChange">
+          <el-upload v-if="auth.can('regulations:write')" :show-file-list="false" accept=".pdf,.docx" :auto-upload="false" :on-change="onUploadChange">
             <el-button type="primary">上传制度文件（PDF / DOCX ≤ 50MB）</el-button>
           </el-upload>
           <span style="color:#909399; font-size:13px">版本 append-only；解析为异步，状态实时轮询</span>
@@ -36,7 +36,7 @@
           <el-table-column label="当前生效" width="110">
             <template #default="{ row }">
               <el-tag v-if="row.is_current" type="success">生效中</el-tag>
-              <el-button v-else-if="row.parse_status === 'parsed' && reg.status !== 'archived'" text size="small" type="primary" @click="switchVersion(row)">设为生效</el-button>
+              <el-button v-else-if="row.parse_status === 'parsed' && reg.status !== 'archived' && auth.can('regulations:write')" text size="small" type="primary" @click="switchVersion(row)">设为生效</el-button>
             </template>
           </el-table-column>
           <el-table-column label="上传时间" min-width="150">
@@ -45,7 +45,7 @@
           <el-table-column label="操作" width="150" fixed="right">
             <template #default="{ row }">
               <el-button text size="small" @click="preview(row)">预览</el-button>
-              <el-button v-if="row.parse_status === 'failed'" text size="small" type="warning" @click="retryParse(row)">重新解析</el-button>
+              <el-button v-if="row.parse_status === 'failed' && auth.can('regulations:write')" text size="small" type="warning" @click="retryParse(row)">重新解析</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -55,28 +55,28 @@
         <el-form label-width="160px" style="max-width:520px; margin-top:12px">
           <el-form-item label="规定有效学习时长（分钟）">
             <!-- key 随每次 load 递增：el-input-number 在程序化更新场景下内部显示可能不回同步，重挂载保证显示=数据 -->
-            <el-input-number :key="configKey" v-model="config.required_minutes" :min="1" :max="600" />
+            <el-input-number :key="configKey" v-model="config.required_minutes" :min="1" :max="600" :disabled="!auth.can('regulations:write')" />
           </el-form-item>
           <el-form-item label="滚动分段数">
             <el-input-number :key="configKey + 1" v-model="config.scroll_segments" :min="10" :max="10" disabled />
             <span style="color:#909399; font-size:12px; margin-left:8px">本期固定 10 段（配置项前向保留）</span>
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" @click="saveConfig">保存学习要求</el-button>
+            <el-button v-if="auth.can('regulations:write')" type="primary" @click="saveConfig">保存学习要求</el-button>
           </el-form-item>
         </el-form>
       </el-tab-pane>
 
       <el-tab-pane label="发布范围">
-        <el-radio-group v-model="scope.is_all">
+        <el-radio-group v-model="scope.is_all" :disabled="!auth.can('regulations:write')">
           <el-radio :value="true">面向全员</el-radio>
           <el-radio :value="false">按部门圈定（含子部门）</el-radio>
         </el-radio-group>
         <div v-if="!scope.is_all" style="margin-top:14px; max-width:420px">
-          <el-tree ref="scopeTreeRef" :data="deptTree" show-checkbox node-key="id" default-expand-all
+          <el-tree ref="scopeTreeRef" :data="deptTree" show-checkbox node-key="id" default-expand-all :disabled="!auth.can('regulations:write')"
             :props="{ label: 'name' }" />
         </div>
-        <el-button type="primary" style="margin-top:14px" @click="saveScope">保存发布范围</el-button>
+        <el-button v-if="auth.can('regulations:write')" type="primary" style="margin-top:14px" @click="saveScope">保存发布范围</el-button>
       </el-tab-pane>
 
       <el-tab-pane label="内容预览">
@@ -98,9 +98,11 @@ import { ArrowLeft } from '@element-plus/icons-vue';
 import type { UploadFile } from 'element-plus';
 import http, { upload } from '../../api/http';
 import { formatDateTime } from '../../utils/format';
+import { useAuthStore } from '../../stores/auth';
 
 const route = useRoute();
 const regId = String(route.params.id);
+const auth = useAuthStore();
 
 const reg = ref<any>(null);
 const versions = ref<any[]>([]);

@@ -138,9 +138,9 @@
 | captcha_id | body | string | 管理员必填 | /auth/captcha 返回的短期标识 |
 | captcha_code | body | string | 管理员必填 | 验证码答案；服务端一次消费，不在响应回显 |
 
-规则：凭据校验 → `status = 0` 拒绝 →「用户不存在」与「密码错误」返回同一错误码 40104（不泄露区别，05 册 2.4.1）；非首次登录成功后更新 `last_login_at`。首次登录（`last_login_at IS NULL`）校验通过时签发**受限令牌**（payload 含 `pwd_pending: true`），响应中携带 `force_change_password: true`（07 册 2.2），**此阶段不写入 `last_login_at`**；仅在 `PUT /auth/password` 成功（签发完整令牌）的同一事务内写入 `last_login_at`——防止丢弃受限令牌重新登录即绕过强制改密。
+规则：凭据校验 → `status = 0` 拒绝 →「用户不存在」与「密码错误」返回同一错误码 40104（不泄露区别，05 册 2.4.1）；每次真实密码成功登录（包括 pending 阶段）递增 `login_count` 并更新 `last_login_at` / `last_login_ip`，refresh 不更新这些统计。`force_password_change = 1` 时签发**受限令牌**（payload 含 `pwd_pending: true`），响应携带 `force_change_password: true`；该状态与登录统计分离。
 
-**PUT /auth/password**：body 含 `old_password`、`new_password`（强度策略见 07 册 2.2）；成功后在同一事务内写入 `last_login_at`（首次登录强制改密的收口点）、写 `auth:block:{user_id}` 吊销受限令牌（见 1.3），并签发完整令牌（payload 无 `pwd_pending`）随响应返回，客户端替换本地双令牌。
+**PUT /auth/password**：body 含 `old_password`、`new_password`（强度策略见 07 册 2.2）；成功后在同一事务内清除 `force_password_change`、递增 `auth_version`、吊销旧会话并创建新会话，写 `auth:block:{user_id}` 兼容吊销键，并签发完整令牌（payload 无 `pwd_pending`）随响应返回，客户端替换本地双令牌。
 
 ### 3.2 员工管理 /users（权限：管理）
 
@@ -153,7 +153,7 @@
 | 5 | PUT | /users/{id}/status | 启用（1）/ 停用（0） |
 | 6 | GET | /users/import-template | 下载导入模板（Excel） |
 | 7 | POST | /users/import | Excel 批量导入（multipart，file 字段） |
-| 8 | PUT | /users/{id}/password | 重置密码（写 password_hash、last_login_at = NULL、auth:block:{user_id}，见 1.3；重置后下次登录回到强制改密流程） |
+| 8 | PUT | /users/{id}/password | 重置密码（写 password_hash、force_password_change = 1、递增 auth_version、auth:block:{user_id}，见 1.3；保留真实登录统计，重置后下次登录回到强制改密流程） |
 
 **POST /users/import**：模板 6 列（username / real_name / employee_no / department / role / password，05 册 2.4.4）；两阶段校验（格式层 + 业务层）后批量写入；采用「预校验 + 批量写 + 唯一冲突降级」的部分成功策略——响应 data 返回 `success_count / fail_count / failures[]`（行号 + 原因），全部失败时事务回滚。
 

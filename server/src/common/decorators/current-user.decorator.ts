@@ -8,6 +8,7 @@ export interface AuthUser {
   jti: string;
   iat: number;
   sid?: string;
+  authVersion?: number;
   pwdPending?: boolean;
 }
 

@@ -11,6 +11,8 @@ import { AuditService } from '../../common/audit.service';
 import { AppConfig } from '../../config/configuration';
 import { validatePasswordStrength } from '../../common/password-policy';
 import { CategoryService } from '../training/category.service';
+import { SessionService } from '../auth/session.service';
+import { AccessService } from '../access/access.service';
 
 const VALID_ROLES: Role[] = [RoleEnum.SUPER_ADMIN, RoleEnum.REGULATION_ADMIN, RoleEnum.EMPLOYEE];
 
@@ -25,7 +27,13 @@ export class UsersService {
     private readonly audit: AuditService,
     private readonly config: AppConfig,
     private readonly categories: CategoryService,
+    private readonly sessions: SessionService,
+    private readonly access: AccessService,
   ) {}
+
+  private authVersion(u: SysUser): number {
+    return Number.isInteger(Number(u.authVersion)) ? Number(u.authVersion) : 0;
+  }
 
   sanitize(u: SysUser) {
     return {
@@ -38,7 +46,11 @@ export class UsersService {
       phone: u.phone,
       email: u.email,
       status: u.status,
+      auth_version: this.authVersion(u),
+      force_password_change: u.forcePasswordChange === undefined ? u.lastLoginAt === null : Number(u.forcePasswordChange) === 1,
+      login_count: Number(u.loginCount || 0),
       last_login_at: u.lastLoginAt,
+      last_login_ip: u.lastLoginIp,
       created_at: u.createdAt,
     };
   }
@@ -267,7 +279,11 @@ export class UsersService {
           phone: input.phone || null,
           email: input.email || null,
           status: 1,
-          lastLoginAt: null, // 初始密码：首登强制改密（07 册 2.2.3）
+          forcePasswordChange: 1,
+          loginCount: 0,
+          lastLoginAt: null,
+          lastLoginIp: null,
+          rolesConfigured: 0,
         }),
       );
       this.audit.log({
@@ -296,6 +312,7 @@ export class UsersService {
       const dept = await this.dataSource.getRepository(SysDepartment).findOne({ where: { id: patch.department_id } });
       if (!dept) throw Errors.param('部门不存在');
     }
+    const roleChanged = patch.role !== undefined && patch.role !== u.role;
     if (patch.real_name !== undefined) u.realName = patch.real_name;
     if (patch.employee_no !== undefined) u.employeeNo = patch.employee_no || null;
     if (patch.department_id !== undefined) u.departmentId = patch.department_id || null;
@@ -303,7 +320,32 @@ export class UsersService {
     if (patch.phone !== undefined) u.phone = patch.phone || null;
     if (patch.email !== undefined) u.email = patch.email || null;
     try {
-      await this.userRepo.save(u);
+      if (roleChanged) {
+        const oldSids: string[] = [];
+        await this.dataSource.transaction(async (manager) => {
+          const repo = manager.getRepository(SysUser);
+          const current = await repo.findOne({ where: { id } });
+          if (!current) throw Errors.notFound('员工不存在');
+          if (patch.role !== undefined && current.role === RoleEnum.SUPER_ADMIN && patch.role !== RoleEnum.SUPER_ADMIN) {
+            const activeSuperCount = await repo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
+            if (Number(current.id) === 1 || activeSuperCount <= 1) throw Errors.lastSuperAdmin();
+          }
+          if (patch.real_name !== undefined) current.realName = patch.real_name;
+          if (patch.employee_no !== undefined) current.employeeNo = patch.employee_no || null;
+          if (patch.department_id !== undefined) current.departmentId = patch.department_id || null;
+          if (patch.role !== undefined) current.role = patch.role;
+          if (patch.phone !== undefined) current.phone = patch.phone || null;
+          if (patch.email !== undefined) current.email = patch.email || null;
+          current.authVersion = this.authVersion(current) + 1;
+          await repo.save(current);
+          oldSids.push(...await this.sessions.invalidateUser(manager, id));
+          Object.assign(u, current);
+        });
+        await this.sessions.markRevoked(oldSids);
+        await this.access.invalidate(id);
+      } else {
+        await this.userRepo.save(u);
+      }
     } catch (e: any) {
       if (String(e?.code) === 'ER_DUP_ENTRY') throw Errors.param('工号已存在');
       throw e;
@@ -323,8 +365,22 @@ export class UsersService {
       const activeSuperCount = await this.userRepo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
       if (Number(u.id) === 1 || activeSuperCount <= 1) throw Errors.lastSuperAdmin();
     }
-    u.status = status;
-    await this.userRepo.save(u);
+    const oldSids: string[] = [];
+    await this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(SysUser);
+      const current = await repo.findOne({ where: { id } });
+      if (!current) throw Errors.notFound('员工不存在');
+      if (status === 0 && current.role === RoleEnum.SUPER_ADMIN) {
+        const activeSuperCount = await repo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
+        if (Number(current.id) === 1 || activeSuperCount <= 1) throw Errors.lastSuperAdmin();
+      }
+      current.status = status;
+      current.authVersion = this.authVersion(current) + 1;
+      await repo.save(current);
+      oldSids.push(...await this.sessions.invalidateUser(manager, id));
+      Object.assign(u, current);
+    });
+    await this.sessions.markRevoked(oldSids);
     if (status === 0) {
       // 用户级封禁：存量令牌即时失效（07 册 2.1.4）
       // 令牌 iat 只有秒精度；向前推进一秒，覆盖与停用请求同一秒签发的旧 access，停用后不会再签发新令牌。
@@ -347,9 +403,20 @@ export class UsersService {
       { username: u.username, employeeNo: u.employeeNo, realName: u.realName },
       '初始密码',
     );
-    u.passwordHash = await bcrypt.hash(newPassword, 12);
-    u.lastLoginAt = null;
-    await this.userRepo.save(u);
+    const hash = await bcrypt.hash(newPassword, 12);
+    const oldSids: string[] = [];
+    await this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(SysUser);
+      const current = await repo.findOne({ where: { id } });
+      if (!current) throw Errors.notFound('员工不存在');
+      current.passwordHash = hash;
+      current.forcePasswordChange = 1;
+      current.authVersion = this.authVersion(current) + 1;
+      await repo.save(current);
+      oldSids.push(...await this.sessions.invalidateUser(manager, id));
+      Object.assign(u, current);
+    });
+    await this.sessions.markRevoked(oldSids);
     await this.redis.setUserBlock(Number(u.id), Math.floor(Date.now() / 1000) + 1, this.config.jwt.refreshExpiresDays * 86400);
     this.audit.log({
       actor_id: actor.id, actor_name: actor.name, action: 'user.password.reset', object_type: 'sys_user',

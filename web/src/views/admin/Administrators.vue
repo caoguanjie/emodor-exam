@@ -17,7 +17,7 @@
       </el-table-column>
       <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag></template></el-table-column>
       <el-table-column prop="last_login_at" label="最后登录" min-width="170" />
-      <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }"><el-button text type="primary" :disabled="row.id === '1'" @click="openRoles(row)">配置角色</el-button></template></el-table-column>
+      <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }"><el-button v-if="auth.can('administrators:write')" text type="primary" :disabled="row.id === '1'" @click="openRoles(row)">配置角色</el-button></template></el-table-column>
     </el-table>
 
     <el-dialog v-model="dialog" title="配置业务角色" width="480px">
@@ -25,7 +25,7 @@
       <el-checkbox-group v-model="selectedRoleIds" class="role-list">
         <el-checkbox v-for="role in editableRoles" :key="role.id" :label="role.id">{{ role.name }}（{{ role.code }}）</el-checkbox>
       </el-checkbox-group>
-      <template #footer><el-button @click="dialog = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveRoles">保存</el-button></template>
+      <template #footer><el-button @click="dialog = false">取消</el-button><el-button v-if="auth.can('administrators:write')" type="primary" :loading="saving" @click="saveRoles">保存</el-button></template>
     </el-dialog>
   </div>
 </template>
@@ -34,7 +34,9 @@
 import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import http from '../../api/http';
+import { useAuthStore } from '../../stores/auth';
 
+const auth = useAuthStore();
 const rows = ref<any[]>([]);
 const roles = ref<any[]>([]);
 const loading = ref(false);
@@ -42,7 +44,7 @@ const saving = ref(false);
 const dialog = ref(false);
 const selected = ref<any>(null);
 const selectedRoleIds = ref<string[]>([]);
-const editableRoles = computed(() => roles.value.filter((role) => role.code !== 'super_admin'));
+const editableRoles = computed(() => roles.value.filter((role) => !role.is_system));
 
 function roleName(code: string) { return ({ super_admin: '超级管理员', regulation_admin: '制度管理员', employee: '员工' } as any)[code] || code; }
 
@@ -57,7 +59,8 @@ async function load() {
 
 function openRoles(row: any) {
   selected.value = row;
-  selectedRoleIds.value = (row.role_ids || []).map((id: string | number) => String(id));
+  const editableIds = new Set(editableRoles.value.map((role) => String(role.id)));
+  selectedRoleIds.value = (row.role_ids || []).map((id: string | number) => String(id)).filter((id: string) => editableIds.has(id));
   dialog.value = true;
 }
 

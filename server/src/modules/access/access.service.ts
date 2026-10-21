@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { AppConfig } from '../../config/configuration';
 import { Errors, RoleEnum } from '../../common/errors';
 import { RedisService } from '../../common/redis.service';
@@ -11,6 +11,7 @@ import { SysPermission } from '../../entities/sys-permission.entity';
 import { SysRolePermission } from '../../entities/sys-role-permission.entity';
 import { SysUserRole } from '../../entities/sys-user-role.entity';
 import { AuthSession } from '../../entities/auth-session.entity';
+import { SessionService } from '../auth/session.service';
 import {
   LEGACY_REGULATION_ADMIN_PERMISSIONS,
   PERMISSION_CATALOG,
@@ -30,12 +31,18 @@ export class AccessService {
     @InjectRepository(SysRolePermission) private readonly rolePermissionRepo: Repository<SysRolePermission>,
     @InjectRepository(SysUserRole) private readonly userRoleRepo: Repository<SysUserRole>,
     private readonly redis: RedisService,
+    private readonly dataSource: DataSource,
+    private readonly sessions: SessionService,
     private readonly audit?: AuditService,
     private readonly config?: AppConfig,
   ) {}
 
   private cacheKey(userId: string | number) {
     return `access:permissions:${String(userId)}`;
+  }
+
+  private authVersion(user: SysUser): number {
+    return Number.isInteger(Number(user.authVersion)) ? Number(user.authVersion) : 0;
   }
 
   async invalidate(userId: string | number): Promise<void> {
@@ -60,7 +67,7 @@ export class AccessService {
       effective = [...PERMISSION_CATALOG];
     } else {
       const links = await this.userRoleRepo.find({ where: { userId: String(userId) } });
-      if (links.length === 0 && user.role === RoleEnum.REGULATION_ADMIN) {
+      if (links.length === 0 && user.role === RoleEnum.REGULATION_ADMIN && Number(user.rolesConfigured || 0) === 0) {
         // 兼容既有种子管理员；一旦配置了业务角色，就只使用显式授权。
         effective = [...LEGACY_REGULATION_ADMIN_PERMISSIONS];
       } else if (links.length === 0) {
@@ -118,12 +125,20 @@ export class AccessService {
     if (['super_admin', 'regulation_admin', 'employee'].includes(input.code)) throw Errors.param('系统角色代码不可重复创建');
     let role: SysRole;
     try {
-      role = await this.roleRepo.save(this.roleRepo.create({ code: input.code, name: input.name.trim(), isSystem: 0, status: 1 }));
+      role = await this.dataSource.transaction(async (manager) => {
+        const roleRepo = manager.getRepository(SysRole);
+        const permissionRepo = manager.getRepository(SysPermission);
+        const rolePermissionRepo = manager.getRepository(SysRolePermission);
+        const created = await roleRepo.save(roleRepo.create({ code: input.code, name: input.name.trim(), isSystem: 0, status: 1 }));
+        const permissions = input.permissions.length ? await permissionRepo.find({ where: { code: In(input.permissions) } }) : [];
+        if (permissions.length !== input.permissions.length) throw Errors.param('权限代码不存在');
+        if (permissions.length) await rolePermissionRepo.save(permissions.map((permission) => rolePermissionRepo.create({ roleId: created.id, permissionId: permission.id })));
+        return created;
+      });
     } catch (error: any) {
       if (String(error?.code) === 'ER_DUP_ENTRY') throw Errors.param('角色代码已存在');
       throw error;
     }
-    await this.replaceRolePermissions(String(role.id), input.permissions);
     this.audit?.log({ actor_id: Number(actorId), actor_name: 'system', action: 'access.role.create', object_type: 'sys_role', object_id: role.id, detail: { code: role.code }, result: 'success', source_ip: null });
     return (await this.listRoles()).find((item) => item.id === String(role.id));
   }
@@ -133,39 +148,58 @@ export class AccessService {
     if (!role) throw Errors.notFound('角色不存在');
     if (role.isSystem) throw Errors.param('系统角色不可编辑');
     if (input.permissions) this.assertPermissionCodes(input.permissions);
-    if (input.name !== undefined) role.name = input.name.trim();
-    if (input.status !== undefined) role.status = input.status ? 1 : 0;
-    await this.roleRepo.save(role);
-    if (input.permissions) await this.replaceRolePermissions(id, input.permissions);
-    await this.invalidateUsersWithRole(id);
+    const affected = await this.userRoleRepo.find({ where: { roleId: id } });
+    const oldSids: string[] = [];
+    await this.dataSource.transaction(async (manager) => {
+      const roleRepo = manager.getRepository(SysRole);
+      const current = await roleRepo.findOne({ where: { id } });
+      if (!current || current.isSystem) throw Errors.param('系统角色不可编辑');
+      if (input.name !== undefined) current.name = input.name.trim();
+      if (input.status !== undefined) current.status = input.status ? 1 : 0;
+      await roleRepo.save(current);
+      if (input.permissions) await this.replaceRolePermissions(id, input.permissions, manager);
+      const userRepo = manager.getRepository(SysUser);
+      for (const link of affected) {
+        const user = await userRepo.findOne({ where: { id: String(link.userId) } });
+        if (!user) continue;
+        user.authVersion = this.authVersion(user) + 1;
+        await userRepo.save(user);
+        oldSids.push(...await this.sessions.invalidateUser(manager, user.id));
+      }
+    });
+    await this.sessions.markRevoked(oldSids);
+    await Promise.all(affected.map((link) => this.invalidate(link.userId)));
     this.audit?.log({ actor_id: Number(actorId), actor_name: 'system', action: 'access.role.update', object_type: 'sys_role', object_id: id, detail: {}, result: 'success', source_ip: null });
     return (await this.listRoles()).find((item) => item.id === String(id));
   }
 
-  private async replaceRolePermissions(roleId: string, codes: string[]) {
-    const permissions = codes.length ? await this.permissionRepo.find({ where: { code: In(codes) } }) : [];
+  private async replaceRolePermissions(roleId: string, codes: string[], manager = this.dataSource.manager) {
+    const permissionRepo = manager.getRepository(SysPermission);
+    const rolePermissionRepo = manager.getRepository(SysRolePermission);
+    const permissions = codes.length ? await permissionRepo.find({ where: { code: In(codes) } }) : [];
     if (permissions.length !== codes.length) throw Errors.param('权限代码不存在');
-    await this.rolePermissionRepo.delete({ roleId });
-    if (permissions.length) await this.rolePermissionRepo.save(permissions.map((permission) => this.rolePermissionRepo.create({ roleId, permissionId: permission.id })));
-  }
-
-  private async invalidateUsersWithRole(roleId: string) {
-    const links = await this.userRoleRepo.find({ where: { roleId } });
-    await Promise.all(links.map((link) => this.invalidate(link.userId)));
+    await rolePermissionRepo.delete({ roleId });
+    if (permissions.length) await rolePermissionRepo.save(permissions.map((permission) => rolePermissionRepo.create({ roleId, permissionId: permission.id })));
   }
 
   async listAdministrators() {
-    const users = await this.userRepo.find({ where: [{ role: RoleEnum.SUPER_ADMIN }, { role: RoleEnum.REGULATION_ADMIN }] });
+    const [legacyUsers, links] = await Promise.all([
+      this.userRepo.find({ where: [{ role: RoleEnum.SUPER_ADMIN }, { role: RoleEnum.REGULATION_ADMIN }] }),
+      this.userRoleRepo.find(),
+    ]);
+    const linkedIds = [...new Set(links.map((link) => String(link.userId)))];
+    const linkedUsers = linkedIds.length ? await this.userRepo.find({ where: { id: In(linkedIds) } }) : [];
+    const users = [...new Map([...legacyUsers, ...linkedUsers].map((user) => [String(user.id), user])).values()];
     return Promise.all(users.map(async (user) => {
       let links = await this.userRoleRepo.find({ where: { userId: user.id } });
-      if (!links.length && user.role !== RoleEnum.EMPLOYEE) {
+      if (!links.length && user.role !== RoleEnum.EMPLOYEE && Number(user.rolesConfigured || 0) === 0) {
         const legacyRole = await this.roleRepo.findOne({ where: { code: user.role } });
         if (legacyRole) links = [{ roleId: legacyRole.id } as SysUserRole];
       }
       return {
-      id: String(user.id), username: user.username, real_name: user.realName,
-      system_role: user.role, status: user.status, last_login_at: user.lastLoginAt,
-      role_ids: links.map((link) => String(link.roleId)), permissions: await this.permissions(user.id),
+        id: String(user.id), username: user.username, real_name: user.realName,
+        system_role: user.role, status: user.status, last_login_at: user.lastLoginAt,
+        role_ids: links.map((link) => String(link.roleId)), permissions: await this.permissions(user.id),
       };
     }));
   }
@@ -173,22 +207,30 @@ export class AccessService {
   async assignRoles(userId: string, roleIds: string[], actorId: string | number) {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (!user) throw Errors.notFound('管理员不存在');
-    const roles = roleIds.length ? await this.roleRepo.find({ where: { id: In(roleIds), status: 1 } }) : [];
+    const uniqueRoleIds = [...new Set(roleIds.map(String))];
+    if (uniqueRoleIds.length !== roleIds.length) throw Errors.param('角色不可重复选择');
+    const roles = uniqueRoleIds.length ? await this.roleRepo.find({ where: { id: In(uniqueRoleIds), status: 1 } }) : [];
     if (roles.length !== roleIds.length) throw Errors.param('角色不存在或已停用');
-    const isSuper = roles.some((role) => role.code === RoleEnum.SUPER_ADMIN);
-    if (Number(user.id) === 1 && !isSuper) throw Errors.lastSuperAdmin();
-    if (user.role === RoleEnum.SUPER_ADMIN && !isSuper) {
-      const activeSuperCount = await this.userRepo.count({ where: { role: RoleEnum.SUPER_ADMIN, status: 1 } });
-      if (activeSuperCount <= 1) throw Errors.lastSuperAdmin();
-    }
-    const systemRole = [RoleEnum.SUPER_ADMIN, RoleEnum.REGULATION_ADMIN, RoleEnum.EMPLOYEE]
-      .map((code) => roles.find((role) => role.code === code))
-      .find((role): role is SysRole => Boolean(role));
-    if (systemRole) user.role = systemRole.code;
-    else if (roles.length === 0) user.role = RoleEnum.EMPLOYEE;
-    await this.userRepo.save(user);
-    await this.userRoleRepo.delete({ userId });
-    if (roles.length) await this.userRoleRepo.save(roles.map((role) => this.userRoleRepo.create({ userId, roleId: role.id })));
+    if (roles.some((role) => role.isSystem)) throw Errors.param('只能分配业务角色');
+    if (user.role === RoleEnum.SUPER_ADMIN && Number(user.id) === 1 && roleIds.length === 0) throw Errors.lastSuperAdmin();
+    const oldSids: string[] = [];
+    await this.dataSource.transaction(async (manager) => {
+      const userRepo = manager.getRepository(SysUser);
+      const roleRepo = manager.getRepository(SysRole);
+      const userRoleRepo = manager.getRepository(SysUserRole);
+      const current = await userRepo.findOne({ where: { id: userId } });
+      if (!current) throw Errors.notFound('管理员不存在');
+      const currentRoles = uniqueRoleIds.length ? await roleRepo.find({ where: { id: In(uniqueRoleIds), status: 1 } }) : [];
+      if (currentRoles.length !== uniqueRoleIds.length || currentRoles.some((role) => role.isSystem)) throw Errors.param('只能分配启用的业务角色');
+      if (current.role === RoleEnum.SUPER_ADMIN && Number(current.id) === 1 && uniqueRoleIds.length === 0) throw Errors.lastSuperAdmin();
+      current.rolesConfigured = 1;
+      current.authVersion = this.authVersion(current) + 1;
+      await userRepo.save(current);
+      await userRoleRepo.delete({ userId });
+      if (currentRoles.length) await userRoleRepo.save(currentRoles.map((role) => userRoleRepo.create({ userId, roleId: role.id })));
+      oldSids.push(...await this.sessions.invalidateUser(manager, userId));
+    });
+    await this.sessions.markRevoked(oldSids);
     await this.invalidate(userId);
     this.audit?.log({ actor_id: Number(actorId), actor_name: 'system', action: 'access.administrator.roles', object_type: 'sys_user', object_id: userId, detail: { role_ids: roleIds }, result: 'success', source_ip: null });
   }

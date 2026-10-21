@@ -11,9 +11,9 @@
         <el-option v-for="r in regulations" :key="r.id" :label="r.title" :value="String(r.id)" />
       </el-select>
       <div style="flex:1" />
-      <el-button @click="exportExcel('regulation_overview', '制度维度统计表')">导出制度维度统计表</el-button>
-      <el-button v-if="regId" @click="exportExcel('uncompleted', '未完成人员清单')">导出未完成人员清单</el-button>
-      <el-button v-if="regId" @click="exportExcel('user_detail', '个人维度明细表')">导出个人维度明细表</el-button>
+      <el-button v-if="auth.can('statistics:export')" @click="exportExcel('regulation_overview', '制度维度统计表')">导出制度维度统计表</el-button>
+      <el-button v-if="regId && auth.can('statistics:export')" @click="exportExcel('uncompleted', '未完成人员清单')">导出未完成人员清单</el-button>
+      <el-button v-if="regId && auth.can('statistics:export')" @click="exportExcel('user_detail', '个人维度明细表')">导出个人维度明细表</el-button>
     </div>
 
     <template v-if="overview">
@@ -147,7 +147,9 @@
 import { onMounted, ref } from 'vue';
 import { User, Reading, EditPen, Medal } from '@element-plus/icons-vue';
 import http, { download } from '../../api/http';
+import { useAuthStore } from '../../stores/auth';
 
+const auth = useAuthStore();
 const regulations = ref<any[]>([]);
 const regId = ref<string>('');
 const overview = ref<any>(null);

@@ -71,6 +71,12 @@ http.interceptors.response.use(
       if (!location.pathname.startsWith('/login')) location.href = '/login';
       return Promise.reject(err);
     }
+    if (status === 403 && config && !String(config.url).includes('/auth/profile') && !String(config.url).includes('/auth/login')) {
+      // A permission change can leave a rendered page with stale buttons until
+      // the next router navigation. Refresh the principal after the first
+      // authorization failure; the server remains the final authority.
+      try { await useAuthStore().fetchProfile(); } catch { /* keep the original 403 */ }
+    }
     const msg = body?.message || err.message || '网络异常';
     ElMessage.error(msg);
     return Promise.reject(new ApiError(code ?? status ?? 0, msg, body?.data));

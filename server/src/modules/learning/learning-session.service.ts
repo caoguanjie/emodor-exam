@@ -11,6 +11,8 @@ import { RedisService } from '../../common/redis.service';
 import { RegulationScopeService } from '../regulations/regulation-scope.service';
 import { ContentService } from '../regulations/content.service';
 import { StatisticsService } from '../statistics/statistics.service';
+import { AccessService } from '../access/access.service';
+import { RoleEnum } from '../../common/errors';
 
 export const SESSION_TTL_SECONDS = 6 * 3600; // learn:session:{id} TTL 6 小时兜底过期
 export const OFFLINE_THRESHOLD_MS = 90_000; // 90 秒无心跳判定离线（05 册 5.4.6）
@@ -47,6 +49,7 @@ export class LearningSessionService {
     private readonly content: ContentService,
     private readonly statistics: StatisticsService,
     private readonly dataSource: DataSource,
+    private readonly access: AccessService,
   ) {}
 
   private sessionKey(sessionId: string | number) {
@@ -125,7 +128,10 @@ export class LearningSessionService {
   private async userContext(userId: number) {
     const u = await this.userRepo.findOne({ where: { id: String(userId) } });
     if (!u) throw Errors.notFound('用户不存在');
-    return { role: u.role, departmentId: u.departmentId };
+    const permissions = await this.access.permissions(userId);
+    const canReadAsAdmin = u.role === RoleEnum.SUPER_ADMIN
+      || (u.role === RoleEnum.REGULATION_ADMIN && permissions.includes('regulations:read'));
+    return { role: canReadAsAdmin ? u.role : RoleEnum.EMPLOYEE, departmentId: u.departmentId };
   }
 
   /** 确保学习汇总行存在（首次进入学习时创建，uk_user_regulation 防并发首学） */
