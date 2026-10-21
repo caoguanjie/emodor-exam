@@ -404,10 +404,12 @@ export async function run(ctx) {
   const threeGp = await upload(ctx, admin, { purpose: 'video' }, await ffmpegFixture('.3gp'), 'lesson.3gp', 'video/mp4');
   assert(threeGp.status === 400, `3GP container expected 400: ${threeGp.status}`);
   const videoBytes = await ffmpegFixture();
-  const video = await upload(ctx, admin, { purpose: 'video' }, videoBytes, 'lesson.mp4', 'video/mp4');
+  const video = await upload(ctx, admin, { purpose: 'video' }, videoBytes, '课程.mp4', 'video/mp4');
   assert(video.status === 200 && video.data.status === 'ready' && video.data.duration_ms > 0, `real video probe failed: ${video.status}`);
   const videoOwner = await ctx.request(admin, 'GET', `/media/${video.data.asset_id}`);
-  assert(videoOwner.status === 200 && videoOwner.data.duration_ms > 0, 'video metadata duration missing');
+  assert(videoOwner.status === 200 && videoOwner.data.duration_ms > 0 && videoOwner.data.original_name === '课程.mp4', 'video API metadata lost the Chinese original filename');
+  const storedVideoName = await ctx.queryTestDb('SELECT original_name FROM media_asset WHERE id = ?', [String(video.data.asset_id)]);
+  assert(storedVideoName[0]?.original_name === '课程.mp4', 'persisted video metadata lost the Chinese original filename');
   const aacVideoBytes = await ffmpegFixture('.mp4', { audio: true });
   const aacVideo = await upload(ctx, admin, { purpose: 'video' }, aacVideoBytes, 'lesson-aac.mp4', 'video/mp4');
   assert(aacVideo.status === 200 && aacVideo.data.status === 'ready' && aacVideo.data.duration_ms > 0, `H.264/AAC API upload failed: ${aacVideo.status}`);

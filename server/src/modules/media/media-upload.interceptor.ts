@@ -18,6 +18,38 @@ type MediaRequest = Request & {
 
 type MediaWriterFactory = (path: string) => WriteStream;
 
+const HAN_CHARACTER = /\p{Script=Han}/u;
+
+/**
+ * Browser multipart headers carry raw UTF-8 filename bytes, while the
+ * Multer/Busboy boundary exposes legacy filename parameters as Latin-1.
+ * Recover only Han-producing byte roundtrips as a conservative heuristic.
+ * Latin-only overlaps stay unchanged; even a Han result does not prove the
+ * source encoding was unambiguous.
+ */
+function normalizeMultipartFilename(value: string): string {
+  if (!value || HAN_CHARACTER.test(value)) return value;
+  if ([...value].some((character) => character.codePointAt(0)! > 0xff)) return value;
+  const bytes = Buffer.from(value, 'latin1');
+  let decoded: string;
+  try {
+    decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return value;
+  }
+  if (!HAN_CHARACTER.test(decoded) || !Buffer.from(decoded, 'utf8').equals(bytes)) return value;
+  return decoded;
+}
+
+function normalizeMultipartFile(
+  _req: Request,
+  file: Express.Multer.File,
+  callback: (error: Error | null, acceptFile: boolean) => void,
+): void {
+  file.originalname = normalizeMultipartFilename(file.originalname);
+  callback(null, true);
+}
+
 function uploadTempRoot(): string {
   const root = process.env.UPLOAD_DIR || './data/uploads';
   const path = join(root, 'tmp', 'media');
@@ -234,6 +266,7 @@ class MediaUploadInterceptorImpl implements NestInterceptor {
     this.storage = new MediaUploadStorage(uploadTempRoot, (path) => this.media.markTempPath(path));
     this.upload = multer({
       storage: this.storage,
+      fileFilter: normalizeMultipartFile,
       limits: {
         fileSize: media.uploadByteLimit(),
         files: 1,
