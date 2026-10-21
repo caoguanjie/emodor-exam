@@ -23,6 +23,7 @@ const mysql = require('mysql2/promise');
 export const SUITE_REGISTRY = Object.freeze({
   smoke: join(ROOT, 'tests', 'suites', 'e2e-smoke-adapter.mjs'),
   'e2e-smoke': join(ROOT, 'tests', 'suites', 'e2e-smoke-adapter.mjs'),
+  'training-identity': join(ROOT, 'tests', 'training-identity.mjs'),
 });
 
 export function resolveSuitePaths(selector, registry = SUITE_REGISTRY) {

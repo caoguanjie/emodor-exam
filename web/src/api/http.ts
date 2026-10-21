@@ -97,9 +97,10 @@ export async function download(url: string, filename: string, params?: Record<st
 }
 
 /** 文件上传（multipart） */
-export async function upload(url: string, file: File, field = 'file') {
+export async function upload(url: string, file: File, field = 'file', fields: Record<string, string> = {}) {
   const form = new FormData();
   form.append(field, file);
+  Object.entries(fields).forEach(([key, value]) => form.append(key, value));
   const res = await http.post(url, form, { headers: { 'Content-Type': 'multipart/form-data' } });
   return res;
 }

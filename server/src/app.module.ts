@@ -17,6 +17,8 @@ import { AuditService } from './common/audit.service';
 // 业务表实体 + 迁移注册表（schema_migration 是运维元数据，不计入业务表清单）
 import { SysDepartment } from './entities/sys-department.entity';
 import { SysUser } from './entities/sys-user.entity';
+import { TrainingCategory } from './entities/training-category.entity';
+import { ImportBatch } from './entities/import-batch.entity';
 import { Regulation } from './entities/regulation.entity';
 import { RegulationVersion } from './entities/regulation-version.entity';
 import { RegulationScope } from './entities/regulation-scope.entity';
@@ -33,9 +35,12 @@ import { AuthController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
 import { DepartmentsController } from './modules/departments/departments.controller';
 import { DepartmentService } from './modules/departments/department.service';
-import { UsersController } from './modules/users/users.controller';
+import { MeProfileController, StudentsController, UsersController } from './modules/users/users.controller';
 import { UsersService } from './modules/users/users.service';
 import { UserImportService } from './modules/users/user-import.service';
+import { CategoryController } from './modules/training/category.controller';
+import { CategoryService } from './modules/training/category.service';
+import { ImportBatchService } from './modules/imports/import-batch.service';
 import { RegulationsController } from './modules/regulations/regulations.controller';
 import { RegulationService } from './modules/regulations/regulation.service';
 import { RegulationVersionService } from './modules/regulations/regulation-version.service';
@@ -69,19 +74,20 @@ const config = loadConfig();
     TypeOrmModule.forFeature([
       SysDepartment, SysUser, Regulation, RegulationVersion, RegulationScope,
       LearningSession, LearningRecord, Question, ExamPaper, PaperQuestion, ExamRecord, ExamAnswer, SchemaMigration,
+      TrainingCategory, ImportBatch,
     ]),
     JwtModule.register({ secret: config.jwt.secret, signOptions: { expiresIn: config.jwt.expiresIn } }),
     ScheduleModule.forRoot(),
   ],
   controllers: [
-    AuthController, DepartmentsController, UsersController,
+    AuthController, DepartmentsController, UsersController, StudentsController, MeProfileController, CategoryController,
     RegulationsController, AiController, LearningController, ExamsController,
     StatisticsController, HealthController,
   ],
   providers: [
     // 全局配置单例（loadConfig 启动时读取环境变量）
     { provide: AppConfig, useValue: config },
-    AuthService, DepartmentService, UsersService, UserImportService,
+    AuthService, DepartmentService, UsersService, UserImportService, CategoryService, ImportBatchService,
     RegulationService, RegulationVersionService, RegulationScopeService, ParsePipelineService, ContentService,
     AiConfigService, AiGatewayService, PdfVisionService, QuestionGenerationService, QuestionReviewService, PaperService,
     LearningSessionService, ExamService, ShuffleService, GradingService, StatisticsService,

@@ -1,6 +1,6 @@
 -- =====================================================================
 -- EmodorRuleExam 制度学习及考试系统 · 数据库初始化脚本
--- 依据 docs/design/03-数据库设计.md 逐字建业务表（当前 12 张，InnoDB + utf8mb4）
+-- 依据 docs/design/03-数据库设计.md 逐字建业务表（当前 14 张，InnoDB + utf8mb4）
 -- 时间字段 DATETIME(3)；无数据库级外键（03 册 1.6 节，应用层维护）
 -- 枚举字段 VARCHAR + 应用层校验（03 册 1.7 节）
 -- 种子数据（根部门 / 超级管理员）由 database/seed.mjs 按环境变量生成，
@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   `real_name`     VARCHAR(64)  NOT NULL COMMENT '真实姓名',
   `employee_no`   VARCHAR(32)  NULL COMMENT '工号，全局唯一（NULL 不去重）',
   `department_id` BIGINT UNSIGNED NULL COMMENT '归属部门',
+  `category_id`   BIGINT UNSIGNED NULL COMMENT '培训类别；旧用户未补齐时为 NULL',
+  `source`        VARCHAR(16)  NULL COMMENT 'institution / external；旧用户未确认时为 NULL',
   `role`          VARCHAR(32)  NOT NULL DEFAULT 'employee' COMMENT 'super_admin / regulation_admin / employee',
   `phone`         VARCHAR(20)  NULL,
   `email`         VARCHAR(128) NULL,
@@ -46,11 +48,48 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_username` (`username`),
   UNIQUE KEY `uk_employee_no` (`employee_no`),
-  KEY `idx_department_status` (`department_id`, `status`)
+  KEY `idx_department_status` (`department_id`, `status`),
+  KEY `idx_training_identity` (`category_id`, `source`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='员工账号';
 
 -- ---------------------------------------------------------------------
--- 2. 制度域（3 张）
+-- 2. 培训身份与可恢复导入域（2 张）
+-- ---------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS `training_category` (
+  `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `name`        VARCHAR(128) NOT NULL COMMENT '培训类别名称，全局唯一',
+  `description` TEXT         NULL COMMENT '类别说明',
+  `status`      TINYINT      NOT NULL DEFAULT 1 COMMENT '1=启用，0=停用',
+  `created_by`  BIGINT UNSIGNED NOT NULL COMMENT '创建人（sys_user.id）',
+  `created_at`  DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`  DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_training_category_name` (`name`),
+  KEY `idx_training_category_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='培训类别';
+
+CREATE TABLE IF NOT EXISTS `import_batch` (
+  `id`              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `owner_id`        BIGINT UNSIGNED NOT NULL COMMENT '发起管理员（sys_user.id）',
+  `kind`            VARCHAR(32) NOT NULL COMMENT 'students / questions',
+  `input_hash`      CHAR(64)    NOT NULL COMMENT '脱敏输入指纹，不含明文口令',
+  `status`          VARCHAR(16) NOT NULL DEFAULT 'previewed' COMMENT 'previewed / committing / committed / failed',
+  `normalized_rows` JSON        NULL COMMENT '规范化行；学员口令仅保留 password_hash',
+  `valid_rows`      JSON        NULL COMMENT '预检查通过行号',
+  `errors`          JSON        NULL COMMENT '行级错误（不得包含口令或哈希）',
+  `duplicates`      JSON        NULL COMMENT '批内重复行号',
+  `committed_rows`  JSON        NULL COMMENT '首次确认的固定行号集合',
+  `created_ids`     JSON        NULL COMMENT '提交创建的实体 ID',
+  `created_at`      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  KEY `idx_import_batch_owner_kind` (`owner_id`, `kind`),
+  KEY `idx_import_batch_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='可恢复导入批次';
+
+-- ---------------------------------------------------------------------
+-- 3. 制度域（3 张）
 -- ---------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS `regulation` (

@@ -23,6 +23,8 @@ const routes: RouteRecordRaw[] = [
       // ---- 管理端 ----
       { path: 'admin/departments', component: () => import('../views/admin/Departments.vue'), meta: { title: '部门管理', admin: true } },
       { path: 'admin/users', component: () => import('../views/admin/Users.vue'), meta: { title: '员工管理', admin: true, superOnly: true } },
+      { path: 'admin/students', component: () => import('../views/admin/Users.vue'), meta: { title: '学员管理', admin: true, superOnly: true } },
+      { path: 'admin/training-categories', component: () => import('../views/admin/TrainingCategories.vue'), meta: { title: '培训类别', admin: true, superOnly: true } },
       { path: 'admin/regulations', component: () => import('../views/admin/Regulations.vue'), meta: { title: '制度管理', admin: true } },
       { path: 'admin/regulations/:id', component: () => import('../views/admin/RegulationDetail.vue'), meta: { title: '制度详情', admin: true } },
       { path: 'admin/questions', component: () => import('../views/admin/Questions.vue'), meta: { title: '题库与出题', admin: true } },

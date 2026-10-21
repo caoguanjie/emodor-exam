@@ -19,6 +19,8 @@
             <template v-if="auth.isSuperAdmin">
               <el-menu-item index="/admin/departments"><el-icon><OfficeBuilding /></el-icon>部门管理</el-menu-item>
               <el-menu-item index="/admin/users"><el-icon><User /></el-icon>员工管理</el-menu-item>
+              <el-menu-item index="/admin/students"><el-icon><UserFilled /></el-icon>学员管理</el-menu-item>
+              <el-menu-item index="/admin/training-categories"><el-icon><CollectionTag /></el-icon>培训类别</el-menu-item>
               <el-menu-item index="/admin/ai-config"><el-icon><Setting /></el-icon>AI 服务配置</el-menu-item>
             </template>
           </template>
@@ -61,7 +63,7 @@
 import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
-  Document, EditPen, Tickets, DataAnalysis, OfficeBuilding, User, Setting, Reading, AlarmClock, Medal, SwitchButton,
+  Document, EditPen, Tickets, DataAnalysis, OfficeBuilding, User, UserFilled, CollectionTag, Setting, Reading, AlarmClock, Medal, SwitchButton,
 } from '@element-plus/icons-vue';
 import { useAuthStore } from '../stores/auth';
 import brandLogo from '../assets/brand-logo.png';

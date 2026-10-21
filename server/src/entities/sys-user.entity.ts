@@ -21,6 +21,14 @@ export class SysUser {
   @Column({ name: 'department_id', type: 'bigint', nullable: true })
   departmentId: string | null;
 
+  /** 培训类别；旧用户未补齐资料时保持 NULL，不反推默认类别。 */
+  @Column({ name: 'category_id', type: 'bigint', nullable: true })
+  categoryId: string | null;
+
+  /** institution=本机构，external=外来；旧用户未确认时保持 NULL。 */
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  source: 'institution' | 'external' | null;
+
   /** super_admin / regulation_admin / employee（README 3.4） */
   @Column({ type: 'varchar', length: 32, default: 'employee' })
   role: string;

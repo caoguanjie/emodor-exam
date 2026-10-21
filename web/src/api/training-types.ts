@@ -47,6 +47,16 @@ export interface DraftAck {
 export type GradeState = 'not_submitted' | 'pending_manual' | 'finalized';
 export type SubmissionMethod = 'manual' | 'timeout';
 
+export interface TrainingCategory {
+  id: Id;
+  name: string;
+  description: string | null;
+  status: number;
+  created_by: Id;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ImportPreview {
   batch_id: Id;
   valid_rows: number[];

@@ -1,12 +1,13 @@
 import {
-  Body, Controller, Get, Param, Post, Put, Req, Res, UploadedFile, UseInterceptors, Query,
+  Body, Controller, Get, Param, Patch, Post, Put, Req, Res, UploadedFile, UseInterceptors, Query,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response, Request } from 'express';
 import { Transform } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
 import { UsersService } from './users.service';
 import { UserImportService } from './user-import.service';
+import { ImportBatchService } from '../imports/import-batch.service';
 import { Roles } from '../../common/guards/roles.guard';
 import { SkipEnvelope } from '../../common/response.interceptor';
 import { Errors, RoleEnum } from '../../common/errors';
@@ -46,6 +47,42 @@ class StatusDto {
 
 class ResetPasswordDto {
   @IsString() @MinLength(8) @MaxLength(128) @INITIAL_PASSWORD() password!: string;
+}
+
+class CreateStudentDto {
+  @IsString() @MinLength(1) @MaxLength(64) username!: string;
+  @IsString() @MinLength(8) @MaxLength(128) @INITIAL_PASSWORD() password!: string;
+  @IsString() @MinLength(1) @MaxLength(64) real_name!: string;
+  @IsString() @MinLength(1) @MaxLength(32) category_id!: string;
+  @IsIn(['institution', 'external']) source!: 'institution' | 'external';
+  @IsOptional() @IsString() @MaxLength(32) employee_no?: string;
+  @IsOptional() @IsString() @MaxLength(32) @NormalizeDeptId() department_id?: string;
+  @IsOptional() @IsString() @MaxLength(20) phone?: string;
+  @IsOptional() @IsString() @MaxLength(128) email?: string;
+}
+
+class UpdateStudentDto {
+  @IsOptional() @IsString() @MaxLength(64) real_name?: string;
+  @IsOptional() @IsString() @MaxLength(32) employee_no?: string;
+  @IsOptional() @IsString() @MaxLength(32) @NormalizeDeptId() department_id?: string;
+  @IsOptional() @IsString() @MaxLength(32) category_id?: string;
+  @IsOptional() @IsIn(['institution', 'external']) source?: 'institution' | 'external';
+  @IsOptional() @IsString() @MaxLength(20) phone?: string;
+  @IsOptional() @IsString() @MaxLength(128) email?: string;
+}
+
+class StudentStatusDto {
+  @IsInt() status!: number;
+}
+
+class StudentResetPasswordDto {
+  @IsString() @MinLength(8) @MaxLength(128) @INITIAL_PASSWORD() password!: string;
+}
+
+class SelfProfileDto {
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(64) real_name?: string;
+  @IsOptional() @IsString() @MaxLength(20) phone?: string;
+  @IsOptional() @IsString() @MaxLength(128) email?: string;
 }
 
 /** /users 员工管理（04 册 3.2，全部 super_admin） */
@@ -103,5 +140,128 @@ export class UsersController {
   async resetPassword(@Param('id') id: string, @Body(new DtoValidationPipe()) dto: ResetPasswordDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
     await this.users.resetPassword(id, dto.password, { id: user.id, name: user.username }, req.ip || null);
     return null;
+  }
+}
+
+/** /admin/students：新培训学员接口；A3 接入后将权限标识收敛为 students:*。 */
+@Controller('admin/students')
+@Roles(RoleEnum.SUPER_ADMIN)
+export class StudentsController {
+  constructor(
+    private readonly users: UsersService,
+    private readonly importer: ImportBatchService,
+  ) {}
+
+  private actor(user: AuthUser) {
+    return { id: user.id, name: user.username };
+  }
+
+  @Get()
+  list(@Query() query: any) {
+    return this.users.listStudents(query);
+  }
+
+  @Get('import-template')
+  @SkipEnvelope()
+  async template(@Res() res: Response) {
+    const buffer = await this.importer.buildStudentTemplate();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="student-import-template.xlsx"');
+    res.end(buffer);
+  }
+
+  @Get('import-batches/:id')
+  batchStatus(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.importer.status(String(user.id), id);
+  }
+
+  @Post('import-preview')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  async preview(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() body: any,
+    @CurrentUser() user: AuthUser,
+  ) {
+    let rows: unknown[];
+    if (file) rows = await this.importer.parseStudentWorkbook(file.buffer);
+    else {
+      try {
+        rows = Array.isArray(body?.rows) ? body.rows : typeof body?.rows === 'string' ? JSON.parse(body.rows) : [];
+      } catch {
+        throw Errors.param('rows 必须是合法 JSON 数组');
+      }
+    }
+    if (!Array.isArray(rows)) throw Errors.param('rows 必须是数组');
+    let defaults: any;
+    try {
+      defaults = typeof body?.defaults === 'string' ? JSON.parse(body.defaults) : body?.defaults || {};
+    } catch {
+      throw Errors.param('defaults 必须是合法 JSON 对象');
+    }
+    const withDefaults = rows.map((row: any) => ({
+      ...(row && typeof row === 'object' ? row : {}),
+      source: row?.source || defaults.source,
+      category_id: row?.category_id || defaults.category_id,
+    }));
+    return this.importer.preview(String(user.id), 'students', withDefaults);
+  }
+
+  @Post('import-batches/:id/commit')
+  async commit(@Param('id') id: string, @Body() body: any, @CurrentUser() user: AuthUser) {
+    if (!Array.isArray(body?.row_numbers)) throw Errors.param('row_numbers 必须是数组');
+    return this.importer.commit(String(user.id), id, body.row_numbers);
+  }
+
+  @Get(':id')
+  detail(@Param('id') id: string) {
+    return this.users.studentDetail(id);
+  }
+
+  @Post()
+  create(@Body(new DtoValidationPipe()) dto: CreateStudentDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'role')) throw Errors.param('学员角色固定为 employee');
+    return this.users.createStudent({ ...dto, department_id: dto.department_id || null }, this.actor(user), req.ip || null);
+  }
+
+  @Put(':id')
+  update(@Param('id') id: string, @Body(new DtoValidationPipe()) dto: UpdateStudentDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'role')) throw Errors.param('学员角色不可修改');
+    return this.users.updateStudent(id, dto, this.actor(user), req.ip || null);
+  }
+
+  @Put(':id/status')
+  status(@Param('id') id: string, @Body(new DtoValidationPipe()) dto: StudentStatusDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    if (dto.status !== 0 && dto.status !== 1) throw Errors.param('status 取值非法');
+    return this.users.setStudentStatus(id, dto.status as 0 | 1, this.actor(user), req.ip || null);
+  }
+
+  @Put(':id/password')
+  async resetPassword(@Param('id') id: string, @Body(new DtoValidationPipe()) dto: StudentResetPasswordDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    await this.users.resetStudentPassword(id, dto.password, this.actor(user), req.ip || null);
+    return null;
+  }
+}
+
+/** 学员与管理员共用的本人资料；source/category/role 永远不由本人接口接受。 */
+@Controller('me')
+export class MeProfileController {
+  constructor(private readonly users: UsersService) {}
+
+  @Get('profile')
+  profile(@CurrentUser() user: AuthUser) {
+    return this.users.selfProfile(String(user.id));
+  }
+
+  @Patch('profile')
+  update(
+    @Body(new DtoValidationPipe()) dto: SelfProfileDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const forbidden = ['source', 'category_id', 'categoryId', 'role', 'avatar_id', 'avatarId'];
+    if (forbidden.some((key) => Object.prototype.hasOwnProperty.call(req.body || {}, key))) {
+      throw Errors.param('本人资料不允许修改来源、培训类别、角色或头像');
+    }
+    return this.users.updateSelfProfile(String(user.id), dto);
   }
 }

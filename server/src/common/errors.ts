@@ -38,6 +38,8 @@ export const Errors = {
   paperQuestionsLocked: () => new BizError(40907, 409, '题目组成不可变更'),
   questionInUse: () => new BizError(40908, 409, '题目正在考试中使用，禁止编辑'),
   aiNotConfigured: () => new BizError(40909, 409, 'AI 服务未配置或配置不完整'),
+  categoryInactive: (msg = '培训类别不存在或已停用') => new BizError(40910, 409, msg),
+  importBatchConflict: (msg = '导入批次已确认，不能更换行集合') => new BizError(40911, 409, msg),
   fileFormat: (msg = '文件格式不支持') => new BizError(42201, 422, msg),
   fileTooLarge: (msg = '文件超过大小上限') => new BizError(42202, 422, msg),
   publishCheckFailed: (msg = '发布校验未通过') => new BizError(42203, 422, msg),
