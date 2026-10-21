@@ -52,7 +52,7 @@
 
 ### Task A2: 类别、学员来源与可恢复导入
 
-**Files:** Modify `server/src/entities/sys-user.entity.ts`、`server/src/modules/users/users.service.ts`、`users.controller.ts`、`user-import.service.ts`（后两项同目录）、`web/src/views/admin/Users.vue`。Create `server/src/modules/training/category.service.ts`、`category.controller.ts`（同目录）、`server/src/modules/imports/import-batch.service.ts`、`web/src/views/admin/TrainingCategories.vue`、`web/src/components/ImportPreview.vue`；`001_training_identity.sql` 与总计划对应实体。Test `server/test/training-identity.spec.ts`、`tests/training-identity.mjs`。
+**Files:** Modify `server/src/entities/sys-user.entity.ts`、`server/src/modules/users/users.service.ts`、`users.controller.ts`（同目录）、`web/src/views/admin/Users.vue`。Reuse `server/src/modules/users/user-import.service.ts` unchanged for legacy six-column partial-success import; new preview/confirm uses the new batch service. Create `server/src/modules/training/category.service.ts`、`category.controller.ts`（同目录）、`server/src/modules/imports/import-batch.service.ts`、`web/src/views/admin/TrainingCategories.vue`、`web/src/components/ImportPreview.vue`；`001_training_identity.sql` 与总计划对应实体。Test `server/test/training-identity.spec.ts`、`tests/training-identity.mjs`。
 
 **Interfaces:** Consumes A1 `Id/LearnerSource/ImportPreview/ImportResult`。Produces `CategoryService.assertActive(id:Id):Promise<void>`、`UsersService.trainingProfile(userId:Id):Promise<{categoryId:Id|null;source:LearnerSource|null;active:boolean}>`；`ImportBatchService.preview(ownerId:Id,kind:'students'|'questions',rows:unknown[]):Promise<ImportPreview>`、`commit(ownerId:Id,batchId:Id,rowNumbers:number[]):Promise<ImportResult>`，解析/行校验由所属业务注入，不让通用服务依赖 AI。
 
