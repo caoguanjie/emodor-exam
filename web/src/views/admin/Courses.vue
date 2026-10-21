@@ -108,20 +108,39 @@ const createDirty = ref(false);
 const query = reactive({ page: 1, page_size: 20, keyword: '', category_id: '', status: '' });
 const form = reactive<CourseDraft>({ title: '', category_id: '', description: '', cover_asset_id: null, is_recommended: false, sort_order: 0 });
 let createBaseline: CourseDraft = { ...form };
+let createContextToken = 0;
+let createOperationSequence = 0;
+let createLatestOperation = 0;
+let createLastAppliedOperation = 0;
 const createUnsaved = useUnsavedChanges(createDirty, { onDiscard: discardCreate });
 
 function snapshotCreate(): CourseDraft { return { ...form }; }
+function sameCreateDraft(left: CourseDraft, right: CourseDraft) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 function discardCreate() {
+  createContextToken += 1;
   Object.assign(form, createBaseline);
   createDirty.value = false;
   createVisible.value = false;
+  saving.value = false;
 }
 async function closeCreate() {
-  if (!createDirty.value) { createVisible.value = false; return; }
+  if (!createDirty.value) {
+    createContextToken += 1;
+    createVisible.value = false;
+    saving.value = false;
+    return;
+  }
   await createUnsaved.confirmDiscard();
 }
 async function beforeCreateClose(done: () => void) {
-  if (!createDirty.value) { done(); return; }
+  if (!createDirty.value) {
+    createContextToken += 1;
+    saving.value = false;
+    done();
+    return;
+  }
   if (await createUnsaved.confirmDiscard()) done();
 }
 
@@ -158,6 +177,8 @@ async function load() {
 }
 function search() { query.page = 1; void load(); }
 function openCreate() {
+  createContextToken += 1;
+  saving.value = false;
   Object.assign(form, { title: '', category_id: categories.value[0]?.id || '', description: '', cover_asset_id: null, is_recommended: false, sort_order: 0 });
   createBaseline = snapshotCreate();
   createUnsaved.markClean();
@@ -165,16 +186,31 @@ function openCreate() {
 }
 async function create() {
   if (!form.title.trim() || !form.category_id) { ElMessage.warning('请填写课程标题并选择培训类别'); return; }
+  const contextToken = createContextToken;
+  const operation = ++createOperationSequence;
+  createLatestOperation = operation;
+  const submitted = snapshotCreate();
   saving.value = true;
   try {
-    const created = await http.post('/admin/courses', { ...form }) as { id: Id };
-    createBaseline = snapshotCreate();
-    createUnsaved.markClean();
+    const created = await http.post('/admin/courses', submitted) as { id: Id };
+    const sameContext = contextToken === createContextToken;
+    if (sameContext && operation > createLastAppliedOperation) {
+      createLastAppliedOperation = operation;
+      createBaseline = { ...submitted };
+      createDirty.value = !sameCreateDraft(snapshotCreate(), createBaseline);
+    }
     ElMessage.success('课程草稿已创建');
-    createVisible.value = false;
-    if (canRead.value) await router.push(`/admin/courses/${created.id}`);
-    else ElMessage.info(`课程 ${created.id} 已创建；获得查看权限后可继续维护目录`);
-  } finally { saving.value = false; }
+    if (sameContext && operation === createLatestOperation && sameCreateDraft(snapshotCreate(), submitted)) {
+      createUnsaved.markClean();
+      saving.value = false;
+      createContextToken += 1;
+      createVisible.value = false;
+      if (canRead.value) await router.push(`/admin/courses/${created.id}`);
+      else ElMessage.info(`课程 ${created.id} 已创建；获得查看权限后可继续维护目录`);
+    }
+  } finally {
+    if (contextToken === createContextToken && operation === createLatestOperation) saving.value = false;
+  }
 }
 async function publish(row: CourseRow) {
   await ElMessageBox.confirm('系统将重新校验全部必学视频是否就绪。确认上架？', '上架课程', { type: 'warning' });

@@ -39,6 +39,7 @@ const testContext = {
   permissions: new Set(['courses:read', 'courses:write', 'courses:publish', 'media:write', 'regulations:read']),
   routerPushes: [],
   unsavedSources: [],
+  deferredRequests: new Map(),
 };
 let clientComponentCode = '';
 let courseListClientCode = '';
@@ -68,6 +69,11 @@ const httpStubCode = `
     const key = method + ' ' + path;
     if (context.failRequests.has(key)) throw new Error('configured failure: ' + key);
   };
+  const waitConfigured = async (method, path) => {
+    const key = method + ' ' + path;
+    const queue = context.deferredRequests.get(key);
+    if (queue?.length) await queue.shift().promise;
+  };
   export default {
     async get(path) {
       context.calls.push({ method: 'GET', path });
@@ -88,12 +94,14 @@ const httpStubCode = `
     async put(path, body) {
       context.calls.push({ method: 'PUT', path, body: clone(body) });
       rejectConfigured('PUT', path);
+      await waitConfigured('PUT', path);
       if (path === '/admin/courses/course-1') Object.assign(context.course, clone(body));
       return {};
     },
     async post(path, body) {
       context.calls.push({ method: 'POST', path, body: clone(body) });
       rejectConfigured('POST', path);
+      await waitConfigured('POST', path);
       if (path === '/admin/courses') return { id: 'course-created' };
       if (path.endsWith('/publish')) context.course.status = 'published';
       if (path.endsWith('/offline')) context.course.status = 'offline';
@@ -301,6 +309,21 @@ function coursePutCalls() {
   return testContext.calls.filter((call) => call.method === 'PUT' && call.path === '/admin/courses/course-1');
 }
 
+function deferRequest(method, path) {
+  let resolvePromise;
+  let rejectPromise;
+  const promise = new Promise((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  const deferred = { promise, resolve: resolvePromise, reject: rejectPromise };
+  const key = `${method} ${path}`;
+  const queue = testContext.deferredRequests.get(key) || [];
+  queue.push(deferred);
+  testContext.deferredRequests.set(key, queue);
+  return deferred;
+}
+
 before(async () => {
   globalThis.__courseDetailStateTest = testContext;
   vite = await createServer({
@@ -341,6 +364,7 @@ beforeEach(() => {
   testContext.permissions = new Set(['courses:read', 'courses:write', 'courses:publish', 'media:write', 'regulations:read']);
   testContext.routerPushes = [];
   testContext.unsavedSources = [];
+  testContext.deferredRequests = new Map();
 });
 
 test('normalizes legacy numeric regulation options and saves add, echo, and removal as string IDs', async () => {
@@ -494,5 +518,205 @@ test('protects the Courses create draft and never redirects a write-only creator
   assert.equal(mounted.state.createVisible, false);
   assert.equal(mounted.state.form.title, '');
   assert.equal(createSource.dirty.value, false);
+  mounted.unmount();
+});
+
+test('a completed create only closes and navigates the exact submitted draft context', async () => {
+  const mounted = await mountCourses();
+  const [createSource] = testContext.unsavedSources;
+
+  mounted.state.openCreate();
+  mounted.state.form.title = '创建请求 A';
+  const first = deferRequest('POST', '/admin/courses');
+  const firstSave = mounted.state.create();
+  await waitFor(() => testContext.calls.some((call) => call.method === 'POST' && call.body?.title === '创建请求 A'), 1800, 'first create request');
+  mounted.state.form.title = '响应前草稿 B';
+  await nextTick();
+  assert.equal(testContext.calls.find((call) => call.method === 'POST')?.body?.title, '创建请求 A');
+  first.resolve();
+  await firstSave;
+  assert.equal(mounted.state.createVisible, true);
+  assert.equal(mounted.state.form.title, '响应前草稿 B');
+  assert.equal(createSource.dirty.value, true);
+  assert.deepEqual(testContext.routerPushes, []);
+
+  await mounted.state.closeCreate();
+  mounted.state.openCreate();
+  mounted.state.form.title = '旧弹窗请求 A';
+  const stale = deferRequest('POST', '/admin/courses');
+  const staleSave = mounted.state.create();
+  await waitFor(() => testContext.calls.filter((call) => call.method === 'POST').length === 2, 1800, 'stale create request');
+  await mounted.state.closeCreate();
+  mounted.state.openCreate();
+  mounted.state.form.title = '新弹窗草稿 B';
+  await nextTick();
+  stale.resolve();
+  await staleSave;
+  assert.equal(mounted.state.createVisible, true);
+  assert.equal(mounted.state.form.title, '新弹窗草稿 B');
+  assert.equal(createSource.dirty.value, true);
+  assert.deepEqual(testContext.routerPushes, []);
+  mounted.unmount();
+});
+
+test('course metadata success advances only its submitted snapshot and ignores an older response', async () => {
+  const mounted = await mountCourseDetail();
+  const [metadataSource] = testContext.unsavedSources;
+
+  mounted.state.form.description = '元数据请求 A';
+  const first = deferRequest('PUT', '/admin/courses/course-1');
+  const firstSave = mounted.state.saveCourse();
+  await waitFor(() => coursePutCalls().length === 1, 1800, 'first metadata save');
+  mounted.state.form.description = '响应前草稿 B';
+  await nextTick();
+  assert.equal(coursePutCalls()[0].body.description, '元数据请求 A');
+  first.resolve();
+  await firstSave;
+  assert.equal(mounted.state.form.description, '响应前草稿 B');
+  assert.equal(metadataSource.dirty.value, true);
+  await metadataSource.confirmDiscard();
+  assert.equal(mounted.state.form.description, '元数据请求 A');
+
+  mounted.state.form.description = '较旧请求 C';
+  const older = deferRequest('PUT', '/admin/courses/course-1');
+  const olderSave = mounted.state.saveCourse();
+  await waitFor(() => coursePutCalls().length === 2, 1800, 'older metadata save');
+  mounted.state.form.description = '较新请求 D';
+  const newer = deferRequest('PUT', '/admin/courses/course-1');
+  const newerSave = mounted.state.saveCourse();
+  await waitFor(() => coursePutCalls().length === 3, 1800, 'newer metadata save');
+  newer.resolve();
+  await newerSave;
+  mounted.state.form.description = 'D 成功后的草稿 E';
+  await nextTick();
+  older.resolve();
+  await olderSave;
+  assert.equal(mounted.state.form.description, 'D 成功后的草稿 E');
+  assert.equal(metadataSource.dirty.value, true);
+  await metadataSource.confirmDiscard();
+  assert.equal(mounted.state.form.description, '较新请求 D');
+  mounted.unmount();
+});
+
+test('a stale chapter save cannot clean or close a reopened chapter draft', async () => {
+  const mounted = await mountCourseDetail();
+  const chapterSource = testContext.unsavedSources[1];
+
+  mounted.state.openChapter({ id: 'chapter-same', title: '章节原值', sort_order: 1, lessons: [] });
+  mounted.state.chapterForm.title = '章节请求 A';
+  const sameContext = deferRequest('PUT', '/admin/courses/course-1/chapters/chapter-same');
+  const sameContextSave = mounted.state.saveChapter();
+  await waitFor(() => testContext.calls.some((call) => call.path?.endsWith('/chapters/chapter-same')), 1800, 'same-context chapter save');
+  mounted.state.chapterForm.title = '响应前章节草稿 B';
+  await nextTick();
+  assert.equal(testContext.calls.find((call) => call.path?.endsWith('/chapters/chapter-same'))?.body?.title, '章节请求 A');
+  sameContext.resolve();
+  await sameContextSave;
+  assert.equal(mounted.state.chapterForm.title, '响应前章节草稿 B');
+  assert.equal(mounted.state.chapterVisible, true);
+  assert.equal(chapterSource.dirty.value, true);
+  await mounted.state.closeChapter();
+
+  mounted.state.openChapter({ id: 'chapter-a', title: '章节 A 原值', sort_order: 1, lessons: [] });
+  mounted.state.chapterForm.title = '章节 A 提交值';
+  const deferred = deferRequest('PUT', '/admin/courses/course-1/chapters/chapter-a');
+  const pending = mounted.state.saveChapter();
+  await waitFor(() => testContext.calls.some((call) => call.path?.endsWith('/chapters/chapter-a')), 1800, 'chapter A save');
+  await mounted.state.closeChapter();
+  mounted.state.openChapter({ id: 'chapter-b', title: '章节 B 原值', sort_order: 2, lessons: [] });
+  mounted.state.chapterForm.title = '章节 B 草稿';
+  await nextTick();
+  deferred.resolve();
+  await pending;
+  assert.equal(mounted.state.editingChapterId, 'chapter-b');
+  assert.equal(mounted.state.chapterForm.title, '章节 B 草稿');
+  assert.equal(mounted.state.chapterVisible, true);
+  assert.equal(chapterSource.dirty.value, true);
+  mounted.unmount();
+});
+
+test('a stale lesson save cannot clean or close a reopened lesson draft', async () => {
+  const mounted = await mountCourseDetail();
+  const lessonSource = testContext.unsavedSources[2];
+
+  mounted.state.openLesson('chapter-same', {
+    id: 'lesson-same', title: '课时原值', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
+  });
+  mounted.state.lessonForm.title = '课时请求 A';
+  const sameContext = deferRequest('PUT', '/admin/courses/course-1/lessons/lesson-same');
+  const sameContextSave = mounted.state.saveLesson();
+  await waitFor(() => testContext.calls.some((call) => call.path?.endsWith('/lessons/lesson-same')), 1800, 'same-context lesson save');
+  mounted.state.lessonForm.title = '响应前课时草稿 B';
+  await nextTick();
+  assert.equal(testContext.calls.find((call) => call.path?.endsWith('/lessons/lesson-same'))?.body?.title, '课时请求 A');
+  sameContext.resolve();
+  await sameContextSave;
+  assert.equal(mounted.state.lessonForm.title, '响应前课时草稿 B');
+  assert.equal(mounted.state.lessonVisible, true);
+  assert.equal(lessonSource.dirty.value, true);
+  await mounted.state.closeLesson();
+
+  mounted.state.openLesson('chapter-a', {
+    id: 'lesson-a', title: '课时 A 原值', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
+  });
+  mounted.state.lessonForm.title = '课时 A 提交值';
+  const deferred = deferRequest('PUT', '/admin/courses/course-1/lessons/lesson-a');
+  const pending = mounted.state.saveLesson();
+  await waitFor(() => testContext.calls.some((call) => call.path?.endsWith('/lessons/lesson-a')), 1800, 'lesson A save');
+  await mounted.state.closeLesson();
+  mounted.state.openLesson('chapter-b', {
+    id: 'lesson-b', title: '课时 B 原值', lesson_type: 'video', required: false, sort_order: 2, current_version: null,
+  });
+  mounted.state.lessonForm.title = '课时 B 草稿';
+  await nextTick();
+  deferred.resolve();
+  await pending;
+  assert.equal(mounted.state.editingLessonId, 'lesson-b');
+  assert.equal(mounted.state.lessonForm.title, '课时 B 草稿');
+  assert.equal(mounted.state.lessonVisible, true);
+  assert.equal(lessonSource.dirty.value, true);
+  mounted.unmount();
+});
+
+test('a stale video save cannot clean or close a reopened replacement draft', async () => {
+  const mounted = await mountCourseDetail();
+  const videoSource = testContext.unsavedSources[3];
+
+  mounted.state.openVideo({
+    id: 'lesson-same', title: '课时', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
+  });
+  mounted.state.replacementAssetId = 'video-request-a';
+  const sameContext = deferRequest('POST', '/admin/courses/course-1/lessons/lesson-same/versions');
+  const sameContextSave = mounted.state.replaceVideo();
+  await waitFor(() => testContext.calls.some((call) => call.path?.endsWith('/lessons/lesson-same/versions')), 1800, 'same-context video save');
+  mounted.state.replacementAssetId = 'video-draft-b';
+  await nextTick();
+  assert.equal(testContext.calls.find((call) => call.path?.endsWith('/lessons/lesson-same/versions'))?.body?.asset_id, 'video-request-a');
+  sameContext.resolve();
+  await sameContextSave;
+  assert.equal(mounted.state.replacementAssetId, 'video-draft-b');
+  assert.equal(mounted.state.videoVisible, true);
+  assert.equal(videoSource.dirty.value, true);
+  await mounted.state.closeVideo();
+
+  mounted.state.openVideo({
+    id: 'lesson-a', title: '课时 A', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
+  });
+  mounted.state.replacementAssetId = 'video-a';
+  const deferred = deferRequest('POST', '/admin/courses/course-1/lessons/lesson-a/versions');
+  const pending = mounted.state.replaceVideo();
+  await waitFor(() => testContext.calls.some((call) => call.path?.endsWith('/lessons/lesson-a/versions')), 1800, 'video A save');
+  await mounted.state.closeVideo();
+  mounted.state.openVideo({
+    id: 'lesson-b', title: '课时 B', lesson_type: 'video', required: true, sort_order: 2, current_version: null,
+  });
+  mounted.state.replacementAssetId = 'video-b';
+  await nextTick();
+  deferred.resolve();
+  await pending;
+  assert.equal(mounted.state.replacementLessonId, 'lesson-b');
+  assert.equal(mounted.state.replacementAssetId, 'video-b');
+  assert.equal(mounted.state.videoVisible, true);
+  assert.equal(videoSource.dirty.value, true);
   mounted.unmount();
 });
