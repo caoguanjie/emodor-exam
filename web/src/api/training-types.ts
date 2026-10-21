@@ -12,6 +12,48 @@ export interface Page<T> {
   page_size: number;
 }
 
+export type CourseStatus = 'draft' | 'published' | 'offline';
+
+export interface CourseSummary {
+  id: Id;
+  title: string;
+  category_id: Id;
+  cover_asset_id: Id | null;
+  status: CourseStatus;
+  required_lesson_count: number;
+}
+
+export interface LessonVersionView {
+  version_id: Id;
+  asset_id: Id;
+  duration_ms: number;
+}
+
+export interface CourseLessonView {
+  id: Id;
+  title: string;
+  lesson_type: 'video';
+  required: boolean;
+  sort_order: number;
+  current_version: LessonVersionView | null;
+}
+
+export interface CourseChapterView {
+  id: Id;
+  title: string;
+  sort_order: number;
+  lessons: CourseLessonView[];
+}
+
+export interface CourseDetail extends CourseSummary {
+  description: string | null;
+  chapters: CourseChapterView[];
+  regulation_ids?: Id[];
+  is_recommended?: boolean;
+  sort_order?: number;
+  missing_required_lesson_ids?: Id[];
+}
+
 export interface PoolRule {
   type: QuestionType;
   count: number;

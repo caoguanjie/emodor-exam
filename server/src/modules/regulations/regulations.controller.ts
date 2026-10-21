@@ -4,7 +4,8 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Request, Response } from 'express';
 import { Readable } from 'node:stream';
-import { IsArray, IsInt, IsOptional, IsString, MaxLength, Min, MinLength, ArrayMinSize } from 'class-validator';
+import { IsArray, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { RegulationService } from './regulation.service';
 import { RegulationVersionService } from './regulation-version.service';
 import { RegulationScopeService } from './regulation-scope.service';
@@ -14,21 +15,25 @@ import { Roles, roleHas } from '../../common/guards/roles.guard';
 import { SkipEnvelope } from '../../common/response.interceptor';
 import { Errors, RoleEnum } from '../../common/errors';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
-import { DtoValidationPipe } from '../../common/dto-validation.pipe';
+import { DtoValidationPipe, StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { SysUser } from '../../entities/sys-user.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AccessService } from '../access/access.service';
+import { CategoryService } from '../training/category.service';
+import { Permissions } from '../../common/decorators/permissions.decorator';
 
 class CreateRegulationDto {
   @IsString() @MinLength(1) @MaxLength(128) title!: string;
   @IsString() @MinLength(1) @MaxLength(32) category!: string;
+  @IsOptional() @ValidateIf((_object, value) => value !== null) @IsString() @Matches(/^[1-9]\d*$/) category_id?: string | null;
   @IsOptional() @IsString() @MaxLength(512) description?: string;
 }
 
 class UpdateRegulationDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(128) title?: string;
   @IsOptional() @IsString() @MinLength(1) @MaxLength(32) category?: string;
+  @IsOptional() @ValidateIf((_object, value) => value !== null) @IsString() @Matches(/^[1-9]\d*$/) category_id?: string | null;
   @IsOptional() @IsString() @MaxLength(512) description?: string;
 }
 
@@ -47,6 +52,20 @@ class CurrentVersionDto {
   @IsString() version_id!: string;
 }
 
+const QueryNumber = () => Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)));
+
+class RegulationCategoryOptionsDto {
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(1_000_000) page?: number;
+  @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
+  @IsOptional() @IsString() @MaxLength(128) keyword?: string;
+}
+
+function assertOptionQueryKeys(value: unknown): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw Errors.param('类别选项查询必须是对象');
+  const unknown = Object.keys(value).filter((key) => !['page', 'page_size', 'keyword'].includes(key));
+  if (unknown.length) throw Errors.param(`类别选项查询包含不支持的字段：${unknown.join(',')}`);
+}
+
 const REG_ADMIN = [RoleEnum.SUPER_ADMIN, RoleEnum.REGULATION_ADMIN] as const;
 
 /** /regulations 制度文件管理模块（04 册 3.4：15 个管理侧接口 + content 员工侧） */
@@ -60,6 +79,7 @@ export class RegulationsController {
     private readonly parsePipeline: ParsePipelineService,
     @InjectRepository(SysUser) private readonly userRepo: Repository<SysUser>,
     private readonly access: AccessService,
+    private readonly categories: CategoryService,
   ) {}
 
   private async withDepartment(user: AuthUser): Promise<{ id: number; role: string; departmentId: string | null }> {
@@ -83,6 +103,18 @@ export class RegulationsController {
   @Roles(...REG_ADMIN)
   list(@Query() query: any) {
     return this.regulations.list(query);
+  }
+
+  @Get('category-options')
+  @Roles(...REG_ADMIN)
+  @Permissions('regulations:write')
+  async categoryOptions(
+    @Query(new StrictDtoValidationPipe(['page', 'page_size', 'keyword'])) query: RegulationCategoryOptionsDto,
+    @Req() req: Request,
+  ) {
+    assertOptionQueryKeys(req.query);
+    const page = await this.categories.list({ ...query, status: 1 });
+    return { ...page, items: page.items.map((item) => ({ id: String(item.id), name: item.name })) };
   }
 
   @Get(':id')

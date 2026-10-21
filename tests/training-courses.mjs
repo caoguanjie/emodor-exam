@@ -1,0 +1,268 @@
+import { createRequire } from 'node:module';
+import { randomBytes } from 'node:crypto';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawn } from 'node:child_process';
+import { randomStrongPassword } from './training-access.mjs';
+
+const require = createRequire(new URL('../server/package.json', import.meta.url));
+const Redis = require('ioredis');
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function captchaAnswer(ctx, captchaId) {
+  const redis = new Redis({
+    host: ctx.env.REDIS_HOST || '127.0.0.1',
+    port: Number(ctx.env.REDIS_PORT || 6379),
+    password: ctx.env.REDIS_PASSWORD || undefined,
+  });
+  try { return await redis.get(`${ctx.env.REDIS_KEY_PREFIX || ''}auth:captcha:${captchaId}`); }
+  finally { await redis.quit(); }
+}
+
+async function login(ctx, username, password, ...personalValues) {
+  const sourceIp = `198.51.100.${(login.sequence = ((login.sequence || 0) % 200) + 1)}`;
+  const headers = { 'X-Forwarded-For': sourceIp };
+  const captcha = await ctx.request(null, 'POST', '/auth/captcha', undefined, headers);
+  assert(captcha.status === 200 && captcha.data?.captcha_id, `${username} captcha failed`);
+  const answer = await captchaAnswer(ctx, captcha.data.captcha_id);
+  assert(answer, `${username} captcha answer missing`);
+  const actor = {};
+  const result = await ctx.request(actor, 'POST', '/auth/login', {
+    username, password, captcha_id: captcha.data.captcha_id, captcha_code: answer,
+  }, headers);
+  assert(result.status === 200 && result.data?.access_token, `${username} login failed: ${result.status}`);
+  actor.accessToken = result.data.access_token;
+  if (!result.data.force_change_password) return actor;
+  const nextPassword = randomStrongPassword(username, ...personalValues);
+  const changed = await ctx.request(actor, 'PUT', '/auth/password', { old_password: password, new_password: nextPassword });
+  assert(changed.status === 200 && changed.data?.access_token, `${username} first password change failed`);
+  actor.accessToken = changed.data.access_token;
+  return actor;
+}
+
+function multipart(fields, bytes, filename, contentType) {
+  const boundary = `----ruleexam-courses-${randomBytes(12).toString('hex')}`;
+  const chunks = [];
+  for (const [name, value] of Object.entries(fields)) {
+    chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+  }
+  chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`));
+  chunks.push(bytes);
+  chunks.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+  return { body: Buffer.concat(chunks), headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` } };
+}
+
+async function uploadMedia(ctx, actor, purpose, bytes, filename, contentType) {
+  const payload = multipart({ purpose }, bytes, filename, contentType);
+  return ctx.request(actor, 'POST', '/media/upload', payload.body, payload.headers);
+}
+
+async function videoFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'ruleexam-course-video-'));
+  const output = join(root, 'lesson.mp4');
+  try {
+    await new Promise((resolve, reject) => {
+      const child = spawn(process.env.FFMPEG_PATH || 'ffmpeg', [
+        '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=32x32:d=1',
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an', '-movflags', '+faststart', '-y', output,
+      ], { shell: false, stdio: ['ignore', 'ignore', 'pipe'] });
+      let stderr = '';
+      let stderrBytes = 0;
+      let settled = false;
+      let stopReason;
+      let processError;
+      let timer;
+      const requestStop = (error) => {
+        if (settled || stopReason) return;
+        stopReason = error;
+        child.kill('SIGKILL');
+      };
+      child.stderr.on('data', (chunk) => {
+        if (settled || stopReason) return;
+        stderrBytes += chunk.length;
+        if (stderrBytes > 256 * 1024) {
+          requestStop(new Error('ffmpeg fixture output exceeded limit'));
+          return;
+        }
+        stderr += chunk.toString();
+      });
+      child.once('error', (error) => { processError = error; });
+      child.once('close', (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (stopReason) reject(stopReason);
+        else if (processError) reject(processError);
+        else if (code === 0) resolve();
+        else reject(new Error(`ffmpeg fixture failed: ${stderr.slice(0, 200)}`));
+      });
+      timer = setTimeout(() => requestStop(new Error('ffmpeg fixture timed out')), 15_000);
+    });
+    return await readFile(output);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+async function createCategory(ctx, admin, name) {
+  const response = await ctx.request(admin, 'POST', '/admin/training-categories', { name, description: 'B1 fixture' });
+  assert(response.status === 200 && response.data?.id, `category create failed: ${response.status}`);
+  return String(response.data.id);
+}
+
+async function createStudent(ctx, admin, categoryId, source, label) {
+  const username = `course_${label}_${randomBytes(4).toString('hex')}`;
+  const employeeNo = `C${randomBytes(5).toString('hex')}`;
+  const password = randomStrongPassword(username, employeeNo, label);
+  const response = await ctx.request(admin, 'POST', '/admin/students', {
+    username, password, real_name: label, employee_no: employeeNo,
+    category_id: String(categoryId), source,
+  });
+  assert(response.status === 200 && response.data?.id, `${label} create failed: ${response.status}`);
+  return { id: String(response.data.id), username, password, employeeNo, realName: label };
+}
+
+async function runBody(ctx) {
+  ctx.reportOwnedRuntime?.({ stage: 'training-courses-start', database: ctx.env.DB_DATABASE });
+  const admin = await login(ctx, 'admin', ctx.adminPassword, '超级管理员');
+  const adminProfile = await ctx.request(admin, 'GET', '/auth/profile');
+  assert(adminProfile.status === 200 && adminProfile.data?.id, 'admin profile failed');
+  const adminId = String(adminProfile.data.id);
+
+  const categoryA = await createCategory(ctx, admin, `B1 初级 ${randomBytes(3).toString('hex')}`);
+  const categoryB = await createCategory(ctx, admin, `B1 其他 ${randomBytes(3).toString('hex')}`);
+  const institution = await createStudent(ctx, admin, categoryA, 'institution', '机构学员');
+  const external = await createStudent(ctx, admin, categoryA, 'external', '外来学员');
+  const otherCategory = await createStudent(ctx, admin, categoryB, 'institution', '其他类别学员');
+  institution.actor = await login(ctx, institution.username, institution.password, institution.employeeNo, institution.realName);
+  external.actor = await login(ctx, external.username, external.password, external.employeeNo, external.realName);
+  otherCategory.actor = await login(ctx, otherCategory.username, otherCategory.password, otherCategory.employeeNo, otherCategory.realName);
+
+  const permissionUser = await createStudent(ctx, admin, categoryA, 'institution', '窄权限管理员');
+  const role = await ctx.request(admin, 'POST', '/admin/roles', {
+    code: `course_writer_${randomBytes(4).toString('hex')}`,
+    name: 'B1 课程与制度编辑',
+    permissions: ['courses:write', 'regulations:write'],
+  });
+  assert(role.status === 200 && role.data?.id, `role create failed: ${role.status}`);
+  const assigned = await ctx.request(admin, 'PUT', `/admin/administrators/${permissionUser.id}/roles`, { role_ids: [String(role.data.id)] });
+  assert(assigned.status === 200, `role assign failed: ${assigned.status}`);
+  permissionUser.actor = await login(ctx, permissionUser.username, permissionUser.password, permissionUser.employeeNo, permissionUser.realName);
+  const regulationOptions = await ctx.request(permissionUser.actor, 'GET', '/regulations/category-options?page=1&page_size=100');
+  assert(regulationOptions.status === 200 && regulationOptions.data?.items?.some((item) => String(item.id) === categoryA), `regulation category options denied: ${regulationOptions.status}`);
+  const courseOptions = await ctx.request(permissionUser.actor, 'GET', '/admin/courses/category-options?page=1&page_size=100');
+  assert(courseOptions.status === 200 && courseOptions.data?.items?.some((item) => String(item.id) === categoryA), `course category options denied: ${courseOptions.status}`);
+  const categoryAdminList = await ctx.request(permissionUser.actor, 'GET', '/admin/training-categories');
+  assert(categoryAdminList.status === 403, `narrow writer reached category management: ${categoryAdminList.status}`);
+  const narrowWriterCourse = await ctx.request(permissionUser.actor, 'POST', '/admin/courses', {
+    title: 'B1 仅写权限草稿', category_id: categoryB,
+  });
+  assert(narrowWriterCourse.status === 200 && narrowWriterCourse.data?.id, `courses:write could not create: ${narrowWriterCourse.status}`);
+  const narrowWriterList = await ctx.request(permissionUser.actor, 'GET', '/admin/courses');
+  assert(narrowWriterList.status === 403, `courses:write unexpectedly granted courses:read: ${narrowWriterList.status}`);
+
+  const regulation = await ctx.request(admin, 'POST', '/regulations', {
+    title: `B1 关联制度 ${randomBytes(3).toString('hex')}`,
+    category: '保留旧分类', category_id: categoryA, description: '课程信息关联',
+  });
+  assert(regulation.status === 200 && String(regulation.data?.category_id) === categoryA && regulation.data?.category === '保留旧分类', `regulation category create failed: ${regulation.status}`);
+
+  const course = await ctx.request(admin, 'POST', '/admin/courses', {
+    title: 'B1 视频课程', category_id: categoryA, description: '生命周期闭环',
+    regulation_ids: [String(regulation.data.id)], is_recommended: true, sort_order: 1,
+  });
+  assert(course.status === 200 && course.data?.id, `course create failed: ${course.status}/${course.code}`);
+  const courseId = String(course.data.id);
+  const chapter = await ctx.request(admin, 'POST', `/admin/courses/${courseId}/chapters`, { title: '第一章', sort_order: 1 });
+  assert(chapter.status === 200 && chapter.data?.id, `chapter create failed: ${chapter.status}`);
+  const unknownLesson = await ctx.request(admin, 'POST', `/admin/courses/${courseId}/lessons`, {
+    chapter_id: String(chapter.data.id), title: '未知课时', lesson_type: 'document', required: true, sort_order: 1,
+  });
+  assert(unknownLesson.status === 400, `unknown lesson type expected 400, got ${unknownLesson.status}`);
+  const lesson = await ctx.request(admin, 'POST', `/admin/courses/${courseId}/lessons`, {
+    chapter_id: String(chapter.data.id), title: '视频课时', lesson_type: 'video', required: true, sort_order: 1,
+  });
+  assert(lesson.status === 200 && lesson.data?.id, `lesson create failed: ${lesson.status}`);
+  const lessonId = String(lesson.data.id);
+
+  const publishWithoutRequiredVideo = await ctx.request(admin, 'POST', `/admin/courses/${courseId}/publish`);
+  assert(publishWithoutRequiredVideo.status === 409, `publish without required video expected 409, got ${publishWithoutRequiredVideo.status}`);
+
+  const failedUpload = await uploadMedia(ctx, admin, 'video', Buffer.from('not-an-mp4'), 'failed.mp4', 'video/mp4');
+  assert(failedUpload.status === 400, `failed media expected 400, got ${failedUpload.status}`);
+  const failedRows = await ctx.queryTestDb('SELECT id FROM media_asset WHERE uploaded_by = ? AND purpose = ? AND status = ? ORDER BY id DESC LIMIT 1', [adminId, 'video', 'failed']);
+  assert(failedRows.length === 1, 'processing-failed media row missing');
+
+  const videoBytes = await videoFixture();
+  const firstUpload = await uploadMedia(ctx, admin, 'video', videoBytes, 'lesson-v1.mp4', 'video/mp4');
+  assert(firstUpload.status === 200 && firstUpload.data?.status === 'ready', `first video upload failed: ${firstUpload.status}`);
+  const firstAssetId = String(firstUpload.data.asset_id);
+  const firstVersion = await ctx.request(admin, 'POST', `/admin/courses/${courseId}/lessons/${lessonId}/versions`, { asset_id: firstAssetId });
+  assert(firstVersion.status === 200 && firstVersion.data?.version_id, `first lesson version failed: ${firstVersion.status}`);
+  const oldVersionId = String(firstVersion.data.version_id);
+
+  const publishWithReadyVideo = await ctx.request(admin, 'POST', `/admin/courses/${courseId}/publish`);
+  assert(publishWithReadyVideo.status === 200, `publish with ready video failed: ${publishWithReadyVideo.status}`);
+
+  const secondUpload = await uploadMedia(ctx, admin, 'video', videoBytes, 'lesson-v2.mp4', 'video/mp4');
+  assert(secondUpload.status === 200 && secondUpload.data?.status === 'ready', `second video upload failed: ${secondUpload.status}`);
+  const replaceVideo = await ctx.request(admin, 'POST', `/admin/courses/${courseId}/lessons/${lessonId}/versions`, { asset_id: String(secondUpload.data.asset_id) });
+  assert(replaceVideo.status === 200 && replaceVideo.data?.version_id, `replace video failed: ${replaceVideo.status}`);
+  assert(String(replaceVideo.data.version_id) !== oldVersionId, 'replace video mutated the old version');
+  const deleteReferencedVideo = await ctx.request(admin, 'DELETE', `/media/${firstAssetId}`);
+  assert(deleteReferencedVideo.status === 409, `referenced video delete expected 409, got ${deleteReferencedVideo.status}`);
+
+  const secondary = await ctx.request(admin, 'POST', '/admin/courses', {
+    title: 'B1 非推荐课程', category_id: categoryA, is_recommended: false, sort_order: 99,
+  });
+  assert(secondary.status === 200 && secondary.data?.id, `secondary course create failed: ${secondary.status}`);
+  const secondaryId = String(secondary.data.id);
+  const publishSecondary = await ctx.request(admin, 'POST', `/admin/courses/${secondaryId}/publish`);
+  assert(publishSecondary.status === 200, `secondary course publish failed: ${publishSecondary.status}`);
+
+  const adminPage = await ctx.request(admin, 'GET', `/admin/courses?page=1&page_size=1&category_id=${categoryA}`);
+  assert(adminPage.status === 200 && adminPage.data?.total === 2 && adminPage.data?.items?.length === 1, 'admin course pagination mismatch');
+  const institutionCourses = await ctx.request(institution.actor, 'GET', '/me/courses?page=1&page_size=1');
+  assert(institutionCourses.status === 200 && institutionCourses.data?.total === 2 && institutionCourses.data?.items?.length === 1
+    && String(institutionCourses.data.items[0]?.id) === courseId, 'institution recommendation/page 1 mismatch');
+  const institutionPageTwo = await ctx.request(institution.actor, 'GET', '/me/courses?page=2&page_size=1');
+  assert(institutionPageTwo.status === 200 && institutionPageTwo.data?.total === 2
+    && String(institutionPageTwo.data.items[0]?.id) === secondaryId, 'institution course page 2 mismatch');
+  const externalCourses = await ctx.request(external.actor, 'GET', '/me/courses?page=1&page_size=20');
+  assert(externalCourses.status === 200 && externalCourses.data?.total === 0, 'external learner received assigned courses');
+  const institutionDetail = await ctx.request(institution.actor, 'GET', `/me/courses/${courseId}`);
+  assert(institutionDetail.status === 200 && institutionDetail.data?.chapters?.[0]?.lessons?.[0]?.current_version?.version_id === String(replaceVideo.data.version_id), 'learner course detail/current version mismatch');
+  const otherCategoryCourse = await ctx.request(otherCategory.actor, 'GET', `/me/courses/${courseId}`);
+  assert(otherCategoryCourse.status === 403, `other category course expected 403, got ${otherCategoryCourse.status}`);
+
+  const offline = await ctx.request(admin, 'POST', `/admin/courses/${courseId}/offline`);
+  assert(offline.status === 200 && offline.data?.status === 'offline', `course offline failed: ${offline.status}`);
+  const afterOffline = await ctx.request(institution.actor, 'GET', '/me/courses?page=1&page_size=20');
+  assert(afterOffline.status === 200 && afterOffline.data?.total === 1
+    && !afterOffline.data.items.some((item) => String(item.id) === courseId), 'offline course remained visible');
+  const republish = await ctx.request(admin, 'POST', `/admin/courses/${courseId}/publish`);
+  assert(republish.status === 200 && republish.data?.status === 'published', `course republish failed: ${republish.status}`);
+
+  const disableCategory = await ctx.request(admin, 'PUT', `/admin/training-categories/${categoryA}/status`, { status: 0 });
+  assert(disableCategory.status === 200, `category disable failed: ${disableCategory.status}`);
+  const preserveInactiveReference = await ctx.request(admin, 'PUT', `/regulations/${regulation.data.id}`, {
+    title: 'B1 关联制度（更新）', category_id: categoryA,
+  });
+  assert(preserveInactiveReference.status === 200 && String(preserveInactiveReference.data?.category_id) === categoryA,
+    `unchanged inactive regulation category should be preserved: ${preserveInactiveReference.status}`);
+  const clearInactiveReference = await ctx.request(admin, 'PUT', `/regulations/${regulation.data.id}`, { category_id: null });
+  assert(clearInactiveReference.status === 200 && clearInactiveReference.data?.category_id === null
+    && clearInactiveReference.data?.category === '保留旧分类', 'regulation category clear changed legacy category');
+
+  const deleteCategory = await ctx.request(admin, 'DELETE', `/admin/training-categories/${categoryA}`);
+  assert(deleteCategory.status === 409, `referenced category delete expected 409, got ${deleteCategory.status}`);
+}
+
+export async function run(ctx) {
+  await runBody(ctx);
+  console.log('training-courses: passed');
+}

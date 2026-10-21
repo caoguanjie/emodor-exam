@@ -15,6 +15,7 @@ export const PERMISSION_CATALOG = [
   'administrators:read', 'administrators:write',
   'sessions:read', 'sessions:write',
   'media:read', 'media:write',
+  'courses:read', 'courses:write', 'courses:publish',
   'system_settings:read', 'system_settings:write',
 ] as const;
 
@@ -57,6 +58,9 @@ export const PERMISSION_NAMES: Record<PermissionCode, string> = {
   'sessions:write': '强制下线会话',
   'media:read': '读取媒体',
   'media:write': '上传媒体',
+  'courses:read': '查看课程',
+  'courses:write': '维护课程',
+  'courses:publish': '发布课程',
   'system_settings:read': '查看系统配置',
   'system_settings:write': '维护系统配置',
 };

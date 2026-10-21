@@ -249,6 +249,39 @@ test('upgrade preserves existing rows and converges INFORMATION_SCHEMA with init
   await upgrade.end();
 });
 
+test('005 courses check/apply/recheck upgrades the accepted A4 schema without losing rows', async () => {
+  const database = await createDatabase('a4_courses_' + randomBytes(3).toString('hex'));
+  const acceptedA4Sql = execFileSync('git', ['show', 'c81ebe045cb25bb46f6ab5be077b68143b224a25:database/init.sql'], { cwd: ROOT, encoding: 'utf8' });
+  await admin.query(renderSchemaForDatabase(acceptedA4Sql, database));
+  const conn = await connectionFor(database);
+  await conn.query("INSERT INTO sys_department (name, sort, status) VALUES ('B1迁移保留数据', 1, 1)");
+  const courses = await migration('005_courses');
+
+  const before = await inspectMigrations({ connection: conn, database, migrations: [courses] });
+  assert.deepEqual(before.pending.map((item) => item.id), ['005_courses']);
+
+  const applied = await applyMigrations({ connection: conn, database, migrations: [courses] });
+  assert.deepEqual(applied.applied, ['005_courses']);
+
+  const after = await inspectMigrations({ connection: conn, database, migrations: [courses] });
+  assert.deepEqual(after.pending, []);
+  const [[preserved]] = await conn.query("SELECT COUNT(*) AS count FROM sys_department WHERE name = 'B1迁移保留数据'");
+  assert.equal(Number(preserved.count), 1);
+  const [tables] = await conn.query("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('training_course','course_chapter','course_lesson','lesson_version') ORDER BY TABLE_NAME");
+  assert.deepEqual(tables.map((row) => row.TABLE_NAME), ['course_chapter', 'course_lesson', 'lesson_version', 'training_course']);
+  const [[categoryColumn]] = await conn.query("SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'regulation' AND COLUMN_NAME = 'category_id' AND COLUMN_TYPE = 'bigint unsigned' AND IS_NULLABLE = 'YES'");
+  assert.equal(Number(categoryColumn.count), 1);
+  const [[permissions]] = await conn.query("SELECT COUNT(*) AS count FROM sys_permission WHERE code IN ('courses:read','courses:write','courses:publish')");
+  assert.equal(Number(permissions.count), 3);
+  const [[migrationRow]] = await conn.query("SELECT status, progress FROM schema_migration WHERE migration_id = '005_courses'");
+  assert.equal(migrationRow.status, 'applied');
+  assert.deepEqual(migrationRow.progress, [
+    'add_regulation_category_id', 'add_regulation_category_index', 'create_training_course',
+    'create_course_chapter', 'create_course_lesson', 'create_lesson_version', 'register_course_permissions',
+  ]);
+  await conn.end();
+});
+
 test('media migration completion checks reject same-count schema drift without destroying rows', async () => {
   const base = await migration();
   const media = await migration('003_media');

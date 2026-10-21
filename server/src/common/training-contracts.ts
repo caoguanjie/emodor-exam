@@ -16,6 +16,17 @@ export interface Page<T> {
   page_size: number;
 }
 
+export type CourseStatus = 'draft' | 'published' | 'offline';
+
+export interface CourseSummary {
+  id: Id;
+  title: string;
+  category_id: Id;
+  cover_asset_id: Id | null;
+  status: CourseStatus;
+  required_lesson_count: number;
+}
+
 export interface PoolRule {
   type: QuestionType;
   count: number;

@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训类别/学员/本人资料与 A4 受控媒体接口均以实际 controller/entity/migration 为准。课程表单、题库版本、发布/个人题单、持久草稿、图片答案/阅卷、监控和场次统计接口仍由后续任务在实际实现后补入。所有接口继续使用 `/api/v1`、`{code,message,data}`、DTO 校验、所有权校验和 HttpOnly refresh Cookie。
+> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训类别/学员/本人资料、A4 受控媒体与 B1 课程主体接口均以实际 controller/entity/migration 为准。B1 暂不提供 `/me/home`，该组合接口等待 A5 `SystemService.publicConfig()`；题库版本、发布/个人题单、持久草稿、图片答案/阅卷、监控和场次统计仍由后续任务补入。所有接口继续使用 `/api/v1`、`{code,message,data}`、DTO 校验、所有权校验和 HttpOnly refresh Cookie。
 
 ---
 
@@ -20,7 +20,7 @@
 | 认证方式 | `Authorization: Bearer <access_token>`（JWT 双令牌，见 1.3） |
 | 时间格式 | ISO 8601（`2026-09-12T14:30:00.000+08:00`）；纯秒数字段（如 `total_seconds`）为整型 |
 | 字段命名 | JSON 字段一律 snake_case，与数据库字段对齐（03 册） |
-| ID 字段 | 路径与 body 中的 `*_id` 一律为整型（对应 03 册 `BIGINT UNSIGNED`），不使用带前缀的字符串编码；唯一例外：异步任务编号 `task_id` 为服务端生成的业务编号字符串（Redis 承载、无数据库实体，05 册 4.4.2） |
+| ID 字段 | legacy 接口继续保留既有 number 响应以兼容页面；A1 后新增培训接口的 `Id` 与 body/path 中 `*_id` 使用正十进制字符串，避免 BIGINT 经 JavaScript `Number` 丢精度。异步 `task_id` 仍是服务端业务字符串 |
 | 幂等性 | GET/PUT 天然幂等；POST 中的关键动作（交卷、开考、会话开始）通过服务端状态校验实现幂等（见 1.5） |
 
 ### 1.2 统一响应结构
@@ -54,6 +54,8 @@
 
 所有列表接口强制以主键 `id` 作为最终 tie-breaker（`ORDER BY {sort} {order}, id DESC`）保证分页稳定；`sort` 白名单校验防注入——不在白名单内的取值返回 40001。
 
+**培训分页例外**：A1 后新增的 `Page<T>` 固定为 `{items,total,page,page_size}`。B1 的课程列表与两类 category-options 均使用 `items`；不改写 legacy `/regulations` 等接口的 `list` 字段。
+
 ### 1.3 认证与令牌（与 05 册 2.4.1 节一致）
 
 | 令牌 | 有效期 | 载荷 | 用途 |
@@ -86,7 +88,8 @@
 | API 范围 | 文档状态 | 规则 |
 |---|---|---|
 | `/auth`、`/users`、`/departments`、`/regulations`、`/ai`、`/learning`、旧 `/exams`、旧 `/statistics` | 当前 legacy 契约 | 旧制度阅读资格、旧固定卷字段与自动客观评分保持兼容；下发不含答案/解析，refresh 走 HttpOnly Cookie，DTO/统一信封不变 |
-| 培训类别/学员来源、课程/视频、题库版本/导入、发布快照、个人题单、持久草稿、图片附件/阅卷、监控、培训统计 | 计划契约（A1—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后，才在本册写精确 DTO、错误码、分页和路由；本阶段不凭设计表格制造“已实现 API” |
+| 培训类别/学员来源、受控媒体、B1 课程/视频内容版本 | 当前增量契约 | 使用字符串 ID 与 `Page.items`；课程只负责内容版本和可见集合，不提前承载 B2 视频进度或 A5 首页配置 |
+| 题库版本/导入、发布快照、个人题单、持久草稿、图片附件/阅卷、监控、培训统计 | 计划契约（B3—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后，才在本册写精确 DTO、错误码、分页和路由 |
 | 旧固定卷 vs 新培训考试开考 | 两条口径并存 | 旧固定卷继续检查 `learning_record.is_valid`；新培训考试默认关闭学习门槛，但仍检查发布、类别/来源、权限、次数、身份状态和服务端 deadline |
 
 目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 客观题自动判分/图片题待阅 → 受控逐题评分 → 服务端汇总 → 最终结果只读。具体字段由 C1—C4 落地后补入，不能让旧 `/exams` 响应提前承载两套不兼容语义。
@@ -106,14 +109,16 @@
 | /me | 1. 组织权限模块（A2/A4） | 2 | 本人资料查询与姓名/联系方式/头像修改 |
 | /media | 1. 组织权限模块（A4） | 5 | 受控上传、限制查询、状态/Range 读取、引用保护删除 |
 | /departments | 1. 组织权限模块 | 5 | 部门树、CRUD、层级调整 |
-| /regulations | 2. 制度文件管理模块 | 15 | 制度 CRUD、版本上传与历史回看、管理端预览、范围与学习要求配置、发布、阅读内容 |
+| /regulations | 2. 制度文件管理模块 | 18 | 制度 CRUD、版本/文件读取、管理端预览、范围与学习要求配置、发布、阅读内容及写权限类别选项 |
+| /admin/courses | 4. 学习行为管控模块（B1 内容侧） | 14 | 课程、章节、视频课时、不可变内容版本、上架/下架与类别选项 |
+| /me/courses | 4. 学习行为管控模块（B1 内容侧） | 2 | 本人同类别已上架课程分页与目录；external 默认空 |
 | /ai | 3. AI 出题模块 | 16 | AI 配置（`ai_config:read/write`；super_admin 天然拥有）、出题任务、题目审核编辑、人工录入、试卷管理与组卷 |
 | /learning | 4. 学习行为管控模块 | 7 | 学习列表、会话生命周期、心跳、进度 |
 | /exams | 5. 考试评分模块 | 8 | 可考列表、开考、心跳、切屏、交卷、成绩 |
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**合计 94 个接口（93 个业务接口 + 1 个健康检查，含 A2/A4 增量；媒体内容流不包统一信封）。**
+**接口总量以实际 controllers 与契约测试为准；本表已登记 B1 新增的 16 个课程接口和 1 个制度类别选项接口。媒体内容流不包统一信封。**
 
 ---
 
@@ -175,9 +180,9 @@
 | 3 | POST | /admin/training-categories | body：`name`（必填，1—128）、`description`（可选，≤2000） | `Category`，创建时 status=1 |
 | 4 | PUT | /admin/training-categories/{id} | body：`name?`、`description?` | `Category` |
 | 5 | PUT | /admin/training-categories/{id}/status | body：`status`（0/1） | `Category` |
-| 6 | DELETE | /admin/training-categories/{id} | — | `null`；已被 `sys_user.category_id` 引用时拒绝硬删除 |
+| 6 | DELETE | /admin/training-categories/{id} | — | `null`；已被学员、课程或制度的 `category_id` 引用时拒绝硬删除 |
 
-`Category` 字段为 `{ id, name, description, status, created_by, created_at, updated_at }`。查询、分页、状态和 body 中的未知字段及非法数字（包括 NaN）均返回 40001；名称唯一冲突返回 40001。类别状态/删除与学员引用写入在同一事务中锁定类别行并重查，删除使用中的类别返回 40910。
+`Category` 字段为 `{ id, name, description, status, created_by, created_at, updated_at }`。查询、分页、状态和 body 中的未知字段及非法数字（包括 NaN）均返回 40001；名称唯一冲突返回 40001。类别状态/删除与引用写入在同一事务中锁定类别行并重查；删除时检查学员、课程与制度引用，使用中的类别返回 40910。
 
 ### 3.2.2 培训学员 /admin/students（A2）
 
@@ -265,10 +270,11 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 | # | 方法 | 路径 | 说明 |
 |---|---|---|---|
-| 1 | GET | /regulations | 分页列表（筛选：keyword/category/status） |
-| 2 | GET | /regulations/{id} | 制度详情（含当前版本与学习要求） |
-| 3 | POST | /regulations | 创建制度（title / category / description） |
-| 4 | PUT | /regulations/{id} | 修改制度基础信息 |
+| 0 | GET | /regulations/category-options | `regulations:write`；query `page/page_size/keyword`，强制只查启用培训类别，返回 `Page<{id,name}>` |
+| 1 | GET | /regulations | 分页列表（筛选：keyword/category/status）；item 增加 `category_id:string|null`，legacy `category` 保持不变 |
+| 2 | GET | /regulations/{id} | 制度详情（含当前版本、学习要求与 `category_id`） |
+| 3 | POST | /regulations | 创建制度（title / legacy category / 可选 category_id / description） |
+| 4 | PUT | /regulations/{id} | 修改制度基础信息；`category_id` 支持省略/字符串 ID/null 三态 |
 | 5 | PUT | /regulations/{id}/learning-config | 学习要求配置（required_minutes / scroll_segments） |
 | 6 | PUT | /regulations/{id}/scope | 发布范围配置（is_all / department_ids[]） |
 | 7 | POST | /regulations/{id}/versions | 上传制度文件（multipart） |
@@ -279,6 +285,8 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 12 | POST | /regulations/{id}/publish | 发布（前置校验：生效版本 parsed、已配学习要求与范围） |
 | 13 | POST | /regulations/{id}/archive | 归档/下架（动作端点，非幂等，见 1.1） |
 | 14 | GET | /regulations/{id}/preview?versionId= | 管理端预览（跳过 status = published 校验、仅角色校验；versionId 缺省为当前生效版本） |
+
+`GET /regulations/category-options` 必须在 `/:id` 路由之前声明。它只要求 `regulations:write`，不会顺带授予或要求 `training_categories:read`，响应 item 严格只有字符串 `id` 与 `name`。`POST` 的非空 `category_id` 必须在事务内锁定并校验类别启用；`PUT` 省略表示不改，显式 `null` 表示清空，正十进制字符串表示设置。PUT 传入与当前相同 ID 时不得因该类别后来停用而阻断标题等元数据编辑；只有改成新的非空 ID 才再次 `lockActive`。所有读响应继续回显旧 `category` 字符串。
 
 **POST /regulations/{id}/versions**（multipart/form-data）：
 
@@ -416,6 +424,46 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 未完成人员清单 | 应学但 `is_valid = 0`，含学习进度（total_seconds / max_scroll_percent） |
 
 **GET /statistics/export**：查询参数 `type`（regulation_overview / uncompleted / user_detail）+ `regulation_id`；返回 Excel 二进制流（07 册 4.2 下载鉴权）。
+
+### 3.9 B1 课程内容 /admin/courses、/me/courses
+
+管理接口使用细权限，不要求类别管理权限。`GET /admin/courses/category-options` 是课程编辑器专用的启用类别窄查询；上传封面/视频仍调用 A4 `/media/upload`，因此操作者还需 `media:write`。
+
+| 方法 | 路径 | 权限 | 请求与成功 data |
+|---|---|---|---|
+| GET | /admin/courses/category-options | courses:write | query `page/page_size/keyword`；`Page<{id,name}>`，仅启用类别 |
+| GET | /admin/courses | courses:read | query `page/page_size/keyword/category_id/status`；`Page<AdminCourse>` |
+| POST | /admin/courses | courses:write | `CreateCourse`；创建 draft 的 `AdminCourse` |
+| GET | /admin/courses/{id} | courses:read | 课程资料、章节、课时当前版本与缺失必学课时 ID |
+| PUT | /admin/courses/{id} | courses:write | `UpdateCourse`；未传字段不变 |
+| POST | /admin/courses/{id}/publish | courses:publish | 上架或从 offline 重新上架；重新校验类别与全部必学视频 |
+| POST | /admin/courses/{id}/offline | courses:publish | 下架但不删除结构、版本或媒体引用 |
+| GET / POST | /admin/courses/{id}/chapters | courses:read / courses:write | 获取章节 / 创建 `{title,sort_order?}` |
+| PUT | /admin/courses/{id}/chapters/{chapterId} | courses:write | 修改 `{title?,sort_order?}` |
+| GET / POST | /admin/courses/{id}/lessons | courses:read / courses:write | 获取课时 / 创建 `{chapter_id,title,lesson_type:'video',required?,sort_order?,asset_id?}` |
+| PUT | /admin/courses/{id}/lessons/{lessonId} | courses:write | 修改 `{title?,lesson_type?:'video',required?,sort_order?}` |
+| POST | /admin/courses/{id}/lessons/{lessonId}/versions | courses:write | `{asset_id}`；追加视频版本并返回 `{version_id,asset_id,duration_ms,version_no}` |
+| GET | /me/courses | 登录本人 | query `page/page_size`；`Page<CourseSummary>` |
+| GET | /me/courses/{id} | 登录本人 | 可见课程目录；不返回管理员推荐/制度关联配置 |
+
+`CreateCourse = {title,category_id,cover_asset_id?,description?,regulation_ids?,is_recommended?,sort_order?}`；`UpdateCourse` 字段相同且全可选。所有 ID 为正十进制字符串，`cover_asset_id` 与 `regulation_ids` 可为 null，`regulation_ids` 最多 100 项且写入前逐一验证制度存在。`CourseSummary = {id,title,category_id,cover_asset_id,status,required_lesson_count}`。管理详情另含 `description/regulation_ids/is_recommended/sort_order/missing_required_lesson_ids/published_at/created_at/updated_at` 及：
+
+```json
+{
+  "chapters": [{
+    "id": "8", "title": "第一章", "sort_order": 1,
+    "lessons": [{
+      "id": "21", "title": "视频课时", "lesson_type": "video",
+      "required": true, "sort_order": 1,
+      "current_version": { "version_id": "35", "asset_id": "50", "duration_ms": 120000 }
+    }]
+  }]
+}
+```
+
+课程状态为 `draft / published / offline`。只有 draft/offline 可改变章节或课时结构；published 仍允许追加新 `lesson_version`，旧版本与媒体引用不覆盖。上架时锁定并确认类别启用，并要求每个必学课时的当前版本属于该课时、时长大于 0，且媒体为 ready 的 video；不满足返回 40930。课程的 `regulation_ids` 只是信息关联，不能进入抽题池或变成学习门槛。
+
+学员可见集合固定为：账号启用、`source=institution`、有类别、课程 `status=published` 且类别相同；排序为推荐优先、`sort_order ASC,id DESC`。external 或缺来源/类别返回空页，跨类别/下架详情返回 40302。B1 core 不注册 `/me/home`；root 合入 A5 后才由真实 `SystemService.publicConfig()` 与同一可见集合组合首页。
 
 ---
 
@@ -764,10 +812,11 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 40907 | 409 | 题目组成不可变更 | 修改已发布试卷的 paper_question |
 | 40908 | 409 | 题目正在考试中使用，禁止编辑 | 题目被 in_progress 考试记录引用时修改 stem/options/answer/type（仅允许 analysis，05 册 4.4.6） |
 | 40909 | 409 | AI 服务未配置或配置不完整 | 未配置 base_url/api_key/model 即发起出题或连通性测试（FR-AIQ-01 验收③） |
-| 40910 | 409 | 培训类别不存在或已停用 | 学员/导入确认引用不存在或已停用类别；删除仍被学员引用的类别 |
+| 40910 | 409 | 培训类别不存在或已停用 | 学员/导入/课程/制度写入引用不存在或已停用类别；删除仍被学员、课程或制度引用的类别 |
 | 40911 | 409 | 导入批次已确认，不能更换行集合 | 批次确认重试更换合法行集合，或确认事务正在处理 |
 | 40912 | 409 | 至少保留一名启用的超级管理员 | 尝试删除/停用/清空最高管理员保护权限 |
 | 40913 | 409 | 媒体仍被业务引用，不能删除 | `media_reference` 存在时删除媒体资源 |
+| 40930 | 409 | 课程状态冲突 | 必学视频未就绪、已上架课程直接修改章节/课时结构，或视频资源缺少有效服务端时长 |
 | 42201 | 422 | 文件格式不支持 | 上传非 pdf/docx（含魔法数不符） |
 | 41601 | 416 | 请求的媒体范围无效 | `Range` 语法非法、多段范围或起止超出文件边界 |
 | 42202 | 422 | 文件超过大小上限 | 制度文件超过 50MB，或媒体图片/视频超过当前配置限制；Multer 拦截与业务层统一此码 |
@@ -792,8 +841,10 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | /admin/training-categories | — | — | — | A2 候选实现全部 6 个；A3 映射 training_categories:read/write |
 | /admin/students | — | — | — | A2 候选实现全部 10 个；A3 映射 students:read/write |
 | /me | — | GET/PATCH 本人资料 | — | 同左 |
+| /me/courses | — | 同类别已上架课程分页/详情；external 默认空 | — | 同左（仍按本人类别收口） |
 | /departments | tree（登录） | — | — | 其余 5 个 |
-| /regulations | — | content | 其余 14 个 | 同左 |
+| /regulations | — | content | 类别选项需 regulations:write；其余管理路由按 regulations:read/write/publish | 同左 |
+| /admin/courses | — | — | 由业务角色显式授予 courses:read/write/publish | super_admin 天然拥有；类别 options 只需 courses:write |
 | /ai | — | — | 其余 13 个 | 出题任务/题库工作流按 `ai:read/write` 等权限；config 三接口分别使用 `ai_config:read`（GET）和 `ai_config:write`（PUT/test），不自动授予 legacy `regulation_admin` |
 | /learning | — | 全部 7 个 | — | — |
 | /exams | — | 全部 8 个 | — | — |
@@ -813,6 +864,8 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | POST /exams/records/{id}/switch | 1 秒去抖窗口 | Redis INCR + 窗口合并（前端 500ms 事件合并后上报，服务端 1 秒二次去抖，05 册 6.4.4） |
 | POST /exams/records/{id}/submit | 幂等：重复交卷返回首次结果 | 三层幂等（05 册 6.4.5） |
 | POST /regulations/{id}/versions | 并发上传同一制度串行化（版本号唯一） | 事务 + uk_regulation_version |
+| POST /admin/courses/{id}/publish | 上架与下架后重上架均重新校验类别和必学视频；发布中间态不对学员可见 | 课程行悲观锁 + 同事务 readiness 校验 |
+| POST /admin/courses/{id}/lessons/{lessonId}/versions | 同一课时版本号顺序追加，旧行不修改 | 课程/课时行悲观锁 + uk_lesson_version_number |
 | POST /ai/generate-questions | 同制度同时仅一个运行中任务 | 任务状态前置校验；计划中的 category/difficulty/source_version 由 B3 落地后扩展，不改旧接口语义 |
 
 ### 6.3 传输与敏感信息
@@ -828,8 +881,8 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 | 校验项 | 结果 |
 |---|---|
-| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；A2 增量 `/admin/training-categories`、`/admin/students`、`/me` 已由 migration/entity/controller/UI 同步落地 |
-| 当前表名/字段名（snake_case）与 03 册 | 一致（learning_record.total_seconds、exam_paper.partial_credit_ratio 等）；新增字段以迁移/entity/API 同步为准 |
+| 当前路由前缀与 README 3.4 模块映射 | 一致（legacy 八大路由保留）；A2/A4 与 B1 增量 `/admin/training-categories`、`/admin/students`、`/me`、`/media`、`/admin/courses`、`/me/courses` 已由 entity/controller/UI 同步落地；菜单路由待 A5 外壳组合 |
+| 当前表名/字段名（snake_case）与 03 册 | 一致（含 regulation.category_id、training_course、course_chapter、course_lesson、lesson_version）；新增字段以迁移/entity/API 同步为准 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
 | 心跳/失焦/乱序/超时/切屏行为与 05 册 | 一致（5.4.2/5.4.3/6.4.1~6.4.5 逐条对应） |
 | 统计口径与 05 册 7.4.1 | 一致（七项指标逐字对齐） |

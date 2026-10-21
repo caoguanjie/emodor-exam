@@ -1,6 +1,6 @@
 -- =====================================================================
 -- EmodorRuleExam 制度学习及考试系统 · 数据库初始化脚本
--- 依据 docs/design/03-数据库设计.md 逐字建 legacy、A2 培训身份、A3 权限/会话及 A4 媒体业务表（当前 21 张，InnoDB + utf8mb4）
+-- 依据 docs/design/03-数据库设计.md 逐字建 legacy、培训身份/权限/媒体与 B1 课程业务表（当前 25 张，InnoDB + utf8mb4）
 -- 时间字段 DATETIME(3)；无数据库级外键（03 册 1.6 节，应用层维护）
 -- 枚举字段 VARCHAR + 应用层校验（03 册 1.7 节）
 -- 种子数据（根部门 / 超级管理员）由 database/seed.mjs 按环境变量生成，
@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS `regulation` (
   `id`                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `title`              VARCHAR(128) NOT NULL COMMENT '制度标题',
   `category`           VARCHAR(32)  NOT NULL COMMENT '制度分类',
+  `category_id`        BIGINT UNSIGNED NULL COMMENT '可选培训类别；独立于 legacy category 字符串',
   `description`        VARCHAR(512) NULL COMMENT '制度描述/摘要',
   `status`             VARCHAR(16)  NOT NULL DEFAULT 'draft' COMMENT 'draft / published / archived',
   `current_version_id` BIGINT UNSIGNED NULL COMMENT '当前生效版本（regulation_version.id）',
@@ -172,6 +173,7 @@ CREATE TABLE IF NOT EXISTS `regulation` (
   `updated_at`         DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   KEY `idx_status_category` (`status`, `category`),
+  KEY `idx_regulation_category_id` (`category_id`),
   KEY `idx_created_by` (`created_by`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='制度主档';
 
@@ -368,7 +370,70 @@ CREATE TABLE IF NOT EXISTS `media_reference` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='媒体业务引用';
 
 -- ---------------------------------------------------------------------
--- 6. 迁移元数据（由 database/migrate.mjs 管理；不属于业务表数量）
+-- 6. 课程内容域（4 张，B1）
+-- ---------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS `training_course` (
+  `id`                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `title`                 VARCHAR(255) NOT NULL COMMENT '课程标题',
+  `category_id`           BIGINT UNSIGNED NOT NULL COMMENT '培训类别',
+  `cover_asset_id`        BIGINT UNSIGNED NULL COMMENT 'course_cover 媒体资源',
+  `description`           TEXT NULL,
+  `regulation_ids`        JSON NULL COMMENT '可选制度信息关联；不构成学习或考试门槛',
+  `is_recommended`        TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  `sort_order`            INT NOT NULL DEFAULT 0,
+  `status`                VARCHAR(32) NOT NULL DEFAULT 'draft' COMMENT 'draft / published / offline',
+  `created_by`            BIGINT UNSIGNED NOT NULL,
+  `published_at`          DATETIME(3) NULL,
+  `created_at`            DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`            DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  KEY `idx_training_course_category_status` (`category_id`, `status`),
+  KEY `idx_training_course_recommended_sort` (`is_recommended`, `sort_order`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='培训课程';
+
+CREATE TABLE IF NOT EXISTS `course_chapter` (
+  `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `course_id`  BIGINT UNSIGNED NOT NULL,
+  `title`      VARCHAR(255) NOT NULL,
+  `sort_order` INT NOT NULL DEFAULT 0,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  KEY `idx_course_chapter_course_sort` (`course_id`, `sort_order`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='课程章节';
+
+CREATE TABLE IF NOT EXISTS `course_lesson` (
+  `id`                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `course_id`          BIGINT UNSIGNED NOT NULL,
+  `chapter_id`         BIGINT UNSIGNED NOT NULL,
+  `title`              VARCHAR(255) NOT NULL,
+  `lesson_type`        VARCHAR(32) NOT NULL DEFAULT 'video' COMMENT '本期仅 video',
+  `is_required`        TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  `sort_order`         INT NOT NULL DEFAULT 0,
+  `current_version_id` BIGINT UNSIGNED NULL,
+  `created_at`         DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`         DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  KEY `idx_course_lesson_course` (`course_id`),
+  KEY `idx_course_lesson_chapter_sort` (`chapter_id`, `sort_order`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='课程课时';
+
+CREATE TABLE IF NOT EXISTS `lesson_version` (
+  `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `lesson_id`   BIGINT UNSIGNED NOT NULL,
+  `version_no`  INT UNSIGNED NOT NULL,
+  `asset_id`    BIGINT UNSIGNED NOT NULL COMMENT 'video 媒体资源',
+  `duration_ms` BIGINT UNSIGNED NOT NULL COMMENT '服务端媒体探测时长快照',
+  `created_by`  BIGINT UNSIGNED NOT NULL,
+  `created_at`  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_lesson_version_number` (`lesson_id`, `version_no`),
+  KEY `idx_lesson_version_asset` (`asset_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='视频课时不可变内容版本';
+
+-- ---------------------------------------------------------------------
+-- 7. 迁移元数据（由 database/migrate.mjs 管理；不属于业务表数量）
 -- ---------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS `schema_migration` (

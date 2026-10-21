@@ -38,6 +38,10 @@ import { ExamAnswer } from './entities/exam-answer.entity';
 import { SchemaMigration } from './entities/schema-migration.entity';
 import { MediaAsset } from './entities/media-asset.entity';
 import { MediaReference } from './entities/media-reference.entity';
+import { TrainingCourse } from './entities/training-course.entity';
+import { CourseChapter } from './entities/course-chapter.entity';
+import { CourseLesson } from './entities/course-lesson.entity';
+import { LessonVersion } from './entities/lesson-version.entity';
 
 import { AuthController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
@@ -79,6 +83,9 @@ import { TasksService } from './tasks.service';
 import { MediaController } from './modules/media/media.controller';
 import { MediaService } from './modules/media/media.service';
 import { MediaProbeService } from './modules/media/media-probe.service';
+import { CourseAdminController, MyCoursesController } from './modules/courses/course.controller';
+import { CourseService } from './modules/courses/course.service';
+import { LessonVersionService } from './modules/courses/lesson-version.service';
 
 const config = loadConfig();
 
@@ -92,6 +99,7 @@ const config = loadConfig();
       TrainingCategory, ImportBatch,
       SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
       MediaAsset, MediaReference,
+      TrainingCourse, CourseChapter, CourseLesson, LessonVersion,
       TrainingCategory, ImportBatch,
       SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
     ]),
@@ -104,6 +112,7 @@ const config = loadConfig();
     RegulationsController, AiController, LearningController, ExamsController,
     StatisticsController, HealthController,
     MediaController,
+    CourseAdminController, MyCoursesController,
   ],
   providers: [
     // 全局配置单例（loadConfig 启动时读取环境变量）
@@ -114,6 +123,7 @@ const config = loadConfig();
     LearningSessionService, ExamService, ShuffleService, GradingService, StatisticsService,
     RedisService, AuditService, TasksService,
     MediaService, MediaProbeService,
+    CourseService, LessonVersionService,
     // 守卫链（07 册 2.3.2）：① JWT 认证 → ② 细权限映射 → ③ 兼容角色边界
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },

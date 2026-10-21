@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { TrainingCategory } from '../../entities/training-category.entity';
 import { SysUser } from '../../entities/sys-user.entity';
+import { TrainingCourse } from '../../entities/training-course.entity';
+import { Regulation } from '../../entities/regulation.entity';
 import { Errors } from '../../common/errors';
 import { AuditService } from '../../common/audit.service';
 
@@ -141,8 +143,10 @@ export class CategoryService {
   async remove(id: string, actor: CategoryActor, ip: string | null) {
     await this.categoryRepo.manager.transaction(async (manager) => {
       const category = await this.lockExisting(manager, id);
-      const referenced = await manager.getRepository(SysUser).count({ where: { categoryId: String(id) } });
-      if (referenced > 0) throw Errors.categoryInactive('培训类别已被学员引用，不能删除');
+      const users = await manager.getRepository(SysUser).count({ where: { categoryId: String(id) } });
+      const courses = await manager.getRepository(TrainingCourse).count({ where: { categoryId: String(id) } });
+      const regulations = await manager.getRepository(Regulation).count({ where: { categoryId: String(id) } });
+      if (users + courses + regulations > 0) throw Errors.categoryInactive('培训类别已被学员、课程或制度引用，不能删除');
       await manager.getRepository(TrainingCategory).remove(category);
     });
     this.audit.log({

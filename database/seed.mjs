@@ -59,7 +59,9 @@ const permissions = [
   ['papers:read', '查看试卷'], ['papers:write', '维护试卷'], ['papers:publish', '发布试卷'], ['papers:review', '审核试卷'], ['papers:export', '导出试卷'],
   ['statistics:read', '查看统计'], ['statistics:export', '导出统计'],
   ['roles:read', '查看角色'], ['roles:write', '维护角色'], ['administrators:read', '查看管理员'], ['administrators:write', '维护管理员角色'],
-  ['sessions:read', '查看在线会话'], ['sessions:write', '强制下线会话'], ['media:read', '读取媒体'], ['media:write', '上传媒体'], ['system_settings:read', '查看系统配置'], ['system_settings:write', '维护系统配置'],
+  ['sessions:read', '查看在线会话'], ['sessions:write', '强制下线会话'], ['media:read', '读取媒体'], ['media:write', '上传媒体'],
+  ['courses:read', '查看课程'], ['courses:write', '维护课程'], ['courses:publish', '发布课程'],
+  ['system_settings:read', '查看系统配置'], ['system_settings:write', '维护系统配置'],
 ];
 for (const [code, name] of permissions) {
   await conn.execute(
