@@ -700,6 +700,11 @@ CREATE TABLE IF NOT EXISTS `site_setting` (
   UNIQUE KEY `uk_site_setting_key` (`setting_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='站点公开展示配置白名单';
 
+INSERT INTO `sys_permission` (`code`, `name`) VALUES
+  ('exam_records:read', '查看考试记录'),
+  ('exam_records:monitor', '查看考试监控')
+ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
+
 INSERT INTO `sys_dictionary` (`type`, `code`, `label`, `sort`, `status`, `is_system`, `remark`) VALUES
   ('learner_source','institution','本机构学员',10,1,1,'业务固定枚举'),
   ('learner_source','external','外来学员',20,1,1,'业务固定枚举'),
@@ -756,6 +761,16 @@ INSERT INTO `sys_menu` (`id`, `parent_id`, `name`, `type`, `route_path`, `permis
   (25,2,'网站配置','menu','/admin/system/site-settings','system_settings:read','Picture',60,1),
   (26,2,'审计日志','menu','/admin/system/audit-logs','system_settings:read','DocumentChecked',70,1)
 ON DUPLICATE KEY UPDATE `id` = `id`;
+
+INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
+SELECT 1, '考试记录', 'menu', '/admin/exam-records', 'exam_records:read', 'DocumentChecked', 35, 1
+FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory'
+  AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/exam-records');
+
+INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
+SELECT 1, '考试监控', 'menu', '/admin/exam-monitor', 'exam_records:monitor', 'Monitor', 36, 1
+FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory'
+  AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/exam-monitor');
 
 INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
 SELECT 1, '人工阅卷', 'menu', '/admin/grading', 'exam_records:review', 'EditPen', 37, 1
