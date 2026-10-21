@@ -75,6 +75,23 @@ const httpStubCode = `
     const queue = context.deferredRequests.get(key);
     if (queue?.length) await queue.shift().promise;
   };
+  const findLesson = (lessonId) => {
+    for (const chapter of context.course.chapters || []) {
+      const lesson = chapter.lessons.find((item) => item.id === lessonId);
+      if (lesson) return { chapter, lesson };
+    }
+    return null;
+  };
+  const lessonResponse = (entry, fallback) => ({
+    id: entry?.lesson.id || fallback.id,
+    course_id: context.course.id,
+    chapter_id: entry?.chapter.id || fallback.chapter_id,
+    title: entry?.lesson.title || fallback.title,
+    lesson_type: 'video',
+    required: entry?.lesson.required ?? fallback.required,
+    sort_order: entry?.lesson.sort_order ?? fallback.sort_order,
+    current_version_id: entry?.lesson.current_version?.version_id || null,
+  });
   export default {
     async get(path) {
       context.calls.push({ method: 'GET', path });
@@ -97,6 +114,21 @@ const httpStubCode = `
       rejectConfigured('PUT', path);
       await waitConfigured('PUT', path);
       if (path === '/admin/courses/course-1') Object.assign(context.course, clone(body));
+      const lessonPrefix = '/admin/courses/course-1/lessons/';
+      const lessonId = path.startsWith(lessonPrefix) && !path.endsWith('/versions') ? path.slice(lessonPrefix.length) : '';
+      if (lessonId) {
+        const entry = findLesson(lessonId);
+        if (entry) Object.assign(entry.lesson, {
+          title: body.title,
+          lesson_type: body.lesson_type,
+          required: Boolean(body.required),
+          sort_order: body.sort_order,
+        });
+        return lessonResponse(entry, {
+          id: lessonId, chapter_id: 'chapter-unknown', title: body.title,
+          required: Boolean(body.required), sort_order: body.sort_order,
+        });
+      }
       return {};
     },
     async post(path, body) {
@@ -105,7 +137,31 @@ const httpStubCode = `
       await waitConfigured('POST', path);
       if (path === '/admin/courses') return { id: 'course-created' };
       if (path === '/admin/courses/course-1/chapters') return { id: 'chapter-created' };
-      if (path === '/admin/courses/course-1/lessons') return { id: 'lesson-created' };
+      if (path === '/admin/courses/course-1/lessons') {
+        const chapter = context.course.chapters.find((item) => item.id === body.chapter_id);
+        const lesson = {
+          id: 'lesson-created', title: body.title, lesson_type: 'video', required: Boolean(body.required),
+          sort_order: body.sort_order,
+          current_version: body.asset_id ? { version_id: 'version-created', asset_id: body.asset_id, duration_ms: 60_000 } : null,
+        };
+        if (chapter) chapter.lessons.push(lesson);
+        return lessonResponse(chapter ? { chapter, lesson } : null, {
+          id: lesson.id, chapter_id: body.chapter_id, title: lesson.title,
+          required: lesson.required, sort_order: lesson.sort_order,
+        });
+      }
+      const versionPrefix = '/admin/courses/course-1/lessons/';
+      const versionSuffix = '/versions';
+      const versionLessonId = path.startsWith(versionPrefix) && path.endsWith(versionSuffix)
+        ? path.slice(versionPrefix.length, -versionSuffix.length) : '';
+      if (versionLessonId) {
+        const saved = { version_id: 'version-next', asset_id: body.asset_id, duration_ms: 90_000, version_no: 2 };
+        const entry = findLesson(versionLessonId);
+        if (entry) entry.lesson.current_version = {
+          version_id: saved.version_id, asset_id: saved.asset_id, duration_ms: saved.duration_ms,
+        };
+        return saved;
+      }
       if (path.endsWith('/publish')) context.course.status = 'published';
       if (path.endsWith('/offline')) context.course.status = 'offline';
       return {};
@@ -742,7 +798,8 @@ test('a retained lesson create saves metadata and its later asset through distin
   mounted.unmount();
 });
 
-test('a failed retained lesson version keeps confirmed metadata as the discard baseline', async () => {
+test('a failed retained lesson version keeps confirmed metadata in the baseline and parent row', async () => {
+  testContext.course.chapters = [{ id: 'chapter-same', title: '第一章', sort_order: 1, lessons: [] }];
   const mounted = await mountCourseDetail();
   const lessonSource = testContext.unsavedSources[2];
   const versionPath = '/admin/courses/course-1/lessons/lesson-created/versions';
@@ -760,6 +817,7 @@ test('a failed retained lesson version keeps confirmed metadata as the discard b
   await createSave;
   assert.equal(mounted.state.editingLessonId, 'lesson-created');
   assert.equal(lessonSource.dirty.value, true);
+  assert.equal(mounted.state.course.chapters[0].lessons[0].title, '课时 metadata A');
 
   const metadata = deferRequest('PUT', '/admin/courses/course-1/lessons/lesson-created');
   testContext.failRequests.add(`POST ${versionPath}`);
@@ -775,8 +833,11 @@ test('a failed retained lesson version keeps confirmed metadata as the discard b
   assert.equal(mounted.state.lessonSaving, false);
   assert.equal(lessonSource.dirty.value, true);
   assert.equal(testContext.messages.some((item) => item.type === 'error' && item.message.includes('视频版本保存失败')), true);
+  assert.equal(mounted.state.course.chapters[0].lessons[0].title, '课时 metadata B');
+  assert.equal(mounted.state.course.chapters[0].lessons[0].current_version.asset_id, 'video-a');
 
   testContext.failRequests.delete(`POST ${versionPath}`);
+  mounted.state.lessonForm.sort_order = 9;
   mounted.state.lessonForm.asset_id = null;
   await nextTick();
   await mounted.state.saveLesson();
@@ -785,13 +846,30 @@ test('a failed retained lesson version keeps confirmed metadata as the discard b
   assert.equal(mounted.state.lessonVisible, true);
   assert.equal(lessonSource.dirty.value, true);
   assert.equal(testContext.messages.some((item) => item.type === 'warning' && item.message.includes('不能删除')), true);
+  assert.equal(mounted.state.course.chapters[0].lessons[0].title, '课时 metadata B');
+  assert.equal(mounted.state.course.chapters[0].lessons[0].sort_order, 9);
+  assert.equal(mounted.state.course.chapters[0].lessons[0].current_version.asset_id, 'video-a');
 
   await lessonSource.confirmDiscard();
   assert.equal(mounted.state.editingLessonId, 'lesson-created');
   assert.equal(mounted.state.lessonForm.title, '课时 metadata B');
+  assert.equal(mounted.state.lessonForm.sort_order, 9);
   assert.equal(mounted.state.lessonForm.asset_id, 'video-a');
   assert.equal(mounted.state.lessonVisible, false);
   assert.equal(lessonSource.dirty.value, false);
+
+  const persistedRow = mounted.state.course.chapters[0].lessons[0];
+  mounted.state.openLesson('chapter-same', persistedRow);
+  assert.equal(mounted.state.lessonForm.title, '课时 metadata B');
+  assert.equal(mounted.state.lessonForm.sort_order, 9);
+  mounted.state.lessonForm.required = false;
+  await mounted.state.saveLesson();
+  const lastMetadataPut = testContext.calls.filter((call) => call.method === 'PUT' && call.path.endsWith('/lessons/lesson-created')).at(-1);
+  assert.equal(lastMetadataPut.body.title, '课时 metadata B');
+  assert.equal(lastMetadataPut.body.sort_order, 9);
+  assert.equal(lastMetadataPut.body.required, false);
+  assert.equal(mounted.state.course.chapters[0].lessons[0].title, '课时 metadata B');
+  assert.equal(mounted.state.course.chapters[0].lessons[0].required, false);
   mounted.unmount();
 });
 

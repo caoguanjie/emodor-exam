@@ -110,7 +110,7 @@ import { ArrowLeft } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useRoute, useRouter } from 'vue-router';
 import http from '../../api/http';
-import type { CourseChapterView, CourseDetail, CourseLessonView, CourseStatus, Id, Page } from '../../api/training-types';
+import type { CourseChapterView, CourseDetail, CourseLessonView, CourseStatus, Id, LessonVersionView, Page } from '../../api/training-types';
 import MediaUpload from '../../components/MediaUpload.vue';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
@@ -123,6 +123,10 @@ interface CourseDraft {
 }
 interface ChapterDraft { title: string; sort_order: number }
 interface LessonDraft { chapter_id: Id | ''; title: string; required: boolean; sort_order: number; asset_id: Id | null }
+interface SavedLessonMetadata {
+  id: Id; course_id: Id; chapter_id: Id; title: string; lesson_type: 'video';
+  required: boolean; sort_order: number; current_version_id: Id | null;
+}
 
 const route = useRoute();
 const router = useRouter();
@@ -194,6 +198,23 @@ function lessonMetadata(value: LessonDraft) {
 function syncLessonDraftState() {
   lessonDirty.value = !sameDraft(snapshotLessonDraft(), lessonBaseline);
   lessonAssetDraftVisible.value = editingLessonId.value === null || lessonForm.asset_id !== lessonBaseline.form.asset_id;
+}
+function courseLesson(lessonId: Id) {
+  return course.value?.chapters.flatMap((chapter) => chapter.lessons).find((lesson) => lesson.id === lessonId);
+}
+function syncSavedLessonMetadata(saved: SavedLessonMetadata) {
+  const row = courseLesson(saved.id);
+  if (!row) return;
+  Object.assign(row, {
+    title: saved.title,
+    lesson_type: saved.lesson_type,
+    required: saved.required,
+    sort_order: saved.sort_order,
+  });
+}
+function syncSavedLessonVersion(lessonId: Id, saved: LessonVersionView) {
+  const row = courseLesson(lessonId);
+  if (row) row.current_version = { ...saved };
 }
 function snapshotVideoDraft() {
   return { lessonId: replacementLessonId.value, assetId: replacementAssetId.value };
@@ -449,19 +470,17 @@ async function saveLesson() {
     const metadataChanged = !sameDraft(lessonMetadata(submitted.form), lessonMetadata(lessonBaseline.form));
     const assetChanged = submitted.form.asset_id !== lessonBaseline.form.asset_id;
     if (metadataChanged) {
-      await http.put(`/admin/courses/${courseId}/lessons/${persistedId}`, payload);
-      if (contextToken !== lessonContextToken || operation !== lessonLatestOperation) {
-        await load(false);
-        return;
-      }
+      const saved = await http.put(`/admin/courses/${courseId}/lessons/${persistedId}`, payload) as SavedLessonMetadata;
+      syncSavedLessonMetadata(saved);
+      if (contextToken !== lessonContextToken || operation !== lessonLatestOperation) return;
       lessonLastAppliedOperation = Math.max(lessonLastAppliedOperation, operation);
       lessonBaseline = {
         editingId: persistedId,
         form: {
           ...lessonBaseline.form,
-          title: submitted.form.title,
-          required: submitted.form.required,
-          sort_order: submitted.form.sort_order,
+          title: saved.title,
+          required: saved.required,
+          sort_order: saved.sort_order,
         },
       };
       syncLessonDraftState();
@@ -475,7 +494,10 @@ async function saveLesson() {
         return;
       }
       try {
-        await http.post(`/admin/courses/${courseId}/lessons/${persistedId}/versions`, { asset_id: submitted.form.asset_id });
+        const saved = await http.post(`/admin/courses/${courseId}/lessons/${persistedId}/versions`, {
+          asset_id: submitted.form.asset_id,
+        }) as LessonVersionView;
+        syncSavedLessonVersion(persistedId, saved);
       } catch (error) {
         if (contextToken === lessonContextToken && operation === lessonLatestOperation) {
           syncLessonDraftState();
@@ -499,7 +521,6 @@ async function saveLesson() {
       lessonContextToken += 1;
       lessonVisible.value = false;
     }
-    await load(false);
   } finally {
     if (contextToken === lessonContextToken && operation === lessonLatestOperation) lessonSaving.value = false;
   }
