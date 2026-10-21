@@ -242,6 +242,7 @@ const editingExpectedVersionId = ref<Id | null>(null);
 const editorForm = ref<QuestionDraftPayload>(emptyDraft());
 const editorDirty = ref(false);
 const editorBaseline = ref<EditorBaseline | null>(null);
+let editorContext: symbol | null = null;
 const saving = ref(false);
 const previewVisible = ref(false);
 const selectedQuestion = ref<QuestionView | null>(null);
@@ -292,8 +293,12 @@ function editorSnapshot(): EditorBaseline {
   };
 }
 
-function captureEditorBaseline() {
-  editorBaseline.value = editorSnapshot();
+function cloneEditorBaseline(value: EditorBaseline): EditorBaseline {
+  return { ...value, form: cloneEditorForm(value.form) };
+}
+
+function captureEditorBaseline(value = editorSnapshot()) {
+  editorBaseline.value = cloneEditorBaseline(value);
   editorDirty.value = false;
 }
 
@@ -305,24 +310,28 @@ function discardEditorDraft() {
     editingExpectedVersionId.value = baseline.expectedVersionId;
     editorForm.value = cloneEditorForm(baseline.form);
   }
+  editorContext = null;
   editorDirty.value = false;
 }
 
 const editorUnsaved = useUnsavedChanges(editorDirty, { onDiscard: discardEditorDraft });
 watch(
-  () => [editorVisible.value, JSON.stringify(editorSnapshot())] as const,
-  ([visible, current]) => {
-    editorDirty.value = !!visible && !!editorBaseline.value && current !== JSON.stringify(editorBaseline.value);
+  () => [editorVisible.value, JSON.stringify(editorSnapshot()), JSON.stringify(editorBaseline.value)] as const,
+  ([visible, current, baseline]) => {
+    editorDirty.value = !!visible && !!editorBaseline.value && current !== baseline;
   },
   { flush: 'sync' },
 );
 
 async function closeEditor() {
-  if (await editorUnsaved.confirmDiscard()) editorVisible.value = false;
+  if (!await editorUnsaved.confirmDiscard()) return;
+  editorContext = null;
+  editorVisible.value = false;
 }
 
 async function beforeEditorClose(done: () => void) {
   if (!await editorUnsaved.confirmDiscard()) return;
+  editorContext = null;
   done();
 }
 
@@ -454,16 +463,22 @@ function toDraft(row: QuestionView): QuestionDraftPayload {
 }
 
 async function openCreate() {
+  const context = Symbol('question-editor-context');
+  editorContext = context;
   editorMode.value = 'create'; editingId.value = null; editingExpectedVersionId.value = null; editorForm.value = emptyDraft();
   captureEditorBaseline();
   await loadEditorConcepts({ category_id: editorForm.value.category_id, type: editorForm.value.type });
+  if (editorContext !== context) return;
   editorVisible.value = true;
 }
 
 async function openEdit(row: QuestionView) {
+  const context = Symbol('question-editor-context');
+  editorContext = context;
   editorMode.value = 'edit'; editingId.value = row.question_id; editingExpectedVersionId.value = expectedVersionId(row.current_version_id); editorForm.value = toDraft(row);
   captureEditorBaseline();
   await loadEditorConcepts({ category_id: editorForm.value.category_id, type: editorForm.value.type });
+  if (editorContext !== context) return;
   editorVisible.value = true;
 }
 
@@ -494,24 +509,47 @@ function payload(value: QuestionDraftPayload) {
 }
 
 async function saveQuestion() {
+  if (saving.value) return;
   if (!hasEditorDifficulty.value) {
     ElMessage.warning('请选择题目难度后再保存');
     return;
   }
+  const requestContext = editorContext;
+  if (!requestContext || !editorVisible.value) return;
+  const submitted = editorSnapshot();
   saving.value = true;
   try {
-    if (editorMode.value === 'create') {
-      await http.post('/ai/questions', payload(editorForm.value));
+    let saved: any;
+    if (submitted.mode === 'create') {
+      saved = await http.post('/ai/questions', payload(submitted.form));
       ElMessage.success('人工题已保存，并记录当前管理员确认信息');
     } else {
-      await http.put(`/ai/questions/${editingId.value}`, {
-        ...payload(editorForm.value), expected_version_id: editingExpectedVersionId.value,
+      saved = await http.put(`/ai/questions/${submitted.id}`, {
+        ...payload(submitted.form), expected_version_id: submitted.expectedVersionId,
       });
       ElMessage.success('已生成待审核新版本，旧版本保持不变');
     }
-    captureEditorBaseline();
-    editorUnsaved.markClean();
-    editorVisible.value = false;
+    if (editorContext === requestContext && editorVisible.value) {
+      const savedId = saved?.question_id === undefined || saved?.question_id === null
+        ? submitted.id
+        : String(saved.question_id);
+      const persisted: EditorBaseline = {
+        form: cloneEditorForm(submitted.form),
+        mode: submitted.mode === 'create' && savedId ? 'edit' : submitted.mode,
+        id: savedId,
+        expectedVersionId: expectedVersionId(saved?.current_version_id ?? submitted.expectedVersionId),
+      };
+      editorMode.value = persisted.mode;
+      editingId.value = persisted.id;
+      editingExpectedVersionId.value = persisted.expectedVersionId;
+      captureEditorBaseline(persisted);
+      editorDirty.value = JSON.stringify(editorSnapshot()) !== JSON.stringify(editorBaseline.value);
+      if (!editorDirty.value) {
+        editorUnsaved.markClean();
+        editorContext = null;
+        editorVisible.value = false;
+      }
+    }
     await load();
   } finally { saving.value = false; }
 }

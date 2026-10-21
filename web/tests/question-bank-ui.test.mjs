@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
-import { computed, createRenderer, h, inject, nextTick, provide } from '@vue/runtime-core';
+import { computed, createRenderer, h, inject, nextTick, provide, watch } from '@vue/runtime-core';
+import TreeStore from '../node_modules/element-plus/es/components/tree/src/model/tree-store.mjs';
 
 const webRoot = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const previewClientId = '\0question-preview-client-test';
@@ -97,6 +98,7 @@ const stubs = new Map([
         return () => {
           context.editorModels.push(JSON.parse(JSON.stringify(props.modelValue)));
           return h('question-editor-stub', { difficulty: props.modelValue.difficulty }, [
+            h('button', { onClick: () => emit('update:modelValue', { ...props.modelValue, difficulty: 'easy' }) }, 'choose-easy'),
             h('button', { onClick: () => emit('update:modelValue', { ...props.modelValue, difficulty: 'hard' }) }, 'choose-hard'),
           ]);
         };
@@ -303,20 +305,43 @@ const Pagination = {
 };
 const Tree = {
   inheritAttrs: false,
-  setup(_props, { attrs, expose }) {
-    let checkedKeys = [];
-    let halfCheckedKeys = [];
+  props: {
+    data: { type: Array, default: () => [] },
+    nodeKey: { type: String, default: 'id' },
+    props: { type: Object, default: () => ({}) },
+  },
+  setup(props, { attrs, expose }) {
+    let store;
+    let requestedKeys = [];
+    const rebuild = () => {
+      store = new TreeStore({
+        data: props.data,
+        key: props.nodeKey,
+        props: props.props,
+        checkStrictly: false,
+      });
+      store.initialize();
+      store.setCheckedKeys(requestedKeys);
+    };
+    watch(() => props.data, rebuild, { deep: true, immediate: true });
+    const setCheckedKeys = (keys) => {
+      requestedKeys = [...keys].map(String);
+      store.setCheckedKeys(requestedKeys);
+    };
+    const getCheckedKeys = () => store.getCheckedKeys().map(String);
+    const getHalfCheckedKeys = () => store.getHalfCheckedKeys().map(String);
     expose({
-      setCheckedKeys(keys) { checkedKeys = [...keys].map(String); halfCheckedKeys = []; },
-      getCheckedKeys() { return [...checkedKeys]; },
-      getHalfCheckedKeys() { return [...halfCheckedKeys]; },
+      setCheckedKeys,
+      getCheckedKeys,
+      getHalfCheckedKeys,
     });
     return () => h('tree', {
       ...attrs,
-      triggerCheck(nextChecked, nextHalf = []) {
-        checkedKeys = [...nextChecked].map(String);
-        halfCheckedKeys = [...nextHalf].map(String);
-        attrs.onCheck?.({}, { checkedKeys: [...checkedKeys], halfCheckedKeys: [...halfCheckedKeys] });
+      getCheckedKeys,
+      getHalfCheckedKeys,
+      triggerCheck(nextChecked) {
+        setCheckedKeys(nextChecked);
+        attrs.onCheck?.({}, { checkedKeys: getCheckedKeys(), halfCheckedKeys: getHalfCheckedKeys() });
       },
     });
   },
@@ -379,6 +404,16 @@ function waitFor(predicate, label, timeoutMs = 2500) {
     };
     check();
   });
+}
+
+function deferred() {
+  let resolvePromise;
+  let rejectPromise;
+  const promise = new Promise((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
 }
 
 function controlledMediaDocument() {
@@ -536,7 +571,9 @@ function setHttp() {
     if (method === 'get' && url === '/regulations/category-options') return { items: [{ id: '7', name: '安全培训' }, { id: '8', name: '管理培训' }], total: 2, page: 1, page_size: 100 };
     if (method === 'get' && url === '/regulations/99') return JSON.parse(JSON.stringify(context.regulation));
     if (method === 'get' && url === '/regulations/99/versions') return [{ id: '501', version_no: 1, parse_status: 'parsed', is_current: true }];
-    if (method === 'get' && url === '/departments/tree') return { list: [{ id: '1', name: '总部', children: [{ id: '2', name: '研发', children: [] }] }] };
+    if (method === 'get' && url === '/departments/tree') return {
+      list: [{ id: 'P', name: '父部门', children: [{ id: 'A', name: '甲部门', children: [] }, { id: 'B', name: '乙部门', children: [] }] }],
+    };
     if (method === 'get' && url.startsWith('/regulations/99/preview')) return { content_html: '<p>制度内容</p>', file_type: 'pdf', parse_status: 'parsed' };
     if (method === 'get' && url === '/regulations') return { list: [] };
     if (method === 'get' && url === '/ai/questions') return { list: context.row ? [context.row] : [], total: context.row ? 1 : 0 };
@@ -592,7 +629,7 @@ beforeEach(() => {
   context.confirmDecisions = [];
   context.regulation = {
     id: '99', title: '安全制度', category: '旧分类', category_id: '7', status: 'draft',
-    required_minutes: 10, scroll_segments: 10, scope: { is_all: false, department_ids: ['2'] },
+    required_minutes: 10, scroll_segments: 10, scope: { is_all: false, department_ids: ['A'] },
   };
   setHttp();
 });
@@ -900,7 +937,7 @@ test('keeps regulation draft sections independent and never reloads over sibling
 
   const tree = walk(mounted.root, (node) => node.type === 'tree')[0];
   assert.ok(tree);
-  tree.props.triggerCheck(['2'], ['1']);
+  tree.props.triggerCheck(['B']);
   await nextTick();
   assert.deepEqual(context.unsavedSources.map((source) => source.dirty.value), [true, true, true]);
 
@@ -978,15 +1015,301 @@ test('keeps regulation draft sections independent and never reloads over sibling
   context.confirmDecisions.push(true);
   assert.equal(await scopeSource.confirmDiscard(), true);
   await nextTick();
-  assert.deepEqual(setup.scope.departmentIds, ['2'], 'confirmed scope discard restores its server baseline');
+  assert.deepEqual(setup.scope.departmentIds, ['A'], 'confirmed scope discard restores its server baseline');
   assert.equal(scopeSource.dirty.value, false);
 
-  tree.props.triggerCheck(['2'], ['1']);
+  tree.props.triggerCheck(['B']);
   await nextTick();
   assert.equal(scopeSource.dirty.value, true);
   await setup.saveScope();
   await nextTick();
   assert.equal(scopeSource.dirty.value, false);
   assert.deepEqual(context.unsavedSources.map((source) => source.dirty.value), [false, false, false]);
+  mounted.unmount();
+});
+
+test('keeps edits made after a delayed question submit and ignores that response after opening another draft', async () => {
+  context.row = legacyRow({ current_version_id: '900719925474099312345', revision: 3, difficulty: 'medium' });
+  const mounted = mount(Questions);
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
+  await click(button(mounted.root, '修订'));
+  const source = context.unsavedSources[0];
+  const normalHttp = context.http;
+  const pending = [];
+  context.http = async (method, url, body, config) => {
+    if (method === 'put' && url === `/ai/questions/${context.row.question_id}`) {
+      context.calls.push({ method, url, body, config });
+      const gate = deferred();
+      pending.push(gate);
+      return gate.promise;
+    }
+    return normalHttp(method, url, body, config);
+  };
+
+  await click(button(mounted.root, 'choose-hard'));
+  const firstSave = button(mounted.root, '保存为待审核版本').props.onClick();
+  await waitFor(() => pending.length === 1, 'first delayed question save');
+  await click(button(mounted.root, 'choose-easy'));
+  pending[0].resolve({
+    ...context.row,
+    difficulty: 'hard',
+    current_version_id: '900719925474099312346',
+  });
+  await firstSave;
+  await nextTick();
+
+  assert.equal(mounted.instance.$.setupState.editorVisible, true, 'later edits must keep the same editor open');
+  assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'easy');
+  assert.equal(mounted.instance.$.setupState.editingExpectedVersionId, '900719925474099312346');
+  assert.equal(source.dirty.value, true, 'later edits must remain dirty against the submitted snapshot');
+  context.confirmDecisions.push(true);
+  await click(button(mounted.root, '取消'));
+  assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'hard', 'discard restores the confirmed submitted form');
+
+  await click(button(mounted.root, '修订'));
+  await click(button(mounted.root, 'choose-hard'));
+  const secondSave = button(mounted.root, '保存为待审核版本').props.onClick();
+  await waitFor(() => pending.length === 2, 'second delayed question save');
+  context.confirmDecisions.push(true);
+  await click(button(mounted.root, '取消'));
+  await click(button(mounted.root, '人工录题'));
+  await click(button(mounted.root, 'choose-hard'));
+  assert.equal(mounted.instance.$.setupState.editorMode, 'create');
+  assert.equal(source.dirty.value, true);
+
+  pending[1].resolve({
+    ...context.row,
+    difficulty: 'hard',
+    current_version_id: '900719925474099312347',
+  });
+  await secondSave;
+  await nextTick();
+  assert.equal(mounted.instance.$.setupState.editorVisible, true, 'late A response must not close reopened B');
+  assert.equal(mounted.instance.$.setupState.editorMode, 'create');
+  assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'hard');
+  assert.equal(mounted.instance.$.setupState.editingExpectedVersionId, null);
+  assert.equal(source.dirty.value, true, 'late A response must not clean reopened B');
+  mounted.unmount();
+});
+
+test('rebases a delayed category save from its submitted value and serializes repeated submits', async () => {
+  context.permissions = new Set(['regulations:read', 'regulations:write']);
+  const mounted = mount(RegulationDetail);
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url.startsWith('/regulations/99/preview')), 'regulation detail');
+  const setup = mounted.instance.$.setupState;
+  const source = context.unsavedSources[0];
+  const normalHttp = context.http;
+  const gate = deferred();
+  context.http = async (method, url, body, config) => {
+    if (method === 'put' && url === '/regulations/99') {
+      context.calls.push({ method, url, body, config });
+      return gate.promise;
+    }
+    return normalHttp(method, url, body, config);
+  };
+  let savePromise;
+  try {
+    setup.categoryId = '8';
+    savePromise = setup.saveCategory();
+    await waitFor(() => context.calls.some((call) => call.method === 'put' && call.url === '/regulations/99'), 'delayed category save');
+    assert.equal(button(mounted.root, '保存培训类别').props.disabled, true, 'pending category save must disable repeat submission');
+    setup.categoryId = null;
+    await setup.saveCategory();
+    assert.equal(context.calls.filter((call) => call.method === 'put' && call.url === '/regulations/99').length, 1);
+    gate.resolve({});
+    await savePromise;
+    await nextTick();
+    assert.equal(setup.reg.category_id, '8');
+    assert.equal(setup.categoryId, null);
+    assert.equal(source.dirty.value, true);
+    context.confirmDecisions.push(true);
+    assert.equal(await source.confirmDiscard(), true);
+    assert.equal(setup.categoryId, '8', 'discard restores the confirmed request value, not later input');
+  } finally {
+    gate.resolve({});
+    await savePromise?.catch(() => undefined);
+    context.http = normalHttp;
+    mounted.unmount();
+  }
+});
+
+test('rebases a delayed learning-config save from its submitted value and serializes repeated submits', async () => {
+  context.permissions = new Set(['regulations:read', 'regulations:write']);
+  const mounted = mount(RegulationDetail);
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url.startsWith('/regulations/99/preview')), 'regulation detail');
+  const setup = mounted.instance.$.setupState;
+  const source = context.unsavedSources[1];
+  const normalHttp = context.http;
+  const gate = deferred();
+  context.http = async (method, url, body, config) => {
+    if (method === 'put' && url === '/regulations/99/learning-config') {
+      context.calls.push({ method, url, body, config });
+      return gate.promise;
+    }
+    return normalHttp(method, url, body, config);
+  };
+  const originalDocument = globalThis.document;
+  globalThis.document = { activeElement: null };
+  let savePromise;
+  try {
+    setup.config.required_minutes = 20;
+    savePromise = setup.saveConfig();
+    await waitFor(() => context.calls.some((call) => call.url === '/regulations/99/learning-config'), 'delayed config save');
+    assert.equal(button(mounted.root, '保存学习要求').props.disabled, true, 'pending config save must disable repeat submission');
+    setup.config.required_minutes = 25;
+    await setup.saveConfig();
+    assert.equal(context.calls.filter((call) => call.url === '/regulations/99/learning-config').length, 1);
+    gate.resolve({});
+    await savePromise;
+    await nextTick();
+    assert.equal(setup.reg.required_minutes, 20);
+    assert.equal(setup.config.required_minutes, 25);
+    assert.equal(source.dirty.value, true);
+    context.confirmDecisions.push(true);
+    assert.equal(await source.confirmDiscard(), true);
+    assert.equal(setup.config.required_minutes, 20, 'discard restores the confirmed config request');
+  } finally {
+    gate.resolve({});
+    await savePromise?.catch(() => undefined);
+    context.http = normalHttp;
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+    mounted.unmount();
+  }
+});
+
+test('rebases a delayed scope save from its submitted value and serializes repeated submits', async () => {
+  context.permissions = new Set(['regulations:read', 'regulations:write']);
+  const mounted = mount(RegulationDetail);
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url.startsWith('/regulations/99/preview')), 'regulation detail');
+  const setup = mounted.instance.$.setupState;
+  const source = context.unsavedSources[2];
+  const normalHttp = context.http;
+  const gate = deferred();
+  context.http = async (method, url, body, config) => {
+    if (method === 'put' && url === '/regulations/99/scope') {
+      context.calls.push({ method, url, body, config });
+      return gate.promise;
+    }
+    return normalHttp(method, url, body, config);
+  };
+  let savePromise;
+  try {
+    setup.scope.is_all = true;
+    savePromise = setup.saveScope();
+    await waitFor(() => context.calls.some((call) => call.url === '/regulations/99/scope'), 'delayed scope save');
+    assert.equal(button(mounted.root, '保存发布范围').props.disabled, true, 'pending scope save must disable repeat submission');
+    setup.scope.is_all = false;
+    await nextTick();
+    const tree = walk(mounted.root, (node) => node.type === 'tree')[0];
+    tree.props.triggerCheck(['B']);
+    await nextTick();
+    await setup.saveScope();
+    assert.equal(context.calls.filter((call) => call.url === '/regulations/99/scope').length, 1);
+    gate.resolve({});
+    await savePromise;
+    await nextTick();
+    assert.deepEqual(setup.reg.scope, { is_all: true, department_ids: [] });
+    assert.deepEqual({ is_all: setup.scope.is_all, departmentIds: setup.scope.departmentIds }, { is_all: false, departmentIds: ['B'] });
+    assert.equal(source.dirty.value, true);
+    context.confirmDecisions.push(true);
+    assert.equal(await source.confirmDiscard(), true);
+    assert.equal(setup.scope.is_all, true, 'discard restores the confirmed all-users request');
+  } finally {
+    gate.resolve({});
+    await savePromise?.catch(() => undefined);
+    context.http = normalHttp;
+    mounted.unmount();
+  }
+});
+
+test('keeps the server scope baseline when initialization requests resolve after a user change', async () => {
+  context.permissions = new Set(['regulations:read', 'regulations:write']);
+  const normalHttp = context.http;
+  const versionsGate = deferred();
+  const departmentsGate = deferred();
+  context.http = async (method, url, body, config) => {
+    if (method === 'get' && url === '/regulations/99/versions') {
+      context.calls.push({ method, url, body, config });
+      return versionsGate.promise;
+    }
+    if (method === 'get' && url === '/departments/tree') {
+      context.calls.push({ method, url, body, config });
+      return departmentsGate.promise;
+    }
+    return normalHttp(method, url, body, config);
+  };
+  const mounted = mount(RegulationDetail);
+  try {
+    await waitFor(() => context.calls.some((call) => call.url === '/regulations/99/versions'), 'delayed initial versions');
+    const setup = mounted.instance.$.setupState;
+    const source = context.unsavedSources[2];
+    setup.scope.is_all = true;
+    await nextTick();
+    assert.equal(source.dirty.value, true);
+    versionsGate.resolve([{ id: '501', version_no: 1, parse_status: 'parsed', is_current: true }]);
+    await waitFor(() => context.calls.some((call) => call.url === '/departments/tree'), 'delayed initial departments');
+    departmentsGate.resolve({
+      list: [{ id: 'P', name: '父部门', children: [{ id: 'A', name: '甲部门', children: [] }, { id: 'B', name: '乙部门', children: [] }] }],
+    });
+    await waitFor(() => context.calls.some((call) => call.url.startsWith('/regulations/99/preview')), 'completed delayed initialization');
+    await nextTick();
+    assert.equal(source.dirty.value, true, 'late initialization must not absorb the user change');
+    context.confirmDecisions.push(true);
+    assert.equal(await source.confirmDiscard(), true);
+    await nextTick();
+    assert.equal(setup.scope.is_all, false);
+    assert.deepEqual(setup.scope.departmentIds, ['A']);
+    const tree = walk(mounted.root, (node) => node.type === 'tree')[0];
+    assert.deepEqual(tree.props.getCheckedKeys(), ['A']);
+  } finally {
+    versionsGate.resolve([]);
+    departmentsGate.resolve({ list: [] });
+    context.http = normalHttp;
+    mounted.unmount();
+  }
+});
+
+test('restores and submits only truly checked department keys while preserving explicit parent selection', async () => {
+  context.permissions = new Set(['regulations:read', 'regulations:write']);
+  const mounted = mount(RegulationDetail);
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url.startsWith('/regulations/99/preview')), 'regulation detail');
+  const setup = mounted.instance.$.setupState;
+  const source = context.unsavedSources[2];
+  let tree = walk(mounted.root, (node) => node.type === 'tree')[0];
+
+  assert.deepEqual(tree.props.getCheckedKeys(), ['A']);
+  assert.deepEqual(tree.props.getHalfCheckedKeys(), ['P'], 'the installed TreeStore derives the half-selected parent');
+  assert.deepEqual(setup.scope.departmentIds, ['A'], 'half-selected parent must not enter the persisted draft');
+
+  tree.props.triggerCheck(['B']);
+  await nextTick();
+  assert.equal(source.dirty.value, true);
+  context.confirmDecisions.push(true);
+  assert.equal(await source.confirmDiscard(), true);
+  await nextTick();
+  tree = walk(mounted.root, (node) => node.type === 'tree')[0];
+  assert.deepEqual(tree.props.getCheckedKeys(), ['A']);
+  assert.deepEqual(tree.props.getHalfCheckedKeys(), ['P']);
+
+  setup.scope.is_all = true;
+  await nextTick();
+  setup.scope.is_all = false;
+  await waitFor(() => {
+    const currentTree = walk(mounted.root, (node) => node.type === 'tree')[0];
+    return currentTree?.props.getCheckedKeys().length === 1;
+  }, 'specified scope restoration after all-users toggle');
+  tree = walk(mounted.root, (node) => node.type === 'tree')[0];
+  assert.deepEqual(tree.props.getCheckedKeys(), ['A'], 'all/specified toggle must not promote half-selected P or select B');
+  await setup.saveScope();
+  const partialPayload = context.calls.findLast((call) => call.method === 'put' && call.url === '/regulations/99/scope').body;
+  assert.deepEqual(partialPayload, { is_all: false, department_ids: ['A'] });
+
+  tree.props.triggerCheck(['P']);
+  await nextTick();
+  assert.deepEqual(tree.props.getCheckedKeys(), ['P', 'A', 'B']);
+  await setup.saveScope();
+  const parentPayload = context.calls.findLast((call) => call.method === 'put' && call.url === '/regulations/99/scope').body;
+  assert.deepEqual(parentPayload, { is_all: false, department_ids: ['A', 'B', 'P'] });
   mounted.unmount();
 });

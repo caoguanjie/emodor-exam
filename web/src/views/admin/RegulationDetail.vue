@@ -22,7 +22,7 @@
             </el-select>
             <span v-else>{{ categoryId ? `类别 ID ${categoryId}` : '未关联' }}</span>
           </el-form-item>
-          <el-form-item v-if="auth.can('regulations:write')"><el-button type="primary" @click="saveCategory">保存培训类别</el-button></el-form-item>
+          <el-form-item v-if="auth.can('regulations:write')"><el-button type="primary" :loading="categorySaving" :disabled="categorySaving" @click="saveCategory">保存培训类别</el-button></el-form-item>
         </el-form>
       </el-tab-pane>
       <el-tab-pane label="制度版本">
@@ -74,7 +74,7 @@
             <span style="color:#909399; font-size:12px; margin-left:8px">本期固定 10 段（配置项前向保留）</span>
           </el-form-item>
           <el-form-item>
-            <el-button v-if="auth.can('regulations:write')" type="primary" @click="saveConfig">保存学习要求</el-button>
+            <el-button v-if="auth.can('regulations:write')" type="primary" :loading="configSaving" :disabled="configSaving" @click="saveConfig">保存学习要求</el-button>
           </el-form-item>
         </el-form>
       </el-tab-pane>
@@ -88,7 +88,7 @@
           <el-tree ref="scopeTreeRef" :data="deptTree" show-checkbox node-key="id" default-expand-all :disabled="!auth.can('regulations:write')"
             :props="{ label: 'name' }" @check="onScopeCheck" />
         </div>
-        <el-button v-if="auth.can('regulations:write')" type="primary" style="margin-top:14px" @click="saveScope">保存发布范围</el-button>
+        <el-button v-if="auth.can('regulations:write')" type="primary" :loading="scopeSaving" :disabled="scopeSaving" style="margin-top:14px" @click="saveScope">保存发布范围</el-button>
       </el-tab-pane>
 
       <el-tab-pane label="内容预览">
@@ -134,9 +134,16 @@ const scopeBaseline = ref<{ is_all: boolean; departmentIds: string[] }>({ is_all
 const categoryDirty = ref(false);
 const configDirty = ref(false);
 const scopeDirty = ref(false);
+const categorySaving = ref(false);
+const configSaving = ref(false);
+const scopeSaving = ref(false);
 
 function normalizeDepartmentIds(values: unknown[]): string[] {
   return [...new Set(values.map(String))].sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+}
+
+function categorySnapshot(): string | null {
+  return categoryId.value || null;
 }
 
 function configSnapshot() {
@@ -150,52 +157,58 @@ function scopeSnapshot() {
   };
 }
 
-function captureCategoryBaseline() {
-  categoryBaseline.value = categoryId.value;
-  categoryDirty.value = false;
+function syncCategoryDirty() {
+  categoryDirty.value = categorySnapshot() !== categoryBaseline.value;
 }
 
-function captureConfigBaseline() {
-  configBaseline.value = configSnapshot();
-  configDirty.value = false;
+function syncConfigDirty() {
+  configDirty.value = JSON.stringify(configSnapshot()) !== JSON.stringify(configBaseline.value);
 }
 
-function captureScopeBaseline() {
-  scopeBaseline.value = scopeSnapshot();
-  scopeDirty.value = false;
+function syncScopeDirty() {
+  scopeDirty.value = JSON.stringify(scopeSnapshot()) !== JSON.stringify(scopeBaseline.value);
+}
+
+function setCategoryBaseline(value = categorySnapshot()) {
+  categoryBaseline.value = value;
+  syncCategoryDirty();
+}
+
+function setConfigBaseline(value = configSnapshot()) {
+  configBaseline.value = { ...value };
+  syncConfigDirty();
+}
+
+function setScopeBaseline(value = scopeSnapshot()) {
+  scopeBaseline.value = { is_all: value.is_all, departmentIds: [...value.departmentIds] };
+  syncScopeDirty();
 }
 
 function restoreCategoryBaseline() {
   categoryId.value = categoryBaseline.value;
-  categoryDirty.value = false;
+  syncCategoryDirty();
 }
 
 function restoreConfigBaseline() {
   Object.assign(config, configBaseline.value);
   configKey.value += 1;
-  configDirty.value = false;
+  syncConfigDirty();
 }
 
 function restoreScopeBaseline() {
   scope.is_all = scopeBaseline.value.is_all;
   scope.departmentIds = [...scopeBaseline.value.departmentIds];
-  scopeDirty.value = false;
+  syncScopeDirty();
   void nextTick(() => (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds));
 }
 
-const categoryUnsaved = useUnsavedChanges(categoryDirty, { onDiscard: restoreCategoryBaseline });
-const configUnsaved = useUnsavedChanges(configDirty, { onDiscard: restoreConfigBaseline });
-const scopeUnsaved = useUnsavedChanges(scopeDirty, { onDiscard: restoreScopeBaseline });
+useUnsavedChanges(categoryDirty, { onDiscard: restoreCategoryBaseline });
+useUnsavedChanges(configDirty, { onDiscard: restoreConfigBaseline });
+useUnsavedChanges(scopeDirty, { onDiscard: restoreScopeBaseline });
 
-watch(categoryId, () => {
-  categoryDirty.value = categoryId.value !== categoryBaseline.value;
-}, { flush: 'sync' });
-watch(config, () => {
-  configDirty.value = JSON.stringify(configSnapshot()) !== JSON.stringify(configBaseline.value);
-}, { deep: true, flush: 'sync' });
-watch(scope, () => {
-  scopeDirty.value = JSON.stringify(scopeSnapshot()) !== JSON.stringify(scopeBaseline.value);
-}, { deep: true, flush: 'sync' });
+watch(categoryId, syncCategoryDirty, { flush: 'sync' });
+watch(config, syncConfigDirty, { deep: true, flush: 'sync' });
+watch(scope, syncScopeDirty, { deep: true, flush: 'sync' });
 watch(() => scope.is_all, (isAll) => {
   if (!isAll) void nextTick(() => (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds));
 });
@@ -214,19 +227,25 @@ async function load() {
   config.scroll_segments = reg.value.scroll_segments;
   configKey.value++; // 强制 el-input-number 重挂载，显示与数据保持一致
   // 发布范围回显（详情接口含 scope：is_all / department_ids）
-  scope.is_all = !!reg.value.scope?.is_all;
-  scope.departmentIds = (reg.value.scope?.department_ids || []).map(String);
+  const serverScope = {
+    is_all: !!reg.value.scope?.is_all,
+    departmentIds: reg.value.scope?.is_all ? [] : normalizeDepartmentIds(reg.value.scope?.department_ids || []),
+  };
+  scope.is_all = serverScope.is_all;
+  scope.departmentIds = [...serverScope.departmentIds];
   // 在首次异步等待前建立服务端基线，避免加载中的数据回显被误判成用户草稿。
-  captureCategoryBaseline();
-  captureConfigBaseline();
-  captureScopeBaseline();
+  setCategoryBaseline();
+  setConfigBaseline();
+  setScopeBaseline(serverScope);
   await loadVersions();
   const tree: any = await http.get('/departments/tree');
   deptTree.value = tree.list;
   await nextTick();
-  (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds);
-  scope.departmentIds = currentScopeDepartmentIds();
-  captureScopeBaseline();
+  if (!scope.is_all) {
+    (scopeTreeRef.value as any)?.setCheckedKeys(scope.departmentIds);
+    scope.departmentIds = currentScopeDepartmentIds();
+  }
+  syncScopeDirty();
 }
 
 async function loadVersions() {
@@ -237,11 +256,11 @@ function currentScopeDepartmentIds(): string[] {
   if (scope.is_all) return [];
   const tree = scopeTreeRef.value as any;
   if (!tree) return normalizeDepartmentIds(scope.departmentIds);
-  return normalizeDepartmentIds([...(tree.getCheckedKeys?.() || []), ...(tree.getHalfCheckedKeys?.() || [])]);
+  return normalizeDepartmentIds(tree.getCheckedKeys?.() || []);
 }
 
-function onScopeCheck(_data: unknown, state: { checkedKeys?: unknown[]; halfCheckedKeys?: unknown[] }) {
-  scope.departmentIds = normalizeDepartmentIds([...(state.checkedKeys || []), ...(state.halfCheckedKeys || [])]);
+function onScopeCheck(_data: unknown, state: { checkedKeys?: unknown[] }) {
+  scope.departmentIds = normalizeDepartmentIds(state.checkedKeys || []);
 }
 
 async function loadCategoryOptions() {
@@ -251,11 +270,17 @@ async function loadCategoryOptions() {
 }
 
 async function saveCategory() {
-  await http.put(`/regulations/${regId}`, { category_id: categoryId.value || null });
-  if (reg.value) reg.value.category_id = categoryId.value || null;
-  captureCategoryBaseline();
-  categoryUnsaved.markClean();
-  ElMessage.success(categoryId.value ? '培训类别已保存' : '已清除培训类别关联');
+  if (categorySaving.value) return;
+  const submitted = categorySnapshot();
+  categorySaving.value = true;
+  try {
+    await http.put(`/regulations/${regId}`, { category_id: submitted });
+    if (reg.value) reg.value.category_id = submitted;
+    setCategoryBaseline(submitted);
+    ElMessage.success(submitted ? '培训类别已保存' : '已清除培训类别关联');
+  } finally {
+    categorySaving.value = false;
+  }
 }
 
 async function handleUpload(file: File) {
@@ -299,26 +324,37 @@ async function retryParse(row: any) {
 }
 
 async function saveConfig() {
+  if (configSaving.value) return;
   // el-input-number 聚焦期间不改写 model（显示与实际值会短暂脱节），保存前先失焦提交
   (document.activeElement as HTMLElement | null)?.blur?.();
-  await http.put(`/regulations/${regId}/learning-config`, { ...config });
-  if (reg.value) {
-    reg.value.required_minutes = config.required_minutes;
-    reg.value.scroll_segments = config.scroll_segments;
+  const submitted = configSnapshot();
+  configSaving.value = true;
+  try {
+    await http.put(`/regulations/${regId}/learning-config`, { ...submitted });
+    if (reg.value) {
+      reg.value.required_minutes = submitted.required_minutes;
+      reg.value.scroll_segments = submitted.scroll_segments;
+    }
+    setConfigBaseline(submitted);
+    ElMessage.success('学习要求已保存（已达标员工不回退）');
+  } finally {
+    configSaving.value = false;
   }
-  captureConfigBaseline();
-  configUnsaved.markClean();
-  ElMessage.success('学习要求已保存（已达标员工不回退）');
 }
 
 async function saveScope() {
+  if (scopeSaving.value) return;
   scope.departmentIds = currentScopeDepartmentIds();
-  const snapshot = scopeSnapshot();
-  await http.put(`/regulations/${regId}/scope`, { is_all: snapshot.is_all, department_ids: snapshot.departmentIds });
-  if (reg.value) reg.value.scope = { is_all: snapshot.is_all, department_ids: [...snapshot.departmentIds] };
-  captureScopeBaseline();
-  scopeUnsaved.markClean();
-  ElMessage.success('发布范围已保存');
+  const submitted = scopeSnapshot();
+  scopeSaving.value = true;
+  try {
+    await http.put(`/regulations/${regId}/scope`, { is_all: submitted.is_all, department_ids: submitted.departmentIds });
+    if (reg.value) reg.value.scope = { is_all: submitted.is_all, department_ids: [...submitted.departmentIds] };
+    setScopeBaseline(submitted);
+    ElMessage.success('发布范围已保存');
+  } finally {
+    scopeSaving.value = false;
+  }
 }
 
 async function onPublish() {
