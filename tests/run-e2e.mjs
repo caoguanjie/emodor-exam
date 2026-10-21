@@ -25,7 +25,6 @@ export const SUITE_REGISTRY = Object.freeze({
   'e2e-smoke': join(ROOT, 'tests', 'suites', 'e2e-smoke-adapter.mjs'),
   'training-identity': join(ROOT, 'tests', 'training-identity.mjs'),
   'training-access': join(ROOT, 'tests', 'training-access.mjs'),
-  all: join(ROOT, 'tests', 'suites', 'e2e-smoke-adapter.mjs'),
 });
 
 export function resolveSuitePaths(selector, registry = SUITE_REGISTRY) {
