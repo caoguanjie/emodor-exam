@@ -23,8 +23,8 @@ function serviceFor(root: string, probe: unknown = { probe: async () => ({ mimeT
 function managerFor(asset: any) {
   const inserted: any[] = [];
   const refs: any = {
-    findOne: async () => null,
-    insert: async (value: any) => { inserted.push(value); },
+    findOne: vi.fn(async () => null),
+    insert: vi.fn(async (value: any) => { inserted.push(value); }),
   };
   const manager: any = {
     getRepository(entity: unknown) {
@@ -33,7 +33,7 @@ function managerFor(asset: any) {
       throw new Error('unexpected repository');
     },
   };
-  return { manager, inserted };
+  return { manager, inserted, refs };
 }
 
 afterEach(async () => {
@@ -97,6 +97,26 @@ describe('media lifecycle contracts', () => {
     const { manager, inserted } = managerFor(asset);
     await media.bind(manager, '99', 'answer_attempt', 'attempt-123');
     expect(inserted).toEqual([{ assetId: '99', ownerType: 'answer_attempt', ownerId: 'attempt-123' }]);
+  });
+
+  it('uses a current locking read for the idempotent reference check after the asset lock', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ruleexam-media-lifecycle-'));
+    roots.push(root);
+    const media = serviceFor(root);
+    media.registerOwnerPolicy('result_item', {
+      allowedPurposes: ['question'],
+      authorizeRead: () => true,
+    });
+    const { manager, refs } = managerFor({ id: '99', ownerId: '7', purpose: 'question', mediaKind: 'image', status: 'ready' });
+    refs.findOne.mockResolvedValue({ id: '501' });
+
+    await media.bind(manager, '99', 'result_item', '701');
+
+    expect(refs.findOne).toHaveBeenCalledWith({
+      where: { assetId: '99', ownerType: 'result_item', ownerId: '701' },
+      lock: { mode: 'pessimistic_read' },
+    });
+    expect(refs.insert).not.toHaveBeenCalled();
   });
 
   it('lets the final owner policy reject a video masquerading as an avatar', async () => {
