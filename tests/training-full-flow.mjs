@@ -8,6 +8,7 @@ import { randomStrongPassword } from './training-access.mjs';
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
 const JSZip = require('jszip');
+const ExcelJS = require('exceljs');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -221,7 +222,7 @@ export async function prepareTrainingFlow(ctx) {
   return { admin, learners, categoryId, regulationId, courseId, paperId, releaseId: String(release.release_id) };
 }
 
-export async function finishTrainingFlow(ctx, flow) {
+export async function finishTrainingFlow(ctx, flow, { verifyStatistics = false } = {}) {
   const [institution, external] = flow.learners;
   const manual = await ok(ctx, institution.actor, 'POST', `/me/exam-records/${institution.attempt.record_id}/submit`);
   assert.equal(manual.grading_state, 'pending_manual');
@@ -231,6 +232,16 @@ export async function finishTrainingFlow(ctx, flow) {
   const timeout = await ok(ctx, external.actor, 'POST', `/me/exam-records/${external.attempt.record_id}/submit`);
   assert.equal(timeout.submission_method, 'timeout');
   assert.equal(timeout.grading_state, 'pending_manual');
+  if (verifyStatistics) {
+    const pending = await ok(ctx, flow.admin.actor, 'GET', `/statistics/training/summary?paper_id=${flow.paperId}`);
+    assert.equal(pending.pending_users, 2);
+    assert.equal(pending.pending_attempts, 2);
+    assert.equal(pending.finalized_users, 0, 'pending image answers must not enter final statistics');
+    for (const difficulty of ['easy', 'hard']) {
+      const ranking = await ok(ctx, flow.admin.actor, 'GET', `/statistics/training/ranking?paper_id=${flow.paperId}&difficulty=${difficulty}`);
+      assert.deepEqual(ranking.items, [], 'pending results must not be displayed as zero-score ranking entries');
+    }
+  }
   for (const [learner, cents, expected] of [[institution, 1750, 80], [external, 1000, 35]]) {
     await ok(ctx, flow.admin.actor, 'PUT', `/admin/exam-records/${learner.attempt.record_id}/grades/${learner.imageItemId}`, { score_cents: cents, comment: '全链验收受控评分', expected_version: 0 });
     const result = await ok(ctx, learner.actor, 'GET', `/me/exam-records/${learner.attempt.record_id}/result`);
@@ -246,8 +257,63 @@ export async function finishTrainingFlow(ctx, flow) {
 
 export async function run(ctx) {
   const flow = await prepareTrainingFlow(ctx);
-  await finishTrainingFlow(ctx, flow);
-  // C5/C6 assertions are appended once their actual controller contracts land.
-  // Until then this file is intentionally not registered in --suite all.
-  console.log('[training-full-flow] regulation/AI/review/import/video/dual-difficulty/restart/submit/grade passed');
+  const monitorPath = `/admin/exams/${flow.paperId}/monitor`;
+  const active = await ok(ctx, flow.admin.actor, 'GET', monitorPath);
+  assert.equal(active.total, 2);
+  assertSafe(active);
+  for (const learner of flow.learners) {
+    const row = active.items.find((item) => item.record_id === learner.attempt.record_id);
+    assert.equal(row.source, learner.source);
+    assert.equal(row.difficulty, learner.difficulty);
+    assert.equal(row.answered_count, learner.source === 'institution' ? 4 : 2);
+    assert.equal(row.total_count, 4);
+    assert.equal(row.grading_state, 'not_submitted');
+  }
+  await finishTrainingFlow(ctx, flow, { verifyStatistics: true });
+  const ended = await ok(ctx, flow.admin.actor, 'GET', monitorPath);
+  assert.ok(ended.items.every((row) => row.connection_state === 'ended' && row.grading_state === 'finalized'));
+  const summary = await ok(ctx, flow.admin.actor, 'GET', `/statistics/training/summary?paper_id=${flow.paperId}`);
+  assert.equal(summary.release_id, flow.releaseId);
+  assert.equal(summary.eligible_count, 2);
+  assert.equal(summary.eligible_started_count, 2);
+  assert.equal(summary.historical_started_count, 2);
+  assert.equal(summary.participation_rate, 1);
+  assert.equal(summary.pending_users, 0);
+  assert.equal(summary.finalized_users, 2);
+  for (const path of [
+    '/statistics/training/options?unexpected=1',
+    `/statistics/training/summary?paper_id=${flow.paperId}&unexpected=1`,
+    `/statistics/training/ranking?paper_id=${flow.paperId}&difficulty=easy&unexpected=1`,
+    `/statistics/training/export?paper_id=${flow.paperId}&difficulty=easy&unexpected=1`,
+    '/admin/dashboard?unexpected=1',
+  ]) {
+    const rejected = await ctx.request(flow.admin.actor, 'GET', path);
+    assert.equal(rejected.status, 400, `unknown query must be rejected: ${path}`);
+    assert.equal(rejected.code, 40001);
+  }
+  assert.equal((await ctx.request(flow.admin.actor, 'GET', `/statistics/training/ranking?paper_id=${flow.paperId}`)).status, 400);
+  for (const [learner, expectedScore] of [[flow.learners[0], 80], [flow.learners[1], 35]]) {
+    const group = summary.score_groups.find((item) => item.difficulty === learner.difficulty);
+    assert.equal(group.finalized_users, 1);
+    assert.equal(group.average_score, expectedScore);
+    assert.equal(group.pass_rate, expectedScore >= 60 ? 1 : 0);
+    const filter = `paper_id=${flow.paperId}&difficulty=${learner.difficulty}&page=1&page_size=20`;
+    const ranking = await ok(ctx, flow.admin.actor, 'GET', `/statistics/training/ranking?${filter}`);
+    assert.equal(ranking.total, 1);
+    assert.equal(ranking.items[0].rank, 1);
+    assert.equal(ranking.items[0].user_id, learner.id);
+    assert.equal(ranking.items[0].score, expectedScore);
+    assert.equal(ranking.items[0].record_id, learner.attempt.record_id);
+    const exported = await ok(ctx, flow.admin.actor, 'GET', `/statistics/training/export?${filter}`);
+    assert.ok(Buffer.isBuffer(exported));
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(exported);
+    const rows = [];
+    workbook.getWorksheet('难度排名').eachRow((row, number) => {
+      if (number > 1) rows.push(Array.from({ length: 8 }, (_, index) => row.getCell(index + 1).value));
+    });
+    assert.deepEqual(rows, ranking.items.map((row) => [row.rank, row.user_id, row.name, row.source, row.difficulty, row.score, row.duration_seconds, row.record_id]), 'export and screen must use identical query rows');
+  }
+  assert.equal((await ctx.request(flow.learners[0].actor, 'GET', `/statistics/training/summary?paper_id=${flow.paperId}`)).status, 403);
+  console.log('[training-full-flow] regulation/AI/review/import/video/dual-difficulty/restart/submit/grade/monitor/statistics/export passed');
 }
