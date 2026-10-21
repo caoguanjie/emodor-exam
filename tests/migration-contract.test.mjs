@@ -446,7 +446,7 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
       '000_migration_registry', '001_training_identity', '002_access', '003_media',
       '004_system', '005_courses', '006_video_learning', '007_question_bank',
       '008_paper_release', '009_attempt_snapshot', '010_answers', '011_manual_grading',
-      '012_course_navigation', '013_exam_monitor_navigation',
+      '012_course_navigation', '013_exam_monitor_navigation', '014_training_statistics_navigation',
     ]);
 
     await conn.query("INSERT INTO sys_department (name, sort, status) VALUES ('完整升级保留数据', 917, 0)");
@@ -496,10 +496,11 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
     );
     assert.deepEqual(reservedMenusAfter, reservedMenusBefore);
     const [newNavigation] = await conn.query(
-      "SELECT id, route_path FROM sys_menu WHERE route_path IN ('/admin/courses','/admin/grading','/admin/exam-records','/admin/exam-monitor') ORDER BY route_path",
+      "SELECT id, route_path FROM sys_menu WHERE route_path IN ('/admin/courses','/admin/dashboard','/admin/grading','/admin/exam-records','/admin/exam-monitor','/admin/training-statistics') ORDER BY route_path",
     );
     assert.deepEqual(newNavigation.map((row) => row.route_path), [
-      '/admin/courses', '/admin/exam-monitor', '/admin/exam-records', '/admin/grading',
+      '/admin/courses', '/admin/dashboard', '/admin/exam-monitor', '/admin/exam-records',
+      '/admin/grading', '/admin/training-statistics',
     ]);
     assert.equal(new Set(newNavigation.map((row) => String(row.id))).size, newNavigation.length);
     assert.equal(newNavigation.every((row) => Number(row.id) < 20 || Number(row.id) > 26), true);
