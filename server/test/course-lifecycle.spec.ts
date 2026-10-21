@@ -9,6 +9,10 @@ import { LessonVersion } from '../src/entities/lesson-version.entity';
 import { MediaAsset } from '../src/entities/media-asset.entity';
 import { Regulation } from '../src/entities/regulation.entity';
 import { SysUser } from '../src/entities/sys-user.entity';
+import { TrainingCategory } from '../src/entities/training-category.entity';
+import { Question } from '../src/entities/question.entity';
+import { QuestionConcept } from '../src/entities/question-concept.entity';
+import { QuestionVersion } from '../src/entities/question-version.entity';
 import { CategoryService } from '../src/modules/training/category.service';
 import { RegulationService } from '../src/modules/regulations/regulation.service';
 
@@ -42,6 +46,50 @@ function lessonService(overrides: Record<string, unknown> = {}) {
     ...overrides,
   });
   return service as LessonVersionService & Record<string, any>;
+}
+
+const categoryReferenceCases = [
+  ['a learner', SysUser],
+  ['a course', TrainingCourse],
+  ['a regulation', Regulation],
+  ['a question', Question],
+  ['a question version', QuestionVersion],
+  ['a question concept', QuestionConcept],
+] as const;
+
+function categoryDeleteFixture(referencedEntity?: unknown) {
+  const events: string[] = [];
+  const category = { id: '7', status: 1 };
+  const remove = vi.fn().mockResolvedValue(category);
+  const repositories = new Map<unknown, Record<string, unknown>>();
+
+  for (const [, entity] of categoryReferenceCases) {
+    repositories.set(entity, {
+      count: vi.fn(async (options) => {
+        events.push(`count:${entity.name}`);
+        expect(options).toEqual({ where: { categoryId: '7' } });
+        return entity === referencedEntity ? 1 : 0;
+      }),
+    });
+  }
+  repositories.set(TrainingCategory, { remove });
+
+  const manager = {
+    findOne: vi.fn(async () => {
+      events.push('lock');
+      return category;
+    }),
+    getRepository(entity: unknown) {
+      const repository = repositories.get(entity);
+      if (!repository) throw new Error(`unexpected repository: ${String((entity as any)?.name)}`);
+      return repository;
+    },
+  } as any;
+  const service = Object.create(CategoryService.prototype) as any;
+  service.categoryRepo = { manager: { transaction: (work: any) => work(manager) } };
+  service.audit = { log: vi.fn() };
+
+  return { category, events, manager, remove, service };
 }
 
 describe('course lifecycle', () => {
@@ -225,20 +273,38 @@ describe('course and regulation category references', () => {
       .resolves.toMatchObject({ category_id: null, category: 'legacy' });
   });
 
-  it('prevents deleting a training category referenced by a course', async () => {
-    const manager = {
-      findOne: vi.fn().mockResolvedValue({ id: '7', status: 1 }),
-      getRepository(entity: unknown) {
-        if (entity === SysUser) return { count: vi.fn().mockResolvedValue(0) };
-        if (entity === TrainingCourse) return { count: vi.fn().mockResolvedValue(1) };
-        if (entity === Regulation) return { count: vi.fn().mockResolvedValue(0) };
-        throw new Error(`unexpected repository: ${String((entity as any)?.name)}`);
-      },
-    } as any;
-    const service = Object.create(CategoryService.prototype) as any;
-    service.categoryRepo = { manager: { transaction: (work: any) => work(manager) } };
-    service.audit = { log: vi.fn() };
+  it.each(categoryReferenceCases)('prevents deleting a training category referenced by %s', async (_label, referencedEntity) => {
+    const { events, manager, remove, service } = categoryDeleteFixture(referencedEntity);
 
-    await expect(service.remove('7', { id: '9', name: 'admin' }, null)).rejects.toMatchObject({ httpStatus: 409 });
+    await expect(service.remove('7', { id: '9', name: 'admin' }, null)).rejects.toMatchObject({
+      code: 40910,
+      httpStatus: 409,
+    });
+    expect(manager.findOne).toHaveBeenCalledWith(TrainingCategory, {
+      where: { id: '7' },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(events[0]).toBe('lock');
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('deletes an unreferenced training category after locking and checking every reference', async () => {
+    const { category, events, manager, remove, service } = categoryDeleteFixture();
+
+    await expect(service.remove('7', { id: '9', name: 'admin' }, null)).resolves.toBeNull();
+    expect(manager.findOne).toHaveBeenCalledWith(TrainingCategory, {
+      where: { id: '7' },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(events).toEqual([
+      'lock',
+      'count:SysUser',
+      'count:TrainingCourse',
+      'count:Regulation',
+      'count:Question',
+      'count:QuestionConcept',
+      'count:QuestionVersion',
+    ]);
+    expect(remove).toHaveBeenCalledWith(category);
   });
 });
