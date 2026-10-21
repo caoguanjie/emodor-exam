@@ -16,6 +16,14 @@ const SAFE_MIGRATION_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SAFE_STEP_ID = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/;
 const MIGRATION_FILE = /^\d{3}[_-][A-Za-z0-9_-]+\.sql$/;
 const SYSTEM_DATABASES = new Set(['mysql', 'sys', 'information_schema', 'performance_schema', 'ndbinfo']);
+// Probe expressions stay deliberately small: these built-ins are read-only and
+// are the only function calls needed by the current migration contracts. SQL
+// expression keywords such as EXISTS/IN/CASE are not function calls.
+const SAFE_PROBE_FUNCTIONS = new Set(['COALESCE', 'COUNT', 'DATABASE']);
+const PROBE_EXPRESSION_KEYWORDS = new Set([
+  'AND', 'CASE', 'ELSE', 'END', 'EXISTS', 'IN', 'IS', 'NOT', 'OR', 'THEN', 'WHEN',
+]);
+const PROBE_FUNCTION_CALL = /(`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_$]*)\s*\(/g;
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const mysql = require('mysql2/promise');
 
@@ -151,6 +159,106 @@ function normalizeSingleStatement(sql, kind) {
   return statements[0];
 }
 
+function withoutStringLiterals(sql) {
+  let output = '';
+  let quote = null;
+  for (let index = 0; index < sql.length; index += 1) {
+    const current = sql[index];
+    if (quote) {
+      if (current === '\\' && sql[index + 1]) {
+        output += '  ';
+        index += 1;
+      } else if (current === quote) {
+        if (sql[index + 1] === quote) {
+          output += '  ';
+          index += 1;
+        } else {
+          output += ' ';
+          quote = null;
+        }
+      } else {
+        output += '\n' === current ? '\n' : ' ';
+      }
+      continue;
+    }
+    if (current === "'" || current === '"') {
+      quote = current;
+      output += ' ';
+      continue;
+    }
+    output += current;
+  }
+  return output;
+}
+
+function qualifiedIdentifier(statement, allowInformationSchema) {
+  const withoutStrings = withoutStringLiterals(statement);
+  const matches = withoutStrings.matchAll(/(`[^`]+`|[A-Za-z_][A-Za-z0-9_$]*)\s*\.\s*(`[^`]+`|[A-Za-z_][A-Za-z0-9_$]*)/g);
+  for (const match of matches) {
+    const left = match[1].replaceAll('`', '').toUpperCase();
+    if (!allowInformationSchema || left !== 'INFORMATION_SCHEMA') return match[0];
+  }
+  return null;
+}
+
+function hasTopLevelSelectComma(statement) {
+  const withoutStrings = withoutStringLiterals(statement);
+  let depth = 0;
+  for (let index = withoutStrings.search(/\bSELECT\b/i) + 6; index < withoutStrings.length; index += 1) {
+    const current = withoutStrings[index];
+    if (current === '(') {
+      depth += 1;
+      continue;
+    }
+    if (current === ')') {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (depth === 0 && current === ',') return true;
+    if (depth === 0 && /\bFROM\b/i.test(withoutStrings.slice(index, index + 5))) return false;
+  }
+  return false;
+}
+
+function rejectUnsafeSql(statement, kind, { allowInformationSchema = false } = {}) {
+  const withoutStrings = withoutStringLiterals(statement);
+  const qualified = qualifiedIdentifier(statement, allowInformationSchema);
+  if (qualified || /`[^`]*\.[^`]*`/.test(withoutStrings)) {
+    throw new Error(`${kind} cannot reference a schema-qualified table: ${qualified || 'backtick-qualified identifier'}`);
+  }
+  if (/@{1,2}[A-Za-z_][A-Za-z0-9_$]*/.test(withoutStrings) || /:=/.test(withoutStrings)) {
+    throw new Error(`${kind} cannot use session variables or assignments`);
+  }
+  if (/\b(?:GET_LOCK|RELEASE_LOCK|RELEASE_ALL_LOCKS|IS_USED_LOCK|RELEASE_GET_LOCK|SLEEP|LOAD_FILE|BENCHMARK)\s*\(/i.test(withoutStrings)) {
+    throw new Error(`${kind} cannot use side-effect or lock functions`);
+  }
+  if (/\b(?:FOR\s+UPDATE|LOCK\s+IN\s+SHARE\s+MODE|NOWAIT|SKIP\s+LOCKED)\b/i.test(withoutStrings)
+    || /\bLOCK\s*=/i.test(withoutStrings)) {
+    throw new Error(`${kind} cannot use locking clauses`);
+  }
+  if (/\bINTO\s+(?:OUTFILE|DUMPFILE|@)/i.test(withoutStrings)) {
+    throw new Error(`${kind} cannot write query results to a file or variable`);
+  }
+  if (/\b(?:CALL|DO|PREPARE|EXECUTE|HANDLER|START\s+TRANSACTION|COMMIT|ROLLBACK)\b/i.test(withoutStrings)) {
+    throw new Error(`${kind} contains an unsupported session or transaction operation`);
+  }
+}
+
+function rejectUnsupportedProbeFunctions(statement, kind) {
+  const withoutStrings = withoutStringLiterals(statement);
+  for (const match of withoutStrings.matchAll(PROBE_FUNCTION_CALL)) {
+    const token = match[1];
+    if (token.startsWith('`')) {
+      throw new Error(`${kind} cannot use quoted function names`);
+    }
+    const name = token.toUpperCase();
+    if (PROBE_EXPRESSION_KEYWORDS.has(name)) continue;
+    if (!SAFE_PROBE_FUNCTIONS.has(name)) {
+      throw new Error(`${kind} uses an unsupported function: ${token}`);
+    }
+  }
+}
+
 function normalizeCheckSql(sql, migrationId, stepId) {
   const statement = normalizeSingleStatement(sql, `migration probe ${migrationId}/${stepId}`);
   if (!/^SELECT\b/i.test(statement)) {
@@ -159,17 +267,17 @@ function normalizeCheckSql(sql, migrationId, stepId) {
   if (!/\bAS\s+(?:`complete`|complete)\b/i.test(statement)) {
     throw new Error(`migration probe ${migrationId}/${stepId} must return AS complete`);
   }
-  if (/\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|USE|CALL|SET|INTO)\b/i.test(statement)) {
-    throw new Error(`migration probe ${migrationId}/${stepId} must be read-only`);
-  }
+  if (hasTopLevelSelectComma(statement)) throw new Error(`migration probe ${migrationId}/${stepId} must return exactly one completion flag`);
+  if (/\bINTO\b/i.test(withoutStringLiterals(statement))) throw new Error(`migration probe ${migrationId}/${stepId} cannot use INTO`);
+  rejectUnsafeSql(statement, `migration probe ${migrationId}/${stepId}`, { allowInformationSchema: true });
+  rejectUnsupportedProbeFunctions(statement, `migration probe ${migrationId}/${stepId}`);
   return statement;
 }
 
 function normalizeMigrationSql(sql, migrationId, stepId) {
   const statement = normalizeSingleStatement(sql, `migration step ${migrationId}/${stepId}`);
-  if (/\b(?:USE|CREATE\s+DATABASE|DROP\s+DATABASE)\b/i.test(statement)) {
-    throw new Error(`migration step ${migrationId}/${stepId} cannot switch or destroy databases`);
-  }
+  rejectUnsafeSql(statement, `migration step ${migrationId}/${stepId}`);
+  if (/\b(?:USE|CREATE\s+DATABASE|DROP\s+DATABASE)\b/i.test(statement)) throw new Error(`migration step ${migrationId}/${stepId} cannot switch or destroy databases`);
   if (!/^(?:CREATE\s+TABLE|ALTER\s+TABLE|CREATE\s+(?:UNIQUE\s+)?INDEX|INSERT\s+INTO|INSERT\s+IGNORE|UPDATE)\b/i.test(statement)) {
     throw new Error(`migration step ${migrationId}/${stepId} uses an unsupported SQL statement`);
   }
@@ -462,14 +570,6 @@ async function probeStep(connection, migration, step) {
   return Number(value) === 1;
 }
 
-async function validateRuntimeProbes(connection, migrations) {
-  for (const migration of migrations) {
-    for (const step of migration.steps) {
-      await probeStep(connection, migration, step);
-    }
-  }
-}
-
 async function checkpoint(onCheckpoint, event, migration, step) {
   if (typeof onCheckpoint === 'function') {
     await onCheckpoint({ event, migrationId: migration.id, stepId: step?.id || null });
@@ -599,9 +699,6 @@ export async function applyMigrations({ connection, database, migrations, onChec
   try {
     await readPreflight(connection, database);
     const initialPlan = await inspectMigrations({ connection, database, migrations: definitions, allowApplying: true });
-    // Execute every probe before the first metadata/DDL write. This makes a
-    // malformed or unexecutable probe fail as a read-only validation error.
-    await validateRuntimeProbes(connection, definitions);
     const registryMigration = definitions.find((migration) => migration.id === REGISTRY_MIGRATION_ID);
     if (!registryMigration && !await tableExists(connection, REGISTRY_TABLE)) {
       throw new Error(`${REGISTRY_MIGRATION_ID}.sql is required to bootstrap the registry`);

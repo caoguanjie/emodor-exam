@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import {
   applyMigrations,
   getMigrationChecksum,
+  getMigrationLockName,
   inspectMigrations,
   listMigrations,
   parseMigrationText,
@@ -247,6 +248,34 @@ ALTER TABLE partial_fixture ADD COLUMN second_marker INT NOT NULL DEFAULT 0;
   await conn.end();
 });
 
+test('dependent migrations run probes in migration order and backfill a newly created object', async () => {
+  const database = await createDatabase();
+  const conn = await connectionFor(database);
+  const base = await migration();
+  const createFixture = fixtureMigration('001_dependency_create', `
+-- @step create_dependency
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dependency_fixture') THEN 1 ELSE 0 END AS complete;
+CREATE TABLE dependency_fixture (id INT PRIMARY KEY, marker VARCHAR(16) NOT NULL);
+-- @step seed_dependency
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM dependency_fixture WHERE id = 1 AND marker = 'pending') THEN 1 ELSE 0 END AS complete;
+INSERT INTO dependency_fixture (id, marker) VALUES (1, 'pending') ON DUPLICATE KEY UPDATE marker = VALUES(marker);
+`);
+  const backfillFixture = fixtureMigration('002_dependency_backfill', `
+-- @step backfill_dependency
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM dependency_fixture WHERE id = 1 AND marker = 'done') THEN 1 ELSE 0 END AS complete;
+UPDATE dependency_fixture SET marker = 'done' WHERE id = 1;
+`);
+  await applyMigrations({ connection: conn, database, migrations: [base, createFixture, backfillFixture] });
+  const [[row]] = await conn.query('SELECT marker FROM dependency_fixture WHERE id = 1');
+  assert.equal(row.marker, 'done');
+  const [progress] = await conn.query(`SELECT migration_id, status, progress FROM \`${migrationTable}\` WHERE migration_id IN (?, ?) ORDER BY migration_id`, [createFixture.id, backfillFixture.id]);
+  assert.deepEqual(progress.map((item) => [item.migration_id, item.status, item.progress]), [
+    [createFixture.id, 'applied', ['create_dependency', 'seed_dependency']],
+    [backfillFixture.id, 'applied', ['backfill_dependency']],
+  ]);
+  await conn.end();
+});
+
 test('crash window after DDL is reconciled by the completion probe without duplicate ALTER', async () => {
   const database = await createDatabase();
   const conn = await connectionFor(database);
@@ -281,6 +310,63 @@ ALTER TABLE crash_fixture ADD COLUMN marker INT NOT NULL DEFAULT 0;
   await conn.end();
 });
 
+test('a killed lock owner leaves stale applying metadata and the named lock is released for recovery', async () => {
+  const database = await createDatabase();
+  const owner = await connectionFor(database);
+  const killer = await connectionFor(database);
+  const base = await migration();
+  const fixture = fixtureMigration('001_killed_owner_fixture', `
+-- @step add_marker
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'killed_owner_fixture' AND COLUMN_NAME = 'marker') THEN 1 ELSE 0 END AS complete;
+ALTER TABLE killed_owner_fixture ADD COLUMN marker INT NOT NULL DEFAULT 0;
+`);
+  await owner.query('CREATE TABLE killed_owner_fixture (id INT PRIMARY KEY)');
+  const [[thread]] = await owner.query('SELECT CONNECTION_ID() AS connection_id');
+  const lockName = getMigrationLockName(database);
+  let releaseOwnerCheckpoint;
+  const ownerCheckpoint = new Promise((resolve) => { releaseOwnerCheckpoint = resolve; });
+  let reachedOwnerCheckpoint;
+  const ownerReached = new Promise((resolve) => { reachedOwnerCheckpoint = resolve; });
+  let ownerKilled = false;
+  const ownerRun = applyMigrations({
+    connection: owner,
+    database,
+    migrations: [base, fixture],
+    onCheckpoint: async ({ event, migrationId, stepId }) => {
+      if (!ownerKilled && event === 'before-progress' && migrationId === fixture.id && stepId === 'add_marker') {
+        reachedOwnerCheckpoint();
+        await ownerCheckpoint;
+      }
+    },
+  });
+  await ownerReached;
+  const [[ownerState]] = await killer.query('SELECT IS_USED_LOCK(?) AS owner_id', [lockName]);
+  assert.equal(Number(ownerState.owner_id), Number(thread.connection_id));
+  await killer.query(`KILL CONNECTION ${Number(thread.connection_id)}`);
+  ownerKilled = true;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const [[state]] = await killer.query('SELECT IS_USED_LOCK(?) AS owner_id', [lockName]);
+    if (state.owner_id === null) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (attempt === 19) assert.fail('killed migration connection still owns named lock');
+  }
+  const [[stale]] = await killer.query(`SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = ?`, [fixture.id]);
+  assert.equal(stale.status, 'applying');
+  assert.deepEqual(stale.progress, []);
+  const recoveryRun = applyMigrations({ connection: killer, database, migrations: [base, fixture] });
+  await recoveryRun;
+  releaseOwnerCheckpoint();
+  await assert.rejects(ownerRun, /closed|lost|reset|connection|PROTOCOL/i);
+  const [[row]] = await killer.query(`SELECT status, progress, attempts FROM \`${migrationTable}\` WHERE migration_id = ?`, [fixture.id]);
+  assert.equal(row.status, 'applied');
+  assert.deepEqual(row.progress, ['add_marker']);
+  assert.ok(row.attempts >= 2);
+  const [[column]] = await killer.query("SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'killed_owner_fixture' AND COLUMN_NAME = 'marker'");
+  assert.equal(Number(column.count), 1);
+  await owner.end().catch(() => undefined);
+  await killer.end();
+});
+
 test('checksum conflict and malformed or multi-statement definitions reject before writes', async () => {
   const database = await createDatabase();
   const conn = await connectionFor(database);
@@ -299,6 +385,64 @@ CREATE TABLE x (id INT); CREATE TABLE y (id INT);
   await conn.end();
 });
 
+test('migration SQL and probes reject cross-schema, session, side-effect, and locking syntax', () => {
+  const rejected = [
+    ['001_cross_schema_ddl', `
+-- @step alter
+-- @check SELECT 1 AS complete;
+ALTER TABLE mysql.foreign_table ADD COLUMN marker INT;
+`],
+    ['002_cross_schema_backfill', `
+-- @step backfill
+-- @check SELECT 1 AS complete;
+UPDATE \`other_db\`.\`foreign_table\` SET marker = 1 WHERE id = 1;
+`],
+    ['003_lock_probe', `
+-- @step lock
+-- @check SELECT GET_LOCK('not-a-migration-lock', 0) AS complete;
+CREATE TABLE safe_fixture (id INT PRIMARY KEY);
+`],
+    ['003b_release_all_locks_probe', `
+-- @step release
+-- @check SELECT RELEASE_ALL_LOCKS() AS complete;
+CREATE TABLE safe_fixture (id INT PRIMARY KEY);
+`],
+    ['004_file_probe', `
+-- @step file
+-- @check SELECT 1 AS complete INTO OUTFILE '/tmp/not-a-migration-file';
+CREATE TABLE safe_fixture (id INT PRIMARY KEY);
+`],
+    ['005_session_probe', `
+-- @step session
+-- @check SELECT @session_value := 1 AS complete;
+CREATE TABLE safe_fixture (id INT PRIMARY KEY);
+`],
+    ['006_lock_clause', `
+-- @step lock_clause
+-- @check SELECT 1 AS complete FROM safe_fixture FOR UPDATE;
+CREATE TABLE safe_fixture (id INT PRIMARY KEY);
+`],
+    ['007_unknown_probe_function', `
+-- @step unknown_function
+-- @check SELECT arbitrary_stored_function() AS complete;
+CREATE TABLE safe_fixture (id INT PRIMARY KEY);
+`],
+    ['008_backtick_probe_function', `
+-- @step backtick_function
+-- @check SELECT \`COUNT\`(*) AS complete;
+CREATE TABLE safe_fixture (id INT PRIMARY KEY);
+`],
+  ];
+  for (const [id, sql] of rejected) {
+    assert.throws(() => parseMigrationText(id, sql), /schema-qualified|session|side-effect|lock|file|completion flag|locking|function|quoted/i);
+  }
+  assert.doesNotThrow(() => parseMigrationText('009_approved_probe_functions', `
+-- @step approved
+-- @check SELECT CASE WHEN EXISTS (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'safe_fixture') AND 1 IN (1, 2) THEN COALESCE(1, 0) ELSE 0 END AS complete;
+CREATE TABLE approved_probe_fixture (id INT PRIMARY KEY);
+`));
+});
+
 test('a probe that does not return one completion flag is rejected before registry writes', async () => {
   const database = await createDatabase();
   const conn = await connectionFor(database);
@@ -314,7 +458,7 @@ test('a probe that does not return one completion flag is rejected before regist
   };
   await assert.rejects(
     () => applyMigrations({ connection: conn, database, migrations: [base, invalidProbe] }),
-    /exactly one complete flag/i,
+    /exactly one completion flag/i,
   );
   const [[registry]] = await conn.query(`SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${migrationTable}'`);
   assert.equal(Number(registry.count), 0);
