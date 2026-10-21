@@ -6,10 +6,10 @@ CREATE TABLE IF NOT EXISTS `exam_review_event` (`id` BIGINT UNSIGNED NOT NULL AU
 
 -- @step register_exam_review_permission
 -- @check SELECT CASE WHEN (SELECT COUNT(*) FROM `sys_permission` WHERE `code` = 'exam_records:review' AND `name` = '人工阅卷') = 1 THEN 1 ELSE 0 END AS complete;
-INSERT INTO `sys_permission` (`code`, `name`) SELECT 'exam_records:review', '人工阅卷' WHERE NOT EXISTS (SELECT 1 FROM `sys_permission` WHERE `code` = 'exam_records:review');
+INSERT IGNORE INTO `sys_permission` (`code`, `name`) SELECT 'exam_records:review', '人工阅卷' WHERE NOT EXISTS (SELECT 1 FROM `sys_permission` WHERE `code` = 'exam_records:review');
 
 -- Existing valid label/icon/sort/status customizations are preserved. A row at
 -- the same route with the wrong parent/type/permission leaves the probe false.
 -- @step register_grading_menu
 -- @check SELECT CASE WHEN (SELECT COUNT(*) FROM `sys_menu` WHERE `route_path` = '/admin/grading') = 1 AND (SELECT COUNT(*) FROM `sys_menu` WHERE `route_path` = '/admin/grading' AND `parent_id` = 1 AND `type` = 'menu' AND `permission_code` = 'exam_records:review') = 1 THEN 1 ELSE 0 END AS complete;
-INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`) SELECT 1, '人工阅卷', 'menu', '/admin/grading', 'exam_records:review', 'EditPen', 37, 1 WHERE EXISTS (SELECT 1 FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory') AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/grading');
+INSERT IGNORE INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`) SELECT 1, '人工阅卷', 'menu', '/admin/grading', 'exam_records:review', 'EditPen', 37, 1 WHERE EXISTS (SELECT 1 FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory') AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/grading');

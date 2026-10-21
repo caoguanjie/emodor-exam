@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { listMigrations } from '../database/migrate.mjs';
+
+test('every shipped migration is accepted by the real runner before database access', async () => {
+  // Catch unsupported SQL in newly shipped files, not only in synthetic parser
+  // fixtures. listMigrations validates the entire catalog without a DB socket.
+  const migrations = await listMigrations();
+  assert.ok(migrations.length > 0);
+  for (const migration of migrations) assert.ok(migration.steps.length > 0, migration.id);
+});

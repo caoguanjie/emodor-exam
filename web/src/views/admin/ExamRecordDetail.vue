@@ -1,7 +1,7 @@
 <template>
   <section class="page-card">
     <div class="page-head">
-      <div><h2>考试记录详情</h2><p>只读元数据与服务端确认进度；不展示标准答案、解析或答题图片。</p></div>
+      <div><h2>考试记录详情</h2><p>在考仅展示服务端确认进度；交卷后可查看冻结题目、作答与判分，答题图片需阅卷权限。</p></div>
       <div><el-button @click="router.back()">返回</el-button><el-button :loading="loading" @click="load">刷新</el-button></div>
     </div>
     <el-alert v-if="errorMessage" :title="errorMessage" type="error" show-icon :closable="false"><el-button link @click="load">重试</el-button></el-alert>
