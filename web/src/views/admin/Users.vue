@@ -16,17 +16,17 @@
         </el-select>
         <el-button type="primary" @click="loadStudents">查询</el-button>
         <div style="flex:1" />
-        <el-select v-model="studentImportDefaults.source" clearable placeholder="导入默认来源" style="width:150px">
+        <el-select v-if="auth.can('students:write')" v-model="studentImportDefaults.source" clearable placeholder="导入默认来源" style="width:150px">
           <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
         </el-select>
-        <el-select v-model="studentImportDefaults.category_id" clearable placeholder="导入默认类别" style="width:170px">
+        <el-select v-if="auth.can('students:write')" v-model="studentImportDefaults.category_id" clearable placeholder="导入默认类别" style="width:170px">
           <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
         </el-select>
-        <el-button @click="downloadStudentTemplate">下载导入模板</el-button>
-        <el-upload :show-file-list="false" accept=".xlsx" :before-upload="onStudentImport">
+        <el-button v-if="auth.can('students:write')" @click="downloadStudentTemplate">下载导入模板</el-button>
+        <el-upload v-if="auth.can('students:write')" :show-file-list="false" accept=".xlsx" :before-upload="onStudentImport">
           <el-button type="success">预览导入</el-button>
         </el-upload>
-        <el-button type="primary" @click="openStudentCreate">新增学员</el-button>
+        <el-button v-if="auth.can('students:write')" type="primary" @click="openStudentCreate">新增学员</el-button>
       </div>
       <el-table v-loading="studentLoading" :data="students">
         <el-table-column prop="username" label="用户名" width="130" />
@@ -35,7 +35,7 @@
         <el-table-column label="来源" width="90"><template #default="{ row }">{{ sourceLabel(row.source) }}</template></el-table-column>
         <el-table-column label="培训类别" min-width="150"><template #default="{ row }">{{ categoryName(row.category_id) }}</template></el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column v-if="auth.can('students:write')" label="操作" width="250" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" @click="openStudentEdit(row)">编辑</el-button>
             <el-button text :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStudentStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
@@ -58,7 +58,7 @@
           <el-form-item label="手机号"><el-input v-model="studentForm.phone" maxlength="20" /></el-form-item>
           <el-form-item label="邮箱"><el-input v-model="studentForm.email" maxlength="128" /></el-form-item>
         </el-form>
-        <template #footer><el-button @click="studentDialog = false">取消</el-button><el-button type="primary" @click="saveStudent">保存</el-button></template>
+        <template #footer><el-button @click="studentDialog = false">取消</el-button><el-button v-if="auth.can('students:write')" type="primary" @click="saveStudent">保存</el-button></template>
       </el-dialog>
 
       <el-dialog v-model="previewVisible" title="导入预览" width="650px">

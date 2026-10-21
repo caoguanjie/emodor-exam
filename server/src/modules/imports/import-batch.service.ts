@@ -341,7 +341,11 @@ export class ImportBatchService {
           phone: row.phone ? String(row.phone) : null,
           email: row.email ? String(row.email) : null,
           status: 1,
+          forcePasswordChange: 1,
+          loginCount: 0,
           lastLoginAt: null,
+          lastLoginIp: null,
+          rolesConfigured: 0,
         }));
         const saved = await repo.save(entities, { chunk: 200 });
         const createdIds = saved.map((user) => String(user.id));

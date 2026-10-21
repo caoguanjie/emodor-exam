@@ -147,6 +147,7 @@ export async function run(ctx) {
       'statistics:read', 'regulations:read', 'regulations:write',
       'questions:read', 'questions:write', 'ai:read', 'ai:write',
       'papers:read', 'papers:write',
+      'training_categories:read', 'training_categories:write', 'students:read', 'students:write',
     ],
   });
   assert(employeeRole.status === 200 && employeeRole.data?.id, `employee admin role create failed: ${employeeRole.status}`);
@@ -263,6 +264,101 @@ export async function run(ctx) {
     'SELECT login_count, force_password_change, last_login_at, last_login_ip FROM sys_user WHERE id = ?',
     [String(employee.data.id)],
   );
+
+  const categoryName = `培训类别_${randomBytes(4).toString('hex')}`;
+  const createdCategory = await ctx.request(employeeAdminLogin.actor, 'POST', '/admin/training-categories', {
+    name: categoryName, description: 'delegated training category',
+  });
+  assert(createdCategory.status === 200 && createdCategory.data?.id, `delegated category write denied: ${createdCategory.status}`);
+  const categoryList = await ctx.request(employeeAdminLogin.actor, 'GET', '/admin/training-categories');
+  assert(categoryList.status === 200 && categoryList.data?.items?.some((item) => item.id === createdCategory.data.id), `delegated category read denied: ${categoryList.status}`);
+
+  const studentUsername = `training_student_${randomBytes(4).toString('hex')}`;
+  const studentPassword = randomStrongPassword(studentUsername, '培训学员');
+  const createdStudent = await ctx.request(employeeAdminLogin.actor, 'POST', '/admin/students', {
+    username: studentUsername, password: studentPassword, real_name: '培训学员',
+    category_id: String(createdCategory.data.id), source: 'institution',
+  });
+  assert(createdStudent.status === 200 && createdStudent.data?.id, `delegated student create denied: ${createdStudent.status}`);
+  const createdStudentFacts = await ctx.queryTestDb(
+    'SELECT force_password_change, login_count, last_login_at FROM sys_user WHERE id = ?',
+    [String(createdStudent.data.id)],
+  );
+  assert(Number(createdStudentFacts[0]?.force_password_change || 0) === 1, 'manual student create did not set force_password_change');
+  assert(Number(createdStudentFacts[0]?.login_count || 0) === 0 && !createdStudentFacts[0]?.last_login_at, 'manual student create changed login facts');
+  const studentLogin = await ctx.request(null, 'POST', '/auth/login', { username: studentUsername, password: studentPassword });
+  assert(studentLogin.status === 200 && studentLogin.data?.force_change_password === true, `manual student first login flag missing: ${studentLogin.status}`);
+
+  const importedUsername = `training_import_${randomBytes(4).toString('hex')}`;
+  const importedPassword = randomStrongPassword(importedUsername, '导入学员');
+  const importPreview = await ctx.request(employeeAdminLogin.actor, 'POST', '/admin/students/import-preview', {
+    rows: [{ username: importedUsername, real_name: '导入学员', source: 'external', category_id: String(createdCategory.data.id), password: importedPassword }],
+  });
+  assert(importPreview.status === 200 && importPreview.data?.batch_id && importPreview.data?.valid_rows?.length === 1, `student import preview denied: ${importPreview.status}`);
+  const importCommit = await ctx.request(employeeAdminLogin.actor, 'POST', `/admin/students/import-batches/${importPreview.data.batch_id}/commit`, {
+    row_numbers: importPreview.data.valid_rows,
+  });
+  assert(importCommit.status === 200 && importCommit.data?.created_ids?.length === 1, `student import commit denied: ${importCommit.status}`);
+  const importedStudentFacts = await ctx.queryTestDb(
+    'SELECT id, force_password_change, login_count, last_login_at FROM sys_user WHERE username = ?',
+    [importedUsername],
+  );
+  assert(Number(importedStudentFacts[0]?.force_password_change || 0) === 1, 'imported student did not set force_password_change');
+  assert(Number(importedStudentFacts[0]?.login_count || 0) === 0 && !importedStudentFacts[0]?.last_login_at, 'student import changed login facts');
+
+  const studentResetPassword = randomStrongPassword(studentUsername, '培训学员重置');
+  const studentReset = await ctx.request(employeeAdminLogin.actor, 'PUT', `/admin/students/${createdStudent.data.id}/password`, { password: studentResetPassword });
+  assert(studentReset.status === 200, `delegated student reset denied: ${studentReset.status}`);
+  const studentOldToken = await ctx.request({ accessToken: studentLogin.data.access_token }, 'GET', '/auth/profile');
+  assert(studentOldToken.status === 401, `student token after reset expected 401, got ${studentOldToken.status}`);
+
+  const importedLogin = await ctx.request(null, 'POST', '/auth/login', { username: importedUsername, password: importedPassword });
+  assert(importedLogin.status === 200 && importedLogin.data?.force_change_password === true, `imported student first login flag missing: ${importedLogin.status}`);
+  const importedChangedPassword = randomStrongPassword(importedUsername, '导入学员改密');
+  const importedChange = await ctx.request({ accessToken: importedLogin.data.access_token }, 'PUT', '/auth/password', {
+    old_password: importedPassword, new_password: importedChangedPassword,
+  });
+  assert(importedChange.status === 200 && importedChange.data?.access_token, `imported student password change failed: ${importedChange.status}`);
+  const disabledStudent = await ctx.request(employeeAdminLogin.actor, 'PUT', `/admin/students/${importedStudentFacts[0].id}/status`, { status: 0 });
+  assert(disabledStudent.status === 200, `delegated student disable denied: ${disabledStudent.status}`);
+  const disabledStudentToken = await ctx.request({ accessToken: importedChange.data.access_token }, 'GET', '/auth/profile');
+  assert(disabledStudentToken.status === 403, `disabled student live session expected 403, got ${disabledStudentToken.status}`);
+
+  const oldUsersDenied = await ctx.request(employeeAdminLogin.actor, 'GET', '/users');
+  assert(oldUsersDenied.status === 403, `delegated manager reached legacy users API: ${oldUsersDenied.status}`);
+  const systemRoleDenied = await ctx.request(employeeAdminLogin.actor, 'GET', '/admin/roles');
+  assert(systemRoleDenied.status === 403, `delegated manager reached system roles API: ${systemRoleDenied.status}`);
+
+  const readOnlyRoleCode = `training_read_${randomBytes(4).toString('hex')}`;
+  const readOnlyRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
+    code: readOnlyRoleCode, name: '培训只读', permissions: ['training_categories:read', 'students:read'],
+  });
+  assert(readOnlyRole.status === 200 && readOnlyRole.data?.id, `training read-only role create failed: ${readOnlyRole.status}`);
+  const readOnlyUsername = `training_readonly_${randomBytes(4).toString('hex')}`;
+  const readOnlyPassword = randomStrongPassword(readOnlyUsername, '培训只读');
+  const readOnlyUser = await ctx.request(admin.actor, 'POST', '/users', {
+    username: readOnlyUsername, password: readOnlyPassword, real_name: '培训只读', role: 'employee',
+  });
+  assert(readOnlyUser.status === 200 && readOnlyUser.data?.id, `training read-only fixture create failed: ${readOnlyUser.status}`);
+  const readOnlyAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${readOnlyUser.data.id}/roles`, { role_ids: [String(readOnlyRole.data.id)] });
+  assert(readOnlyAssigned.status === 200, `training read-only role assignment failed: ${readOnlyAssigned.status}`);
+  const readOnlyLogin = await completeFirstLogin(
+    ctx,
+    await captchaLogin(ctx, readOnlyUsername, readOnlyPassword),
+    readOnlyUsername, readOnlyPassword, 'TrainingReadOnly',
+  );
+  const readOnlyCategories = await ctx.request(readOnlyLogin.actor, 'GET', '/admin/training-categories');
+  assert(readOnlyCategories.status === 200, `training read-only category read denied: ${readOnlyCategories.status}`);
+  const readOnlyStudents = await ctx.request(readOnlyLogin.actor, 'GET', '/admin/students');
+  assert(readOnlyStudents.status === 200, `training read-only student read denied: ${readOnlyStudents.status}`);
+  const readOnlyCategoryWrite = await ctx.request(readOnlyLogin.actor, 'POST', '/admin/training-categories', { name: `forbidden_${randomBytes(4).toString('hex')}` });
+  assert(readOnlyCategoryWrite.status === 403, `training read-only category write unexpectedly allowed: ${readOnlyCategoryWrite.status}`);
+  const readOnlyStudentWrite = await ctx.request(readOnlyLogin.actor, 'POST', '/admin/students', {
+    username: `forbidden_${randomBytes(4).toString('hex')}`, password: randomStrongPassword('forbidden'), real_name: '禁止写入',
+    category_id: String(createdCategory.data.id), source: 'institution',
+  });
+  assert(readOnlyStudentWrite.status === 403, `training read-only student write unexpectedly allowed: ${readOnlyStudentWrite.status}`);
+
   assert(Number(employeeStatsRows[0]?.login_count || 0) >= 3, 'successful password logins did not increment login_count');
   assert(Number(employeeStatsRows[0]?.force_password_change || 0) === 0, 'password change did not clear force_password_change');
   assert(employeeStatsRows[0]?.last_login_at && employeeStatsRows[0]?.last_login_ip, 'successful login stats missing timestamp or IP');

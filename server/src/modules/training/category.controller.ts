@@ -7,6 +7,7 @@ import { CurrentUser, AuthUser } from '../../common/decorators/current-user.deco
 import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { Errors, RoleEnum } from '../../common/errors';
 import { Roles } from '../../common/guards/roles.guard';
+import { Permissions } from '../../common/decorators/permissions.decorator';
 
 class CreateCategoryDto {
   @IsString() @MinLength(1) @MaxLength(128) name!: string;
@@ -48,29 +49,34 @@ export class CategoryController {
   }
 
   @Get()
+  @Permissions('training_categories:read')
   list(@Query(new StrictDtoValidationPipe(['page', 'page_size', 'keyword', 'status'])) query: CategoryListQueryDto, @Req() req: Request) {
     assertRequestKeys(req.query, ['page', 'page_size', 'keyword', 'status'], '查询参数');
     return this.categories.list(query);
   }
 
   @Get(':id')
+  @Permissions('training_categories:read')
   detail(@Param('id') id: string) {
     return this.categories.detail(id);
   }
 
   @Post()
+  @Permissions('training_categories:write')
   create(@Body(new StrictDtoValidationPipe(['name', 'description'])) dto: CreateCategoryDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
     assertRequestKeys(req.body, ['name', 'description'], '类别请求');
     return this.categories.create(dto, this.actor(user), req.ip || null);
   }
 
   @Put(':id')
+  @Permissions('training_categories:write')
   update(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['name', 'description'])) dto: UpdateCategoryDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
     assertRequestKeys(req.body, ['name', 'description'], '类别请求');
     return this.categories.update(id, dto, this.actor(user), req.ip || null);
   }
 
   @Put(':id/status')
+  @Permissions('training_categories:write')
   status(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['status'])) dto: CategoryStatusDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
     assertRequestKeys(req.body, ['status'], '类别状态请求');
     if (dto.status !== 0 && dto.status !== 1) throw Errors.param('status 取值非法');
@@ -78,6 +84,7 @@ export class CategoryController {
   }
 
   @Delete(':id')
+  @Permissions('training_categories:write')
   remove(@Param('id') id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.categories.remove(id, this.actor(user), req.ip || null);
   }

@@ -13,7 +13,7 @@
       </el-select>
       <el-button type="primary" @click="load">查询</el-button>
       <div style="flex:1" />
-      <el-button type="primary" @click="openCreate">新增类别</el-button>
+      <el-button v-if="auth.can('training_categories:write')" type="primary" @click="openCreate">新增类别</el-button>
     </div>
     <el-table v-loading="loading" :data="items">
       <el-table-column prop="name" label="类别名称" min-width="180" />
@@ -22,7 +22,7 @@
         <template #default="{ row }"><el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag></template>
       </el-table-column>
       <el-table-column label="更新时间" width="180"><template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template></el-table-column>
-      <el-table-column label="操作" width="220" fixed="right">
+      <el-table-column v-if="auth.can('training_categories:write')" label="操作" width="220" fixed="right">
         <template #default="{ row }">
           <el-button text type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button text :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
@@ -38,7 +38,7 @@
         <el-form-item label="名称"><el-input v-model="form.name" maxlength="128" /></el-form-item>
         <el-form-item label="说明"><el-input v-model="form.description" type="textarea" maxlength="2000" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="dialog = false">取消</el-button><el-button type="primary" @click="save">保存</el-button></template>
+      <template #footer><el-button @click="dialog = false">取消</el-button><el-button v-if="auth.can('training_categories:write')" type="primary" @click="save">保存</el-button></template>
     </el-dialog>
   </div>
 </template>
@@ -48,6 +48,7 @@ import { onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
 import { formatDateTime } from '../../utils/format';
+import { useAuthStore } from '../../stores/auth';
 
 const items = ref<any[]>([]);
 const total = ref(0);
@@ -55,6 +56,7 @@ const loading = ref(false);
 const dialog = ref(false);
 const form = reactive<any>({});
 const query = reactive({ page: 1, page_size: 20, keyword: '', status: undefined as number | undefined });
+const auth = useAuthStore();
 
 async function load() {
   loading.value = true;

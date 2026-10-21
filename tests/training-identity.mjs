@@ -5,14 +5,34 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const ExcelJS = require('exceljs');
+const Redis = require('ioredis');
 
 function password(prefix = 'P') {
   return `${prefix}9${randomBytes(10).toString('hex')}`;
 }
 
-async function login(ctx, username, initialPassword) {
+async function login(ctx, username, initialPassword, { captcha = true } = {}) {
   const actor = {};
-  const result = await ctx.request(actor, 'POST', '/auth/login', { username, password: initialPassword });
+  const headers = captcha
+    ? { 'X-Forwarded-For': `198.51.100.${(login.sequence = (login.sequence || 0) + 1)}` }
+    : undefined;
+  const body = { username, password: initialPassword };
+  let redis;
+  if (captcha) {
+    const issued = await ctx.request(null, 'POST', '/auth/captcha', undefined, headers);
+    assert.equal(issued.status, 200, `captcha issue: ${JSON.stringify(issued)}`);
+    redis = new Redis({
+      host: ctx.env.REDIS_HOST || '127.0.0.1',
+      port: Number(ctx.env.REDIS_PORT || 6379),
+      password: ctx.env.REDIS_PASSWORD || undefined,
+    });
+    const prefix = ctx.env.REDIS_KEY_PREFIX || '';
+    body.captcha_id = issued.data.captcha_id;
+    body.captcha_code = await redis.get(`${prefix}auth:captcha:${body.captcha_id}`);
+    assert.ok(body.captcha_code, 'captcha fixture answer missing from run-owned Redis');
+  }
+  const result = await ctx.request(actor, 'POST', '/auth/login', body, headers);
+  await redis?.quit();
   assert.equal(result.status, 200, `${username} login: ${JSON.stringify(result.json || result.data || result.body)}`);
   return { actor: { accessToken: result.data.access_token, cookie: actor.cookie }, data: result.data };
 }
@@ -150,11 +170,11 @@ export async function run(ctx) {
   const owner2Commit = await ctx.request(owner2, 'POST', `/admin/students/import-batches/${importPreview.data.batch_id}/commit`, { row_numbers: [2, 4] });
   assert.equal(owner2Commit.status, 404, `owner2Commit ${JSON.stringify(owner2Commit)}`);
 
-  const disabledLogin = await login(ctx, institution.data.username, institutionPassword);
+  const disabledLogin = await login(ctx, institution.data.username, institutionPassword, { captcha: false });
   const disabled = await ctx.request(admin, 'PUT', `/admin/students/${institution.data.id}/status`, { status: 0 });
   assert.equal(disabled.status, 200);
   const revoked = await ctx.request(disabledLogin.actor, 'GET', '/auth/profile');
-  assert.equal(revoked.status, 401);
+  assert.equal(revoked.status, 403);
 
   const referencedDelete = await ctx.request(admin, 'DELETE', `/admin/training-categories/${categoryId}`);
   assert.equal(referencedDelete.status, 409);

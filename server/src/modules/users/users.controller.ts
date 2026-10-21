@@ -9,6 +9,7 @@ import { UsersService } from './users.service';
 import { UserImportService } from './user-import.service';
 import { ImportBatchService } from '../imports/import-batch.service';
 import { Roles } from '../../common/guards/roles.guard';
+import { Permissions } from '../../common/decorators/permissions.decorator';
 import { SkipEnvelope } from '../../common/response.interceptor';
 import { Errors, RoleEnum } from '../../common/errors';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
@@ -229,12 +230,14 @@ export class StudentsController {
   }
 
   @Get()
+  @Permissions('students:read')
   list(@Query(new StrictDtoValidationPipe(['page', 'page_size', 'keyword', 'category_id', 'source', 'status'])) query: StudentListQueryDto, @Req() req: Request) {
     assertImportObject(req.query, ['page', 'page_size', 'keyword', 'category_id', 'source', 'status'], '查询参数');
     return this.users.listStudents(query);
   }
 
   @Get('import-template')
+  @Permissions('students:write')
   @SkipEnvelope()
   async template(@Res() res: Response) {
     const buffer = await this.importer.buildStudentTemplate();
@@ -244,11 +247,13 @@ export class StudentsController {
   }
 
   @Get('import-batches/:id')
+  @Permissions('students:write')
   batchStatus(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.importer.status(String(user.id), id);
   }
 
   @Post('import-preview')
+  @Permissions('students:write')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
   async preview(
     @UploadedFile() file: Express.Multer.File | undefined,
@@ -271,29 +276,34 @@ export class StudentsController {
   }
 
   @Post('import-batches/:id/commit')
+  @Permissions('students:write')
   async commit(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['row_numbers'])) body: StudentImportCommitDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
     assertImportObject(req.body, ['row_numbers'], '导入确认请求');
     return this.importer.commit(String(user.id), id, body.row_numbers);
   }
 
   @Get(':id')
+  @Permissions('students:read')
   detail(@Param('id') id: string) {
     return this.users.studentDetail(id);
   }
 
   @Post()
+  @Permissions('students:write')
   create(@Body(new StrictDtoValidationPipe(['username', 'password', 'real_name', 'category_id', 'source', 'employee_no', 'department_id', 'phone', 'email'])) dto: CreateStudentDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
     assertImportObject(req.body, ['username', 'password', 'real_name', 'category_id', 'source', 'employee_no', 'department_id', 'phone', 'email'], '学员请求');
     return this.users.createStudent({ ...dto, department_id: dto.department_id || null }, this.actor(user), req.ip || null);
   }
 
   @Put(':id')
+  @Permissions('students:write')
   update(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['real_name', 'employee_no', 'department_id', 'category_id', 'source', 'phone', 'email'])) dto: UpdateStudentDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
     assertImportObject(req.body, ['real_name', 'employee_no', 'department_id', 'category_id', 'source', 'phone', 'email'], '学员请求');
     return this.users.updateStudent(id, dto, this.actor(user), req.ip || null);
   }
 
   @Put(':id/status')
+  @Permissions('students:write')
   status(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['status'])) dto: StudentStatusDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
     assertImportObject(req.body, ['status'], '学员状态请求');
     if (dto.status !== 0 && dto.status !== 1) throw Errors.param('status 取值非法');
@@ -301,6 +311,7 @@ export class StudentsController {
   }
 
   @Put(':id/password')
+  @Permissions('students:write')
   async resetPassword(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['password'])) dto: StudentResetPasswordDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
     assertImportObject(req.body, ['password'], '学员密码请求');
     await this.users.resetStudentPassword(id, dto.password, this.actor(user), req.ip || null);

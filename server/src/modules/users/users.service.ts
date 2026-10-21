@@ -177,7 +177,11 @@ export class UsersService {
           phone: input.phone || null,
           email: input.email || null,
           status: 1,
+          forcePasswordChange: 1,
+          loginCount: 0,
           lastLoginAt: null,
+          lastLoginIp: null,
+          rolesConfigured: 0,
         }));
       });
       this.audit.log({
@@ -245,12 +249,18 @@ export class UsersService {
   }
 
   async updateSelfProfile(id: string, patch: { real_name?: string; phone?: string | null; email?: string | null }) {
-    const user = await this.userRepo.findOne({ where: { id: String(id) } });
-    if (!user) throw Errors.notFound('员工不存在');
-    if (patch.real_name !== undefined) user.realName = patch.real_name;
-    if (patch.phone !== undefined) user.phone = patch.phone || null;
-    if (patch.email !== undefined) user.email = patch.email || null;
-    await this.userRepo.save(user);
+    const user = await this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(SysUser);
+      const current = await repo.findOne({
+        where: { id: String(id) },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!current) throw Errors.notFound('员工不存在');
+      if (patch.real_name !== undefined) current.realName = patch.real_name;
+      if (patch.phone !== undefined) current.phone = patch.phone || null;
+      if (patch.email !== undefined) current.email = patch.email || null;
+      return repo.save(current);
+    });
     return this.sanitizeStudent(user);
   }
 

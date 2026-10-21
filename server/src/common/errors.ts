@@ -35,7 +35,7 @@ export const Errors = {
   examInProgress: (msg = '已有进行中的考试') => new BizError(40904, 409, msg),
   submitConflict: (msg = '交卷冲突，考试已结束') => new BizError(40905, 409, msg),
   sessionConflict: (msg = '学习会话冲突') => new BizError(40906, 409, msg),
-  lastSuperAdmin: () => new BizError(40910, 409, '至少保留一名启用的超级管理员'),
+  lastSuperAdmin: () => new BizError(40912, 409, '至少保留一名启用的超级管理员'),
   paperQuestionsLocked: () => new BizError(40907, 409, '题目组成不可变更'),
   questionInUse: () => new BizError(40908, 409, '题目正在考试中使用，禁止编辑'),
   aiNotConfigured: () => new BizError(40909, 409, 'AI 服务未配置或配置不完整'),
