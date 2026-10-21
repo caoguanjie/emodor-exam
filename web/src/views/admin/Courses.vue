@@ -67,7 +67,7 @@
       </el-form>
       <template #footer>
         <el-button @click="closeCreate">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="create">创建草稿</el-button>
+        <el-button type="primary" :loading="saving" :disabled="saving" @click="create">{{ createCourseId ? '保存草稿' : '创建草稿' }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -112,6 +112,7 @@ let createContextToken = 0;
 let createOperationSequence = 0;
 let createLatestOperation = 0;
 let createLastAppliedOperation = 0;
+const createCourseId = ref<Id | null>(null);
 const createUnsaved = useUnsavedChanges(createDirty, { onDiscard: discardCreate });
 
 function snapshotCreate(): CourseDraft { return { ...form }; }
@@ -124,12 +125,14 @@ function discardCreate() {
   createDirty.value = false;
   createVisible.value = false;
   saving.value = false;
+  createCourseId.value = null;
 }
 async function closeCreate() {
   if (!createDirty.value) {
     createContextToken += 1;
     createVisible.value = false;
     saving.value = false;
+    createCourseId.value = null;
     return;
   }
   await createUnsaved.confirmDiscard();
@@ -138,6 +141,7 @@ async function beforeCreateClose(done: () => void) {
   if (!createDirty.value) {
     createContextToken += 1;
     saving.value = false;
+    createCourseId.value = null;
     done();
     return;
   }
@@ -179,34 +183,44 @@ function search() { query.page = 1; void load(); }
 function openCreate() {
   createContextToken += 1;
   saving.value = false;
+  createCourseId.value = null;
   Object.assign(form, { title: '', category_id: categories.value[0]?.id || '', description: '', cover_asset_id: null, is_recommended: false, sort_order: 0 });
   createBaseline = snapshotCreate();
   createUnsaved.markClean();
   createVisible.value = true;
 }
 async function create() {
+  if (saving.value) return;
   if (!form.title.trim() || !form.category_id) { ElMessage.warning('请填写课程标题并选择培训类别'); return; }
   const contextToken = createContextToken;
   const operation = ++createOperationSequence;
   createLatestOperation = operation;
+  const submittedCourseId = createCourseId.value;
   const submitted = snapshotCreate();
   saving.value = true;
   try {
-    const created = await http.post('/admin/courses', submitted) as { id: Id };
+    let savedCourseId = submittedCourseId;
+    if (savedCourseId) await http.put(`/admin/courses/${savedCourseId}`, submitted);
+    else {
+      const created = await http.post('/admin/courses', submitted) as { id: Id };
+      savedCourseId = created.id;
+    }
     const sameContext = contextToken === createContextToken;
     if (sameContext && operation > createLastAppliedOperation) {
       createLastAppliedOperation = operation;
+      createCourseId.value = savedCourseId;
       createBaseline = { ...submitted };
       createDirty.value = !sameCreateDraft(snapshotCreate(), createBaseline);
     }
-    ElMessage.success('课程草稿已创建');
-    if (sameContext && operation === createLatestOperation && sameCreateDraft(snapshotCreate(), submitted)) {
+    ElMessage.success(submittedCourseId ? '课程草稿已保存' : '课程草稿已创建');
+    if (sameContext && operation === createLatestOperation && createCourseId.value === savedCourseId && sameCreateDraft(snapshotCreate(), submitted)) {
       createUnsaved.markClean();
       saving.value = false;
       createContextToken += 1;
       createVisible.value = false;
-      if (canRead.value) await router.push(`/admin/courses/${created.id}`);
-      else ElMessage.info(`课程 ${created.id} 已创建；获得查看权限后可继续维护目录`);
+      createCourseId.value = null;
+      if (canRead.value) await router.push(`/admin/courses/${savedCourseId}`);
+      else ElMessage.info(`课程 ${savedCourseId} 已保存；获得查看权限后可继续维护目录`);
     }
   } finally {
     if (contextToken === createContextToken && operation === createLatestOperation) saving.value = false;

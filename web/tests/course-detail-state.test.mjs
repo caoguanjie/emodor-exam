@@ -58,6 +58,7 @@ const elementStubCode = `
     success(message) { context.messages.push({ type: 'success', message }); },
     warning(message) { context.messages.push({ type: 'warning', message }); },
     info(message) { context.messages.push({ type: 'info', message }); },
+    error(message) { context.messages.push({ type: 'error', message }); },
   };
   export const ElMessageBox = { async confirm() {} };
 `;
@@ -103,6 +104,8 @@ const httpStubCode = `
       rejectConfigured('POST', path);
       await waitConfigured('POST', path);
       if (path === '/admin/courses') return { id: 'course-created' };
+      if (path === '/admin/courses/course-1/chapters') return { id: 'chapter-created' };
+      if (path === '/admin/courses/course-1/lessons') return { id: 'lesson-created' };
       if (path.endsWith('/publish')) context.course.status = 'published';
       if (path.endsWith('/offline')) context.course.status = 'offline';
       return {};
@@ -521,7 +524,7 @@ test('protects the Courses create draft and never redirects a write-only creator
   mounted.unmount();
 });
 
-test('a completed create only closes and navigates the exact submitted draft context', async () => {
+test('a retained course create binds its returned id and saves the next draft with PUT', async () => {
   const mounted = await mountCourses();
   const [createSource] = testContext.unsavedSources;
 
@@ -535,12 +538,31 @@ test('a completed create only closes and navigates the exact submitted draft con
   assert.equal(testContext.calls.find((call) => call.method === 'POST')?.body?.title, '创建请求 A');
   first.resolve();
   await firstSave;
+  assert.equal(mounted.state.createCourseId, 'course-created');
   assert.equal(mounted.state.createVisible, true);
   assert.equal(mounted.state.form.title, '响应前草稿 B');
   assert.equal(createSource.dirty.value, true);
   assert.deepEqual(testContext.routerPushes, []);
 
-  await mounted.state.closeCreate();
+  const second = deferRequest('PUT', '/admin/courses/course-created');
+  const secondSave = mounted.state.create();
+  await waitFor(() => testContext.calls.some((call) => call.method === 'PUT' && call.path === '/admin/courses/course-created'), 1800, 'retained course update');
+  await nextTick();
+  assert.equal(mounted.state.saving, true);
+  assert.equal(findNodes(mounted.root, (node) => node.type === 'button' && node.props.loading === true && node.props.disabled === true).length, 1);
+  await mounted.state.create();
+  const courseCreates = testContext.calls.filter((call) => call.method === 'POST' && call.path === '/admin/courses');
+  const courseUpdates = testContext.calls.filter((call) => call.method === 'PUT' && call.path === '/admin/courses/course-created');
+  assert.equal(courseCreates.length, 1);
+  assert.equal(courseUpdates.length, 1);
+  assert.equal(courseUpdates[0]?.body?.title, '响应前草稿 B');
+  second.resolve();
+  await secondSave;
+  assert.equal(mounted.state.createVisible, false);
+  assert.equal(createSource.dirty.value, false);
+  assert.deepEqual(testContext.routerPushes, ['/admin/courses/course-created']);
+
+  testContext.routerPushes = [];
   mounted.state.openCreate();
   mounted.state.form.title = '旧弹窗请求 A';
   const stale = deferRequest('POST', '/admin/courses');
@@ -598,30 +620,47 @@ test('course metadata success advances only its submitted snapshot and ignores a
   mounted.unmount();
 });
 
-test('a stale chapter save cannot clean or close a reopened chapter draft', async () => {
+test('a retained chapter create binds its returned id while stale saves cannot touch a reopened draft', async () => {
   const mounted = await mountCourseDetail();
   const chapterSource = testContext.unsavedSources[1];
 
-  mounted.state.openChapter({ id: 'chapter-same', title: '章节原值', sort_order: 1, lessons: [] });
+  mounted.state.openChapter();
   mounted.state.chapterForm.title = '章节请求 A';
-  const sameContext = deferRequest('PUT', '/admin/courses/course-1/chapters/chapter-same');
+  const sameContext = deferRequest('POST', '/admin/courses/course-1/chapters');
   const sameContextSave = mounted.state.saveChapter();
-  await waitFor(() => testContext.calls.some((call) => call.path?.endsWith('/chapters/chapter-same')), 1800, 'same-context chapter save');
+  await waitFor(() => testContext.calls.some((call) => call.method === 'POST' && call.path === '/admin/courses/course-1/chapters'), 1800, 'chapter create');
   mounted.state.chapterForm.title = '响应前章节草稿 B';
   await nextTick();
-  assert.equal(testContext.calls.find((call) => call.path?.endsWith('/chapters/chapter-same'))?.body?.title, '章节请求 A');
+  assert.equal(testContext.calls.find((call) => call.method === 'POST' && call.path === '/admin/courses/course-1/chapters')?.body?.title, '章节请求 A');
   sameContext.resolve();
   await sameContextSave;
+  assert.equal(mounted.state.editingChapterId, 'chapter-created');
   assert.equal(mounted.state.chapterForm.title, '响应前章节草稿 B');
   assert.equal(mounted.state.chapterVisible, true);
   assert.equal(chapterSource.dirty.value, true);
-  await mounted.state.closeChapter();
 
-  mounted.state.openChapter({ id: 'chapter-a', title: '章节 A 原值', sort_order: 1, lessons: [] });
+  const second = deferRequest('PUT', '/admin/courses/course-1/chapters/chapter-created');
+  const secondSave = mounted.state.saveChapter();
+  await waitFor(() => testContext.calls.some((call) => call.method === 'PUT' && call.path.endsWith('/chapters/chapter-created')), 1800, 'retained chapter update');
+  await nextTick();
+  assert.equal(mounted.state.chapterSaving, true);
+  assert.equal(findNodes(mounted.root, (node) => node.type === 'button' && node.props.loading === true && node.props.disabled === true).length, 1);
+  await mounted.state.saveChapter();
+  const chapterCreates = testContext.calls.filter((call) => call.method === 'POST' && call.path === '/admin/courses/course-1/chapters');
+  const chapterUpdates = testContext.calls.filter((call) => call.method === 'PUT' && call.path.endsWith('/chapters/chapter-created'));
+  assert.equal(chapterCreates.length, 1);
+  assert.equal(chapterUpdates.length, 1);
+  assert.equal(chapterUpdates[0]?.body?.title, '响应前章节草稿 B');
+  second.resolve();
+  await secondSave;
+  assert.equal(mounted.state.chapterVisible, false);
+  assert.equal(chapterSource.dirty.value, false);
+
+  mounted.state.openChapter();
   mounted.state.chapterForm.title = '章节 A 提交值';
-  const deferred = deferRequest('PUT', '/admin/courses/course-1/chapters/chapter-a');
+  const deferred = deferRequest('POST', '/admin/courses/course-1/chapters');
   const pending = mounted.state.saveChapter();
-  await waitFor(() => testContext.calls.some((call) => call.path?.endsWith('/chapters/chapter-a')), 1800, 'chapter A save');
+  await waitFor(() => testContext.calls.filter((call) => call.method === 'POST' && call.path === '/admin/courses/course-1/chapters').length === 2, 1800, 'stale chapter create');
   await mounted.state.closeChapter();
   mounted.state.openChapter({ id: 'chapter-b', title: '章节 B 原值', sort_order: 2, lessons: [] });
   mounted.state.chapterForm.title = '章节 B 草稿';
@@ -635,34 +674,59 @@ test('a stale chapter save cannot clean or close a reopened chapter draft', asyn
   mounted.unmount();
 });
 
-test('a stale lesson save cannot clean or close a reopened lesson draft', async () => {
+test('a retained lesson create saves metadata and its later asset through distinct contracts', async () => {
   const mounted = await mountCourseDetail();
   const lessonSource = testContext.unsavedSources[2];
 
-  mounted.state.openLesson('chapter-same', {
-    id: 'lesson-same', title: '课时原值', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
-  });
+  mounted.state.openLesson('chapter-same');
   mounted.state.lessonForm.title = '课时请求 A';
-  const sameContext = deferRequest('PUT', '/admin/courses/course-1/lessons/lesson-same');
+  mounted.state.lessonForm.asset_id = 'video-request-a';
+  const sameContext = deferRequest('POST', '/admin/courses/course-1/lessons');
   const sameContextSave = mounted.state.saveLesson();
-  await waitFor(() => testContext.calls.some((call) => call.path?.endsWith('/lessons/lesson-same')), 1800, 'same-context lesson save');
+  await waitFor(() => testContext.calls.some((call) => call.method === 'POST' && call.path === '/admin/courses/course-1/lessons'), 1800, 'lesson create');
   mounted.state.lessonForm.title = '响应前课时草稿 B';
+  mounted.state.lessonForm.asset_id = 'video-draft-b';
   await nextTick();
-  assert.equal(testContext.calls.find((call) => call.path?.endsWith('/lessons/lesson-same'))?.body?.title, '课时请求 A');
+  const lessonCreate = testContext.calls.find((call) => call.method === 'POST' && call.path === '/admin/courses/course-1/lessons');
+  assert.equal(lessonCreate?.body?.title, '课时请求 A');
+  assert.equal(lessonCreate?.body?.asset_id, 'video-request-a');
   sameContext.resolve();
   await sameContextSave;
+  assert.equal(mounted.state.editingLessonId, 'lesson-created');
   assert.equal(mounted.state.lessonForm.title, '响应前课时草稿 B');
+  assert.equal(mounted.state.lessonForm.asset_id, 'video-draft-b');
+  assert.equal(mounted.state.lessonAssetDraftVisible, true);
+  assert.equal(findNodes(mounted.root, (node) => String(node.text || '').includes('已创建课时的视频不能删除')).length, 1);
   assert.equal(mounted.state.lessonVisible, true);
   assert.equal(lessonSource.dirty.value, true);
-  await mounted.state.closeLesson();
 
-  mounted.state.openLesson('chapter-a', {
-    id: 'lesson-a', title: '课时 A 原值', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
-  });
+  const metadata = deferRequest('PUT', '/admin/courses/course-1/lessons/lesson-created');
+  const version = deferRequest('POST', '/admin/courses/course-1/lessons/lesson-created/versions');
+  const secondSave = mounted.state.saveLesson();
+  await waitFor(() => testContext.calls.some((call) => call.method === 'PUT' && call.path.endsWith('/lessons/lesson-created')), 1800, 'retained lesson metadata update');
+  await nextTick();
+  assert.equal(mounted.state.lessonSaving, true);
+  assert.equal(findNodes(mounted.root, (node) => node.type === 'button' && node.props.loading === true && node.props.disabled === true).length, 1);
+  await mounted.state.saveLesson();
+  assert.equal(testContext.calls.filter((call) => call.method === 'PUT' && call.path.endsWith('/lessons/lesson-created')).length, 1);
+  const metadataUpdate = testContext.calls.find((call) => call.method === 'PUT' && call.path.endsWith('/lessons/lesson-created'));
+  assert.equal(metadataUpdate?.body?.title, '响应前课时草稿 B');
+  assert.equal(Object.hasOwn(metadataUpdate?.body || {}, 'asset_id'), false);
+  metadata.resolve();
+  await waitFor(() => testContext.calls.some((call) => call.method === 'POST' && call.path.endsWith('/lessons/lesson-created/versions')), 1800, 'retained lesson video version');
+  const versionCreate = testContext.calls.find((call) => call.method === 'POST' && call.path.endsWith('/lessons/lesson-created/versions'));
+  assert.equal(versionCreate?.body?.asset_id, 'video-draft-b');
+  assert.equal(testContext.calls.filter((call) => call.method === 'POST' && call.path === '/admin/courses/course-1/lessons').length, 1);
+  version.resolve();
+  await secondSave;
+  assert.equal(mounted.state.lessonVisible, false);
+  assert.equal(lessonSource.dirty.value, false);
+
+  mounted.state.openLesson('chapter-a');
   mounted.state.lessonForm.title = '课时 A 提交值';
-  const deferred = deferRequest('PUT', '/admin/courses/course-1/lessons/lesson-a');
+  const deferred = deferRequest('POST', '/admin/courses/course-1/lessons');
   const pending = mounted.state.saveLesson();
-  await waitFor(() => testContext.calls.some((call) => call.path?.endsWith('/lessons/lesson-a')), 1800, 'lesson A save');
+  await waitFor(() => testContext.calls.filter((call) => call.method === 'POST' && call.path === '/admin/courses/course-1/lessons').length === 2, 1800, 'stale lesson create');
   await mounted.state.closeLesson();
   mounted.state.openLesson('chapter-b', {
     id: 'lesson-b', title: '课时 B 原值', lesson_type: 'video', required: false, sort_order: 2, current_version: null,
@@ -675,6 +739,59 @@ test('a stale lesson save cannot clean or close a reopened lesson draft', async 
   assert.equal(mounted.state.lessonForm.title, '课时 B 草稿');
   assert.equal(mounted.state.lessonVisible, true);
   assert.equal(lessonSource.dirty.value, true);
+  mounted.unmount();
+});
+
+test('a failed retained lesson version keeps confirmed metadata as the discard baseline', async () => {
+  const mounted = await mountCourseDetail();
+  const lessonSource = testContext.unsavedSources[2];
+  const versionPath = '/admin/courses/course-1/lessons/lesson-created/versions';
+
+  mounted.state.openLesson('chapter-same');
+  mounted.state.lessonForm.title = '课时 metadata A';
+  mounted.state.lessonForm.asset_id = 'video-a';
+  const create = deferRequest('POST', '/admin/courses/course-1/lessons');
+  const createSave = mounted.state.saveLesson();
+  await waitFor(() => testContext.calls.some((call) => call.method === 'POST' && call.path === '/admin/courses/course-1/lessons'), 1800, 'partial lesson create');
+  mounted.state.lessonForm.title = '课时 metadata B';
+  mounted.state.lessonForm.asset_id = 'video-b';
+  await nextTick();
+  create.resolve();
+  await createSave;
+  assert.equal(mounted.state.editingLessonId, 'lesson-created');
+  assert.equal(lessonSource.dirty.value, true);
+
+  const metadata = deferRequest('PUT', '/admin/courses/course-1/lessons/lesson-created');
+  testContext.failRequests.add(`POST ${versionPath}`);
+  const pending = mounted.state.saveLesson();
+  await waitFor(() => testContext.calls.some((call) => call.method === 'PUT' && call.path.endsWith('/lessons/lesson-created')), 1800, 'partial lesson metadata update');
+  metadata.resolve();
+  await assert.rejects(() => pending, /configured failure/);
+  assert.equal(testContext.calls.filter((call) => call.method === 'POST' && call.path === versionPath).length, 1);
+  assert.equal(mounted.state.lessonForm.title, '课时 metadata B');
+  assert.equal(mounted.state.lessonForm.asset_id, 'video-b');
+  assert.equal(mounted.state.lessonAssetDraftVisible, true);
+  assert.equal(mounted.state.lessonVisible, true);
+  assert.equal(mounted.state.lessonSaving, false);
+  assert.equal(lessonSource.dirty.value, true);
+  assert.equal(testContext.messages.some((item) => item.type === 'error' && item.message.includes('视频版本保存失败')), true);
+
+  testContext.failRequests.delete(`POST ${versionPath}`);
+  mounted.state.lessonForm.asset_id = null;
+  await nextTick();
+  await mounted.state.saveLesson();
+  assert.equal(testContext.calls.filter((call) => call.method === 'POST' && call.path === versionPath).length, 1);
+  assert.equal(mounted.state.lessonAssetDraftVisible, true);
+  assert.equal(mounted.state.lessonVisible, true);
+  assert.equal(lessonSource.dirty.value, true);
+  assert.equal(testContext.messages.some((item) => item.type === 'warning' && item.message.includes('不能删除')), true);
+
+  await lessonSource.confirmDiscard();
+  assert.equal(mounted.state.editingLessonId, 'lesson-created');
+  assert.equal(mounted.state.lessonForm.title, '课时 metadata B');
+  assert.equal(mounted.state.lessonForm.asset_id, 'video-a');
+  assert.equal(mounted.state.lessonVisible, false);
+  assert.equal(lessonSource.dirty.value, false);
   mounted.unmount();
 });
 

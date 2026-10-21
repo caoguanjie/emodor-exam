@@ -78,7 +78,7 @@
         <el-form-item label="章节标题"><el-input v-model="chapterForm.title" maxlength="255" /></el-form-item>
         <el-form-item label="排序"><el-input-number v-model="chapterForm.sort_order" :min="0" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="closeChapter">取消</el-button><el-button type="primary" @click="saveChapter">保存</el-button></template>
+      <template #footer><el-button @click="closeChapter">取消</el-button><el-button type="primary" :loading="chapterSaving" :disabled="chapterSaving" @click="saveChapter">保存</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="lessonVisible" :title="editingLessonId ? '编辑视频课时' : '新增视频课时'" width="620px" destroy-on-close :before-close="beforeLessonClose">
@@ -86,9 +86,14 @@
         <el-form-item label="课时标题"><el-input v-model="lessonForm.title" maxlength="255" /></el-form-item>
         <el-form-item label="必学"><el-switch v-model="lessonForm.required" /></el-form-item>
         <el-form-item label="排序"><el-input-number v-model="lessonForm.sort_order" :min="0" /></el-form-item>
-        <el-form-item v-if="!editingLessonId" label="视频"><MediaUpload v-model="lessonForm.asset_id" purpose="video" :disabled="!canUploadMedia" /></el-form-item>
+        <el-form-item v-if="lessonAssetDraftVisible" label="视频">
+          <div style="width:100%">
+            <MediaUpload v-model="lessonForm.asset_id" purpose="video" :disabled="!canUploadMedia" />
+            <div v-if="editingLessonId" class="muted" style="margin-top:8px">已创建课时的视频不能删除；如需调整，请选择新视频生成替换版本。</div>
+          </div>
+        </el-form-item>
       </el-form>
-      <template #footer><el-button @click="closeLesson">取消</el-button><el-button type="primary" @click="saveLesson">保存</el-button></template>
+      <template #footer><el-button @click="closeLesson">取消</el-button><el-button type="primary" :loading="lessonSaving" :disabled="lessonSaving" @click="saveLesson">保存</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="videoVisible" title="追加视频版本" width="620px" destroy-on-close :before-close="beforeVideoClose">
@@ -128,9 +133,12 @@ const categories = ref<CategoryOption[]>([]);
 const regulations = ref<RegulationOption[]>([]);
 const expanded = ref<Id[]>([]);
 const saving = ref(false);
+const chapterSaving = ref(false);
+const lessonSaving = ref(false);
 const chapterVisible = ref(false);
 const lessonVisible = ref(false);
 const videoVisible = ref(false);
+const lessonAssetDraftVisible = ref(false);
 const courseDirty = ref(false);
 const chapterDirty = ref(false);
 const lessonDirty = ref(false);
@@ -180,6 +188,13 @@ function snapshotChapterDraft() {
 function snapshotLessonDraft() {
   return { editingId: editingLessonId.value, form: { ...lessonForm } };
 }
+function lessonMetadata(value: LessonDraft) {
+  return { title: value.title, required: value.required, sort_order: value.sort_order };
+}
+function syncLessonDraftState() {
+  lessonDirty.value = !sameDraft(snapshotLessonDraft(), lessonBaseline);
+  lessonAssetDraftVisible.value = editingLessonId.value === null || lessonForm.asset_id !== lessonBaseline.form.asset_id;
+}
 function snapshotVideoDraft() {
   return { lessonId: replacementLessonId.value, assetId: replacementAssetId.value };
 }
@@ -193,6 +208,7 @@ function discardCourse() {
 }
 function discardChapter() {
   chapterContextToken += 1;
+  chapterSaving.value = false;
   editingChapterId.value = chapterBaseline.editingId;
   Object.assign(chapterForm, chapterBaseline.form);
   chapterDirty.value = false;
@@ -200,6 +216,8 @@ function discardChapter() {
 }
 function discardLesson() {
   lessonContextToken += 1;
+  lessonSaving.value = false;
+  lessonAssetDraftVisible.value = false;
   editingLessonId.value = lessonBaseline.editingId;
   Object.assign(lessonForm, lessonBaseline.form);
   lessonDirty.value = false;
@@ -215,6 +233,7 @@ function discardVideo() {
 async function closeChapter() {
   if (!chapterDirty.value) {
     chapterContextToken += 1;
+    chapterSaving.value = false;
     chapterVisible.value = false;
     return;
   }
@@ -223,6 +242,7 @@ async function closeChapter() {
 async function beforeChapterClose(done: () => void) {
   if (!chapterDirty.value) {
     chapterContextToken += 1;
+    chapterSaving.value = false;
     done();
     return;
   }
@@ -231,6 +251,8 @@ async function beforeChapterClose(done: () => void) {
 async function closeLesson() {
   if (!lessonDirty.value) {
     lessonContextToken += 1;
+    lessonSaving.value = false;
+    lessonAssetDraftVisible.value = false;
     lessonVisible.value = false;
     return;
   }
@@ -239,6 +261,8 @@ async function closeLesson() {
 async function beforeLessonClose(done: () => void) {
   if (!lessonDirty.value) {
     lessonContextToken += 1;
+    lessonSaving.value = false;
+    lessonAssetDraftVisible.value = false;
     done();
     return;
   }
@@ -266,7 +290,7 @@ watch(chapterForm, () => {
   if (chapterVisible.value) chapterDirty.value = !sameDraft(snapshotChapterDraft(), chapterBaseline);
 }, { deep: true });
 watch(lessonForm, () => {
-  if (lessonVisible.value) lessonDirty.value = !sameDraft(snapshotLessonDraft(), lessonBaseline);
+  if (lessonVisible.value) syncLessonDraftState();
 }, { deep: true });
 watch([replacementLessonId, replacementAssetId], () => {
   if (videoVisible.value) videoDirty.value = !sameDraft(snapshotVideoDraft(), videoBaseline);
@@ -320,6 +344,7 @@ async function saveCourse() {
 }
 function openChapter(chapter?: CourseChapterView) {
   chapterContextToken += 1;
+  chapterSaving.value = false;
   editingChapterId.value = chapter?.id || null;
   Object.assign(chapterForm, {
     title: chapter?.title || '',
@@ -330,28 +355,42 @@ function openChapter(chapter?: CourseChapterView) {
   chapterVisible.value = true;
 }
 async function saveChapter() {
+  if (chapterSaving.value) return;
   if (!chapterForm.title.trim()) { ElMessage.warning('请填写章节标题'); return; }
   const contextToken = chapterContextToken;
   const operation = ++chapterOperationSequence;
   chapterLatestOperation = operation;
   const submitted = snapshotChapterDraft();
-  if (submitted.editingId !== null) await http.put(`/admin/courses/${courseId}/chapters/${submitted.editingId}`, submitted.form);
-  else await http.post(`/admin/courses/${courseId}/chapters`, submitted.form);
-  const sameContext = contextToken === chapterContextToken;
-  if (sameContext && operation > chapterLastAppliedOperation) {
-    chapterLastAppliedOperation = operation;
-    chapterBaseline = { editingId: submitted.editingId, form: { ...submitted.form } };
-    chapterDirty.value = !sameDraft(snapshotChapterDraft(), chapterBaseline);
+  chapterSaving.value = true;
+  try {
+    let persistedId = submitted.editingId;
+    if (persistedId !== null) await http.put(`/admin/courses/${courseId}/chapters/${persistedId}`, submitted.form);
+    else {
+      const created = await http.post(`/admin/courses/${courseId}/chapters`, submitted.form) as { id: Id };
+      persistedId = created.id;
+    }
+    const persisted = { editingId: persistedId, form: { ...submitted.form } };
+    const sameContext = contextToken === chapterContextToken;
+    if (sameContext && operation > chapterLastAppliedOperation) {
+      chapterLastAppliedOperation = operation;
+      editingChapterId.value = persistedId;
+      chapterBaseline = persisted;
+      chapterDirty.value = !sameDraft(snapshotChapterDraft(), chapterBaseline);
+    }
+    if (sameContext && operation === chapterLatestOperation && sameDraft(snapshotChapterDraft(), persisted)) {
+      chapterUnsaved.markClean();
+      chapterSaving.value = false;
+      chapterContextToken += 1;
+      chapterVisible.value = false;
+    }
+    await load(false);
+  } finally {
+    if (contextToken === chapterContextToken && operation === chapterLatestOperation) chapterSaving.value = false;
   }
-  if (sameContext && operation === chapterLatestOperation && sameDraft(snapshotChapterDraft(), submitted)) {
-    chapterUnsaved.markClean();
-    chapterContextToken += 1;
-    chapterVisible.value = false;
-  }
-  await load(false);
 }
 function openLesson(chapterId: Id, lesson?: CourseLessonView) {
   lessonContextToken += 1;
+  lessonSaving.value = false;
   editingLessonId.value = lesson?.id || null;
   Object.assign(lessonForm, {
     chapter_id: chapterId,
@@ -362,9 +401,11 @@ function openLesson(chapterId: Id, lesson?: CourseLessonView) {
   });
   lessonBaseline = snapshotLessonDraft();
   lessonUnsaved.markClean();
+  lessonAssetDraftVisible.value = editingLessonId.value === null;
   lessonVisible.value = true;
 }
 async function saveLesson() {
+  if (lessonSaving.value) return;
   if (!lessonForm.title.trim()) { ElMessage.warning('请填写课时标题'); return; }
   const contextToken = lessonContextToken;
   const operation = ++lessonOperationSequence;
@@ -376,24 +417,92 @@ async function saveLesson() {
     sort_order: submitted.form.sort_order,
     lesson_type: 'video' as const,
   };
-  if (submitted.editingId !== null) await http.put(`/admin/courses/${courseId}/lessons/${submitted.editingId}`, payload);
-  else await http.post(`/admin/courses/${courseId}/lessons`, {
-    ...payload,
-    chapter_id: submitted.form.chapter_id,
-    asset_id: submitted.form.asset_id,
-  });
-  const sameContext = contextToken === lessonContextToken;
-  if (sameContext && operation > lessonLastAppliedOperation) {
-    lessonLastAppliedOperation = operation;
-    lessonBaseline = { editingId: submitted.editingId, form: { ...submitted.form } };
-    lessonDirty.value = !sameDraft(snapshotLessonDraft(), lessonBaseline);
+  lessonSaving.value = true;
+  try {
+    let persistedId = submitted.editingId;
+    if (persistedId === null) {
+      const created = await http.post(`/admin/courses/${courseId}/lessons`, {
+        ...payload,
+        chapter_id: submitted.form.chapter_id,
+        asset_id: submitted.form.asset_id,
+      }) as { id: Id };
+      persistedId = created.id;
+      const persisted = { editingId: persistedId, form: { ...submitted.form } };
+      const sameContext = contextToken === lessonContextToken;
+      if (sameContext && operation > lessonLastAppliedOperation) {
+        lessonLastAppliedOperation = operation;
+        editingLessonId.value = persistedId;
+        lessonBaseline = persisted;
+        syncLessonDraftState();
+      }
+      if (sameContext && operation === lessonLatestOperation && sameDraft(snapshotLessonDraft(), persisted)) {
+        lessonUnsaved.markClean();
+        lessonSaving.value = false;
+        lessonAssetDraftVisible.value = false;
+        lessonContextToken += 1;
+        lessonVisible.value = false;
+      }
+      await load(false);
+      return;
+    }
+
+    const metadataChanged = !sameDraft(lessonMetadata(submitted.form), lessonMetadata(lessonBaseline.form));
+    const assetChanged = submitted.form.asset_id !== lessonBaseline.form.asset_id;
+    if (metadataChanged) {
+      await http.put(`/admin/courses/${courseId}/lessons/${persistedId}`, payload);
+      if (contextToken !== lessonContextToken || operation !== lessonLatestOperation) {
+        await load(false);
+        return;
+      }
+      lessonLastAppliedOperation = Math.max(lessonLastAppliedOperation, operation);
+      lessonBaseline = {
+        editingId: persistedId,
+        form: {
+          ...lessonBaseline.form,
+          title: submitted.form.title,
+          required: submitted.form.required,
+          sort_order: submitted.form.sort_order,
+        },
+      };
+      syncLessonDraftState();
+    }
+
+    if (contextToken !== lessonContextToken || operation !== lessonLatestOperation) return;
+    if (assetChanged) {
+      if (!submitted.form.asset_id) {
+        lessonAssetDraftVisible.value = true;
+        ElMessage.warning('已创建课时的视频不能删除；请选择新视频生成替换版本');
+        return;
+      }
+      try {
+        await http.post(`/admin/courses/${courseId}/lessons/${persistedId}/versions`, { asset_id: submitted.form.asset_id });
+      } catch (error) {
+        if (contextToken === lessonContextToken && operation === lessonLatestOperation) {
+          syncLessonDraftState();
+          ElMessage.error('视频版本保存失败；未提交的视频草稿已保留，请确认后重试');
+        }
+        throw error;
+      }
+      if (contextToken !== lessonContextToken || operation !== lessonLatestOperation) return;
+      lessonLastAppliedOperation = Math.max(lessonLastAppliedOperation, operation);
+      lessonBaseline = {
+        editingId: persistedId,
+        form: { ...lessonBaseline.form, asset_id: submitted.form.asset_id },
+      };
+      syncLessonDraftState();
+    }
+
+    if (sameDraft(snapshotLessonDraft(), lessonBaseline)) {
+      lessonUnsaved.markClean();
+      lessonSaving.value = false;
+      lessonAssetDraftVisible.value = false;
+      lessonContextToken += 1;
+      lessonVisible.value = false;
+    }
+    await load(false);
+  } finally {
+    if (contextToken === lessonContextToken && operation === lessonLatestOperation) lessonSaving.value = false;
   }
-  if (sameContext && operation === lessonLatestOperation && sameDraft(snapshotLessonDraft(), submitted)) {
-    lessonUnsaved.markClean();
-    lessonContextToken += 1;
-    lessonVisible.value = false;
-  }
-  await load(false);
 }
 function openVideo(lesson: CourseLessonView) {
   videoContextToken += 1;
