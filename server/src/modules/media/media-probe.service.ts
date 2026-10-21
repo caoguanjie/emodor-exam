@@ -87,14 +87,12 @@ export class MediaProbeService {
     const streams = Array.isArray(parsed?.streams) ? parsed.streams : [];
     const videoStreams = streams.filter((stream: any) => stream.codec_type === 'video');
     const audioStreams = streams.filter((stream: any) => stream.codec_type === 'audio');
-    const otherStreams = streams.filter((stream: any) => stream.codec_type !== 'video' && stream.codec_type !== 'audio');
     const majorBrand = String(parsed?.format?.tags?.major_brand || '').trim().toLowerCase();
     if (!MP4_MAJOR_BRANDS.has(majorBrand)) throw new Error('视频容器必须是 MP4');
     if (videoStreams.length !== 1 || videoStreams[0].codec_name !== 'h264') throw new Error('视频必须包含 H.264 视频流');
-    if (audioStreams.length > 1 || audioStreams.some((stream: any) => stream.codec_name !== 'aac')) {
-      throw new Error('视频音轨仅支持单个 AAC');
+    if (audioStreams.some((stream: any) => stream.codec_name !== 'aac')) {
+      throw new Error('视频音轨仅支持 AAC');
     }
-    if (otherStreams.length > 0) throw new Error('视频包含不支持的轨道');
     const width = Number(videoStreams[0].width);
     const height = Number(videoStreams[0].height);
     if (!this.isValidDimension(width, height) || width > Math.floor(ABSOLUTE_MAX_DECODE_PIXELS / height)) {

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rename, rm, stat } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -70,51 +70,114 @@ function pngFixture() {
   return Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 }
 
-async function ffmpegFixture(extension = '.mp4') {
+async function ffmpegFixture(extension = '.mp4', options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ruleexam-media-fixture-'));
   const output = join(root, `silent-h264${extension}`);
-  const executable = process.env.FFMPEG_PATH || 'ffmpeg';
+  const executable = options.executable || process.env.FFMPEG_PATH || 'ffmpeg';
+  const timeoutMs = options.timeoutMs || 15_000;
   try {
     await new Promise((resolve, reject) => {
       const args = [
         '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=32x32:d=1',
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an',
       ];
+      if (options.audio) args.push('-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=44100:duration=1');
+      args.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p');
+      if (options.audio) args.push('-c:a', 'aac', '-shortest');
+      else args.push('-an');
       if (extension === '.mp4') args.push('-movflags', '+faststart');
       args.push('-y', output);
       const child = spawn(executable, args, { shell: false, stdio: ['ignore', 'ignore', 'pipe'] });
       let stderr = '';
       let stderrBytes = 0;
       let settled = false;
+      let stopReason;
+      let processError;
       let timer;
-      const stop = (error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
+      const requestStop = (error) => {
+        if (settled || stopReason) return;
+        stopReason = error;
         child.kill('SIGKILL');
-        reject(error);
       };
       child.stderr.on('data', (chunk) => {
+        if (settled || stopReason) return;
         stderrBytes += chunk.length;
         if (stderrBytes > 256 * 1024) {
-          stop(new Error('ffmpeg fixture output exceeded limit'));
+          requestStop(new Error('ffmpeg fixture output exceeded limit'));
           return;
         }
         stderr += chunk.toString();
       });
-      child.once('error', stop);
+      child.once('error', (error) => {
+        processError = error;
+      });
       child.once('close', (code) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        if (code === 0) resolve();
+        if (stopReason) reject(stopReason);
+        else if (processError) reject(processError);
+        else if (code === 0) resolve();
         else reject(new Error(`ffmpeg failed: ${stderr.slice(0, 200)}`));
       });
-      timer = setTimeout(() => stop(new Error('ffmpeg fixture timed out')), 15_000);
+      timer = setTimeout(() => requestStop(new Error('ffmpeg fixture timed out')), timeoutMs);
     });
     return await readFile(output);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+}
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ESRCH') return false;
+    throw error;
+  }
+}
+
+async function waitForOwnedPidExit(pid, timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processExists(pid)) return;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
+  throw new Error(`owned fixture process ${pid} did not exit`);
+}
+
+export async function verifyFfmpegFixtureTimeoutCleanup() {
+  const controlRoot = await mkdtemp(join(tmpdir(), 'ruleexam-media-fixture-timeout-check-'));
+  const executable = join(controlRoot, 'delayed-close-ffmpeg.cjs');
+  const recordPath = join(controlRoot, 'processes.json');
+  let record;
+  try {
+    await writeFile(executable, `#!/usr/bin/env node
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const { spawn } = require('node:child_process');
+      const descendant = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 2500)'], {
+        stdio: ['ignore', 'ignore', 2],
+      });
+      const output = process.argv[process.argv.length - 1];
+      fs.writeFileSync(${JSON.stringify(recordPath)}, JSON.stringify({
+        pid: process.pid,
+        descendantPid: descendant.pid,
+        fixtureRoot: path.dirname(output),
+      }));
+      setInterval(() => {}, 1000);
+    `, 'utf8');
+    await chmod(executable, 0o755);
+    const error = await captureError(ffmpegFixture('.mp4', { executable, timeoutMs: 1000 }));
+    assert(error?.message === 'ffmpeg fixture timed out', `fixture timeout expected bounded error: ${error?.message ?? 'resolved'}`);
+    record = JSON.parse(await readFile(recordPath, 'utf8'));
+    assert(!processExists(record.pid), 'timed-out ffmpeg fixture parent was still running after rejection');
+    assert(!processExists(record.descendantPid), 'ffmpeg fixture rejected before child stdio closed');
+    assert(!(await pathStat(record.fixtureRoot)), 'ffmpeg fixture root was not cleaned after child close');
+  } finally {
+    if (record?.pid) await waitForOwnedPidExit(record.pid);
+    if (record?.descendantPid) await waitForOwnedPidExit(record.descendantPid);
+    await rm(controlRoot, { recursive: true, force: true });
   }
 }
 
@@ -226,12 +289,16 @@ async function verifyBindDeleteRace(ctx, lifecycle, admin, businessId, png) {
 }
 
 async function verifyAbortedMultipartCleanup(ctx, actor) {
+  const restarted = await ctx.restartApi();
+  assert(Number.isInteger(restarted?.pid) && restarted.pid > 0, 'training harness did not return its owned API pid');
+  const ownedApiCtx = { ...ctx, apiPid: restarted.pid };
   const beforeAssets = await ctx.queryTestDb('SELECT COUNT(*) AS count FROM media_asset');
-  const observed = await abortMultipartAfterTempCreated(ctx, actor);
+  const observed = await abortMultipartAfterTempCreated(ownedApiCtx, actor);
   const afterTemps = await mediaTempNames(ctx);
   const afterAssets = await ctx.queryTestDb('SELECT COUNT(*) AS count FROM media_asset');
   const health = await ctx.request(actor, 'GET', '/media/limits');
   assert(observed.ownerPids.length >= 1, 'HTTP abort test did not observe the API open file descriptor for its exact temporary path');
+  assert(observed.fdObservation?.pid === observed.ownerPids[0] && observed.fdObservation?.fd, 'HTTP abort test did not retain its owned API FD observation');
   assert(!afterTemps.includes(observed.createdName) && JSON.stringify(afterTemps) === JSON.stringify(observed.before), 'HTTP abort left its exact multipart temporary file');
   assert(Number(afterAssets[0]?.count || 0) === Number(beforeAssets[0]?.count || 0), 'HTTP abort published a media asset');
   assert(health.status === 200, `API did not accept a follow-up request after multipart abort: ${health.status}`);
@@ -248,6 +315,7 @@ async function createStudent(ctx, admin, categoryId, label) {
 }
 
 export async function run(ctx) {
+  await verifyFfmpegFixtureTimeoutCleanup();
   const admin = await login(ctx, 'admin', ctx.adminPassword, 'admin');
   const limits = await ctx.request(admin, 'GET', '/media/limits');
   assert(limits.status === 200 && limits.data.video_max_bytes === 512 * 1024 * 1024, 'media limits mismatch');
@@ -333,17 +401,41 @@ export async function run(ctx) {
   assert(wrongContainer.status === 400, `non-MP4 container expected 400: ${wrongContainer.status}`);
   const quickTime = await upload(ctx, admin, { purpose: 'video' }, await ffmpegFixture('.mov'), 'lesson.mov', 'video/mp4');
   assert(quickTime.status === 400, `QuickTime container expected 400: ${quickTime.status}`);
+  const threeGp = await upload(ctx, admin, { purpose: 'video' }, await ffmpegFixture('.3gp'), 'lesson.3gp', 'video/mp4');
+  assert(threeGp.status === 400, `3GP container expected 400: ${threeGp.status}`);
   const videoBytes = await ffmpegFixture();
   const video = await upload(ctx, admin, { purpose: 'video' }, videoBytes, 'lesson.mp4', 'video/mp4');
   assert(video.status === 200 && video.data.status === 'ready' && video.data.duration_ms > 0, `real video probe failed: ${video.status}`);
   const videoOwner = await ctx.request(admin, 'GET', `/media/${video.data.asset_id}`);
   assert(videoOwner.status === 200 && videoOwner.data.duration_ms > 0, 'video metadata duration missing');
+  const aacVideoBytes = await ffmpegFixture('.mp4', { audio: true });
+  const aacVideo = await upload(ctx, admin, { purpose: 'video' }, aacVideoBytes, 'lesson-aac.mp4', 'video/mp4');
+  assert(aacVideo.status === 200 && aacVideo.data.status === 'ready' && aacVideo.data.duration_ms > 0, `H.264/AAC API upload failed: ${aacVideo.status}`);
+
+  const adminProfileBefore = await ctx.request(admin, 'GET', '/me/profile');
+  assert(adminProfileBefore.status === 200, `admin profile setup failed: ${adminProfileBefore.status}`);
+  const videoAvatarSetter = await ctx.request(admin, 'PATCH', '/me/profile', { avatar_id: String(video.data.asset_id) });
+  assert(videoAvatarSetter.status === 403 && videoAvatarSetter.code === 40302, `existing video asset avatar setter expected 40302: ${videoAvatarSetter.status}/${videoAvatarSetter.code}`);
+  const afterVideoSetter = await ctx.request(admin, 'GET', '/me/profile');
+  assert(afterVideoSetter.status === 200 && afterVideoSetter.data.avatar_id === adminProfileBefore.data.avatar_id, 'rejected video avatar setter changed the existing profile');
+
+  const questionImage = await upload(ctx, admin, { purpose: 'question' }, png, 'question-image.png', 'image/png');
+  assert(questionImage.status === 200 && questionImage.data?.asset_id, `question image setup failed: ${questionImage.status}`);
+  const questionAvatarSetter = await ctx.request(admin, 'PATCH', '/me/profile', { avatar_id: String(questionImage.data.asset_id) });
+  assert(questionAvatarSetter.status === 403 && questionAvatarSetter.code === 40302, `question-purpose avatar setter expected 40302: ${questionAvatarSetter.status}/${questionAvatarSetter.code}`);
+  const afterQuestionSetter = await ctx.request(admin, 'GET', '/me/profile');
+  assert(afterQuestionSetter.status === 200 && afterQuestionSetter.data.avatar_id === adminProfileBefore.data.avatar_id, 'rejected question avatar setter changed the existing profile');
+  const removeQuestionImage = await ctx.request(admin, 'DELETE', `/media/${questionImage.data.asset_id}`);
+  assert(removeQuestionImage.status === 200, `question image cleanup failed: ${removeQuestionImage.status}`);
+
   const videoAvatar = await upload(ctx, admin, { purpose: 'avatar' }, videoBytes, 'video-avatar.png', 'image/png');
   assert(videoAvatar.status === 400, `video-as-avatar expected 400: ${videoAvatar.status}`);
   const videoRange = await ctx.request(admin, 'GET', `/media/${video.data.asset_id}/content`, undefined, { Range: 'bytes=0-31' });
   assert(videoRange.status === 206 && Buffer.isBuffer(videoRange.body) && videoRange.body.equals(videoBytes.subarray(0, 32)), 'video range body did not match stored bytes');
   const invalidRange = await ctx.request(admin, 'GET', `/media/${video.data.asset_id}/content`, undefined, { Range: 'bytes=999999999-' });
   assert(invalidRange.status === 416 && invalidRange.code === 41601, `invalid media range expected 41601: ${invalidRange.status}/${invalidRange.code}`);
+  const removeAacVideo = await ctx.request(admin, 'DELETE', `/media/${aacVideo.data.asset_id}`);
+  assert(removeAacVideo.status === 200, `AAC video cleanup failed: ${removeAacVideo.status}`);
 
   const orphan = await upload(ctx, studentA.actor, { purpose: 'avatar' }, png, 'orphan.png', 'image/png');
   assert(orphan.status === 200, `orphan upload failed: ${orphan.status}`);

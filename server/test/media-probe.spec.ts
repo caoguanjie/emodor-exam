@@ -18,6 +18,7 @@ let pngPath: string;
 let webpPath: string;
 let silentMp4Path: string;
 let aacMp4Path: string;
+let dualAacMp4Path: string;
 let mp3Mp4Path: string;
 let subtitleMp4Path: string;
 let mpeg4Mp4Path: string;
@@ -107,6 +108,7 @@ beforeAll(async () => {
   webpPath = join(fixtureRoot, 'valid.webp');
   silentMp4Path = join(fixtureRoot, 'silent.mp4');
   aacMp4Path = join(fixtureRoot, 'aac.mp4');
+  dualAacMp4Path = join(fixtureRoot, 'dual-aac.mp4');
   mp3Mp4Path = join(fixtureRoot, 'mp3.mp4');
   subtitleMp4Path = join(fixtureRoot, 'subtitle.mp4');
   mpeg4Mp4Path = join(fixtureRoot, 'mpeg4.mp4');
@@ -124,6 +126,7 @@ beforeAll(async () => {
   await runFixtureTool([...common, '-f', 'lavfi', '-i', 'color=c=blue:s=4x2:d=0.04', '-frames:v', '1', '-c:v', 'libwebp', webpPath]);
   await runFixtureTool([...common, '-f', 'lavfi', '-i', 'color=c=black:s=32x24:r=25:d=0.2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an', '-movflags', '+faststart', '-f', 'mp4', silentMp4Path]);
   await runFixtureTool([...common, '-f', 'lavfi', '-i', 'color=c=black:s=32x24:r=25:d=0.2', '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=44100:duration=0.2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-movflags', '+faststart', '-f', 'mp4', aacMp4Path]);
+  await runFixtureTool([...common, '-f', 'lavfi', '-i', 'color=c=black:s=32x24:r=25:d=0.2', '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=44100:duration=0.2', '-f', 'lavfi', '-i', 'sine=frequency=1500:sample_rate=44100:duration=0.2', '-map', '0:v:0', '-map', '1:a:0', '-map', '2:a:0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-movflags', '+faststart', '-f', 'mp4', dualAacMp4Path]);
   await runFixtureTool([...common, '-f', 'lavfi', '-i', 'color=c=black:s=32x24:r=25:d=0.2', '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=44100:duration=0.2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'libmp3lame', '-shortest', '-movflags', '+faststart', '-f', 'mp4', mp3Mp4Path]);
   await writeFile(subtitlePath, '1\n00:00:00,000 --> 00:00:00,180\nnot allowed\n', 'utf8');
   await runFixtureTool([...common, '-f', 'lavfi', '-i', 'color=c=black:s=32x24:r=25:d=0.2', '-i', subtitlePath, '-map', '0:v:0', '-map', '1:0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:s', 'mov_text', '-t', '0.2', '-movflags', '+faststart', '-f', 'mp4', subtitleMp4Path]);
@@ -201,6 +204,13 @@ describe('media video probe', () => {
     expect(result.durationMs).toBeGreaterThan(0);
   });
 
+  it('accepts H.264 MP4 with multiple AAC audio tracks', async () => {
+    const service = new MediaProbeService(probeConfig());
+    const result = await service.probeVideo(dualAacMp4Path);
+    expect(result.codecs).toEqual(['h264', 'aac']);
+    expect(result.durationMs).toBeGreaterThan(0);
+  });
+
   it.each([
     ['3GP', () => threeGpPath],
     ['QuickTime MOV', () => movPath],
@@ -220,9 +230,11 @@ describe('media video probe', () => {
     await expect(service.probeVideo(mp3Mp4Path)).rejects.toThrowError();
   });
 
-  it('rejects subtitle and other non-audio/video tracks', async () => {
+  it('accepts an H.264 MP4 with an auxiliary subtitle track', async () => {
     const service = new MediaProbeService(probeConfig());
-    await expect(service.probeVideo(subtitleMp4Path)).rejects.toThrowError();
+    const result = await service.probeVideo(subtitleMp4Path);
+    expect(result.codecs).toEqual(['h264', 'mov_text']);
+    expect(result.durationMs).toBeGreaterThan(0);
   });
 });
 

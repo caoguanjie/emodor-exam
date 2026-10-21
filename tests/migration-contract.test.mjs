@@ -282,6 +282,13 @@ test('media migration completion checks reject same-count schema drift without d
       markerTable: 'media_asset',
     },
     {
+      name: 'asset_prefix_unique_index',
+      stepId: 'create_media_asset',
+      assetSql: correctMediaAssetFixture.replace('uk_media_asset_storage_key (storage_key)', 'uk_media_asset_storage_key (storage_key(1))'),
+      referenceSql: correctMediaReferenceFixture,
+      markerTable: 'media_asset',
+    },
+    {
       name: 'reference_wrong_unsigned',
       stepId: 'create_media_reference',
       assetSql: correctMediaAssetFixture,

@@ -59,6 +59,17 @@
           <el-form-item label="邮箱"><el-input v-model="studentForm.email" maxlength="128" /></el-form-item>
           <el-form-item v-if="studentForm.id && auth.can('students:write')" label="头像">
             <MediaUpload v-model="studentForm.avatar_id" purpose="avatar" :owner-id="String(studentForm.id)" :disabled="studentForm.status === 0" @update:model-value="onStudentAvatarChange" />
+            <el-alert
+              v-if="studentAvatarSync.message"
+              :title="studentAvatarSync.message"
+              :type="studentAvatarSync.status === 'confirmed' ? 'success' : studentAvatarSync.status === 'unknown' ? 'warning' : 'info'"
+              :closable="false"
+              show-icon
+            >
+              <template #default>
+                <el-button v-if="studentAvatarSync.status === 'unknown'" link type="primary" @click="queryStudentAvatarState">查询头像状态</el-button>
+              </template>
+            </el-alert>
           </el-form-item>
         </el-form>
         <template #footer><el-button @click="cancelStudentDialog">取消</el-button><el-button v-if="auth.can('students:write')" type="primary" @click="saveStudent">保存</el-button></template>
@@ -177,6 +188,15 @@ import { formatDateTime } from '../../utils/format';
 import ImportPreview from '../../components/ImportPreview.vue';
 import MediaUpload from '../../components/MediaUpload.vue';
 import type { ImportPreview as ImportPreviewData } from '../../api/training-types';
+import {
+  isAvatarReconcileContextCurrent,
+  normalizeAvatarId,
+  preflightAvatarSave,
+  reconcileStudentAvatar,
+  type AvatarReconcileContext,
+  type AvatarReconcileResult,
+  type AvatarSyncStatus,
+} from '../../utils/avatar-save-state';
 
 const route = useRoute();
 const isStudentPage = computed(() => route.path === '/admin/students');
@@ -199,6 +219,9 @@ const categories = ref<any[]>([]);
 const studentDialog = ref(false);
 const studentForm = reactive<any>({});
 const studentAvatarOriginalId = ref<string | null>(null);
+const studentAvatarWritePending = ref(false);
+const studentAvatarSync = reactive<{ status: AvatarSyncStatus; message: string }>({ status: 'idle', message: '' });
+const studentAvatarDialogVersion = ref(0);
 const studentQuery = reactive<any>({ page: 1, page_size: 20, keyword: '', category_id: '', source: '' });
 const studentImportDefaults = reactive<{ source: string; category_id: string }>({ source: '', category_id: '' });
 const studentPreview = ref<ImportPreviewData | null>(null);
@@ -260,16 +283,78 @@ function toTree(nodes: any[]): any[] {
   return nodes.map((n) => ({ value: n.id, label: n.name, children: n.children?.length ? toTree(n.children) : undefined }));
 }
 
+function resetStudentAvatarState() {
+  studentAvatarWritePending.value = false;
+  studentAvatarSync.status = 'idle';
+  studentAvatarSync.message = '';
+}
+
+function setStudentAvatarSync(result: AvatarReconcileResult) {
+  studentAvatarSync.status = result.outcome === 'applied' ? 'confirmed' : result.outcome;
+  studentAvatarSync.message = result.message;
+  if (result.outcome === 'applied') {
+    studentAvatarOriginalId.value = result.confirmedId;
+    studentAvatarWritePending.value = false;
+  } else if (result.outcome === 'not_applied') {
+    // The server has confirmed the current id, while the staged desired id is
+    // retained in studentForm.avatar_id for an explicit save retry.
+    studentAvatarOriginalId.value = result.confirmedId;
+    studentAvatarWritePending.value = true;
+  } else {
+    // Do not replace the last known id: the current server value is unknown.
+    // Keeping the pending flag forces a later explicit query/save decision.
+    studentAvatarWritePending.value = true;
+  }
+}
+
+function currentStudentAvatarContext(): AvatarReconcileContext | null {
+  if (!studentDialog.value || !studentForm.id) return null;
+  return {
+    dialogVersion: studentAvatarDialogVersion.value,
+    studentId: String(studentForm.id),
+    desiredId: normalizeAvatarId(studentForm.avatar_id),
+  };
+}
+
+async function reconcileStudentAvatarState(closeOnApplied = false): Promise<AvatarReconcileResult['outcome'] | 'stale'> {
+  const context = currentStudentAvatarContext();
+  if (!context) return 'stale';
+  const result = await reconcileStudentAvatar(
+    context.studentId,
+    context.desiredId,
+    (path) => http.get(path),
+  );
+  if (!isAvatarReconcileContextCurrent(context, currentStudentAvatarContext())) return 'stale';
+  setStudentAvatarSync(result);
+  if (result.outcome === 'applied') {
+    ElMessage.success('头像已通过状态查询确认更新');
+    if (closeOnApplied) {
+      studentAvatarDialogVersion.value += 1;
+      studentDialog.value = false;
+      resetStudentAvatarState();
+      await loadStudents();
+    }
+    return result.outcome;
+  }
+  ElMessage.warning(result.message);
+  await loadStudents();
+  return result.outcome;
+}
+
 function openStudentCreate() {
+  studentAvatarDialogVersion.value += 1;
   Object.keys(studentForm).forEach((key) => delete studentForm[key]);
   studentAvatarOriginalId.value = null;
+  resetStudentAvatarState();
   Object.assign(studentForm, { source: 'institution', category_id: categories.value[0]?.id || '', department_id: '' });
   studentDialog.value = true;
 }
 function openStudentEdit(row: any) {
+  studentAvatarDialogVersion.value += 1;
   Object.keys(studentForm).forEach((key) => delete studentForm[key]);
   Object.assign(studentForm, row, { department_id: row.department_id || '', category_id: row.category_id || '', employee_no: row.employee_no || '' });
   studentAvatarOriginalId.value = row.avatar_id ? String(row.avatar_id) : null;
+  resetStudentAvatarState();
   studentDialog.value = true;
 }
 
@@ -279,20 +364,54 @@ function onStudentAvatarChange(assetId: string | null) {
   // Cancelling therefore never mutates the managed student row.
   if (!studentForm.id) return;
   studentForm.avatar_id = assetId;
+  studentAvatarWritePending.value = true;
+  studentAvatarSync.status = 'pending';
+  studentAvatarSync.message = assetId ? '头像已暂存，点击保存后绑定' : '头像清除已暂存，点击保存后生效';
 }
 
 function cancelStudentDialog() {
+  studentAvatarDialogVersion.value += 1;
   studentDialog.value = false;
   studentAvatarOriginalId.value = null;
+  resetStudentAvatarState();
 }
+
+async function queryStudentAvatarState() {
+  await reconcileStudentAvatarState(false);
+}
+
 async function saveStudent() {
   if (!studentForm.username || !studentForm.real_name || !studentForm.source || !studentForm.category_id || (!studentForm.id && !studentForm.password)) {
     ElMessage.warning('请填写用户名、姓名、来源、培训类别和密码'); return;
   }
   if (studentForm.id) {
     const studentId = String(studentForm.id);
-    const nextAvatarId = studentForm.avatar_id ? String(studentForm.avatar_id) : null;
-    const avatarChanged = nextAvatarId !== studentAvatarOriginalId.value;
+    const nextAvatarId = normalizeAvatarId(studentForm.avatar_id);
+    const avatarChanged = nextAvatarId !== studentAvatarOriginalId.value || studentAvatarWritePending.value;
+    if (studentAvatarSync.status === 'unknown') {
+      const context = currentStudentAvatarContext();
+      if (!context) return;
+      const preflight = await preflightAvatarSave(
+        studentAvatarSync.status,
+        context,
+        (path) => http.get(path),
+        currentStudentAvatarContext,
+      );
+      if (preflight.action === 'stale' || !preflight.result) return;
+      setStudentAvatarSync(preflight.result);
+      if (preflight.action === 'confirmed') {
+        ElMessage.success('头像已通过状态查询确认更新');
+        studentAvatarDialogVersion.value += 1;
+        studentDialog.value = false;
+        studentAvatarOriginalId.value = null;
+        resetStudentAvatarState();
+        await loadStudents();
+        return;
+      }
+      ElMessage.warning(preflight.result.message);
+      await loadStudents();
+      return;
+    }
     await http.put(`/admin/students/${studentForm.id}`, {
       real_name: studentForm.real_name,
       employee_no: studentForm.employee_no,
@@ -306,22 +425,12 @@ async function saveStudent() {
       try {
         await http.put(`/admin/students/${studentId}/avatar`, { avatar_id: nextAvatarId });
         studentAvatarOriginalId.value = nextAvatarId;
+        resetStudentAvatarState();
       } catch {
         // The avatar endpoint re-checks the managed-student boundary in its
-        // own transaction. Re-read once so a failed bind never leaves a stale
-        // optimistic id in this dialog; any retry is an explicit user action.
-        try {
-          const current: any = await http.get('/admin/students', { params: { page: 1, page_size: 100, keyword: studentForm.username } });
-          const row = (current.items || []).find((item: any) => String(item.id) === studentId);
-          if (row) {
-            studentForm.avatar_id = row.avatar_id ? String(row.avatar_id) : null;
-            studentAvatarOriginalId.value = studentForm.avatar_id;
-          }
-        } catch {
-          studentForm.avatar_id = studentAvatarOriginalId.value;
-        }
-        ElMessage.error('资料已保存，但头像未更新，请确认后重试');
-        await loadStudents();
+        // own transaction. Query the exact student once; never re-post an
+        // uncertain PUT and never throw away the staged asset id.
+        await reconcileStudentAvatarState(true);
         return;
       }
     }
@@ -338,7 +447,7 @@ async function saveStudent() {
       email: studentForm.email,
     });
   }
-  ElMessage.success('已保存'); studentDialog.value = false; studentAvatarOriginalId.value = null; await loadStudents();
+  ElMessage.success('已保存'); studentAvatarDialogVersion.value += 1; studentDialog.value = false; studentAvatarOriginalId.value = null; resetStudentAvatarState(); await loadStudents();
 }
 async function toggleStudentStatus(row: any) {
   await ElMessageBox.confirm(row.status === 1 ? '停用后该学员旧令牌立即失效，确认停用？' : '确认启用该学员？', '确认', { type: 'warning' });

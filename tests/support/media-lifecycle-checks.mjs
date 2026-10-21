@@ -1,8 +1,8 @@
 import { request as httpRequest } from 'node:http';
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { readdir, rm } from 'node:fs/promises';
-import { join, relative, resolve, sep } from 'node:path';
+import { readdir, readlink, realpath } from 'node:fs/promises';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 const require = createRequire(new URL('../../server/package.json', import.meta.url));
@@ -64,21 +64,85 @@ async function lsofOutput(args) {
   }
 }
 
-async function exactPathOwnerPids(path) {
-  const output = await lsofOutput(['-F', 'pn', '--', path]);
-  return [...new Set(output.split('\n')
-    .filter((line) => /^p\d+$/.test(line))
-    .map((line) => Number(line.slice(1))))];
+function normalizedOpenPath(value) {
+  const withoutDeletedSuffix = value.replace(/ \(deleted\)$/, '');
+  if (!withoutDeletedSuffix.startsWith('/')) return null;
+  return resolve(withoutDeletedSuffix);
 }
 
-async function processHoldsDeletedPath(pid, path) {
-  const output = await lsofOutput(['-a', '-p', String(pid), '+L1', '-F', 'n']);
-  const expected = resolve(path);
-  return output.split('\n').some((line) => {
-    if (!line.startsWith('n')) return false;
-    const openPath = line.slice(1).replace(/ \(deleted\)$/, '');
-    return resolve(openPath) === expected;
-  });
+async function procFdPaths(pid) {
+  if (process.platform !== 'linux') return null;
+  let names;
+  try {
+    names = await readdir(`/proc/${pid}/fd`);
+  } catch (error) {
+    if (['ENOENT', 'EACCES', 'EPERM'].includes(error?.code)) return null;
+    throw error;
+  }
+  const paths = [];
+  for (const name of names) {
+    try {
+      const target = await readlink(`/proc/${pid}/fd/${name}`);
+      const normalized = normalizedOpenPath(target);
+      if (normalized) paths.push({ fd: name, path: normalized, linkCount: null });
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+  return paths;
+}
+
+async function lsofFdPaths(pid, deletedOnly) {
+  try {
+    const args = ['-a', '-p', String(pid)];
+    if (deletedOnly) args.push('+L1');
+    args.push('-F', 'fkn');
+    const output = await lsofOutput(args);
+    const records = [];
+    let current;
+    for (const line of output.split('\n')) {
+      if (line.startsWith('f')) {
+        if (current?.path) records.push(current);
+        current = { fd: line.slice(1), path: null, linkCount: null };
+      } else if (line.startsWith('k') && current) {
+        current.linkCount = Number(line.slice(1));
+      } else if (line.startsWith('n') && current) {
+        current.path = normalizedOpenPath(line.slice(1));
+      }
+    }
+    if (current?.path) records.push(current);
+    return records;
+  } catch (error) {
+    throw new Error(`FD observation unavailable for owned API pid ${pid}: ${error?.code || error?.message || 'unknown error'}`);
+  }
+}
+
+async function canonicalOpenPath(value) {
+  const absolute = resolve(value);
+  try {
+    return await realpath(absolute);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    try {
+      return join(await realpath(dirname(absolute)), basename(absolute));
+    } catch (parentError) {
+      if (parentError?.code !== 'ENOENT') throw parentError;
+      return absolute;
+    }
+  }
+}
+
+async function exactPathObservation(pid, path, { deletedOnly = false } = {}) {
+  const expected = await canonicalOpenPath(path);
+  const procRecords = await procFdPaths(pid);
+  const mechanism = procRecords === null ? 'lsof' : 'proc';
+  const observed = procRecords === null ? await lsofFdPaths(pid, deletedOnly) : procRecords;
+  for (const record of observed) {
+    if (await canonicalOpenPath(record.path) === expected) {
+      return { mechanism, pid, fd: record.fd, linkCount: record.linkCount, name: record.path };
+    }
+  }
+  return null;
 }
 
 function dataSourceOptions(ctx) {
@@ -158,6 +222,8 @@ export async function createMediaServicePair(ctx) {
 }
 
 export async function abortMultipartAfterTempCreated(ctx, actor) {
+  const apiPid = Number(ctx.apiPid);
+  if (!Number.isInteger(apiPid) || apiPid <= 0) throw new Error('owned API pid unavailable for multipart FD proof');
   const before = await mediaTempNames(ctx);
   const beforeSet = new Set(before);
   const boundary = `----ruleexam-abort-${Date.now().toString(16)}`;
@@ -190,25 +256,32 @@ export async function abortMultipartAfterTempCreated(ctx, actor) {
       return added.length === 1 ? added[0] : false;
     }, 'server-created multipart temporary file');
     exactPath = join(mediaTempDir(ctx), createdName);
-    ownerPids = await waitUntil(async () => {
-      const owners = await exactPathOwnerPids(exactPath);
-      return owners.length ? owners : false;
-    }, 'API open file descriptor for multipart temporary');
+    const fdObservation = await waitUntil(
+      () => exactPathObservation(apiPid, exactPath),
+      'owned API open file descriptor for multipart temporary',
+    );
+    ownerPids = [apiPid];
     req.destroy(new Error('intentional lifecycle test abort'));
     await Promise.race([
       closed,
       new Promise((_, reject) => setTimeout(() => reject(new Error('aborted HTTP client did not close')), 2_000)),
     ]);
     await waitUntil(async () => !(await mediaTempNames(ctx)).includes(createdName), 'aborted multipart temporary cleanup');
-    await waitUntil(async () => {
-      const held = await Promise.all(ownerPids.map((pid) => processHoldsDeletedPath(pid, exactPath)));
-      return held.every((value) => !value);
-    }, 'aborted multipart open file descriptor cleanup');
-    return { before, createdName, ownerPids };
+    await waitUntil(
+      async () => {
+        const lingering = await exactPathObservation(apiPid, exactPath, { deletedOnly: true });
+        if (!lingering) return true;
+        throw new Error(`pid=${lingering.pid} fd=${lingering.fd} nlink=${lingering.linkCount ?? 'unknown'} name=${lingering.name}`);
+      },
+      'aborted multipart open file descriptor cleanup',
+    );
+    return { before, createdName, ownerPids, fdObservation };
   } catch (error) {
     req.destroy();
-    await closed.catch(() => undefined);
-    if (createdName) await rm(join(mediaTempDir(ctx), createdName), { force: true }).catch(() => undefined);
+    await Promise.race([
+      closed,
+      new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000)),
+    ]);
     throw error;
   } finally {
     if (!req.destroyed) req.destroy();
