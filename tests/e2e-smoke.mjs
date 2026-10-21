@@ -531,6 +531,13 @@ async function main() {
   {
     const deny = await api('GET', '/ai/config', { token: state.tokens.regadmin });
     check('regulation_admin 读 AI 配置被拒（40301，缺少 ai_config:read）', deny.status === 403);
+    const denyWrite = await api('PUT', '/ai/config', {
+      token: state.tokens.regadmin,
+      body: { base_url: 'http://127.0.0.1:9/v1', api_key: 'legacy-config-denied', model: 'legacy-denied' },
+    });
+    check('regulation_admin 写 AI 配置被拒（40301，缺少 ai_config:write）', denyWrite.status === 403);
+    const denyTest = await api('POST', '/ai/config/test', { token: state.tokens.regadmin });
+    check('regulation_admin 测试 AI 配置被拒（40301，缺少 ai_config:write）', denyTest.status === 403);
     const save = await api('PUT', '/ai/config', {
       token: state.tokens.admin,
       body: { base_url: `http://127.0.0.1:${mockPort}/v1`, api_key: 'sk-mock-not-a-real-key', model: 'mock-model' },
