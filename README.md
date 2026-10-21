@@ -113,8 +113,11 @@ brew install poppler
 
 ```bash
 cd server && npm test                 # 核心算法单元测试（评分 / 乱序 / 心跳容差 / 位图）
-DB_PASSWORD=... node tests/run-e2e.mjs  # 端到端冒烟（自动重建测试库、随机密钥、Mock AI 服务）
+node tests/run-e2e.mjs --ephemeral --suite smoke  # 仓库根：自有临时 MySQL/Redis、随机密钥与 Mock AI
+node tests/run-e2e.mjs --ephemeral --suite all    # 注册套件逐个隔离执行，遇失败停止
 ```
+
+临时模式需要本机 MySQL/Redis 可执行文件。连接外部测试服务时仅运行单套件，必须显式注入 `DB_DATABASE=ruleexam_test_<suffix>` 与 `DB_PASSWORD`；启动器不会接受开发库默认值。不得读取凭据文件或把真实口令写入命令示例。
 
 ## 安全约束（实现遵循）
 

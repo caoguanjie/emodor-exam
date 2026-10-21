@@ -19,7 +19,8 @@
 cd server && npm run build        # tsc 构建到 dist/
 cd server && npm test             # vitest 单元测试（评分/乱序/心跳/位图）
 cd web && npm run dev             # Vite :5173，/api/v1 代理到 :3000
-DB_PASSWORD=... node tests/run-e2e.mjs   # 仓库根执行；自动重建测试库、密钥运行期随机、Mock AI
+node tests/run-e2e.mjs --ephemeral --suite smoke   # 仓库根：自有临时服务、密钥运行期随机、Mock AI
+node tests/run-e2e.mjs --ephemeral --suite all     # 注册套件逐个隔离；all 必须使用 ephemeral
 DB_PASSWORD=... ADMIN_INITIAL_PASSWORD=... node database/seed.mjs   # 种子：根部门 + admin（口令 ≥8 位且含字母+数字）
 # ---- GUI/本地联调回归环境（Mock AI :9101）----
 node tests/gui-test-env/mock-ai.mjs                                  # 启动 Mock AI
