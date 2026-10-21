@@ -36,7 +36,7 @@
     </el-dialog>
   </div>
 
-  <div v-else-if="paper" class="page-card paper-detail">
+  <div v-else-if="paper" class="page-card paper-detail" :class="{ 'paper-preview-open': previewVisible }">
     <div class="toolbar">
       <el-button text @click="router.push('/admin/papers')"><el-icon><ArrowLeft /></el-icon>返回</el-button>
       <el-divider direction="vertical" />
@@ -93,11 +93,11 @@
       <template #footer><el-button @click="candidateVisible = false">取消</el-button><el-button type="primary" @click="addCandidates">加入题单</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="previewVisible" :title="previewAnswers ? '答案版预览' : '试卷预览'" width="900px" class="paper-preview-dialog" @closed="closePreview">
+    <el-dialog v-model="previewVisible" :title="previewAnswers ? '答案版预览' : '试卷预览'" width="900px" class="paper-preview-dialog" modal-class="paper-preview-overlay" @closed="closePreview">
       <template v-if="preview">
         <el-alert :type="preview.mode === 'random' ? 'warning' : 'info'" :closable="false" :title="preview.note" style="margin-bottom:14px" />
         <el-alert v-if="previewResourcesFailed" type="error" :closable="false" title="部分题图加载或解码失败，已阻止打印。请重试题图后再打印。" style="margin-bottom:14px"><el-button size="small" @click="retryPreviewMedia">重试题图</el-button></el-alert>
-        <div v-if="preview.mode === 'random'" class="toolbar"><span>样例难度</span><el-radio-group v-model="previewDifficulty" @change="reloadPreview"><el-radio-button value="easy">初级</el-radio-button><el-radio-button value="hard">高级</el-radio-button></el-radio-group></div>
+        <div v-if="preview.mode === 'random'" class="toolbar preview-difficulty"><span>样例难度</span><el-radio-group v-model="previewDifficulty" @change="reloadPreview"><el-radio-button value="easy">初级</el-radio-button><el-radio-button value="hard">高级</el-radio-button></el-radio-group><span class="preview-difficulty-print">{{ difficultyLabel(previewDifficulty) }}</span></div>
         <el-table v-if="preview.capacities.length" :data="preview.capacities" size="small" style="margin-bottom:16px"><el-table-column label="难度" width="90"><template #default="{ row }">{{ difficultyLabel(row.difficulty) }}</template></el-table-column><el-table-column label="题型"><template #default="{ row }">{{ typeLabel(row.type) }}</template></el-table-column><el-table-column prop="required" label="需要考点数" /><el-table-column prop="available" label="可用考点数" /></el-table>
         <div v-for="(question, index) in preview.questions" :key="`${previewSession?.operation}:${previewRenderAttempt}:${question.question_version_id}`" class="preview-question">
           <div class="preview-title">{{ index + 1 }}.</div>
@@ -692,6 +692,7 @@ onMounted(async () => { if (legacyMode) await loadLegacy(); else { await loadTra
 .hint.inline { margin-left:8px; width:auto; }.hint.ok { color:var(--el-color-success); }.hint.danger { color:var(--el-color-danger); }
 .rules { width:100%; }.rule-row { display:grid; grid-template-columns:90px 120px 140px 60px 60px; align-items:center; gap:8px; margin-bottom:8px; }
 .candidate-pagination { display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
+.preview-difficulty-print { display:none; }
 .preview-question { padding:14px 0; border-bottom:1px solid var(--el-border-color-lighter); }.preview-title { font-weight:600; }.answer { margin-top:8px; padding:10px; background:var(--el-fill-color-light); color:var(--el-color-success); }
 :deep(.el-card) { border-radius:var(--re-radius); border:1px solid var(--re-border); box-shadow:var(--re-shadow-card); }
 </style>

@@ -232,4 +232,69 @@ body {
 
   .main { padding: 0 !important; }
   .page-enter { animation: none !important; }
+
+  .paper-detail.paper-preview-open {
+    padding: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+  }
+
+  .paper-detail.paper-preview-open > :not(.paper-preview-overlay) { display: none !important; }
+  .paper-detail.paper-preview-open > .el-overlay { display: none !important; }
+
+  .paper-detail.paper-preview-open > .paper-preview-overlay {
+    display: block !important;
+    position: static !important;
+    inset: auto !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: transparent !important;
+  }
+
+  .paper-preview-overlay .el-overlay-dialog {
+    display: block !important;
+    position: static !important;
+    inset: auto !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .paper-preview-overlay .paper-preview-dialog {
+    --el-dialog-width: 100% !important;
+    --el-dialog-margin-top: 0 !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+  }
+
+  .paper-preview-overlay .el-dialog__body {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .paper-preview-overlay .el-button,
+  .paper-preview-overlay .el-dialog__footer,
+  .paper-preview-overlay .el-dialog__headerbtn,
+  .paper-preview-overlay .preview-difficulty .el-radio-group { display: none !important; }
+
+  .paper-preview-overlay .preview-difficulty-print { display: inline !important; }
+  .paper-preview-overlay .preview-question {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
 }
