@@ -100,6 +100,21 @@ function fixtureMigration(id, text) {
   return parseMigrationText(id, text);
 }
 
+test('010 answer migration exposes stable probed steps without reinterpreting legacy rows', async () => {
+  const answers = await migration('010_answers');
+  assert.ok(answers);
+  assert.deepEqual(answers.steps.map((step) => step.id), [
+    'extend_exam_answer_draft',
+    'extend_exam_record_submission',
+    'copy_snapshot_item_identity',
+    'index_exam_answer_item',
+    'drop_legacy_record_question_index',
+    'restore_snapshot_source_identity',
+    'restore_legacy_record_question_index',
+    'mark_proven_legacy_finalized',
+  ]);
+});
+
 const correctMediaAssetFixture = `CREATE TABLE media_asset (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   owner_id BIGINT UNSIGNED NOT NULL,
@@ -133,6 +148,157 @@ const correctMediaReferenceFixture = `CREATE TABLE media_reference (
   KEY idx_media_reference_asset (asset_id),
   KEY idx_media_reference_owner (owner_type, owner_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`;
+
+test('010 upgrades completed C2 answers by record-scoped item identity without changing legacy collisions or scores', async () => {
+  const database = await createDatabase('answers_' + randomBytes(3).toString('hex'));
+  const c2Sql = execFileSync(
+    'git',
+    ['show', 'f2bc634498561077b9c1f8d435ea8fc3483e6c56:database/init.sql'],
+    { cwd: ROOT, encoding: 'utf8' },
+  );
+  await admin.query(renderSchemaForDatabase(c2Sql, database));
+  const conn = await connectionFor(database);
+  try {
+    await conn.query(
+      "INSERT INTO exam_assignment (id, paper_id, user_id, release_id, source, category_id, difficulty, rule_snapshot, snapshot_origin) VALUES (31, 11, 9, NULL, NULL, NULL, 'unknown', ?, 'legacy_start')",
+      [JSON.stringify({ totalCents: 10000, passCents: 6000, durationMinutes: 30, maxAttempts: 3, partialCreditRatio: 0.5, rules: [] })],
+    );
+    await conn.query(
+      "INSERT INTO exam_record (id, paper_id, regulation_id, user_id, assignment_id, active_assignment_id, release_id, source, category_id, difficulty, rule_snapshot, snapshot_origin, attempt_no, status, score, started_at, deadline_at, submitted_at, switch_count) VALUES (41, 11, 2, 9, 31, NULL, NULL, NULL, NULL, 'unknown', ?, 'legacy_start', 1, 'passed', 50.00, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), 0), (42, 12, 2, 10, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'legacy_unavailable', 1, 'failed', 0.00, UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), UTC_TIMESTAMP(3), 0)",
+      [JSON.stringify({ totalCents: 10000, passCents: 6000, durationMinutes: 30, maxAttempts: 3, partialCreditRatio: 0.5, rules: [] })],
+    );
+    await conn.query(
+      "INSERT INTO exam_record_question (id, record_id, question_id, question_version_id, type, difficulty, score_cents, position, display_to_original, snapshot_json) VALUES (500, 41, 501, NULL, 'single', 'unknown', 2500, 0, ?, ?), (501, 41, 500, NULL, 'single', 'unknown', 2500, 1, ?, ?)",
+      [
+        JSON.stringify([1, 0]), JSON.stringify({ questionId: '501', versionId: null, revision: 1, categoryId: null, difficulty: 'unknown', type: 'single', stem: 'frozen-501', options: [{ key: 'A', text: 'a' }, { key: 'B', text: 'b' }], answer: [1], analysis: null, rubric: null, scoreCents: 2500, source: 'manual', approvedBy: null, approvedAt: null }),
+        JSON.stringify([0, 1]), JSON.stringify({ questionId: '500', versionId: null, revision: 1, categoryId: null, difficulty: 'unknown', type: 'single', stem: 'frozen-500', options: [{ key: 'A', text: 'a' }, { key: 'B', text: 'b' }], answer: [0], analysis: null, rubric: null, scoreCents: 2500, source: 'manual', approvedBy: null, approvedAt: null }),
+      ],
+    );
+    await conn.query(
+      'INSERT INTO exam_answer (exam_record_id, question_id, selected, is_correct, gained_score) VALUES (41, 500, ?, 1, 25.00), (41, 501, ?, 1, 25.00), (42, 500, ?, 0, 0.00)',
+      [JSON.stringify([1]), JSON.stringify([0]), JSON.stringify([0])],
+    );
+
+    const answers = await migration('010_answers');
+    await assert.rejects(
+      () => applyMigrations({
+        connection: conn,
+        database,
+        migrations: [answers],
+        onCheckpoint: ({ event, migrationId, stepId }) => {
+          if (event === 'after-step-sql' && migrationId === answers.id && stepId === 'drop_legacy_record_question_index') {
+            throw new Error('injected failure after legacy index drop');
+          }
+        },
+      }),
+      /injected failure after legacy index drop/,
+    );
+    const [[droppedIndex]] = await conn.query(
+      "SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'exam_answer' AND INDEX_NAME = 'uk_record_question'",
+    );
+    assert.equal(Number(droppedIndex.count), 0);
+    const [[failedAfterDrop]] = await conn.query(
+      `SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = ?`,
+      [answers.id],
+    );
+    assert.equal(failedAfterDrop.status, 'failed');
+    assert.deepEqual(failedAfterDrop.progress, [
+      'extend_exam_answer_draft', 'extend_exam_record_submission',
+      'copy_snapshot_item_identity', 'index_exam_answer_item',
+    ]);
+    const [beforeRestore] = await conn.query(
+      'SELECT exam_record_id, question_id, record_question_id, selected, gained_score FROM exam_answer ORDER BY exam_record_id, id',
+    );
+    assert.deepEqual(beforeRestore.map((row) => ({
+      record: String(row.exam_record_id), question: String(row.question_id),
+      item: row.record_question_id === null ? null : String(row.record_question_id),
+      selected: typeof row.selected === 'string' ? JSON.parse(row.selected) : row.selected,
+      gained: Number(row.gained_score),
+    })), [
+      { record: '41', question: '500', item: '500', selected: [1], gained: 25 },
+      { record: '41', question: '501', item: '501', selected: [0], gained: 25 },
+      { record: '42', question: '500', item: null, selected: [0], gained: 0 },
+    ]);
+
+    await assert.rejects(
+      () => applyMigrations({
+        connection: conn,
+        database,
+        migrations: [answers],
+        onCheckpoint: ({ event, migrationId, stepId }) => {
+          if (event === 'after-step-sql' && migrationId === answers.id && stepId === 'restore_snapshot_source_identity') {
+            throw new Error('injected failure after source identity restore');
+          }
+        },
+      }),
+      /injected failure after source identity restore/,
+    );
+    const [[stillDroppedIndex]] = await conn.query(
+      "SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'exam_answer' AND INDEX_NAME = 'uk_record_question'",
+    );
+    assert.equal(Number(stillDroppedIndex.count), 0);
+    const [[failedAfterRestore]] = await conn.query(
+      `SELECT status, progress FROM \`${migrationTable}\` WHERE migration_id = ?`,
+      [answers.id],
+    );
+    assert.equal(failedAfterRestore.status, 'failed');
+    assert.deepEqual(failedAfterRestore.progress, [
+      'extend_exam_answer_draft', 'extend_exam_record_submission',
+      'copy_snapshot_item_identity', 'index_exam_answer_item',
+      'drop_legacy_record_question_index',
+    ]);
+
+    const applied = await applyMigrations({ connection: conn, database, migrations: [answers] });
+    assert.deepEqual(applied.applied, ['010_answers']);
+    const [rows] = await conn.query(
+      'SELECT exam_record_id, question_id, record_question_id, selected, gained_score FROM exam_answer ORDER BY exam_record_id, id',
+    );
+    assert.deepEqual(rows.map((row) => ({
+      record: String(row.exam_record_id), question: String(row.question_id),
+      item: row.record_question_id === null ? null : String(row.record_question_id),
+      selected: typeof row.selected === 'string' ? JSON.parse(row.selected) : row.selected,
+      gained: Number(row.gained_score),
+    })), [
+      { record: '41', question: '501', item: '500', selected: [1], gained: 25 },
+      { record: '41', question: '500', item: '501', selected: [0], gained: 25 },
+      { record: '42', question: '500', item: null, selected: [0], gained: 0 },
+    ]);
+    const [records] = await conn.query(
+      'SELECT id, grading_state, submission_method, graded_at, score FROM exam_record ORDER BY id',
+    );
+    assert.deepEqual(records.map((row) => ({
+      id: String(row.id), grading: row.grading_state, method: row.submission_method,
+      gradedAt: row.graded_at, score: Number(row.score),
+    })), [
+      { id: '41', grading: 'finalized', method: null, gradedAt: null, score: 50 },
+      { id: '42', grading: 'finalized', method: null, gradedAt: null, score: 0 },
+    ]);
+    const [answerIndexes] = await conn.query(
+      "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE, SUB_PART FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'exam_answer' AND INDEX_NAME IN ('uk_record_item','uk_record_question') ORDER BY INDEX_NAME, SEQ_IN_INDEX",
+    );
+    assert.deepEqual(answerIndexes.map((row) => ({
+      name: row.INDEX_NAME, unique: Number(row.NON_UNIQUE) === 0,
+      order: Number(row.SEQ_IN_INDEX), column: row.COLUMN_NAME,
+      type: row.INDEX_TYPE, prefix: row.SUB_PART,
+    })), [
+      { name: 'uk_record_item', unique: true, order: 1, column: 'exam_record_id', type: 'BTREE', prefix: null },
+      { name: 'uk_record_item', unique: true, order: 2, column: 'record_question_id', type: 'BTREE', prefix: null },
+      { name: 'uk_record_question', unique: true, order: 1, column: 'exam_record_id', type: 'BTREE', prefix: null },
+      { name: 'uk_record_question', unique: true, order: 2, column: 'question_id', type: 'BTREE', prefix: null },
+    ]);
+    const [[completed]] = await conn.query(
+      `SELECT status, progress, attempts FROM \`${migrationTable}\` WHERE migration_id = ?`,
+      [answers.id],
+    );
+    assert.equal(completed.status, 'applied');
+    assert.deepEqual(completed.progress, answers.steps.map((step) => step.id));
+    assert.ok(Number(completed.attempts) >= 3);
+    const repeated = await applyMigrations({ connection: conn, database, migrations: [answers] });
+    assert.deepEqual(repeated.applied, []);
+  } finally {
+    await conn.end();
+  }
+});
 
 test('active in-progress exam records block check and apply before registry writes', async () => {
   const database = await createDatabase();

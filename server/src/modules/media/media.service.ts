@@ -18,6 +18,7 @@ import {
   type ByteRange,
   type MediaLimits,
   type MediaPurpose,
+  type MediaUploadPurpose,
 } from './media-policy';
 import {
   MediaProbeService,
@@ -27,8 +28,6 @@ import {
 } from './media-probe.service';
 
 export type MediaId = string;
-export type MediaUploadPurpose = MediaPurpose;
-
 export type MediaUploadResult = {
   assetId: MediaId;
   status: 'processing' | 'ready' | 'failed';
@@ -241,9 +240,9 @@ export class MediaService {
     return hash.digest('hex');
   }
 
-  async upload(
+  private async uploadForPurpose(
     actorId: string | number,
-    purpose: MediaUploadPurpose,
+    purpose: MediaPurpose,
     file: Express.Multer.File,
     ownerId?: string | number,
   ): Promise<MediaUploadResult> {
@@ -307,6 +306,20 @@ export class MediaService {
     } finally {
       if (materialized.cleanup) await this.cleanupTempPath(materialized.path);
     }
+  }
+
+  async upload(
+    actorId: string | number,
+    purpose: MediaUploadPurpose,
+    file: Express.Multer.File,
+    ownerId?: string | number,
+  ): Promise<MediaUploadResult> {
+    return this.uploadForPurpose(actorId, purpose, file, ownerId);
+  }
+
+  /** Dedicated internal answer upload; the generic HTTP purpose remains closed. */
+  async uploadAnswer(actorId: string | number, file: Express.Multer.File): Promise<MediaUploadResult> {
+    return this.uploadForPurpose(actorId, 'answer', file, actorId);
   }
 
   private async findAsset(assetId: MediaId, manager?: EntityManager): Promise<MediaAsset> {

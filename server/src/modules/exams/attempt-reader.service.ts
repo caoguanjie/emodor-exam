@@ -1,9 +1,9 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Errors, ExamStatus } from '../../common/errors';
-import { RedisService } from '../../common/redis.service';
 import type { AnswerInput, AttemptQuestion, AttemptView, Id, RuleSnapshot } from '../../common/training-contracts';
+import { ExamAnswer } from '../../entities/exam-answer.entity';
 import { ExamRecord } from '../../entities/exam-record.entity';
 import { ExamRecordQuestion } from '../../entities/exam-record-question.entity';
 import { MediaService } from '../media/media.service';
@@ -53,8 +53,9 @@ export class AttemptReaderService implements OnModuleInit {
   constructor(
     @InjectRepository(ExamRecord) private readonly recordRepo: Repository<ExamRecord>,
     @InjectRepository(ExamRecordQuestion) private readonly itemRepo: Repository<ExamRecordQuestion>,
-    private readonly redis: RedisService,
+    @InjectRepository(ExamAnswer) private readonly answerRepo: Repository<ExamAnswer>,
     private readonly media: MediaService,
+    private readonly dataSource: DataSource,
   ) {}
 
   onModuleInit(): void {
@@ -94,50 +95,57 @@ export class AttemptReaderService implements OnModuleInit {
     }
   }
 
-  private async confirmedAnswers(recordId: string, items: ExamRecordQuestion[]): Promise<AnswerInput[]> {
-    let raw: Record<string, string> = {};
-    try {
-      raw = await this.redis.hgetall(`exam:answer:${recordId}`) || {};
-    } catch {
-      // deadline and snapshot remain authoritative if Redis is unavailable;
-      // C3 replaces this compatibility cache with persistent revisions.
-      return [];
-    }
+  private async confirmedAnswers(manager: EntityManager, recordId: string, items: ExamRecordQuestion[]): Promise<AnswerInput[]> {
+    const rows = await manager.getRepository(ExamAnswer).find({ where: { examRecordId: String(recordId) } });
     const allowed = new Set(items.map((item) => String(item.id)));
+    const itemMap = new Map(items.map((item) => [String(item.id), item]));
     const answers: AnswerInput[] = [];
-    for (const [itemId, value] of Object.entries(raw)) {
+    for (const row of rows) {
+      const itemId = row.recordQuestionId ? String(row.recordQuestionId) : '';
       if (!allowed.has(String(itemId))) continue;
-      try {
-        const selected = JSON.parse(value);
-        if (Array.isArray(selected)) answers.push({ item_id: String(itemId), selected: selected.map(Number) });
-      } catch { /* corrupt compatibility cache is treated as unanswered */ }
+      const item = itemMap.get(itemId);
+      const selected = Array.isArray(row.selected) && item
+        ? row.selected.map(Number).map((original) => item.displayToOriginal.indexOf(original))
+          .filter((display) => display >= 0).sort((left, right) => left - right)
+        : [];
+      const assetIds = Array.isArray(row.assetIds) ? row.assetIds.map(String) : [];
+      if (!selected.length && !assetIds.length) continue;
+      answers.push({
+        item_id: String(itemId),
+        ...(selected.length ? { selected } : {}),
+        ...(assetIds.length ? { asset_ids: assetIds } : {}),
+      });
     }
     return answers.sort((left, right) => BigInt(left.item_id) < BigInt(right.item_id) ? -1 : 1);
   }
 
   async forStudent(userId: Id, recordId: Id): Promise<AttemptView> {
-    const record = await this.recordRepo.findOne({ where: { id: String(recordId) } });
-    if (!record) throw Errors.notFound('考试记录不存在');
-    if (String(record.userId) !== String(userId)) throw Errors.dataForbidden();
-    if (record.status !== ExamStatus.IN_PROGRESS) throw Errors.submitConflict('考试已结束');
-    if (!record.assignmentId || !record.ruleSnapshot || !record.difficulty) {
-      throw Errors.notFound('本次个人题单不存在');
-    }
-    const items = await this.itemRepo.find({ where: { recordId: String(record.id) }, order: { position: 'ASC', id: 'ASC' } });
-    if (!items.length) throw Errors.notFound('本次个人题单不存在');
-    return {
-      record_id: String(record.id),
-      paper_id: String(record.paperId),
-      release_id: record.releaseId ? String(record.releaseId) : null,
-      source: record.source,
-      category_id: record.categoryId ? String(record.categoryId) : null,
-      difficulty: record.difficulty,
-      deadline_at: new Date(record.deadlineAt).toISOString(),
-      server_now: new Date().toISOString(),
-      draft_revision: 0,
-      questions: items.map(attemptQuestionView),
-      answers: await this.confirmedAnswers(String(record.id), items),
-    };
+    return this.dataSource.transaction('REPEATABLE READ', async (manager) => {
+      const record = await manager.getRepository(ExamRecord).findOne({ where: { id: String(recordId) } });
+      if (!record) throw Errors.notFound('考试记录不存在');
+      if (String(record.userId) !== String(userId)) throw Errors.dataForbidden();
+      if (record.status !== ExamStatus.IN_PROGRESS) throw Errors.submitConflict('考试已结束');
+      if (!record.assignmentId || !record.ruleSnapshot || !record.difficulty) {
+        throw Errors.notFound('本次个人题单不存在');
+      }
+      const items = await manager.getRepository(ExamRecordQuestion).find({
+        where: { recordId: String(record.id) }, order: { position: 'ASC', id: 'ASC' },
+      });
+      if (!items.length) throw Errors.notFound('本次个人题单不存在');
+      return {
+        record_id: String(record.id),
+        paper_id: String(record.paperId),
+        release_id: record.releaseId ? String(record.releaseId) : null,
+        source: record.source,
+        category_id: record.categoryId ? String(record.categoryId) : null,
+        difficulty: record.difficulty,
+        deadline_at: new Date(record.deadlineAt).toISOString(),
+        server_now: new Date().toISOString(),
+        draft_revision: Number(record.draftRevision || 0),
+        questions: items.map(attemptQuestionView),
+        answers: await this.confirmedAnswers(manager, String(record.id), items),
+      };
+    });
   }
 
   async forGrading(manager: EntityManager, recordId: Id): Promise<GradingSnapshot> {

@@ -44,6 +44,12 @@ test('training publishing suite is registered once in aggregate selection', () =
   assert.equal(resolveSuitePaths('all').filter((path) => path === expected).length, 1);
 });
 
+test('training submissions suite is registered once in aggregate selection', () => {
+  const expected = fileURLToPath(new URL('./training-submissions.mjs', import.meta.url));
+  assert.deepEqual(resolveSuitePaths('training-submissions'), [expected]);
+  assert.equal(resolveSuitePaths('all').filter((path) => path === expected).length, 1);
+});
+
 test('all is an aggregate selector and aliases deduplicate explicit module paths', () => {
   const registry = {
     smoke: SUITE_A,

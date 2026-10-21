@@ -72,11 +72,11 @@ describe('media lifecycle contracts', () => {
     const root = await mkdtemp(join(tmpdir(), 'ruleexam-media-lifecycle-'));
     roots.push(root);
     const media = serviceFor(root);
-    const result = await media.upload('7', 'answer', {
+    const result = await media.uploadAnswer('7', {
       buffer: Buffer.from('answer fixture'),
       originalname: 'answer.bin',
       mimetype: 'application/octet-stream',
-    } as any, '7');
+    } as any);
     expect(result.status).toBe('ready');
     expect(result.assetId).toBe('99');
     const tempEntries = await readdir(join(root, 'tmp', 'media'));

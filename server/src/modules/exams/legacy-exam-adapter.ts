@@ -204,7 +204,7 @@ export class LegacyExamAdapter {
       submitted_at: record.submittedAt,
       best_score: scores.length ? Math.max(...scores) : null,
       answer_summary: answers.map((answer) => ({
-        question_id: Number(itemToQuestionId.get(String(answer.questionId))),
+        question_id: Number(itemToQuestionId.get(String(answer.recordQuestionId))),
         is_correct: answer.isCorrect === null ? null : answer.isCorrect === 1,
         gained_score: Number(answer.gainedScore),
       })),
@@ -220,7 +220,7 @@ export class LegacyExamAdapter {
     if (record.status === ExamStatus.IN_PROGRESS) throw Errors.submitConflict('考试进行中，成绩明细交卷后可查');
     const snapshot = await this.reader.forGrading(this.dataSource.manager, String(record.id));
     const answers = await this.answerRepo.find({ where: { examRecordId: String(record.id) } });
-    const answerMap = new Map(answers.map((answer) => [String(answer.questionId), answer]));
+    const answerMap = new Map(answers.map((answer) => [String(answer.recordQuestionId), answer]));
     const finished = await this.recordRepo.find({ where: { paperId: record.paperId, userId: record.userId } });
     const scores = finished.filter((item) => item.status !== ExamStatus.IN_PROGRESS && item.score !== null).map((item) => Number(item.score));
     return {

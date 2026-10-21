@@ -426,6 +426,9 @@ export interface AttemptView {
 
 export interface FinalResultItem extends AttemptQuestion {
   answer: AnswerInput | null;
+  correct_answer: number[] | null;
+  analysis: string | null;
+  rubric: string | null;
   gained_score: number | null;
   comment: string | null;
   grading_version: number;
@@ -435,7 +438,8 @@ export interface FinalResult {
   record_id: Id;
   grading_state: GradeState;
   grading_revision: number;
-  submission_method: SubmissionMethod;
+  submission_method: SubmissionMethod | null;
+  legacy: boolean;
   submitted_at: string;
   graded_at: string | null;
   score: number | null;

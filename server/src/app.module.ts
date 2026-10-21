@@ -89,6 +89,9 @@ import { AttemptService } from './modules/exams/attempt.service';
 import { AttemptReaderService } from './modules/exams/attempt-reader.service';
 import { LegacyExamAdapter } from './modules/exams/legacy-exam-adapter';
 import { TrainingExamsController } from './modules/exams/training-exams.controller';
+import { AnswerMediaController } from './modules/exams/answer-media.controller';
+import { AnswerDraftService } from './modules/exams/answer-draft.service';
+import { SubmissionService } from './modules/exams/submission.service';
 import { ShuffleService } from './modules/exams/shuffle.service';
 import { GradingService } from './modules/exams/grading.service';
 import { PaperAdminController } from './modules/exams/paper-admin.controller';
@@ -137,7 +140,7 @@ const config = loadConfig();
   ],
   controllers: [
     AuthController, AccessController, DepartmentsController, UsersController, StudentsController, MeProfileController, CategoryController,
-    RegulationsController, AiController, LearningController, ExamsController, TrainingExamsController, PaperAdminController,
+    RegulationsController, AiController, LearningController, ExamsController, TrainingExamsController, AnswerMediaController, PaperAdminController,
     StatisticsController, HealthController,
     MediaController,
     CourseAdminController, LearnerHomeController, MyCoursesController,
@@ -150,7 +153,7 @@ const config = loadConfig();
     AuthService, CaptchaService, SessionService, AccessService, DepartmentService, UsersService, UserImportService, CategoryService, ImportBatchService,
     RegulationService, RegulationVersionService, RegulationScopeService, ParsePipelineService, ContentService,
     AiConfigService, AiGatewayService, PdfVisionService, QuestionGenerationService, QuestionReviewService, PaperService,
-    LearningSessionService, ExamService, AttemptService, AttemptReaderService, LegacyExamAdapter,
+    LearningSessionService, ExamService, AttemptService, AttemptReaderService, LegacyExamAdapter, AnswerDraftService, SubmissionService,
     ShuffleService, GradingService, PaperReleaseService, SamplingService, StatisticsService,
     RedisService, AuditService, TasksService,
     MediaService, MediaProbeService,
