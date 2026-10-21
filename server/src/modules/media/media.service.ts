@@ -46,7 +46,7 @@ export interface ContentDescriptor {
 
 export interface MediaOwnerPolicy {
   allowedPurposes: readonly MediaPurpose[];
-  authorizeRead: (actorId: MediaId, businessId: MediaId) => boolean | Promise<boolean>;
+  authorizeRead: (actorId: MediaId, businessId: MediaId, assetId?: MediaId) => boolean | Promise<boolean>;
   validateBinding?: (manager: EntityManager, asset: MediaAsset, businessId: MediaId) => void | Promise<void>;
 }
 
@@ -362,7 +362,7 @@ export class MediaService {
     for (const ref of refs) {
       const policy = this.ownerPolicies.get(ref.ownerType);
       if (!policy || !policy.allowedPurposes.includes(asset.purpose as MediaPurpose)) continue;
-      if (await policy.authorizeRead(actorId, String(ref.ownerId))) return true;
+      if (await policy.authorizeRead(actorId, String(ref.ownerId), String(asset.id))) return true;
     }
     return false;
   }

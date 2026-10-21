@@ -33,6 +33,8 @@ import { LearningRecord } from './entities/learning-record.entity';
 import { Question } from './entities/question.entity';
 import { ExamPaper } from './entities/exam-paper.entity';
 import { PaperQuestion } from './entities/paper-question.entity';
+import { PaperRelease } from './entities/paper-release.entity';
+import { PaperReleaseQuestion } from './entities/paper-release-question.entity';
 import { ExamRecord } from './entities/exam-record.entity';
 import { ExamAnswer } from './entities/exam-answer.entity';
 import { SchemaMigration } from './entities/schema-migration.entity';
@@ -83,6 +85,9 @@ import { ExamsController } from './modules/exams/exams.controller';
 import { ExamService } from './modules/exams/exam.service';
 import { ShuffleService } from './modules/exams/shuffle.service';
 import { GradingService } from './modules/exams/grading.service';
+import { PaperAdminController } from './modules/exams/paper-admin.controller';
+import { PaperReleaseService } from './modules/exams/paper-release.service';
+import { SamplingService } from './modules/exams/sampling.service';
 import { StatisticsController } from './modules/statistics/statistics.controller';
 import { StatisticsService } from './modules/statistics/statistics.service';
 import { HealthController } from './modules/health/health.controller';
@@ -111,7 +116,7 @@ const config = loadConfig();
     TypeOrmModule.forRoot(config.db),
     TypeOrmModule.forFeature([
       SysDepartment, SysUser, Regulation, RegulationVersion, RegulationScope,
-      LearningSession, LearningRecord, Question, ExamPaper, PaperQuestion, ExamRecord, ExamAnswer, SchemaMigration,
+      LearningSession, LearningRecord, Question, ExamPaper, PaperQuestion, PaperRelease, PaperReleaseQuestion, ExamRecord, ExamAnswer, SchemaMigration,
       TrainingCategory, ImportBatch,
       SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
       MediaAsset, MediaReference,
@@ -125,7 +130,7 @@ const config = loadConfig();
   ],
   controllers: [
     AuthController, AccessController, DepartmentsController, UsersController, StudentsController, MeProfileController, CategoryController,
-    RegulationsController, AiController, LearningController, ExamsController,
+    RegulationsController, AiController, LearningController, ExamsController, PaperAdminController,
     StatisticsController, HealthController,
     MediaController,
     CourseAdminController, LearnerHomeController, MyCoursesController,
@@ -138,7 +143,7 @@ const config = loadConfig();
     AuthService, CaptchaService, SessionService, AccessService, DepartmentService, UsersService, UserImportService, CategoryService, ImportBatchService,
     RegulationService, RegulationVersionService, RegulationScopeService, ParsePipelineService, ContentService,
     AiConfigService, AiGatewayService, PdfVisionService, QuestionGenerationService, QuestionReviewService, PaperService,
-    LearningSessionService, ExamService, ShuffleService, GradingService, StatisticsService,
+    LearningSessionService, ExamService, ShuffleService, GradingService, PaperReleaseService, SamplingService, StatisticsService,
     RedisService, AuditService, TasksService,
     MediaService, MediaProbeService,
     CourseService, LessonVersionService,

@@ -34,10 +34,52 @@ export type QuestionVersionSnapshot = Readonly<QuestionDraft & {
   approvedAt: string | null;
 }>;
 
+type RandomDraftMediaResolver = (
+  versionId: string,
+  categoryId: string | null,
+) => Promise<QuestionVersionSnapshot | null>;
+
 const QUESTION_VERSION_MEDIA_OWNER = 'question_version';
+
+type QuestionMediaFields = {
+  stem?: unknown;
+  options?: unknown;
+  analysis?: unknown;
+  rubric?: unknown;
+};
+
+function questionMediaField(fields: QuestionMediaFields, assetId: string): 'prompt' | 'answer' | null {
+  const optionTexts = Array.isArray(fields.options)
+    ? fields.options.flatMap((option) => (
+        option && typeof option === 'object' && typeof (option as { text?: unknown }).text === 'string'
+          ? [(option as { text: string }).text]
+          : []
+      ))
+    : [];
+  const promptIds = controlledQuestionMediaIds([
+    typeof fields.stem === 'string' ? fields.stem : null,
+    ...optionTexts,
+  ]);
+  if (promptIds.includes(assetId)) return 'prompt';
+  const answerIds = controlledQuestionMediaIds([
+    typeof fields.analysis === 'string' ? fields.analysis : null,
+    typeof fields.rubric === 'string' ? fields.rubric : null,
+  ]);
+  return answerIds.includes(assetId) ? 'answer' : null;
+}
+
+function releaseMediaFields(value: unknown): QuestionMediaFields | null {
+  let parsed = value;
+  if (typeof value === 'string') {
+    try { parsed = JSON.parse(value); } catch { return null; }
+  }
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as QuestionMediaFields : null;
+}
 
 @Injectable()
 export class QuestionVersionService implements OnModuleInit {
+  private randomDraftMediaResolver?: RandomDraftMediaResolver;
+
   constructor(
     @InjectRepository(Question) private readonly questionRepo: Repository<Question>,
     @InjectRepository(QuestionVersion) private readonly versionRepo: Repository<QuestionVersion>,
@@ -53,12 +95,62 @@ export class QuestionVersionService implements OnModuleInit {
   onModuleInit(): void {
     this.media.registerOwnerPolicy(QUESTION_VERSION_MEDIA_OWNER, {
       allowedPurposes: ['question'],
-      authorizeRead: async (actorId) => (await this.access.permissions(actorId)).includes('questions:read'),
+      authorizeRead: (actorId, versionId, assetId) => this.canReadQuestionVersionMedia(actorId, versionId, assetId),
       validateBinding: async (manager, _asset, businessId) => {
         const exists = await manager.getRepository(QuestionVersion).findOne({ where: { id: String(businessId) } });
         if (!exists) throw Errors.notFound('题目版本不存在');
       },
     });
+  }
+
+  registerRandomDraftMediaResolver(resolver: RandomDraftMediaResolver): void {
+    if (this.randomDraftMediaResolver) throw Errors.internal('随机草稿媒体解析器重复注册');
+    this.randomDraftMediaResolver = resolver;
+  }
+
+  private async canReadQuestionVersionMedia(actorId: string, versionId: string, assetId?: string): Promise<boolean> {
+    const permissions = await this.access.permissions(actorId);
+    if (permissions.includes('questions:read')) return true;
+    if (!assetId || !permissions.includes('papers:read')) return false;
+    const includeAnswers = permissions.includes('papers:export') || permissions.includes('questions:export');
+    const exactVersionId = String(versionId);
+    const exactAssetId = String(assetId);
+
+    const version = await this.versionRepo.findOne({ where: { id: exactVersionId } });
+    const draftField = version ? questionMediaField(version, exactAssetId) : null;
+    if (draftField === 'prompt' || (draftField === 'answer' && includeAnswers)) {
+      const draftRows = await this.dataSource.query(
+        `SELECT 1 AS readable
+         FROM paper_question pq
+         INNER JOIN exam_paper paper ON paper.id = pq.paper_id
+         WHERE pq.question_version_id = ? AND paper.mode = 'fixed' AND paper.status = 'draft'
+         LIMIT 1`,
+        [exactVersionId],
+      );
+      if (draftRows.length) return true;
+    }
+
+    const releaseRows = await this.dataSource.query(
+      `SELECT release_question.snapshot_json
+       FROM paper_release_question release_question
+       INNER JOIN paper_release release_row ON release_row.id = release_question.release_id
+       INNER JOIN exam_paper paper ON paper.id = release_row.paper_id
+       WHERE release_question.question_version_id = ?`,
+      [exactVersionId],
+    );
+    const releaseAuthorized = releaseRows.some((row: { snapshot_json?: unknown }) => {
+      const fields = releaseMediaFields(row.snapshot_json);
+      if (!fields) return false;
+      const releaseField = questionMediaField(fields, exactAssetId);
+      return releaseField === 'prompt' || (releaseField === 'answer' && includeAnswers);
+    });
+    if (releaseAuthorized || !version || !this.randomDraftMediaResolver) return releaseAuthorized;
+
+    const categoryId = version.categoryId == null ? null : String(version.categoryId);
+    const candidate = await this.randomDraftMediaResolver(exactVersionId, categoryId);
+    if (!candidate || String(candidate.versionId) !== exactVersionId || String(candidate.categoryId) !== categoryId) return false;
+    const randomField = questionMediaField(candidate, exactAssetId);
+    return randomField === 'prompt' || (randomField === 'answer' && includeAnswers);
   }
 
   private async assertSource(draft: ValidatedQuestionDraft, manager?: EntityManager): Promise<void> {
@@ -366,6 +458,48 @@ export class QuestionVersionService implements OnModuleInit {
     });
   }
 
+  /**
+   * Resolve the exact current approved revision while the caller owns the
+   * publication transaction. Legacy questions are captured as current facts;
+   * no category, difficulty, or historic approval metadata is synthesized.
+   */
+  async currentOrCaptureForRelease(
+    manager: EntityManager,
+    questionId: string,
+    expectedVersionId?: string | null,
+  ): Promise<QuestionVersion> {
+    const questionRepo = manager.getRepository(Question);
+    const versionRepo = manager.getRepository(QuestionVersion);
+    const question = await questionRepo.findOne({
+      where: { id: String(questionId) },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!question) throw Errors.notFound('题目不存在');
+    if (question.status !== 'approved') {
+      throw Errors.paperReleaseConflict(`题目 ${questionId} 已不是当前审核通过版本，请重新选题`);
+    }
+    if (expectedVersionId && String(question.currentVersionId || '') !== String(expectedVersionId)) {
+      throw Errors.paperReleaseConflict(`题目 ${questionId} 的已选版本已过期，请重新选题`);
+    }
+
+    let version: QuestionVersion;
+    if (question.currentVersionId) {
+      const found = await versionRepo.findOne({ where: { id: String(question.currentVersionId) } });
+      if (!found || String(found.questionId) !== String(question.id) || found.status !== 'approved') {
+        throw Errors.paperReleaseConflict(`题目 ${questionId} 已不是当前审核通过版本，请重新选题`);
+      }
+      version = found;
+    } else {
+      if (expectedVersionId) {
+        throw Errors.paperReleaseConflict(`题目 ${questionId} 的已选版本已过期，请重新选题`);
+      }
+      version = await this.captureLegacy(manager, question);
+      question.currentVersionId = version.id;
+      await questionRepo.save(question);
+    }
+    return version;
+  }
+
   async approve(versionId: string, actorId: string): Promise<void> {
     await this.dataSource.transaction(async (manager) => {
       const versionRepo = manager.getRepository(QuestionVersion);
@@ -471,9 +605,11 @@ export class QuestionVersionService implements OnModuleInit {
     });
   }
 
-  async approvedCandidates(filter: CandidateFilter): Promise<QuestionVersionSnapshot[]> {
-    await this.categories.assertActive(String(filter.categoryId));
-    const qb = this.versionRepo.createQueryBuilder('version')
+  async approvedCandidates(filter: CandidateFilter, manager?: EntityManager): Promise<QuestionVersionSnapshot[]> {
+    if (manager) await this.categories.lockActive(manager, String(filter.categoryId));
+    else await this.categories.assertActive(String(filter.categoryId));
+    const repo = manager ? manager.getRepository(QuestionVersion) : this.versionRepo;
+    const qb = repo.createQueryBuilder('version')
       .innerJoin(Question, 'question', 'question.current_version_id = version.id')
       .where('version.status = :status', { status: 'approved' })
       .andWhere('version.category_id = :categoryId', { categoryId: String(filter.categoryId) })

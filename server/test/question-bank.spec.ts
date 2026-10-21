@@ -8,6 +8,8 @@ import { QuestionConceptService } from '../src/modules/questions/question-concep
 import { Question } from '../src/entities/question.entity';
 import { QuestionVersion } from '../src/entities/question-version.entity';
 import { QuestionConcept } from '../src/entities/question-concept.entity';
+import { ExamPaper } from '../src/entities/exam-paper.entity';
+import { PaperQuestion } from '../src/entities/paper-question.entity';
 import { QuestionReviewService } from '../src/modules/ai/question-review.service';
 import { QuestionGenerationService } from '../src/modules/ai/question-generation.service';
 import { PaperService } from '../src/modules/ai/paper.service';
@@ -169,6 +171,34 @@ function versionServiceFixture() {
   return { service, question, versions };
 }
 
+function questionMediaPolicyFixture(input: {
+  permissions: (actorId: string) => string[];
+  version: Record<string, unknown> | null;
+  draftReferenced?: boolean;
+  releaseSnapshots?: Array<Record<string, unknown>>;
+  randomCandidate?: Record<string, unknown> | null;
+}) {
+  let policy: any;
+  const query = vi.fn(async (sql: string) => {
+    if (sql.includes('paper_question')) return input.draftReferenced ? [{ readable: 1 }] : [];
+    if (sql.includes('paper_release_question')) {
+      return (input.releaseSnapshots || []).map((snapshot_json) => ({ snapshot_json }));
+    }
+    throw new Error(`unexpected media authorization query: ${sql}`);
+  });
+  const service = Object.create(QuestionVersionService.prototype) as QuestionVersionService & Record<string, any>;
+  Object.assign(service, {
+    media: { registerOwnerPolicy: vi.fn((_ownerType: string, value: any) => { policy = value; }) },
+    access: { permissions: vi.fn(async (actorId: string) => input.permissions(actorId)) },
+    versionRepo: { findOne: vi.fn(async () => input.version) },
+    dataSource: { query },
+  });
+  service.onModuleInit();
+  const randomResolver = vi.fn(async () => input.randomCandidate || null);
+  if ('randomCandidate' in input) service.registerRandomDraftMediaResolver(randomResolver);
+  return { service, policy, query, randomResolver };
+}
+
 describe('versioned question bank', () => {
   it('sanitizes malicious legacy rich text at the response boundary without rewriting storage', async () => {
     const service = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
@@ -291,6 +321,112 @@ describe('versioned question bank', () => {
     expect(nextId).toBe('100');
     expect((service as any).media.assertUsable).not.toHaveBeenCalled();
     expect((service as any).media.bind).toHaveBeenCalledWith(expect.anything(), '42', 'question_version', '100');
+  });
+
+  it('lets a paper reader load only prompt assets from an exact fixed draft reference', async () => {
+    const { policy } = questionMediaPolicyFixture({
+      permissions: () => ['papers:read'],
+      draftReferenced: true,
+      version: {
+        id: '701', stem: '<p><img data-media-id="11"></p>',
+        options: [{ key: 'A', text: '<img data-media-id="12">' }],
+        analysis: '<p><img data-media-id="13"></p>',
+        rubric: '<p><img data-media-id="14"></p>',
+      },
+    });
+
+    await expect(policy.authorizeRead('8', '701', '11')).resolves.toBe(true);
+    await expect(policy.authorizeRead('8', '701', '12')).resolves.toBe(true);
+    await expect(policy.authorizeRead('8', '701', '13')).resolves.toBe(false);
+    await expect(policy.authorizeRead('8', '701', '14')).resolves.toBe(false);
+    await expect(policy.authorizeRead('8', '701', '99')).resolves.toBe(false);
+  });
+
+  it('uses an immutable release snapshot for historical field authorization and accepts either export permission for answer-only assets', async () => {
+    const { policy } = questionMediaPolicyFixture({
+      permissions: (actorId) => actorId === 'exporter'
+        ? ['papers:export', 'papers:read']
+        : actorId === 'question-exporter' ? ['questions:export', 'papers:read']
+          : actorId === 'question-export-only' ? ['questions:export']
+        : actorId === 'reader' ? ['papers:read'] : [],
+      version: {
+        id: '701', stem: '<p><img data-media-id="91"></p>', options: [], analysis: null, rubric: null,
+      },
+      releaseSnapshots: [{
+        versionId: '701', stem: '<p><img data-media-id="21"></p>',
+        options: [{ key: 'A', text: '<img data-media-id="22">' }],
+        analysis: '<p><img data-media-id="23"></p>',
+        rubric: '<p><img data-media-id="24"></p>',
+      }],
+    });
+
+    await expect(policy.authorizeRead('reader', '701', '21')).resolves.toBe(true);
+    await expect(policy.authorizeRead('reader', '701', '23')).resolves.toBe(false);
+    await expect(policy.authorizeRead('exporter', '701', '23')).resolves.toBe(true);
+    await expect(policy.authorizeRead('exporter', '701', '24')).resolves.toBe(true);
+    await expect(policy.authorizeRead('question-exporter', '701', '23')).resolves.toBe(true);
+    await expect(policy.authorizeRead('question-exporter', '701', '24')).resolves.toBe(true);
+    await expect(policy.authorizeRead('question-export-only', '701', '23')).resolves.toBe(false);
+    await expect(policy.authorizeRead('exporter', '701', '91')).resolves.toBe(false);
+    await expect(policy.authorizeRead('none', '701', '21')).resolves.toBe(false);
+  });
+
+  it('authorizes exact fields from a validated random-draft candidate without a stored paper reference', async () => {
+    const { policy, query, randomResolver } = questionMediaPolicyFixture({
+      permissions: (actorId) => actorId === 'question-exporter'
+        ? ['papers:read', 'questions:export']
+        : ['papers:read'],
+      version: {
+        id: '801', categoryId: '7', stem: '<p>current</p>', options: [], analysis: null, rubric: null,
+      },
+      randomCandidate: {
+        versionId: '801', categoryId: '7', stem: '<p><img data-media-id="31"></p>',
+        options: [{ key: 'A', text: '<img data-media-id="32">' }],
+        analysis: '<p><img data-media-id="33"></p>', rubric: '<p><img data-media-id="34"></p>',
+      },
+    });
+
+    await expect(policy.authorizeRead('reader', '801', '31')).resolves.toBe(true);
+    await expect(policy.authorizeRead('reader', '801', '32')).resolves.toBe(true);
+    await expect(policy.authorizeRead('reader', '801', '33')).resolves.toBe(false);
+    await expect(policy.authorizeRead('question-exporter', '801', '33')).resolves.toBe(true);
+    await expect(policy.authorizeRead('question-exporter', '801', '34')).resolves.toBe(true);
+    await expect(policy.authorizeRead('question-exporter', '801', '99')).resolves.toBe(false);
+
+    expect(randomResolver).toHaveBeenCalledWith('801', '7');
+    expect(query).toHaveBeenCalledTimes(6);
+    expect(query.mock.calls.every(([sql]) => String(sql).includes('paper_release_question'))).toBe(true);
+  });
+
+  it('refuses duplicate random-draft media resolver registration', () => {
+    const { service } = questionMediaPolicyFixture({
+      permissions: () => [],
+      version: null,
+      randomCandidate: null,
+    });
+
+    expect(() => service.registerRandomDraftMediaResolver(async () => null)).toThrow(/重复注册/);
+  });
+
+  it('denies an unreferenced random-version asset when no resolver was registered', async () => {
+    const { policy } = questionMediaPolicyFixture({
+      permissions: () => ['papers:read'],
+      version: {
+        id: '802', categoryId: '7', stem: '<p><img data-media-id="41"></p>', options: [], analysis: null, rubric: null,
+      },
+    });
+
+    await expect(policy.authorizeRead('reader', '802', '41')).resolves.toBe(false);
+  });
+
+  it('preserves the existing question-reader owner policy without requiring an asset argument', async () => {
+    const { policy, query } = questionMediaPolicyFixture({
+      permissions: () => ['questions:read'],
+      version: null,
+    });
+
+    await expect(policy.authorizeRead('question-reader', '701')).resolves.toBe(true);
+    expect(query).not.toHaveBeenCalled();
   });
 
   it('returns only immutable current approved candidates for the exact pool dimensions', async () => {
@@ -746,7 +882,18 @@ describe('versioned question bank', () => {
         return builder;
       }),
     };
-    paperService.dataSource = { transaction: vi.fn(async () => undefined) };
+    paperService.dataSource = { transaction: vi.fn(async (work: (manager: any) => Promise<unknown>) => work({
+      getRepository(entity: unknown) {
+        if (entity === ExamPaper) return paperService.paperRepo;
+        if (entity === Question) return paperService.questionRepo;
+        if (entity === PaperQuestion) return {
+          ...paperService.pqRepo,
+          delete: vi.fn(),
+          save: vi.fn(),
+        };
+        throw new Error(`unexpected repository ${(entity as any)?.name}`);
+      },
+    })) };
     paperService.audit = { log: vi.fn() };
     paperService.detail = vi.fn(async () => ({}));
 

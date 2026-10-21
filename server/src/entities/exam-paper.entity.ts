@@ -1,12 +1,36 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
 @Entity('exam_paper')
+@Index('idx_regulation_status', ['regulationId', 'status'])
+@Index('idx_paper_training_pool', ['categoryId', 'businessScope', 'mode', 'status'])
 export class ExamPaper {
-  @PrimaryGeneratedColumn({ type: 'bigint' })
+  @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })
   id: string;
 
-  @Column({ name: 'regulation_id', type: 'bigint' })
-  regulationId: string;
+  @Column({ name: 'regulation_id', type: 'bigint', unsigned: true, nullable: true })
+  regulationId: string | null;
+
+  /** regulation keeps the original fixed-paper contract; training uses releases. */
+  @Column({ name: 'business_scope', type: 'varchar', length: 16, default: 'regulation' })
+  businessScope: string;
+
+  @Column({ type: 'varchar', length: 16, default: 'fixed' })
+  mode: string;
+
+  @Column({ name: 'category_id', type: 'bigint', unsigned: true, nullable: true })
+  categoryId: string | null;
+
+  @Column({ name: 'requires_learning', type: 'tinyint', unsigned: true, default: 1 })
+  requiresLearning: number;
+
+  @Column({ name: 'regulation_ids', type: 'json', nullable: true })
+  regulationIds: string[] | null;
+
+  @Column({ name: 'course_ids', type: 'json', nullable: true })
+  courseIds: string[] | null;
+
+  @Column({ name: 'rule_config', type: 'json', nullable: true })
+  ruleConfig: import('../common/training-contracts').RuleSnapshot | null;
 
   @Column({ type: 'varchar', length: 128 })
   title: string;
@@ -30,7 +54,7 @@ export class ExamPaper {
   @Column({ name: 'partial_credit_ratio', type: 'decimal', precision: 4, scale: 2, default: 0.5 })
   partialCreditRatio: string;
 
-  /** draft / published / archived */
+  /** draft / published / withdrawn / archived */
   @Column({ type: 'varchar', length: 16, default: 'draft' })
   status: string;
 

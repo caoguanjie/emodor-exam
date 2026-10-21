@@ -356,6 +356,18 @@ export class AiController {
     return this.papers.publish(id, { id: user.id, name: user.username }, req.ip || null);
   }
 
+  @Post('papers/:id/copy')
+  @Roles(...REG_ADMIN)
+  async copyPaper(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    assertRequestKeys(body, [], '试卷复制请求');
+    return this.papers.copy(id, { id: user.id, name: user.username }, req.ip || null);
+  }
+
   @Post('papers/:id/archive')
   @Roles(...REG_ADMIN)
   async archivePaper(@Param('id') id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {

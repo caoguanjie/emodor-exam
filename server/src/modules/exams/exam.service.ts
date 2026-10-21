@@ -104,6 +104,7 @@ export class ExamService {
     const validRegs = new Set(learningRecords.filter((lr) => lr.isValid === 1).map((lr) => lr.regulationId));
     const result: Record<string, unknown>[] = [];
     for (const p of papers) {
+      if (!p.regulationId || p.businessScope === 'training') continue;
       const reg = regMap.get(p.regulationId);
       if (!reg) continue;
       const records = recordsByPaper.get(p.id) || [];
@@ -207,8 +208,15 @@ export class ExamService {
 
     const paper = await this.paperRepo.findOne({ where: { id: paperId } });
     if (!paper) throw Errors.notFound('试卷不存在');
+    // C1 only publishes immutable training releases. Personal question sheets
+    // and the learner start flow are introduced by C2, so never let a new
+    // training paper fall through the legacy regulation/learning path.
+    if (paper.businessScope === 'training' || !paper.regulationId) {
+      throw Errors.contentInvisible('培训考试开考链路尚未开放');
+    }
+    const legacyRegulationId = paper.regulationId;
     // ① 制度 published（+ 范围校验）
-    const regulation = await this.regRepo.findOne({ where: { id: paper.regulationId } });
+    const regulation = await this.regRepo.findOne({ where: { id: legacyRegulationId } });
     if (!regulation || regulation.status !== RegulationStatus.PUBLISHED) {
       throw Errors.contentInvisible('制度未发布或已归档');
     }
@@ -265,7 +273,7 @@ export class ExamService {
           // uk_paper_user_attempt 兜底并发开考：existing/attempt_no 在锁外读取，锁外快照可能过期（撞键时下方兜底）
           const entity = repo.create({
             paperId: paper.id,
-            regulationId: paper.regulationId, // regulation_id 冗余快照（03 册 3.4.4）
+            regulationId: legacyRegulationId, // regulation_id 冗余快照（03 册 3.4.4）
             userId: String(userId),
             attemptNo,
             status: ExamStatus.IN_PROGRESS,

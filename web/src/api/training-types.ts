@@ -295,6 +295,113 @@ export interface QuestionConcept {
   name: string;
 }
 
+export type PaperMode = 'fixed' | 'random';
+export type TrainingPaperStatus = 'draft' | 'published' | 'withdrawn' | 'archived';
+
+export interface PaperRuleInput {
+  type: QuestionType;
+  count: number;
+  score_cents: number;
+}
+
+export interface TrainingPaperSummary {
+  id: Id;
+  title: string;
+  business_scope: 'training';
+  mode: PaperMode;
+  category_id: Id;
+  requires_learning: boolean;
+  regulation_ids: Id[];
+  course_ids: Id[];
+  rules: PaperRuleInput[];
+  total_score: number;
+  pass_score: number;
+  duration_minutes: number;
+  max_attempts: number;
+  partial_credit_ratio: number;
+  status: TrainingPaperStatus;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TrainingPaperQuestion {
+  paper_question_id?: Id;
+  question_id: Id;
+  question_version_id: Id;
+  sort: number;
+  score_cents: number;
+  type: QuestionType;
+  difficulty: Difficulty;
+  concept_id: Id | null;
+  regulation_id: Id | null;
+  stem: string;
+  options: QuestionOption[];
+  status?: string;
+  source?: QuestionSource;
+}
+
+export interface TrainingPaperDetail extends TrainingPaperSummary {
+  latest_release_id: Id | null;
+  sum_score_cents: number;
+  questions: TrainingPaperQuestion[];
+}
+
+export interface PaperPreviewQuestion {
+  question_id: Id;
+  question_version_id: Id;
+  type: QuestionType;
+  difficulty: Difficulty;
+  concept_id: Id | null;
+  regulation_id: Id | null;
+  stem: string;
+  options: QuestionOption[];
+  score: number;
+  answer?: number[];
+  analysis?: string | null;
+  rubric?: string | null;
+}
+
+export interface PaperPreview {
+  paper_id: Id;
+  release_id: Id | null;
+  mode: PaperMode;
+  sample_kind: 'fixed_paper' | 'random_example';
+  note: string;
+  difficulty: Difficulty | null;
+  rule: {
+    total_cents: 10000;
+    pass_cents: number;
+    duration_minutes: number;
+    max_attempts: number;
+    partial_credit_ratio: number;
+    rules: PaperRuleInput[];
+  };
+  capacities: Array<{ difficulty: 'easy' | 'hard'; type: QuestionType; required: number; available: number }>;
+  questions: PaperPreviewQuestion[];
+}
+
+export interface LegacyPaperDetailView {
+  id: number;
+  regulation_id: string | number;
+  title: string;
+  status: 'draft' | 'published' | 'archived';
+  pass_score: number;
+  duration_minutes: number;
+  max_attempts: number;
+  partial_credit_ratio: number;
+  release_id: string | null;
+  rules_locked: boolean;
+  questions: Array<{
+    question_id: string | number;
+    type: string;
+    stem: string;
+    score: number;
+    sort: number;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+}
+
 export interface AttemptQuestion {
   item_id: Id;
   type: QuestionType;

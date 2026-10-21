@@ -8,6 +8,8 @@ import { Regulation } from '../../entities/regulation.entity';
 import { Question } from '../../entities/question.entity';
 import { QuestionConcept } from '../../entities/question-concept.entity';
 import { QuestionVersion } from '../../entities/question-version.entity';
+import { ExamPaper } from '../../entities/exam-paper.entity';
+import { PaperRelease } from '../../entities/paper-release.entity';
 import { Errors } from '../../common/errors';
 import { AuditService } from '../../common/audit.service';
 
@@ -146,16 +148,18 @@ export class CategoryService {
   async remove(id: string, actor: CategoryActor, ip: string | null) {
     await this.categoryRepo.manager.transaction(async (manager) => {
       const category = await this.lockExisting(manager, id);
-      const [users, courses, regulations, questions, concepts, versions] = await Promise.all([
+      const [users, courses, regulations, questions, concepts, versions, papers, releases] = await Promise.all([
         manager.getRepository(SysUser).count({ where: { categoryId: String(id) } }),
         manager.getRepository(TrainingCourse).count({ where: { categoryId: String(id) } }),
         manager.getRepository(Regulation).count({ where: { categoryId: String(id) } }),
         manager.getRepository(Question).count({ where: { categoryId: String(id) } }),
         manager.getRepository(QuestionConcept).count({ where: { categoryId: String(id) } }),
         manager.getRepository(QuestionVersion).count({ where: { categoryId: String(id) } }),
+        manager.getRepository(ExamPaper).count({ where: { categoryId: String(id) } }),
+        manager.getRepository(PaperRelease).count({ where: { categoryId: String(id) } }),
       ]);
-      if (users + courses + regulations + questions + concepts + versions > 0) {
-        throw Errors.categoryInactive('培训类别已被学员、课程、制度、题目或考点引用，不能删除');
+      if (users + courses + regulations + questions + concepts + versions + papers + releases > 0) {
+        throw Errors.categoryInactive('培训类别已被学员、课程、制度、题目、考点或试卷引用，不能删除');
       }
       await manager.getRepository(TrainingCategory).remove(category);
     });
