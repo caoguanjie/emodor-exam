@@ -135,12 +135,12 @@ function triggerFile(root, file) {
   handler({ target: { files: [file] } });
 }
 
-function waitFor(predicate, timeoutMs = 1800) {
+function waitFor(predicate, timeoutMs = 1800, label = 'component state') {
   const started = Date.now();
   return new Promise((resolvePromise, reject) => {
     const check = () => {
       if (predicate()) return resolvePromise();
-      if (Date.now() - started >= timeoutMs) return reject(new Error('timed out waiting for component state'));
+      if (Date.now() - started >= timeoutMs) return reject(new Error(`timed out waiting for ${label}`));
       setTimeout(check, 10);
     };
     check();
@@ -153,25 +153,27 @@ function deferred() {
   return { promise, resolve: resolvePromise };
 }
 
-async function mountComponent({ ownerId = 'owner-100', purpose = 'avatar', updates = [], uploaded = [] } = {}) {
+async function mountComponent({ ownerId = 'owner-100', purpose = 'avatar', assetId = null, updates = [], uploaded = [], statuses = [] } = {}) {
   const host = createHost();
   const root = { type: 'root', props: {}, children: [], parent: null, text: '' };
   const owner = ref(ownerId);
   const currentPurpose = ref(purpose);
+  const boundAsset = ref(assetId);
   const Parent = {
     setup() {
       return () => h(MediaUpload, {
-        modelValue: null,
+        modelValue: boundAsset.value,
         ownerId: owner.value,
         purpose: currentPurpose.value,
         'onUpdate:modelValue': (value) => updates.push(value),
         onUploaded: (value) => uploaded.push(value),
+        onStatus: (value) => statuses.push(value),
       });
     },
   };
   host.render(h(Parent), root);
   await nextTick();
-  return { host, root, owner, currentPurpose, unmount: () => host.render(null, root) };
+  return { host, root, owner, currentPurpose, boundAsset, unmount: () => host.render(null, root) };
 }
 
 before(async () => {
@@ -252,6 +254,43 @@ test('invalidates an in-flight upload when owner or purpose changes', async () =
   pending.resolve({ asset_id: 'asset-old', status: 'ready', duration_ms: null });
   await new Promise((resolvePromise) => setImmediate(resolvePromise));
   assert.deepEqual(updates, []);
+  mounted.unmount();
+});
+
+test('loads the latest non-empty binding once when owner and model change in one tick', async () => {
+  const pending = new Map();
+  const statuses = [];
+  testContext.metadata = async (assetId) => {
+    const request = deferred();
+    pending.set(assetId, request);
+    return request.promise;
+  };
+  const mounted = await mountComponent({ ownerId: 'owner-100', assetId: 'asset-100', statuses });
+  await waitFor(() => pending.has('asset-100'), 1800, 'asset-100 request');
+
+  mounted.owner.value = 'owner-200';
+  mounted.boundAsset.value = 'asset-200';
+  await nextTick();
+  await waitFor(() => pending.has('asset-200'), 1800, 'asset-200 request');
+
+  const ready = (assetId) => ({
+    asset_id: assetId,
+    purpose: 'avatar',
+    media_kind: 'image',
+    original_name: `${assetId}.png`,
+    mime_type: 'image/png',
+    size_bytes: 4,
+    sha256: 'hash',
+    status: 'ready',
+    duration_ms: null,
+    probe_error: null,
+    created_at: new Date().toISOString(),
+  });
+  pending.get('asset-100').resolve(ready('asset-100'));
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  pending.get('asset-200').resolve(ready('asset-200'));
+  await waitFor(() => statuses.some((value) => value.asset_id === 'asset-200'), 1800, 'asset-200 ready status');
+  assert.deepEqual(statuses.map((value) => value.asset_id), ['asset-200']);
   mounted.unmount();
 });
 

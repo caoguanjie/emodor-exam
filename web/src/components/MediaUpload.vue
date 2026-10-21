@@ -365,12 +365,7 @@ async function loadLimits() {
 }
 
 async function loadBoundAsset(assetId: string | null) {
-  requestSerial += 1;
   const serial = requestSerial;
-  clearPoll();
-  abortCurrentRequest();
-  revokePreview();
-  metadata.value = null;
   if (!assetId) {
     state.value = reduceMediaUploadState(state.value, { type: 'clear' });
     return;
@@ -405,14 +400,20 @@ function invalidateMediaContext() {
   resetInput();
 }
 
-watch(() => props.purpose, () => { void loadLimits(); }, { immediate: true });
-watch(() => [props.ownerId, props.purpose], ([ownerId, purpose], [previousOwnerId, previousPurpose]) => {
-  if (ownerId === previousOwnerId && purpose === previousPurpose) return;
+watch(() => [props.ownerId, props.purpose, props.modelValue] as const, ([ownerId, purpose, assetId], previous) => {
+  const previousOwnerId = previous?.[0];
+  const previousPurpose = previous?.[1];
+  const previousAssetId = previous?.[2];
+  const firstRun = previous === undefined;
+  const contextChanged = firstRun || ownerId !== previousOwnerId || purpose !== previousPurpose;
+  const bindingChanged = firstRun || assetId !== previousAssetId;
+  if (!contextChanged && !bindingChanged) return;
+  if (firstRun || purpose !== previousPurpose) void loadLimits();
+  // A ready id emitted by this component is already reflected in state. Do
+  // not turn the v-model feedback into a second GET or a polling reset.
+  if (!contextChanged && assetId === state.value.assetId && state.value.status !== 'idle') return;
   invalidateMediaContext();
-});
-watch(() => props.modelValue, (assetId) => {
-  if (assetId === state.value.assetId && state.value.status !== 'idle') return;
-  void loadBoundAsset(assetId || null);
+  if (assetId) void loadBoundAsset(assetId);
 }, { immediate: true });
 
 onBeforeUnmount(() => {
