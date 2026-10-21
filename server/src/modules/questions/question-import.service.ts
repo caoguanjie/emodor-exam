@@ -1,7 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { AppConfig } from '../../config/configuration';
 import { AuditService } from '../../common/audit.service';
 import { Errors } from '../../common/errors';
@@ -267,11 +267,24 @@ export class QuestionImportService implements OnModuleInit {
     };
   }
 
-  private async existingFingerprints(candidates: CandidateRow[]): Promise<Set<string>> {
-    const categoryIds = [...new Set(candidates.map((candidate) => candidate.draft.categoryId))];
+  private async existingFingerprints(
+    drafts: readonly QuestionDraft[],
+    manager?: EntityManager,
+    currentRead = false,
+  ): Promise<Set<string>> {
+    const categoryIds = [...new Set(drafts.map((draft) => draft.categoryId))];
     if (!categoryIds.length) return new Set();
-    const rows = await this.questionRepo.find({ where: { categoryId: In(categoryIds) } });
-    const allowed = new Set(candidates.map((candidate) => `${candidate.draft.categoryId}:${candidate.draft.type}:${candidate.draft.difficulty}`));
+    let rows: Question[];
+    if (manager) {
+      const query = manager.getRepository(Question)
+        .createQueryBuilder('question')
+        .where('question.category_id IN (:...categoryIds)', { categoryIds });
+      if (currentRead) query.setLock('pessimistic_read');
+      rows = await query.getMany();
+    } else {
+      rows = await this.questionRepo.find({ where: { categoryId: In(categoryIds) } });
+    }
+    const allowed = new Set(drafts.map((draft) => `${draft.categoryId}:${draft.type}:${draft.difficulty}`));
     const result = new Set<string>();
     for (const row of rows) {
       if (!row.categoryId || !row.difficulty) continue;
@@ -312,7 +325,7 @@ export class QuestionImportService implements OnModuleInit {
       }
     }
 
-    const existing = await this.existingFingerprints(candidates);
+    const existing = await this.existingFingerprints(candidates.map((candidate) => candidate.draft));
     const accepted = new Set<string>();
     const normalizedRows: NormalizedQuestionImportRow[] = [];
     const validRows: number[] = [];
@@ -381,6 +394,15 @@ export class QuestionImportService implements OnModuleInit {
           manager,
           rows.map((row) => row.draft),
           ownerId,
+          async (lockedManager, drafts) => {
+            // The category locks are already held. A locking query forces a
+            // current read even if media/source validation established an
+            // older REPEATABLE READ snapshot before this transaction waited.
+            const existing = await this.existingFingerprints(drafts, lockedManager, true);
+            if (drafts.some((draft) => existing.has(fingerprint(draft)))) {
+              throw Errors.importBatchConflict('题库已出现重复题，请重新预检查');
+            }
+          },
         );
         const createdIds = receipts.map((receipt) => receipt.questionId);
         batch.status = 'committed';

@@ -114,7 +114,15 @@ async function parseXlsx(file: Buffer, limits: QuestionImportLimits): Promise<Pa
     if (rowNumber === 1) return;
     const cells: string[] = [];
     const errors: string[] = [];
-    if (excelRow.actualCellCount > QUESTION_IMPORT_HEADERS.length) errors.push('Excel 每行必须使用 10 列');
+    let hasExtraCell = false;
+    excelRow.eachCell({ includeEmpty: false }, (cell, columnNumber) => {
+      if (columnNumber <= QUESTION_IMPORT_HEADERS.length) return;
+      const parsed = excelCellText(cell);
+      if (!parsed.error && parsed.text.trim() === '') return;
+      hasExtraCell = true;
+      if (parsed.error) errors.push(parsed.error);
+    });
+    if (hasExtraCell) errors.unshift('Excel 每行必须使用 10 列');
     QUESTION_IMPORT_HEADERS.forEach((_header, index) => {
       const parsed = excelCellText(excelRow.getCell(index + 1));
       cells.push(parsed.text);

@@ -19,30 +19,30 @@
 
     <el-form label-width="110px" class="import-form">
       <el-form-item label="文件格式" required>
-        <el-radio-group v-model="format" :disabled="previewBusy || commitBusy">
+        <el-radio-group v-model="format" :disabled="interactionLocked">
           <el-radio-button value="xlsx">Excel (.xlsx)</el-radio-button>
           <el-radio-button value="txt">TXT (.txt)</el-radio-button>
         </el-radio-group>
       </el-form-item>
       <el-form-item label="默认类别">
-        <el-select v-model="defaults.category_id" clearable filterable placeholder="文件 category 为空时使用" style="width:320px" :disabled="previewBusy || commitBusy">
+        <el-select v-model="defaults.category_id" clearable filterable placeholder="文件 category 为空时使用" style="width:320px" :disabled="interactionLocked">
           <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
         </el-select>
       </el-form-item>
       <el-form-item label="默认难度">
-        <el-select v-model="defaults.difficulty" clearable placeholder="文件 difficulty 为空时使用" style="width:320px" :disabled="previewBusy || commitBusy">
+        <el-select v-model="defaults.difficulty" clearable placeholder="文件 difficulty 为空时使用" style="width:320px" :disabled="interactionLocked">
           <el-option label="初级" value="easy" /><el-option label="中级" value="medium" /><el-option label="高级" value="hard" />
         </el-select>
       </el-form-item>
       <el-form-item label="导入文件" required>
         <div class="file-actions">
-          <el-button :disabled="previewBusy || commitBusy" @click="downloadTemplate">下载 {{ format.toUpperCase() }} 模板</el-button>
+          <el-button :disabled="previewBusy || commitBusy || statusBusy" @click="downloadTemplate">下载 {{ format.toUpperCase() }} 模板</el-button>
           <el-upload
             :key="uploadKey"
             :show-file-list="false"
             :accept="format === 'xlsx' ? '.xlsx' : '.txt,text/plain'"
             :auto-upload="false"
-            :disabled="previewBusy || commitBusy"
+            :disabled="interactionLocked"
             :on-change="previewFile"
           >
             <el-button type="primary" :loading="previewBusy">选择文件并预览</el-button>
@@ -73,12 +73,12 @@
       <el-empty v-if="!preview.valid_rows.length" description="没有可确认的行，请修正文件后重新上传" :image-size="80" />
 
       <div class="preview-actions">
-        <el-button :disabled="commitBusy" @click="resetPreview">修正后重新上传</el-button>
+        <el-button :disabled="!canReset" @click="resetPreview">修正后重新上传</el-button>
         <el-button v-if="commitUnknown" :loading="statusBusy" @click="queryBatchStatus">查询原批次状态</el-button>
         <el-button
           type="primary"
           :loading="commitBusy"
-          :disabled="!preview.valid_rows.length || commitBusy || commitUnknown"
+          :disabled="!preview.valid_rows.length || commitBusy || statusBusy || commitUnknown"
           @click="commitImport"
         >
           确认导入 {{ preview.valid_rows.length }} 行
@@ -89,12 +89,14 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue';
+import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { UploadFile } from 'element-plus';
 import { useRouter } from 'vue-router';
-import http, { ApiError, download, upload } from '../../api/http';
-import type { Difficulty, Id, ImportPreview, ImportResult, Page } from '../../api/training-types';
+import http, { download, upload } from '../../api/http';
+import type { Difficulty, Id, ImportResult, Page } from '../../api/training-types';
+import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
+import { useQuestionImportWorkflow } from '../../utils/question-import-workflow';
 
 type CategoryOption = { id: Id; name: string };
 
@@ -102,14 +104,28 @@ const router = useRouter();
 const format = ref<'xlsx' | 'txt'>('xlsx');
 const categories = ref<CategoryOption[]>([]);
 const defaults = reactive<{ category_id: Id | ''; difficulty: Difficulty | '' }>({ category_id: '', difficulty: '' });
-const preview = ref<ImportPreview | null>(null);
-const previewBusy = ref(false);
-const commitBusy = ref(false);
-const statusBusy = ref(false);
-const commitUnknown = ref(false);
 const uploadKey = ref(0);
 
-watch(format, () => resetPreview());
+const workflow = useQuestionImportWorkflow({
+  commitBatch: (batchId, rowNumbers) => http.post(
+    `/admin/questions/import-batches/${batchId}/commit`,
+    { row_numbers: rowNumbers },
+  ),
+  readBatch: (batchId) => http.get(`/admin/questions/import-batches/${batchId}`),
+  onCommitted: finish,
+  onWarning: (message) => { ElMessage.warning(message); },
+});
+const {
+  preview, previewBusy, commitBusy, statusBusy, commitUnknown, interactionLocked, canReset,
+} = workflow;
+const unsaved = useUnsavedChanges(workflow.dirty, {
+  onDiscard: () => {
+    workflow.discard();
+    uploadKey.value += 1;
+  },
+});
+
+watch(format, () => { uploadKey.value += 1; });
 
 async function loadCategories() {
   const result = await http.get('/ai/question-category-options', { params: { page: 1, page_size: 100 } }) as Page<CategoryOption>;
@@ -124,10 +140,9 @@ function downloadTemplate() {
   );
 }
 
-function resetPreview() {
-  preview.value = null;
-  commitUnknown.value = false;
-  uploadKey.value += 1;
+async function resetPreview() {
+  if (!canReset.value) return;
+  await unsaved.confirmDiscard();
 }
 
 async function previewFile(value: UploadFile) {
@@ -144,18 +159,14 @@ async function previewFile(value: UploadFile) {
     uploadKey.value += 1;
     return;
   }
-  previewBusy.value = true;
-  commitUnknown.value = false;
-  preview.value = null;
   try {
     const fields = Object.fromEntries(Object.entries({
       format: format.value,
       category_id: defaults.category_id,
       difficulty: defaults.difficulty,
     }).filter(([, item]) => item !== '')) as Record<string, string>;
-    preview.value = await upload('/admin/questions/import-preview', file, 'file', fields) as unknown as ImportPreview;
+    await workflow.loadPreview(() => upload('/admin/questions/import-preview', file, 'file', fields));
   } finally {
-    previewBusy.value = false;
     uploadKey.value += 1;
   }
 }
@@ -166,44 +177,15 @@ async function finish(result: ImportResult) {
 }
 
 async function queryBatchStatus() {
-  if (!preview.value) return;
-  statusBusy.value = true;
-  try {
-    const state = await http.get(`/admin/questions/import-batches/${preview.value.batch_id}`) as ImportPreview | ImportResult;
-    if ('created_ids' in state) {
-      await finish(state);
-      return;
-    }
-    preview.value = state;
-    commitUnknown.value = false;
-    ElMessage.warning('服务器确认该批次尚未提交，请核对后再次明确确认');
-  } catch {
-    ElMessage.warning('仍无法确认原批次状态；系统没有自动新建或重复提交批次');
-  } finally {
-    statusBusy.value = false;
-  }
+  await workflow.queryBatchStatus();
 }
 
 async function commitImport() {
-  if (!preview.value || !preview.value.valid_rows.length) return;
-  commitBusy.value = true;
-  try {
-    const result = await http.post(
-      `/admin/questions/import-batches/${preview.value.batch_id}/commit`,
-      { row_numbers: preview.value.valid_rows },
-    ) as ImportResult;
-    await finish(result);
-  } catch (error) {
-    if (!(error instanceof ApiError) || error.code === 0) {
-      commitUnknown.value = true;
-      ElMessage.warning('提交响应未确认，请先查询原批次状态；系统不会自动重建批次');
-    }
-  } finally {
-    commitBusy.value = false;
-  }
+  await workflow.commitImport();
 }
 
 onMounted(loadCategories);
+onBeforeUnmount(workflow.deactivate);
 </script>
 
 <style scoped>

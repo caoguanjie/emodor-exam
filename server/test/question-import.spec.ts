@@ -65,9 +65,53 @@ describe('question import format', () => {
       expect.stringContaining('10 列'),
     ]));
   });
+
+  it('reports text in column K even when optional cells make the Excel row sparse', async () => {
+    const workbook = sparseQuestionWorkbook();
+    workbook.worksheets[0].getRow(2).getCell(11).value = '额外文本';
+
+    const rows = await parseQuestionImportFile(Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer), 'xlsx');
+
+    expect(rows[0].format_errors).toContain('Excel 每行必须使用 10 列');
+  });
+
+  it('reports a formula in sparse column K without trusting its cached result', async () => {
+    const workbook = sparseQuestionWorkbook();
+    workbook.worksheets[0].getRow(2).getCell(11).value = { formula: '1+1', result: '' };
+
+    const rows = await parseQuestionImportFile(Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer), 'xlsx');
+
+    expect(rows[0].format_errors).toContain('Excel 每行必须使用 10 列');
+  });
+
+  it('accepts a ten-column Excel row whose optional cells are genuinely empty', async () => {
+    const workbook = sparseQuestionWorkbook();
+
+    const rows = await parseQuestionImportFile(Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer), 'xlsx');
+
+    expect(rows).toEqual([expect.objectContaining({
+      row: 2, category: '', concept: '', analysis: '', rubric: '', type: 'single', score: '5',
+    })]);
+    expect(rows[0].format_errors).toBeUndefined();
+  });
 });
 
 const HEADER = 'category\ttype\tdifficulty\tconcept\tstem\toptions\tanswer\tanalysis\trubric\tscore';
+
+function sparseQuestionWorkbook(): ExcelJS.Workbook {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('题库导入');
+  sheet.addRow(HEADER.split('\t'));
+  const row = sheet.getRow(2);
+  row.getCell(2).value = 'single';
+  row.getCell(3).value = 'easy';
+  row.getCell(5).value = '<p>稀疏行题干</p>';
+  row.getCell(6).value = JSON.stringify([{ key: 'A', text: '是' }, { key: 'B', text: '否' }]);
+  row.getCell(7).value = '[0]';
+  row.getCell(10).value = '5';
+  row.commit();
+  return workbook;
+}
 
 function txtFile(rows: string[][]): Buffer {
   return Buffer.from(`\uFEFF${[HEADER, ...rows.map((row) => row.join('\t'))].join('\r\n')}\r\n`, 'utf8');
@@ -86,6 +130,7 @@ function singleRow(stem: string, overrides: Partial<Record<string, string>> = {}
 
 function questionImportFixture(existingQuestions: any[] = []) {
   const batches: any[] = [];
+  let nextQuestionId = 100;
   const batchRepo = {
     create: (value: any) => ({ ...value }),
     save: vi.fn(async (value: any) => {
@@ -98,6 +143,7 @@ function questionImportFixture(existingQuestions: any[] = []) {
     findOne: vi.fn(async ({ where }: any) => batches.find((item) => (
       String(item.id) === String(where.id)
       && (where.ownerId === undefined || String(item.ownerId) === String(where.ownerId))
+      && (where.kind === undefined || item.kind === where.kind)
     )) || null),
   };
   const imports = Object.create(ImportBatchService.prototype) as ImportBatchService & Record<string, any>;
@@ -105,9 +151,19 @@ function questionImportFixture(existingQuestions: any[] = []) {
   imports.batchRepo = batchRepo;
   const versions = {
     validateImportDraft: vi.fn(async (input: QuestionDraftInput) => validateAndSanitizeQuestionDraft(input)),
-    createApprovedImportsInManager: vi.fn(async (_manager: unknown, drafts: QuestionDraftInput[]) => (
-      drafts.map((_draft, index) => ({ questionId: String(100 + index), versionId: String(500 + index) }))
-    )),
+    createApprovedImportsInManager: vi.fn(async (
+      manager: unknown,
+      drafts: QuestionDraftInput[],
+      _actorId: string,
+      afterRelationsLocked?: (manager: unknown, drafts: QuestionDraftInput[]) => Promise<void>,
+    ) => {
+      await afterRelationsLocked?.(manager, drafts);
+      return drafts.map((draft) => {
+        const questionId = String(nextQuestionId++);
+        existingQuestions.push({ id: questionId, ...draft });
+        return { questionId, versionId: String(Number(questionId) + 400) };
+      });
+    }),
   };
   const category = { id: '10', name: '安全管理', status: 1 };
   const concept = { id: '20', categoryId: '10', type: 'single', name: '受限空间' };
@@ -135,6 +191,15 @@ function questionImportFixture(existingQuestions: any[] = []) {
               String(item.id) === String(where.id) && String(item.ownerId) === String(where.ownerId)
             )) || null,
             save: async (value: any) => batchRepo.save(value),
+            getRepository(entity: unknown) {
+              if (entity !== Question) throw new Error(`unexpected repository ${(entity as any)?.name}`);
+              const builder: any = {
+                where: vi.fn(() => builder),
+                setLock: vi.fn(() => builder),
+                getMany: vi.fn(async () => existingQuestions),
+              };
+              return { createQueryBuilder: vi.fn(() => builder) };
+            },
           });
         } catch (error) {
           batches.splice(0, batches.length, ...snapshot);
@@ -203,6 +268,14 @@ describe('question import preview', () => {
 });
 
 describe('question import ownership and commit', () => {
+  it('keeps the legacy students commit entry bound to student batches', async () => {
+    const { service, imports, versions } = questionImportFixture();
+    const preview = await service.preview('1', txtFile([singleRow('<p>不可借学员入口确认</p>')]), 'txt', { categoryId: '10' });
+
+    await expect(imports.commit('1', preview.batch_id, [2])).rejects.toMatchObject({ code: 40401 });
+    expect(versions.createApprovedImportsInManager).not.toHaveBeenCalled();
+  });
+
   it('returns the first committed ids on same-row retry and creates approved questions once', async () => {
     const { service, imports, versions } = questionImportFixture();
     const preview = await service.preview('1', txtFile([singleRow('<p>幂等题目</p>')]), 'txt', { categoryId: '10' });
@@ -213,6 +286,21 @@ describe('question import ownership and commit', () => {
     expect(first.created_ids).toEqual(['100']);
     expect(second).toEqual(first);
     expect(versions.createApprovedImportsInManager).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a second pre-existing preview after the first batch creates the same question', async () => {
+    const { service, imports, batches } = questionImportFixture();
+    const file = txtFile([singleRow('<p>跨批重复题目</p>')]);
+    const firstPreview = await service.preview('1', file, 'txt', { categoryId: '10' });
+    const secondPreview = await service.preview('1', file, 'txt', { categoryId: '10' });
+
+    await imports.commitQuestions('1', firstPreview.batch_id, [2]);
+
+    await expect(imports.commitQuestions('1', secondPreview.batch_id, [2]))
+      .rejects.toMatchObject({ code: 40911, message: expect.stringContaining('重新预检查') });
+    expect(batches.find((batch) => batch.id === secondPreview.batch_id)).toMatchObject({
+      status: 'previewed', committedRows: null, createdIds: null,
+    });
   });
 
   it('rejects another owner and a student batch at the questions endpoint without exposing either batch', async () => {
@@ -252,6 +340,20 @@ function importDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraft
 }
 
 describe('approved import adapter for the versioned question bank', () => {
+  it('passes the caller manager through controlled-media validation', async () => {
+    const assertUsable = vi.fn(async () => undefined);
+    const service = Object.create(QuestionVersionService.prototype) as QuestionVersionService & Record<string, any>;
+    Object.assign(service, { media: { assertUsable } });
+    const manager = { getRepository: vi.fn() } as any;
+
+    await service.validateImportDraft(importDraft({
+      stem: '<p>带图导入题<img data-media-id="42"></p>',
+    }), '7', manager);
+
+    expect(assertUsable).toHaveBeenCalledWith('7', '42', 'question', undefined, manager);
+    expect(manager.getRepository).not.toHaveBeenCalled();
+  });
+
   it('validates every draft before acquiring locks or writing any question row', async () => {
     const questionSave = vi.fn();
     const lockActive = vi.fn();

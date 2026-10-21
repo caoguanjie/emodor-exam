@@ -316,9 +316,15 @@ export class MediaService {
     return asset;
   }
 
-  async assertUsable(actorId: string | number, assetId: MediaId, purpose: string, ownerId?: string | number): Promise<void> {
+  async assertUsable(
+    actorId: string | number,
+    assetId: MediaId,
+    purpose: string,
+    ownerId?: string | number,
+    manager?: EntityManager,
+  ): Promise<void> {
     assertMediaPurpose(purpose);
-    const asset = await this.findAsset(String(assetId));
+    const asset = await this.findAsset(String(assetId), manager);
     if (String(asset.status) !== 'ready') throw Errors.param('媒体尚未就绪');
     if (asset.purpose !== purpose) throw Errors.dataForbidden('媒体用途不匹配');
     if (asset.ownerId !== idOf(ownerId ?? actorId)) throw Errors.dataForbidden();

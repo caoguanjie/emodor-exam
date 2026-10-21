@@ -426,9 +426,9 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | GET | `/admin/questions/import-batches/{id}` | 仅 questions 批次 owner | 未提交返回 `ImportPreview`；已提交返回 `ImportResult` |
 | POST | `/admin/questions/import-batches/{id}/commit` | `{row_numbers:number[]}`，只能选预检合法行 | `ImportResult` |
 
-模板固定十列 `category/type/difficulty/concept/stem/options/answer/analysis/rubric/score`。TXT 仅接受制表符分列，`options/answer` 是 JSON 数组；支持 BOM/CRLF，不支持逗号等多义手工分隔。文件上限 5MB、数据行上限 1000，Excel 公式单元格不执行并落为行级错误。完整填写说明见 [`docs/templates/question-import-format.md`](../templates/question-import-format.md)。
+模板固定十列 `category/type/difficulty/concept/stem/options/answer/analysis/rubric/score`。TXT 仅接受制表符分列，`options/answer` 是 JSON 数组；支持 BOM/CRLF，不支持逗号等多义手工分隔。文件上限 5MB、数据行上限 1000；Excel 公式单元格不执行并落为行级错误，稀疏行中 K 列及其后任何真实非空值或公式同样按超列拒绝。完整填写说明见 [`docs/templates/question-import-format.md`](../templates/question-import-format.md)。
 
-预检逐行复用 B3 四题型、富文本、受控媒体、类别、考点与来源校验。重复指纹覆盖类别、题型、难度、规范化内容与答案；已存在或本批较晚重复行列入 `duplicates`，默认不进入 `valid_rows`。确认事务锁定 owner+batch，调用 B3 的 caller-transaction 写入接口创建 `source=import` 的 approved identity/revision，并把本次实际 `versionId` 写入审计明细；API 按跨任务契约只返回 `created_ids`。同一行集合重试返回首次结果，换集合返回 40911；questions 入口访问他人或 students 批次返回 40302 且不暴露批次内容。网络响应未知时先 GET 原批次状态，不自动新建或重传。
+预检逐行复用 B3 四题型、富文本、受控媒体、类别、考点与来源校验。重复指纹覆盖类别、题型、难度、规范化内容与答案；已存在或本批较晚重复行列入 `duplicates`，默认不进入 `valid_rows`。确认事务锁定 owner+batch，调用 B3 的 caller-transaction 写入接口；排序锁定类别后用当前锁定读再次检查数据库指纹，若其他预检批次已先写入则以 40911 明确要求重新预检，不静默缩减本批确认集合。受控媒体查询沿用该调用方事务 manager，然后创建 `source=import` 的 approved identity/revision，并把本次实际 `versionId` 写入审计明细；API 按跨任务契约只返回 `created_ids`。同一行集合重试返回首次结果，换集合返回 40911；questions 入口访问他人或 students 批次返回 40302 且不暴露批次内容，旧 students 确认入口固定只接受 students 批次，不能按批次 kind 分派到题库适配器。提交只有确定的 4xxxx 业务拒绝才允许直接重试或放弃；502/504、传输失败或无法验证的成功信封都保留原 batch 并先 GET 查询，期间不创建新预览。请求回包还绑定不可变 batch ID 与页面代次，离页或新代次后不得覆盖状态或触发导航。
 
 ### 3.6 学习模块 /learning（权限：员工，数据范围自动收口为本人）
 

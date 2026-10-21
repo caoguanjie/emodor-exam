@@ -99,13 +99,10 @@ export class ImportBatchService {
   }
 
   async commit(ownerId: Id, batchId: Id, rowNumbers: number[]): Promise<ImportResult> {
-    const batch = await this.batchRepo.findOne({ where: { id: String(batchId), ownerId: String(ownerId) } });
+    const batch = await this.batchRepo.findOne({
+      where: { id: String(batchId), ownerId: String(ownerId), kind: 'students' },
+    });
     if (!batch) throw Errors.notFound('导入批次不存在');
-    if (batch.kind === 'questions') {
-      const adapter = this.adapters.get('questions');
-      if (!adapter) throw Errors.param('题库导入适配器尚未注册');
-      return adapter.commit(String(ownerId), String(batchId), rowNumbers);
-    }
     return this.commitStudents(String(ownerId), batch, rowNumbers);
   }
 

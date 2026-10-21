@@ -148,8 +148,11 @@ export class QuestionVersionService implements OnModuleInit {
     }
   }
 
-  private async assertMediaUsable(actorId: string, mediaAssetIds: string[]): Promise<void> {
-    for (const assetId of mediaAssetIds) await this.media.assertUsable(actorId, assetId, 'question');
+  private async assertMediaUsable(actorId: string, mediaAssetIds: string[], manager?: EntityManager): Promise<void> {
+    for (const assetId of mediaAssetIds) {
+      if (manager) await this.media.assertUsable(actorId, assetId, 'question', undefined, manager);
+      else await this.media.assertUsable(actorId, assetId, 'question');
+    }
   }
 
   private async captureLegacy(manager: EntityManager, question: Question): Promise<QuestionVersion> {
@@ -252,7 +255,7 @@ export class QuestionVersionService implements OnModuleInit {
     const draft = validateAndSanitizeQuestionDraft(input);
     if (draft.source !== 'import') throw Errors.param('导入适配器只能创建 import 来源题目');
     await this.assertSource(draft, manager);
-    await this.assertMediaUsable(String(actorId), draft.mediaAssetIds);
+    await this.assertMediaUsable(String(actorId), draft.mediaAssetIds, manager);
     return draft;
   }
 
@@ -265,6 +268,10 @@ export class QuestionVersionService implements OnModuleInit {
     manager: EntityManager,
     inputs: QuestionDraft[],
     actorId: string,
+    afterRelationsLocked?: (
+      manager: EntityManager,
+      drafts: readonly ValidatedQuestionDraft[],
+    ) => Promise<void>,
   ): Promise<Array<{ questionId: string; versionId: string }>> {
     if (!inputs.length) return [];
     const drafts = await Promise.all(inputs.map((input) => this.validateImportDraft(input, actorId, manager)));
@@ -274,6 +281,7 @@ export class QuestionVersionService implements OnModuleInit {
     for (const draft of drafts) {
       if (draft.conceptId) await this.concepts.assertCompatible(manager, draft.conceptId, draft.categoryId, draft.type);
     }
+    await afterRelationsLocked?.(manager, drafts);
     const approval = { actorId: String(actorId), at: new Date() };
     const created: Array<{ questionId: string; versionId: string }> = [];
     for (const draft of drafts) created.push(await this.createInManager(manager, draft, actorId, approval));
