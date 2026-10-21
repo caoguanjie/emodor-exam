@@ -39,7 +39,7 @@ async function waitForSocket(socketPath, child, timeoutMs = 30_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (existsSync(socketPath)) return;
-    if (child.exitCode !== null) throw new Error('ephemeral MySQL exited during bootstrap');
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error('ephemeral MySQL exited during bootstrap');
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error('ephemeral MySQL socket did not become ready');
@@ -48,7 +48,7 @@ async function waitForSocket(socketPath, child, timeoutMs = 30_000) {
 async function waitForTcp(host, port, child, timeoutMs = 30_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    if (child.exitCode !== null) throw new Error('ephemeral service exited before becoming ready');
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error('ephemeral service exited before becoming ready');
     try {
       await new Promise((resolve, reject) => {
         const socket = net.createConnection({ host, port });
@@ -65,13 +65,32 @@ async function waitForTcp(host, port, child, timeoutMs = 30_000) {
 }
 
 async function stopProcess(child) {
-  if (!child || child.exitCode !== null) return;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
   child.kill('SIGTERM');
-  await Promise.race([
-    once(child, 'exit').catch(() => undefined),
-    new Promise((resolve) => setTimeout(resolve, 5_000)),
-  ]);
-  if (child.exitCode === null) child.kill('SIGKILL');
+  const exited = await waitForProcessExit(child, 5_000);
+  if (!exited && child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGKILL');
+    if (!(await waitForProcessExit(child, 5_000)) && child.exitCode === null && child.signalCode === null) {
+      throw new Error('owned ephemeral process did not exit; refusing to remove its task directory');
+    }
+  }
+}
+
+async function waitForProcessExit(child, timeoutMs) {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      child.removeListener('exit', onExit);
+      child.removeListener('error', onExit);
+      resolve(child.exitCode !== null || child.signalCode !== null);
+    }, timeoutMs);
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    child.once('exit', onExit);
+    child.once('error', onExit);
+  });
 }
 
 export async function createEphemeralServices() {
