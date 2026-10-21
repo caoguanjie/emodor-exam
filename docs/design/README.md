@@ -34,11 +34,11 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | 考试与成绩 | 旧固定卷下发、服务端计时、自动客观评分、最高分口径 | 固定/随机发布快照、个人题单、持久草稿、图片题单题最多 9 张；图片题可受控逐题评分，服务端聚合，最终总分只读 |
 | 统计与监控 | 原制度/部门/个人报表 | 按场次/难度、已完成批改个人最高分、当前应考集合交集统计；5 秒轮询，90 秒无心跳仅“连接待确认” |
 
-**实现状态规则**：目标表、字段、DTO、路由由 A1—C7 在相应 migration、entity、controller 存在后补入对应分册；未具备源码与验收证据时只写“计划”。当前源码已包含 12 张 legacy 业务表、A2 两张培训身份/导入表、A3 五张权限/会话表与 A4 两张受控媒体表，共 21 张业务表；另有 A1 `schema_migration` 元数据表，合计 22 张物理表。精确 DDL 与升级边界见 [03-数据库设计.md](03-数据库设计.md) 1.10，验收记录见 [A1 基础验收](../../review/2026-10-21-training-a1-foundation.md)。这不代表已对开发库或生产库执行升级。B1 以后新增业务表继续遵循 DDL/init/migration/entity/设计同步政策。
+**实现状态规则**：目标表、字段、DTO、路由由 A1—C7 在相应 migration、entity、controller 存在后补入对应分册；未具备源码与验收证据时只写“计划”。当前源码已包含 12 张 legacy 业务表、A2 两张培训身份/导入表、A3 五张权限/会话表、A4 两张受控媒体表与 A5 三张后台公共配置表，共 24 张业务表；另有 A1 `schema_migration` 元数据表，合计 25 张物理表。精确 DDL 与升级边界见 [03-数据库设计.md](03-数据库设计.md) 1.10，验收记录见 [A1 基础验收](../../review/2026-10-21-training-a1-foundation.md)。这不代表已对开发库或生产库执行升级。B1 以后新增业务表继续遵循 DDL/init/migration/entity/设计同步政策。
 
 ### 1.4 A1—C7 模块与验收进度映射
 
-当前进度：A1—A3 已验收；A4 的代码、接口回归与独立审查已通过，可进入 A5/B1/B3。A4 的伪格式/超限/头像真实 PC 补验按用户“稍后处理，先继续代码”决定留到 C7，未标记通过；[证据及边界](../../review/2026-10-21-training-a4-media-acceptance.md)。下表列各阶段最终应具备的证据，不代表所有任务已完成。
+当前进度：A1—A3 已验收；A4 的代码、接口回归与独立审查已通过，A5 已有 migration/entity/controller 与 PC 公共框架源码。A4 的伪格式/超限/头像真实 PC 补验按用户“稍后处理，先继续代码”决定留到 C7，未标记通过；[证据及边界](../../review/2026-10-21-training-a4-media-acceptance.md)。A5 的数据库/API/PC 运行验收仍以任务报告为准，源码登记不等于已部署或已完成真实 PC 验收。下表列各阶段最终应具备的证据，不代表所有任务已完成。
 
 | owner 任务 | 目标模块/链路 | 必须留下的验收证据 |
 |---|---|---|
@@ -66,8 +66,8 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | — | README.md（本文档） | 总览索引与全套文档的一致性基准（技术栈 / 术语 / 表名 / 枚举 / 模块名） | 全体读者 |
 | 01 | [01-需求分析.md](01-需求分析.md) | 业务背景、角色用例与功能 / 非功能需求的完整定义，是全部设计的源头 | 管理者、产品、评审者 |
 | 02 | [02-系统架构.md](02-系统架构.md) | 总体架构分层、技术栈落地方式与 Docker Compose 部署拓扑 | 开发人员、架构评审者 |
-| 03 | [03-数据库设计.md](03-数据库设计.md) | legacy + A2/A3/A4 增量表的字段、类型、索引、约束与表间关系；后续增量仍按同步政策追加 | 后端开发、评审者 |
-| 04 | [04-API设计.md](04-API设计.md) | `/api/v1` 全量 REST 接口（含受控媒体）、统一响应结构 `{ code, message, data }` 与 40xxx/50xxx 错误码表 | 前后端开发 |
+| 03 | [03-数据库设计.md](03-数据库设计.md) | legacy + A2/A3/A4/A5 增量表的字段、类型、索引、约束与表间关系；后续增量仍按同步政策追加 | 后端开发、评审者 |
+| 04 | [04-API设计.md](04-API设计.md) | `/api/v1` 全量 REST 接口（含受控媒体、后台系统配置与公开品牌配置）、统一响应结构 `{ code, message, data }` 与 40xxx/50xxx 错误码表 | 前后端开发 |
 | 05 | [05-模块设计.md](05-模块设计.md) | 六大模块的职责边界、内部组成与关键设计决策 | 开发人员 |
 | 06 | [06-关键流程.md](06-关键流程.md) | 端到端关键流程（解析、AI 出题审核、学习判定、考试、评分统计）的时序与状态流转 | 开发人员、评审者 |
 | 07 | [07-安全与非功能设计.md](07-安全与非功能设计.md) | 认证授权、防作弊纵深、数据安全，以及性能 / 可用性等非功能指标 | 评审者、运维 |
@@ -119,7 +119,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 
 ### 3.3 核心实体清单
 
-当前源码有 21 张业务表，表名及其字段必须与 migration、`database/init.sql`、entities 和 [03-数据库设计.md](03-数据库设计.md) 同步；另有不计入业务表清单的 A1 `schema_migration` 元数据表。以下 12 张 legacy 表保持兼容，A2—A4 已实现增量按实际源码登记，B1 以后不得在未实现前凭空预设。
+当前源码有 24 张业务表，表名及其字段必须与 migration、`database/init.sql`、entities 和 [03-数据库设计.md](03-数据库设计.md) 同步；另有不计入业务表清单的 A1 `schema_migration` 元数据表。以下 12 张 legacy 表保持兼容，A2—A5 已实现增量按实际源码登记，B1 以后不得在未实现前凭空预设。
 
 **组织权限域（2 张）**
 
@@ -177,22 +177,30 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | media_asset | 私有媒体资源：服务端存储键、实际类型/大小/哈希/时长、处理与内部删除重试状态。 |
 | media_reference | 媒体业务引用：按已注册 owner type 关联业务实体并保护在用资源。 |
 
+**后台公共配置域（3 张，A5）**
+
+| 表名 | 一句话职责 |
+|---|---|
+| sys_menu | 后台目录/菜单/按钮树；路由和权限只能从服务端白名单中选择。 |
+| sys_dictionary | 显示字典；`is_system=1` 的业务固定枚举只读，不改变业务语义。 |
+| site_setting | 站点公开展示白名单，当前仅 `logo_asset_id` 与最多 3 张 `banners`。 |
+
 ### 3.4 统一命名规范
 
 **数据库命名**
 
 - 表名与字段名一律使用小写 snake_case。
-- 当前表名严格使用 3.3 节清单中的 21 个名称；12 张 legacy 表不改名或删改，A2—A4 增量按版本化 migration 演进。A1 `schema_migration` 是不计入业务表清单的元数据表，精确结构见 03 册 1.10。B1 以后新增培训表继续遵循“迁移脚本 → `database/init.sql` → entities → 03 册/相关分册 → API/controller”同步政策，不能由文档另造第二定义。
+- 当前表名严格使用 3.3 节清单中的 24 个名称；12 张 legacy 表不改名或删改，A2—A5 增量按版本化 migration 演进。A1 `schema_migration` 是不计入业务表清单的元数据表，精确结构见 03 册 1.10。B1 以后新增培训表继续遵循“迁移脚本 → `database/init.sql` → entities → 03 册/相关分册 → API/controller”同步政策，不能由文档另造第二定义。
 
 **API 命名**
 
 - REST 风格，统一前缀 `/api/v1`。
-- legacy 模块路由：`/auth`、`/users`、`/departments`、`/regulations`、`/learning`、`/exams`、`/statistics`、`/ai`；已实现增量另含 `/admin/training-categories`、`/admin/students`、`/admin` 权限/会话路由、`/me` 与 `/media`。
+- legacy 模块路由：`/auth`、`/users`、`/departments`、`/regulations`、`/learning`、`/exams`、`/statistics`、`/ai`；已实现增量另含 `/admin/training-categories`、`/admin/students`、`/admin` 权限/会话/系统配置路由、`/me`、`/media` 与公开 `/site-config`。
 - 路由与模块的对应关系固定如下：
 
 | 模块（固定名称） | 路由前缀 |
 |---|---|
-| 1. 组织权限模块 | `/auth`、`/users`、`/departments`、`/admin/training-categories`、`/admin/students`、`/admin`、`/me`、`/media` |
+| 1. 组织权限模块 | `/auth`、`/users`、`/departments`、`/admin/training-categories`、`/admin/students`、`/admin`、`/me`、`/media`、`/site-config` |
 | 2. 制度文件管理模块 | `/regulations` |
 | 3. AI 出题模块 | `/ai` |
 | 4. 学习行为管控模块 | `/learning` |
@@ -226,7 +234,7 @@ EmodorRuleExam 当前是一套面向企业内部的制度学习与考核系统�
 | exam_record.status | in_progress / submitted / passed / failed / timeout | 考试状态：进行中 / 已交卷 / 已通过 / 未通过 / 超时自动交卷 |
 | media_asset.status | processing / ready / failed / deleting | 媒体状态；`deleting` 仅供物理删除失败重试，公开 API 按不存在处理 |
 
-> 上表以 legacy 基线枚举为主，并登记 A4 已实现的媒体持久状态。计划中的四题型、难度、来源快照、发布/个人题单、草稿与阅卷状态属于后续增量契约；只有实际 migration/entity/controller 落地后才补入，不把“计划枚举”冒充当前 API 或数据库事实。
+> 上表以 legacy 基线枚举为主，并登记 A4 已实现的媒体持久状态；A5 固定字典只是这些服务端枚举的只读显示镜像，不是新的语义来源。计划中的四题型、难度、来源快照、发布/个人题单、草稿与阅卷状态属于后续增量契约；只有实际 migration/entity/controller 落地后才补入，不把“计划枚举”冒充当前 API 或数据库事实。
 
 ---
 

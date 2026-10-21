@@ -324,6 +324,13 @@ export class MediaService {
     if (asset.ownerId !== idOf(ownerId ?? actorId)) throw Errors.dataForbidden();
   }
 
+  /** A5 may publish only probed image assets uploaded for the branding purpose. */
+  async assertPublicBrandingCandidate(assetId: MediaId): Promise<void> {
+    const asset = await this.findAsset(String(assetId));
+    if (String(asset.status) !== 'ready') throw Errors.param('品牌媒体尚未就绪');
+    if (asset.purpose !== 'branding' || asset.mediaKind !== 'image') throw Errors.param('品牌媒体用途不匹配');
+  }
+
   async bind(manager: EntityManager, assetId: MediaId, ownerType: string, ownerId: MediaId): Promise<void> {
     const policy = this.ownerPolicy(ownerType);
     const asset = await manager.getRepository(MediaAsset).findOne({
@@ -384,6 +391,25 @@ export class MediaService {
     const path = this.storagePath(asset.storageKey);
     const fileStat = await stat(path).catch(() => null);
     if (!fileStat?.isFile()) throw Errors.notFound('媒体不存在');
+    let range: ByteRange | null = null;
+    try { range = parseRange(rangeHeader, fileStat.size); } catch { throw Errors.mediaRangeInvalid(); }
+    return { asset, path, size: fileStat.size, range };
+  }
+
+  /**
+   * Narrow anonymous bridge for A5 site branding. A ready branding purpose is
+   * still private unless a current site_config reference exists.
+   */
+  async openPublicBrandingContent(assetId: MediaId, rangeHeader?: string): Promise<ContentDescriptor> {
+    const asset = await this.findAsset(String(assetId));
+    if (String(asset.status) !== 'ready' || asset.purpose !== 'branding' || asset.mediaKind !== 'image') {
+      throw Errors.notFound('公开品牌资源不存在');
+    }
+    const referenced = await this.referenceRepo.count({ where: { assetId: String(assetId), ownerType: 'site_config' } });
+    if (!referenced) throw Errors.notFound('公开品牌资源不存在');
+    const path = this.storagePath(asset.storageKey);
+    const fileStat = await stat(path).catch(() => null);
+    if (!fileStat?.isFile()) throw Errors.notFound('公开品牌资源不存在');
     let range: ByteRange | null = null;
     try { range = parseRange(rangeHeader, fileStat.size); } catch { throw Errors.mediaRangeInvalid(); }
     return { asset, path, size: fileStat.size, range };

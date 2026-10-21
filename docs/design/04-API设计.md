@@ -4,7 +4,7 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训类别/学员/本人资料与 A4 受控媒体接口均以实际 controller/entity/migration 为准。课程表单、题库版本、发布/个人题单、持久草稿、图片答案/阅卷、监控和场次统计接口仍由后续任务在实际实现后补入。所有接口继续使用 `/api/v1`、`{code,message,data}`、DTO 校验、所有权校验和 HttpOnly refresh Cookie。
+> **状态边界（2026-10-21）**：本册 legacy 制度/AI/阅读/旧固定卷接口、A2 培训类别/学员/本人资料、A3 权限/会话、A4 受控媒体与 A5 后台公共配置接口均以实际 controller/entity/migration 为准。课程表单、题库版本、发布/个人题单、持久草稿、图片答案/阅卷、监控和场次统计接口仍由后续任务在实际实现后补入。所有接口继续使用 `/api/v1`、`{code,message,data}`、DTO 校验、所有权校验和 HttpOnly refresh Cookie；媒体与公开品牌内容流例外跳过信封。A5 的源码契约登记不等于已对开发库/生产库执行迁移或已完成真实 PC 验收。
 
 ---
 
@@ -86,7 +86,8 @@
 | API 范围 | 文档状态 | 规则 |
 |---|---|---|
 | `/auth`、`/users`、`/departments`、`/regulations`、`/ai`、`/learning`、旧 `/exams`、旧 `/statistics` | 当前 legacy 契约 | 旧制度阅读资格、旧固定卷字段与自动客观评分保持兼容；下发不含答案/解析，refresh 走 HttpOnly Cookie，DTO/统一信封不变 |
-| 培训类别/学员来源、课程/视频、题库版本/导入、发布快照、个人题单、持久草稿、图片附件/阅卷、监控、培训统计 | 计划契约（A1—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后，才在本册写精确 DTO、错误码、分页和路由；本阶段不凭设计表格制造“已实现 API” |
+| `/admin/training-categories`、`/admin/students`、`/me`、`/admin` 权限/会话/系统配置、`/media`、`/site-config` | 当前 A2—A5 增量契约 | 以下精确 DTO、权限、白名单与错误码与当前 controller/service 对齐；未执行环境验收边界单独记录 |
+| 课程/视频、题库版本/导入、发布快照、个人题单、持久草稿、图片附件/阅卷、监控、培训统计 | 计划契约（B1—C6） | 只有相应 migration/entity/controller 与 API 集成测试存在后，才在本册写精确 DTO、错误码、分页和路由；本阶段不凭设计表格制造“已实现 API” |
 | 旧固定卷 vs 新培训考试开考 | 两条口径并存 | 旧固定卷继续检查 `learning_record.is_valid`；新培训考试默认关闭学习门槛，但仍检查发布、类别/来源、权限、次数、身份状态和服务端 deadline |
 
 目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 客观题自动判分/图片题待阅 → 受控逐题评分 → 服务端汇总 → 最终结果只读。具体字段由 C1—C4 落地后补入，不能让旧 `/exams` 响应提前承载两套不兼容语义。
@@ -95,25 +96,27 @@
 
 ## 2. 模块与路由总览
 
-当前 legacy 基线的八大路由前缀对应六大模块（README 3.4 固定映射）；A2 培训增量路由已按同一 `/api/v1` 前缀注册：
+当前 legacy 基线与 A2—A5 增量路由均使用同一 `/api/v1` 前缀。下表的数量按当前 controller HTTP 方法装饰器机械盘点：
 
 | 路由前缀 | 所属模块（固定名称） | 接口数 | 说明 |
 |---|---|---|---|
-| /auth | 1. 组织权限模块 | 5 | 登录、刷新、个人信息、改密、登出 |
+| /auth | 1. 组织权限模块 | 6 | 验证码、登录、刷新、个人信息、改密、登出 |
 | /users | 1. 组织权限模块 | 8 | 员工 CRUD、重置密码、批量导入、启停 |
 | /admin/training-categories | 1. 组织权限模块（A2） | 6 | 培训类别分页、详情、增改、启停、引用保护删除 |
 | /admin/students | 1. 组织权限模块（A2/A4） | 11 | 学员分页、CRUD、头像、启停、重置密码、xlsx 模板/预检/批次确认 |
 | /me | 1. 组织权限模块（A2/A4） | 2 | 本人资料查询与姓名/联系方式/头像修改 |
 | /media | 1. 组织权限模块（A4） | 5 | 受控上传、限制查询、状态/Range 读取、引用保护删除 |
-| /departments | 1. 组织权限模块 | 5 | 部门树、CRUD、层级调整 |
-| /regulations | 2. 制度文件管理模块 | 15 | 制度 CRUD、版本上传与历史回看、管理端预览、范围与学习要求配置、发布、阅读内容 |
-| /ai | 3. AI 出题模块 | 16 | AI 配置（`ai_config:read/write`；super_admin 天然拥有）、出题任务、题目审核编辑、人工录入、试卷管理与组卷 |
+| /admin | 1. 组织权限模块（A3/A5） | 23 | A3 权限/角色/管理员/会话 10 个；A5 菜单/字典/站点配置/审计 13 个 |
+| /site-config | 1. 组织权限模块（A5） | 2 | 严格公开 Logo/轮播白名单；仅当前配置的品牌图片内容流 |
+| /departments | 1. 组织权限模块 | 6 | 部门树、CRUD、层级调整与启停 |
+| /regulations | 2. 制度文件管理模块 | 17 | 制度 CRUD、版本上传与历史回看、管理端预览、范围与学习要求配置、发布、阅读内容 |
+| /ai | 3. AI 出题模块 | 18 | AI 配置（`ai_config:read/write`；super_admin 天然拥有）、出题任务、题目审核编辑、人工录入、试卷管理与组卷 |
 | /learning | 4. 学习行为管控模块 | 7 | 学习列表、会话生命周期、心跳、进度 |
 | /exams | 5. 考试评分模块 | 8 | 可考列表、开考、心跳、切屏、交卷、成绩 |
 | /statistics | 6. 统计报表模块 | 6 | 制度/部门/个人维度统计与导出 |
 | /health | 基础设施（非业务模块） | 1 | 容器探活，豁免认证，仅限 Compose 内部网络（nginx 不对外代理该路径）；响应 `data` 为 `{ status, mysql, redis, disk_free_mb }` |
 
-**合计 94 个接口（93 个业务接口 + 1 个健康检查，含 A2/A4 增量；媒体内容流不包统一信封）。**
+**合计 126 个接口（125 个业务接口 + 1 个健康检查，含 A2—A5 增量；私有媒体与公开品牌内容流不包统一信封）。**
 
 ---
 
@@ -232,7 +235,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 40911 | 409 | 导入批次已确认，不能更换行集合 | 已提交批次使用不同合法行集合重试，或批次正被另一确认请求处理 |
 
 导入批次的 `owner_id` 是服务端从当前令牌取得，客户端不能指定；未提交批次保留预检结果供查询/恢复，确认成功后保存 `committed_rows/created_ids`。这套批次事实可由 B4 注册题库适配器复用，但通用服务不依赖 AI。
-### 3.2.5 管理权限与在线会话 /admin
+### 3.2.6 管理权限与在线会话 /admin（A3）
 
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
@@ -245,6 +248,46 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | PUT | /admin/administrators/{id}/roles | administrators:write | 多选业务角色；最高管理员保护 |
 | GET | /admin/sessions | sessions:read | 分页查看在线/已吊销会话（返回 `created_at`、`last_seen_at`、持久化 `expires_at` 与 `status`；新会话的创建/更新时间与最后活动时间由同一服务端时刻写入） |
 | POST | /admin/sessions/{id}/revoke | sessions:write | 强制下线并立即吊销该 sid 的双令牌 |
+
+### 3.2.7 菜单、字典、站点配置与审计（A5）
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/admin/menus/navigation` | 登录 | 返回当前账号有效权限过滤后的启用导航树；不下发任意组件或脚本 |
+| GET | `/admin/menus` | `system_settings:read` | 完整目录/菜单/按钮树（含停用项） |
+| GET | `/admin/menus/{id}` | `system_settings:read` | 菜单节点详情 |
+| POST | `/admin/menus` | `system_settings:write` | 新建节点 |
+| PUT | `/admin/menus/{id}` | `system_settings:write` | 更新节点；父链循环校验与写入同一事务 |
+| DELETE | `/admin/menus/{id}` | `system_settings:write` | 删除节点；有子项或其权限仍被角色引用时返回 40920 |
+| GET | `/admin/dictionaries` | `system_settings:read` | 按 `page/page_size/type/keyword/status` 分页，返回 `{items,total,page,page_size}` |
+| POST | `/admin/dictionaries` | `system_settings:write` | 新建自定义显示字典项 |
+| PUT | `/admin/dictionaries/{id}` | `system_settings:write` | 更新自定义字典项；固定业务枚举拒绝 |
+| DELETE | `/admin/dictionaries/{id}` | `system_settings:write` | 删除自定义项；`is_system=1` 或固定 type 返回 40920 |
+| GET | `/admin/site-settings` | `system_settings:read` | 返回与公开端同形的 Logo/轮播配置 |
+| PUT | `/admin/site-settings` | `system_settings:write` | 校验 ready branding image 后原子更新配置与媒体引用 |
+| GET | `/admin/audit-logs` | `system_settings:read` | 按 `date_from/date_to/actor/action/page/page_size` 只读查询结构化审计文件；无清空端点 |
+| GET | `/site-config` | 公开 | 严格返回 `{logo_asset_id,banners}` 两个键 |
+| GET | `/site-config/assets/{id}/content` | 公开 | 仅当 ID 仍在当前 Logo/轮播白名单、有 `site_config` 引用且资源为 ready branding image 时返回原始流；其他 ID 统一 40401，支持单 Range |
+
+菜单写入 DTO 固定为 `parent_id? / name / type / route_path? / permission_code? / icon? / sort / status`。`type=directory` 不得带路由或权限；`type=menu` 的 `route_path` 必须在前端注册管理路由集中；`type=button` 不得带路由且必须使用服务端注册权限。默认 Questions 导航不在数据库层先限制 `questions:read`，前端注册路由精确以 `questions:read OR questions:write` 判定；这不改变各 API 守卫的单接口权限。
+
+字典写入 DTO 固定为 `type/code/label/sort/status/remark?`，`(type,code)` 唯一。服务端固定 type 是 `learner_source/difficulty/question_type/regulation_status/paper_status/question_status/exam_status`；这些项只是显示镜像，不能借 CRUD 改变来源映射、题型、状态或考试规则。
+
+站点配置请求与公开响应均是：
+
+```json
+{
+  "logo_asset_id": "41",
+  "banners": [
+    { "asset_id": "42", "sort": 10 },
+    { "asset_id": "43", "sort": 20 }
+  ]
+}
+```
+
+`logo_asset_id` 可为 null，`banners` 必须为数组、最多 3 项、`asset_id` 不得重复，服务端按 `sort + asset_id` 稳定排序。`GET /site-config` 不会序列化整张设置表，任何 AI 配置、密钥或未白名单 setting 都不得进入响应。
+
+审计查询只打开 `LOG_DIR/audit/audit-YYYY-MM-DD.log` 普通文件，拒绝路径越界与符号链接；忽略损坏旧行而不返回原文。写入、文件失败后的 stderr 降级、查询输出三条路径都对 password/token/cookie/api_key/credential 等敏感字段递归脱敏，但保留 action/result/reason 诊断信息。
 
 ### 3.3 部门管理 /departments（权限：管理）
 
@@ -768,6 +811,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 40911 | 409 | 导入批次已确认，不能更换行集合 | 批次确认重试更换合法行集合，或确认事务正在处理 |
 | 40912 | 409 | 至少保留一名启用的超级管理员 | 尝试删除/停用/清空最高管理员保护权限 |
 | 40913 | 409 | 媒体仍被业务引用，不能删除 | `media_reference` 存在时删除媒体资源 |
+| 40920 | 409 | 系统配置仍被引用，不能删除 | 菜单存在子项/对应权限被角色引用，或固定业务字典尝试修改/删除 |
 | 42201 | 422 | 文件格式不支持 | 上传非 pdf/docx（含魔法数不符） |
 | 41601 | 416 | 请求的媒体范围无效 | `Range` 语法非法、多段范围或起止超出文件边界 |
 | 42202 | 422 | 文件超过大小上限 | 制度文件超过 50MB，或媒体图片/视频超过当前配置限制；Multer 拦截与业务层统一此码 |
@@ -790,8 +834,12 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | /auth | login、refresh | profile、password、logout | 同左 | 同左 |
 | /users | — | — | — | 全部 8 个 |
 | /admin/training-categories | — | — | — | A2 候选实现全部 6 个；A3 映射 training_categories:read/write |
-| /admin/students | — | — | — | A2 候选实现全部 10 个；A3 映射 students:read/write |
+| /admin/students | — | — | — | A2/A4 实现全部 11 个；A3 映射 students:read/write |
 | /me | — | GET/PATCH 本人资料 | — | 同左 |
+| /media | — | 本人头像上传/所有权范围读取 | 非头像上传需 `media:write` | 同左 |
+| /admin 权限/会话 | — | — | 按 `roles/administrators/sessions:*` | 按各接口注册权限 |
+| /admin 系统配置 | — | — | `system_settings:read/write` | 同左；导航树为登录用户自身权限视图 |
+| /site-config | 配置两键与当前品牌内容 | 同左 | 同左 | 同左；不提供任意 media id 公开读取 |
 | /departments | tree（登录） | — | — | 其余 5 个 |
 | /regulations | — | content | 其余 14 个 | 同左 |
 | /ai | — | — | 其余 13 个 | 出题任务/题库工作流按 `ai:read/write` 等权限；config 三接口分别使用 `ai_config:read`（GET）和 `ai_config:write`（PUT/test），不自动授予 legacy `regulation_admin` |

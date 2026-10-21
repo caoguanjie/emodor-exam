@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
+import { QUESTION_ROUTE_PERMISSIONS, routeAccessAllowed } from './access';
 
 /**
  * 路由守卫承载前端侧访问控制（02 册 3.1 选型理由 3 双层防线）：
@@ -29,7 +30,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'admin/training-categories', component: () => import('../views/admin/TrainingCategories.vue'), meta: { title: '培训类别', admin: true, permission: 'training_categories:read' } },
       { path: 'admin/regulations', component: () => import('../views/admin/Regulations.vue'), meta: { title: '制度管理', admin: true, permission: 'regulations:read' } },
       { path: 'admin/regulations/:id', component: () => import('../views/admin/RegulationDetail.vue'), meta: { title: '制度详情', admin: true, permission: 'regulations:read' } },
-      { path: 'admin/questions', component: () => import('../views/admin/Questions.vue'), meta: { title: '题库与出题', admin: true, permission: 'questions:read' } },
+      { path: 'admin/questions', component: () => import('../views/admin/Questions.vue'), meta: { title: '题库与出题', admin: true, permissionAny: [...QUESTION_ROUTE_PERMISSIONS] } },
       { path: 'admin/papers', component: () => import('../views/admin/Papers.vue'), meta: { title: '试卷管理', admin: true, permission: 'papers:read' } },
       { path: 'admin/papers/:id', component: () => import('../views/admin/PaperDetail.vue'), meta: { title: '组卷', admin: true, permission: 'papers:read' } },
       { path: 'admin/statistics', component: () => import('../views/admin/Statistics.vue'), meta: { title: '统计报表', admin: true, permission: 'statistics:read' } },
@@ -37,9 +38,13 @@ const routes: RouteRecordRaw[] = [
       { path: 'admin/administrators', component: () => import('../views/admin/Administrators.vue'), meta: { title: '管理员', admin: true, permission: 'administrators:read' } },
       { path: 'admin/roles', component: () => import('../views/admin/Roles.vue'), meta: { title: '角色权限', admin: true, permission: 'roles:read' } },
       { path: 'admin/sessions', component: () => import('../views/admin/OnlineSessions.vue'), meta: { title: '在线会话', admin: true, permission: 'sessions:read' } },
+      { path: 'admin/system/menus', component: () => import('../views/admin/Menus.vue'), meta: { title: '菜单配置', admin: true, permission: 'system_settings:read' } },
+      { path: 'admin/system/dictionaries', component: () => import('../views/admin/Dictionaries.vue'), meta: { title: '字典配置', admin: true, permission: 'system_settings:read' } },
+      { path: 'admin/system/site-settings', component: () => import('../views/admin/SiteSettings.vue'), meta: { title: '网站配置', admin: true, permission: 'system_settings:read' } },
+      { path: 'admin/system/audit-logs', component: () => import('../views/admin/AuditLogs.vue'), meta: { title: '审计日志', admin: true, permission: 'system_settings:read' } },
     ],
   },
-  { path: '/:pathMatch(.*)*', redirect: '/' },
+  { path: '/:pathMatch(.*)*', component: () => import('../views/NotFound.vue'), meta: { title: '页面未找到' } },
 ];
 
 export const router = createRouter({ history: createWebHistory(), routes });
@@ -67,8 +72,6 @@ router.beforeEach(async (to) => {
   }
   if (auth.needChangePassword && to.path !== '/change-password') return '/change-password';
   if (to.meta.admin && !auth.isAdmin) return '/my/regulations';
-  if (to.meta.superAdminOnly && !auth.isSuperAdmin) return '/my/regulations';
-  if (to.meta.permission && !auth.can(String(to.meta.permission))) return '/my/regulations';
-  if (to.meta.permissionAny && !(to.meta.permissionAny as string[]).some((permission) => auth.can(permission))) return '/my/regulations';
+  if (!routeAccessAllowed(to.meta, auth.can, auth.isSuperAdmin)) return '/my/regulations';
   return true;
 });
