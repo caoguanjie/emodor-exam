@@ -1,5 +1,5 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
-import type { ExamDifficulty, LearnerSource, RuleSnapshot } from '../common/training-contracts';
+import type { ExamDifficulty, GradeState, LearnerSource, RuleSnapshot, SubmissionMethod } from '../common/training-contracts';
 
 @Entity('exam_record')
 @Index('uk_paper_user_attempt', ['paperId', 'userId', 'attemptNo'], { unique: true })
@@ -63,6 +63,33 @@ export class ExamRecord {
 
   @Column({ name: 'submitted_at', type: 'datetime', precision: 3, nullable: true })
   submittedAt: Date | null;
+
+  @Column({ name: 'draft_revision', type: 'int', unsigned: true, default: 0 })
+  draftRevision: number;
+
+  @Column({ name: 'draft_payload_hash', type: 'char', length: 64, nullable: true })
+  draftPayloadHash: string | null;
+
+  @Column({ name: 'draft_saved_at', type: 'datetime', precision: 3, nullable: true })
+  draftSavedAt: Date | null;
+
+  @Column({ name: 'last_heartbeat_at', type: 'datetime', precision: 3, nullable: true })
+  lastHeartbeatAt: Date | null;
+
+  @Column({ name: 'device_summary', type: 'varchar', length: 255, nullable: true })
+  deviceSummary: string | null;
+
+  @Column({ name: 'submission_method', type: 'varchar', length: 16, nullable: true })
+  submissionMethod: SubmissionMethod | null;
+
+  @Column({ name: 'grading_state', type: 'varchar', length: 32, default: 'not_submitted' })
+  gradingState: GradeState;
+
+  @Column({ name: 'grading_revision', type: 'int', unsigned: true, default: 0 })
+  gradingRevision: number;
+
+  @Column({ name: 'graded_at', type: 'datetime', precision: 3, nullable: true })
+  gradedAt: Date | null;
 
   @Column({ name: 'switch_count', type: 'int', default: 0 })
   switchCount: number;

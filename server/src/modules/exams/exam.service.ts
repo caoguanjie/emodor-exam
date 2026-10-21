@@ -18,8 +18,9 @@ import { GradingService } from './grading.service';
 import { RegulationScopeService } from '../regulations/regulation-scope.service';
 import { StatisticsService } from '../statistics/statistics.service';
 import { ScrollCoverageUtil } from '../../entities/learning-record.entity';
-import { AttemptReaderService } from './attempt-reader.service';
-import { gradeFrozenSnapshot, LegacyExamAdapter } from './legacy-exam-adapter';
+import { LegacyExamAdapter } from './legacy-exam-adapter';
+import { AnswerDraftService } from './answer-draft.service';
+import { SubmissionService } from './submission.service';
 
 const SUBMIT_LOCK_TTL = 30; // exam:lock:submit:{record_id} TTL = 判分 P99 × 3（07 册 3.2.4）
 const SWITCH_DEBOUNCE_SECONDS = 1; // 服务端 1 秒窗口二次去抖（05 册 6.4.4）
@@ -52,8 +53,9 @@ export class ExamService {
     private readonly statistics: StatisticsService,
     private readonly config: AppConfig,
     private readonly dataSource: DataSource,
-    private readonly attemptReader: AttemptReaderService,
     private readonly legacyAdapter: LegacyExamAdapter,
+    private readonly answerDrafts: AnswerDraftService,
+    private readonly submissions: SubmissionService,
   ) {}
 
   private deadlineKey(recordId: string | number) {
@@ -295,6 +297,19 @@ export class ExamService {
     const persistedAnswers = record.assignmentId && record.regulationId
       ? await this.legacyAdapter.answersToItems(String(record.id), answers)
       : answers;
+    if (record.assignmentId) {
+      if (persistedAnswers.length) {
+        await this.answerDrafts.patchLegacy(String(userId), String(record.id), persistedAnswers.map((answer) => ({
+          item_id: String(answer.question_id), selected: answer.selected,
+        })));
+      }
+      const heartbeat = await this.submissions.heartbeat(String(userId), String(record.id));
+      return {
+        server_time: heartbeat.server_time,
+        remaining_seconds: heartbeat.remaining_seconds,
+        deadline_at: record.deadlineAt,
+      };
+    }
     // 5 秒去抖窗口：仅拦截异常高频风暴（作答暂存为幂等覆盖写，重复到达无副作用）；
     // 30 秒正常节拍由前端定时器保证，学习心跳同理以远小于节拍的窗口判定「异常高频」（04 册 6.2）
     const lastBeat = await this.redis.get(`exam:beat:${recordId}`);
@@ -324,6 +339,19 @@ export class ExamService {
       const switchCount = record.switchCount;
       return { switch_count: switchCount, warning: switchCount > SWITCH_WARN_THRESHOLD, risk_flag: switchCount >= SWITCH_RISK_THRESHOLD };
     }
+    if (record.assignmentId) {
+      const result = await this.submissions.reportSwitch(String(userId), String(record.id));
+      const count = Number(result.switch_count);
+      const warning = count > SWITCH_WARN_THRESHOLD;
+      const riskFlag = count >= SWITCH_RISK_THRESHOLD;
+      if (riskFlag) {
+        this.audit.log({
+          actor_id: userId, actor_name: '', action: 'exam.switch.risk', object_type: 'exam_record',
+          object_id: recordId, detail: { switch_count: count }, result: 'success', source_ip: null,
+        });
+      }
+      return { switch_count: count, warning, risk_flag: riskFlag };
+    }
     // 1 秒窗口去抖：窗口内的重复上报合并计 1 次（防事件风暴与伪造 flooding）
     const debounced = await this.redis.setNx(`exam:switch:deb:${recordId}`, '1', SWITCH_DEBOUNCE_SECONDS);
     if (!debounced) {
@@ -351,6 +379,21 @@ export class ExamService {
     if (!record) throw Errors.notFound('考试记录不存在');
     if (Number(record.userId) !== userId) throw Errors.dataForbidden();
     this.assertLegacyRecordRoute(record);
+
+    if (record.assignmentId) {
+      // A completed C2 attempt is an idempotent replay regardless of the retry
+      // body. Do not remap stale client answers before returning its first result.
+      if (record.status !== ExamStatus.IN_PROGRESS) {
+        return this.legacyAdapter.submitResult(record);
+      }
+      const mapped = await this.legacyAdapter.answersToItems(String(record.id), answers);
+      await this.submissions.submitLegacy(String(userId), String(record.id), mapped.map((answer) => ({
+        item_id: String(answer.question_id), selected: answer.selected,
+      })));
+      const completed = await this.recordRepo.findOne({ where: { id: String(record.id) } });
+      if (!completed) throw Errors.notFound('考试记录不存在');
+      return this.legacyAdapter.submitResult(completed);
+    }
 
     // 幂等：终态记录重复交卷直接返回首次评分结果（04 册 1.5）
     if (record.status !== ExamStatus.IN_PROGRESS) {
@@ -408,7 +451,6 @@ export class ExamService {
     submitStatus: 'submitted' | 'timeout',
     actorName: string,
   ): Promise<Record<string, unknown>> {
-    if (record.assignmentId) return this.gradeSnapshotAndPersist(record, answers, submitStatus, actorName);
     const paper = await this.paperRepo.findOne({ where: { id: record.paperId } });
     if (!paper) throw Errors.notFound('试卷不存在');
     const pqs = await this.pqRepo.find({ where: { paperId: paper.id }, order: { sort: 'ASC', id: 'ASC' } });
@@ -476,63 +518,6 @@ export class ExamService {
       result: 'success', source_ip: null,
     });
     return this.submitResultView(savedRecord || ({ ...record, status: finalStatus, score: String(graded.total), submittedAt, switchCount } as ExamRecord));
-  }
-
-  /**
-   * C2 compatibility finalization for frozen objective snapshots. C3 owns the
-   * persistent draft/manual-grading finalizer; this branch keeps fixed clients
-   * and the timeout sweeper on immutable facts until that service takes over.
-   */
-  private async gradeSnapshotAndPersist(
-    record: ExamRecord,
-    answers: Map<string, number[]>,
-    submitStatus: 'submitted' | 'timeout',
-    actorName: string,
-  ): Promise<Record<string, unknown>> {
-    const switchCount = Number((await this.redis.get(this.switchKey(record.id))) || 0);
-    const submittedAt = new Date();
-    let savedRecord: ExamRecord | null = null;
-    let totalCents = 0;
-    await this.dataSource.transaction(async (manager) => {
-      const recordRepo = manager.getRepository(ExamRecord);
-      const locked = await recordRepo.findOne({
-        where: { id: String(record.id) }, lock: { mode: 'pessimistic_write' },
-      });
-      if (!locked || locked.status !== ExamStatus.IN_PROGRESS) throw Errors.submitConflict();
-      const snapshot = await this.attemptReader.forGrading(manager, String(record.id));
-      const graded = gradeFrozenSnapshot(snapshot, answers);
-      totalCents = graded.totalCents;
-      const answerRepo = manager.getRepository(ExamAnswer);
-      const rows = graded.details.map((detail) => answerRepo.create({
-        examRecordId: String(record.id),
-        questionId: String(detail.itemId),
-        selected: detail.selected,
-        isCorrect: detail.isCorrect,
-        gainedScore: (detail.gainedCents / 100).toFixed(2),
-      }));
-      if (rows.length) await answerRepo.save(rows);
-      locked.status = graded.totalCents >= Number(snapshot.rule.passCents) ? ExamStatus.PASSED : ExamStatus.FAILED;
-      locked.score = (graded.totalCents / 100).toFixed(2);
-      locked.submittedAt = submittedAt;
-      locked.switchCount = switchCount;
-      locked.activeAssignmentId = null;
-      savedRecord = await recordRepo.save(locked);
-    });
-    const completed = savedRecord || ({
-      ...record,
-      status: totalCents >= Number(record.ruleSnapshot?.passCents || 0) ? ExamStatus.PASSED : ExamStatus.FAILED,
-      score: (totalCents / 100).toFixed(2),
-      submittedAt,
-      switchCount,
-      activeAssignmentId: null,
-    } as ExamRecord);
-    if (record.regulationId) await this.statistics.invalidateRegulationCache(String(record.regulationId));
-    this.audit.log({
-      actor_id: Number(record.userId), actor_name: actorName, action: 'exam.submit', object_type: 'exam_record',
-      object_id: String(record.id), detail: { status: completed.status, score: totalCents / 100, timeout: submitStatus === 'timeout', snapshot: true },
-      result: 'success', source_ip: null,
-    });
-    return this.legacyAdapter.submitResult(completed);
   }
 
   private async submitResultView(record: ExamRecord) {
@@ -638,6 +623,10 @@ export class ExamService {
 
   /** 单条超时交卷：与主动交卷同一评分路径，status=timeout、按当前已答内容评分（FR-EXM-03） */
   private async autoSubmit(record: ExamRecord) {
+    if (record.assignmentId) {
+      await this.submissions.timeout(String(record.id));
+      return;
+    }
     const locked = await this.redis.setNx(`exam:lock:submit:${record.id}`, '1', SUBMIT_LOCK_TTL);
     if (!locked) return; // 主动交卷进行中，先到者生效（幂等，06 册 4.3）
     try {

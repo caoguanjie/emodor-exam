@@ -35,6 +35,7 @@ export const SUITE_REGISTRY = Object.freeze({
   'training-question-import': join(ROOT, 'tests', 'training-question-import.mjs'),
   'training-publishing': join(ROOT, 'tests', 'training-publishing.mjs'),
   'training-attempts': join(ROOT, 'tests', 'training-attempts.mjs'),
+  'training-submissions': join(ROOT, 'tests', 'training-submissions.mjs'),
 });
 
 export function resolveSuitePaths(selector, registry = SUITE_REGISTRY) {
