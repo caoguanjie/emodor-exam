@@ -41,6 +41,7 @@ describe('A3 captcha and access contracts', () => {
     expect(issued).not.toHaveProperty('answer');
 
     const answer = [...redis.values.values()][0];
+    expect(answer).toMatch(/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}$/);
     expect(await service.verify(issued.captcha_id, answer)).toBe(true);
     expect(await service.verify(issued.captcha_id, answer)).toBe(false);
   });

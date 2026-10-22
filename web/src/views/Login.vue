@@ -47,7 +47,7 @@
           </el-form-item>
           <el-form-item>
             <div class="captcha-row">
-              <el-input v-model="captchaCode" placeholder="验证码（管理员必填）" size="large" maxlength="8" @keyup.enter="onLogin">
+              <el-input v-model="captchaCode" placeholder="验证码（管理员必填）" size="large" maxlength="4" @keyup.enter="onLogin">
                 <template #prefix><el-icon><Key /></el-icon></template>
               </el-input>
               <button class="captcha-image" type="button" title="刷新验证码" @click="loadCaptcha">

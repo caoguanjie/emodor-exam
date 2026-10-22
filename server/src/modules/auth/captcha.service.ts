@@ -25,7 +25,7 @@ export class CaptchaService {
   }
 
   private code(): string {
-    const bytes = randomBytes(5);
+    const bytes = randomBytes(4);
     return Array.from(bytes, (value) => CAPTCHA_ALPHABET[value % CAPTCHA_ALPHABET.length]).join('');
   }
 
