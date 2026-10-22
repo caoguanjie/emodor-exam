@@ -9,7 +9,7 @@ import { CurrentUser, AuthUser } from '../../common/decorators/current-user.deco
 import { AuditService } from '../../common/audit.service';
 import { AccessService } from '../access/access.service';
 
-/** /statistics 统计报表模块（04 册 3.8；制度管理角色；个人维度 employee 仅本人） */
+/** 兼容历史统计查询；管理访问受统计权限保护，普通学员仅能查询本人。 */
 @Controller('statistics')
 export class StatisticsController {
   constructor(
@@ -150,7 +150,6 @@ export class StatisticsController {
         { header: '作答次数', key: 'attempts', width: 10 },
         { header: '最高分', key: 'best', width: 10 },
         { header: '最终状态', key: 'status', width: 12 },
-        { header: '切屏次数', key: 'switch', width: 10 },
       ];
       const rows = await this.stats.regulationUserDetails(regulationId);
       for (const r of rows) {

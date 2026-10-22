@@ -5,7 +5,7 @@ export type QuestionImportFormat = 'xlsx' | 'txt';
 
 export const QUESTION_IMPORT_HEADERS = [
   'category', 'type', 'difficulty', 'concept', 'stem',
-  'options', 'answer', 'analysis', 'rubric', 'score',
+  'options', 'answer', 'analysis', 'score',
 ] as const;
 
 type QuestionImportHeader = (typeof QUESTION_IMPORT_HEADERS)[number];
@@ -30,25 +30,19 @@ const TEMPLATE_ROWS: Array<Record<QuestionImportHeader, string>> = [
     category: '', type: 'single', difficulty: 'easy', concept: '',
     stem: '<p>进入作业区域前首先应做什么？</p>',
     options: JSON.stringify([{ key: 'A', text: '完成风险确认' }, { key: 'B', text: '直接开始作业' }]),
-    answer: JSON.stringify([0]), analysis: '<p>应先完成风险确认。</p>', rubric: '', score: '5',
+    answer: JSON.stringify([0]), analysis: '<p>应先完成风险确认。</p>', score: '5',
   },
   {
     category: '', type: 'multiple', difficulty: 'medium', concept: '',
     stem: '<p>以下哪些属于作业前检查？</p>',
     options: JSON.stringify([{ key: 'A', text: '检查防护用品' }, { key: 'B', text: '确认作业许可' }, { key: 'C', text: '跳过交底' }]),
-    answer: JSON.stringify([0, 1]), analysis: '<p>防护用品和作业许可均须确认。</p>', rubric: '', score: '10',
+    answer: JSON.stringify([0, 1]), analysis: '<p>防护用品和作业许可均须确认。</p>', score: '10',
   },
   {
     category: '', type: 'judgment', difficulty: 'hard', concept: '',
     stem: '<p>未完成安全交底也可以开始作业。</p>',
     options: JSON.stringify([{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]),
-    answer: JSON.stringify([1]), analysis: '<p>必须先完成安全交底。</p>', rubric: '', score: '5',
-  },
-  {
-    category: '', type: 'image', difficulty: 'hard', concept: '',
-    stem: '<p>上传现场照片并标出隐患位置。</p>',
-    options: JSON.stringify([]), answer: JSON.stringify([]), analysis: '',
-    rubric: '<p>隐患识别完整、位置准确。</p>', score: '10',
+    answer: JSON.stringify([1]), analysis: '<p>必须先完成安全交底。</p>', score: '5',
   },
 ];
 
@@ -122,7 +116,7 @@ async function parseXlsx(file: Buffer, limits: QuestionImportLimits): Promise<Pa
       hasExtraCell = true;
       if (parsed.error) errors.push(parsed.error);
     });
-    if (hasExtraCell) errors.unshift('Excel 每行必须使用 10 列');
+    if (hasExtraCell) errors.unshift('Excel 每行必须使用 9 列');
     QUESTION_IMPORT_HEADERS.forEach((_header, index) => {
       const parsed = excelCellText(excelRow.getCell(index + 1));
       cells.push(parsed.text);
@@ -152,7 +146,7 @@ function parseTxt(file: Buffer, limits: QuestionImportLimits): ParsedQuestionImp
     if (!line.trim()) return;
     const cells = line.split('\t');
     if (cells.length !== QUESTION_IMPORT_HEADERS.length) {
-      rows.push(rowFromCells(index + 2, cells.slice(0, QUESTION_IMPORT_HEADERS.length), ['TXT 每行必须使用 10 列制表符分隔']));
+      rows.push(rowFromCells(index + 2, cells.slice(0, QUESTION_IMPORT_HEADERS.length), ['TXT 每行必须使用 9 列制表符分隔']));
       return;
     }
     rows.push(rowFromCells(index + 2, cells));
@@ -188,7 +182,7 @@ export async function buildQuestionImportTemplate(format: QuestionImportFormat):
   for (const row of TEMPLATE_ROWS) worksheet.addRow(QUESTION_IMPORT_HEADERS.map((header) => row[header]));
   worksheet.getRow(1).font = { bold: true };
   worksheet.columns.forEach((column, index) => {
-    column.width = ['stem', 'options', 'answer', 'analysis', 'rubric'].includes(QUESTION_IMPORT_HEADERS[index]) ? 36 : 16;
+    column.width = ['stem', 'options', 'answer', 'analysis'].includes(QUESTION_IMPORT_HEADERS[index]) ? 36 : 16;
   });
   return Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer);
 }

@@ -62,8 +62,8 @@ async function createUser(ctx, values, passwordOwner = 'admin') {
 async function insertRecord(ctx, input) {
   await ctx.queryTestDb(
     `INSERT INTO exam_record
-      (paper_id,regulation_id,user_id,assignment_id,active_assignment_id,release_id,source,category_id,difficulty,rule_snapshot,snapshot_origin,attempt_no,status,score,started_at,deadline_at,submitted_at,submission_method,grading_state,grading_revision,graded_at,switch_count)
-     VALUES (?,NULL,?,NULL,NULL,?,?,?,?,?,'release',?,?,?,?,?,?,?,?,0,?,0)`,
+      (paper_id,regulation_id,user_id,assignment_id,active_assignment_id,release_id,source,category_id,difficulty,rule_snapshot,snapshot_origin,attempt_no,status,score,started_at,deadline_at,submitted_at,submission_method,grading_state,graded_at)
+     VALUES (?,NULL,?,NULL,NULL,?,?,?,?,?,'release',?,?,?,?,?,?,?,?,?)`,
     [
       input.paperId, input.userId, input.releaseId, input.source, input.categoryId, input.difficulty,
       input.rule === null ? null : JSON.stringify(input.rule), input.attemptNo, input.status, input.score,
@@ -186,16 +186,18 @@ export async function run(ctx) {
     release: String(summary.data.release_id), eligible: summary.data.eligible_count,
     eligibleStarted: summary.data.eligible_started_count, historical: summary.data.historical_started_count,
     historicalOnly: summary.data.historical_only_started_count, attempts: summary.data.submitted_attempts,
-    users: summary.data.submitted_users, pending: summary.data.pending_users, finalized: summary.data.finalized_users,
+    users: summary.data.submitted_users, finalized: summary.data.finalized_users,
   }, {
     release: String(currentRelease.id), eligible: 4, eligibleStarted: 4, historical: 5,
-    historicalOnly: 1, attempts: 7, users: 5, pending: 1, finalized: 3,
+    historicalOnly: 1, attempts: 7, users: 5, finalized: 3,
   });
+  assert.equal(Object.hasOwn(summary.data, 'pending_users'), false);
+  assert.equal(Object.hasOwn(summary.data, 'pending_attempts'), false);
   assert.equal(summary.data.participation_rate, 1);
   assert.deepEqual(summary.data.course_completion, { eligible_users: 2, required_lessons: 2, completed_users: 1, completion_rate: 0.5 });
   assert.deepEqual(summary.data.uncompleted_reasons, [
     { reason: 'learning_incomplete', users: 1 }, { reason: 'not_started', users: 0 },
-    { reason: 'pending_manual', users: 1 }, { reason: 'not_passed', users: 0 },
+    { reason: 'not_passed', users: 1 },
   ]);
   const easyGroup = summary.data.score_groups.find((item) => item.difficulty === 'easy');
   assert.deepEqual({ users: easyGroup.finalized_users, average: easyGroup.average_score, pass: easyGroup.pass_rate }, { users: 2, average: 80, pass: 1 });
@@ -260,7 +262,7 @@ export async function run(ctx) {
   const adminDashboard = await ctx.request(admin.actor, 'GET', '/admin/dashboard');
   assert.equal(adminDashboard.status, 200);
   assert.equal(adminDashboard.data.metrics.learner_count, 3, 'dashboard learner scope should exclude business-role learner A');
-  assert.equal(adminDashboard.data.metrics.pending_grading_count, 1);
+  assert.equal(Object.hasOwn(adminDashboard.data.metrics, 'pending_grading_count'), false);
   assert.equal(typeof adminDashboard.data.metrics.question_count, 'number');
   assert.equal(typeof adminDashboard.data.metrics.paper_count, 'number');
   assert.ok(adminDashboard.data.exam_trend.reduce((sum, item) => sum + item.count, 0) >= 9);

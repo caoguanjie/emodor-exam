@@ -153,15 +153,15 @@ async function runBody(ctx) {
   const permissionUser = await createStudent(ctx, admin, categoryA, 'institution', '窄权限管理员');
   const role = await ctx.request(admin, 'POST', '/admin/roles', {
     code: `course_writer_${randomBytes(4).toString('hex')}`,
-    name: 'B1 课程与制度编辑',
-    permissions: ['courses:write', 'regulations:write'],
+    name: 'B1 课程编辑',
+    permissions: ['courses:write'],
   });
   assert(role.status === 200 && role.data?.id, `role create failed: ${role.status}`);
   const assigned = await ctx.request(admin, 'PUT', `/admin/administrators/${permissionUser.id}/roles`, { role_ids: [String(role.data.id)] });
   assert(assigned.status === 200, `role assign failed: ${assigned.status}`);
   permissionUser.actor = await login(ctx, permissionUser.username, permissionUser.password, permissionUser.employeeNo, permissionUser.realName);
   const regulationOptions = await ctx.request(permissionUser.actor, 'GET', '/regulations/category-options?page=1&page_size=100');
-  assert(regulationOptions.status === 200 && regulationOptions.data?.items?.some((item) => String(item.id) === categoryA), `regulation category options denied: ${regulationOptions.status}`);
+  assert(regulationOptions.status === 404, `removed regulation category options remained reachable: ${regulationOptions.status}`);
   const courseOptions = await ctx.request(permissionUser.actor, 'GET', '/admin/courses/category-options?page=1&page_size=100');
   assert(courseOptions.status === 200 && courseOptions.data?.items?.some((item) => String(item.id) === categoryA), `course category options denied: ${courseOptions.status}`);
   const categoryAdminList = await ctx.request(permissionUser.actor, 'GET', '/admin/training-categories');
@@ -178,11 +178,11 @@ async function runBody(ctx) {
   assert(narrowWriterNavigation.status === 200 && courseMenu?.permission_code === null,
     `write-only course navigation missing or over-constrained: ${narrowWriterNavigation.status}`);
 
-  const regulation = await ctx.request(admin, 'POST', '/regulations', {
-    title: `B1 关联制度 ${randomBytes(3).toString('hex')}`,
-    category: '保留旧分类', category_id: categoryA, description: '课程信息关联',
+  const regulation = await ctx.request(admin, 'POST', '/admin/question-materials', {
+    title: `B1 关联资料 ${randomBytes(3).toString('hex')}`,
+    description: '课程信息关联',
   });
-  assert(regulation.status === 200 && String(regulation.data?.category_id) === categoryA && regulation.data?.category === '保留旧分类', `regulation category create failed: ${regulation.status}`);
+  assert(regulation.status === 200 && regulation.data?.id, `question material create failed: ${regulation.status}`);
 
   const course = await ctx.request(admin, 'POST', '/admin/courses', {
     title: 'B1 视频课程', category_id: categoryA, description: '生命周期闭环',
@@ -285,14 +285,10 @@ async function runBody(ctx) {
 
   const disableCategory = await ctx.request(admin, 'PUT', `/admin/training-categories/${categoryA}/status`, { status: 0 });
   assert(disableCategory.status === 200, `category disable failed: ${disableCategory.status}`);
-  const preserveInactiveReference = await ctx.request(admin, 'PUT', `/regulations/${regulation.data.id}`, {
-    title: 'B1 关联制度（更新）', category_id: categoryA,
+  const removedRegulationUpdate = await ctx.request(admin, 'PUT', `/regulations/${regulation.data.id}`, {
+    title: '不得恢复制度管理', category_id: categoryA,
   });
-  assert(preserveInactiveReference.status === 200 && String(preserveInactiveReference.data?.category_id) === categoryA,
-    `unchanged inactive regulation category should be preserved: ${preserveInactiveReference.status}`);
-  const clearInactiveReference = await ctx.request(admin, 'PUT', `/regulations/${regulation.data.id}`, { category_id: null });
-  assert(clearInactiveReference.status === 200 && clearInactiveReference.data?.category_id === null
-    && clearInactiveReference.data?.category === '保留旧分类', 'regulation category clear changed legacy category');
+  assert(removedRegulationUpdate.status === 404, `removed regulation update remained reachable: ${removedRegulationUpdate.status}`);
 
   const deleteCategory = await ctx.request(admin, 'DELETE', `/admin/training-categories/${categoryA}`);
   assert(deleteCategory.status === 409, `referenced category delete expected 409, got ${deleteCategory.status}`);

@@ -1,10 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Regulation } from '../../entities/regulation.entity';
 import { RegulationVersion } from '../../entities/regulation-version.entity';
-import { Errors, RegulationStatus } from '../../common/errors';
-import { RegulationScopeService } from './regulation-scope.service';
+import { Errors } from '../../common/errors';
 import { AuditService } from '../../common/audit.service';
 import { AppConfig } from '../../config/configuration';
 import { mkdirSync, renameSync, rmSync, writeFileSync, existsSync, createReadStream, statSync } from 'node:fs';
@@ -13,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 
 export interface UploadResult {
-  version_id: number;
+  version_id: string;
   version_no: number;
   file_type: string;
   file_hash: string;
@@ -22,17 +21,16 @@ export interface UploadResult {
 }
 
 /**
- * 版本与文件服务（05 册 3.4.1 / 3.4.2 / 3.4.4）：
+ * Shared immutable-file version storage for question materials and legacy content reads.
  * 上传校验链（大小 ≤ 50MB → 扩展名 + 魔数 → SHA-256 → 重复检测提示不阻断 → 事务创建版本）；
  * 本地卷目录规则 {UPLOAD_DIR}/regulations/{regulation_id}/{version_no}_{hash8}.{ext}；
- * append-only 版本管理 + current_version_id 切换。
+ * New uploads are append-only; the slimmed application exposes no current-version switch.
  */
 @Injectable()
 export class RegulationVersionService {
   constructor(
     @InjectRepository(Regulation) private readonly regRepo: Repository<Regulation>,
     @InjectRepository(RegulationVersion) private readonly versionRepo: Repository<RegulationVersion>,
-    private readonly scopeService: RegulationScopeService,
     private readonly config: AppConfig,
     private readonly audit: AuditService,
     private readonly dataSource: DataSource,
@@ -62,7 +60,7 @@ export class RegulationVersionService {
 
   async upload(regulationId: string, file: Express.Multer.File, actor: { id: number; name: string }, ip: string | null): Promise<UploadResult> {
     const regulation = await this.regRepo.findOne({ where: { id: regulationId } });
-    if (!regulation) throw Errors.notFound('制度不存在');
+    if (!regulation) throw Errors.notFound('资料不存在');
     if (!file || !file.buffer || !file.buffer.length) throw Errors.param('缺少上传文件');
 
     // 校验 2：大小 ≤ 50MB（nginx client_max_body_size 同步配置，05 册 3.4.1）
@@ -147,11 +145,11 @@ export class RegulationVersionService {
 
     this.audit.log({
       actor_id: actor.id, actor_name: actor.name, action: 'regulation.version.upload', object_type: 'regulation_version',
-      object_id: version.id, detail: { regulation_id: Number(regulationId), version_no: version.versionNo, file_hash: fileHash },
+      object_id: version.id, detail: { regulation_id: String(regulationId), version_no: version.versionNo, file_hash: fileHash },
       result: 'success', source_ip: ip,
     });
     return {
-      version_id: Number(version.id),
+      version_id: String(version.id),
       version_no: version.versionNo,
       file_type: version.fileType,
       file_hash: fileHash,
@@ -169,53 +167,6 @@ export class RegulationVersionService {
     return Number(qb?.maxNo || 0) + 1;
   }
 
-  async listVersions(regulationId: string) {
-    const regulation = await this.regRepo.findOne({ where: { id: regulationId } });
-    if (!regulation) throw Errors.notFound('制度不存在');
-    const rows = await this.versionRepo.find({
-      where: { regulationId },
-      order: { versionNo: 'DESC' },
-    });
-    return rows.map((v) => ({
-      id: Number(v.id),
-      version_no: v.versionNo,
-      file_type: v.fileType,
-      file_hash: v.fileHash,
-      parse_status: v.parseStatus,
-      parsed_at: v.parsedAt,
-      retry_count: v.retryCount,
-      created_at: v.createdAt,
-      is_current: regulation.currentVersionId === v.id,
-    }));
-  }
-
-  /** 版本详情（管理端历史版本回看，FR-REG-04 验收②④）：docx → content_html；pdf → 下载地址 */
-  async versionDetail(regulationId: string, versionId: string) {
-    const version = await this.versionRepo.findOne({ where: { id: versionId, regulationId } });
-    if (!version) throw Errors.notFound('版本不存在');
-    const base: Record<string, unknown> = {
-      id: Number(version.id),
-      version_no: version.versionNo,
-      file_type: version.fileType,
-      file_hash: version.fileHash,
-      parse_status: version.parseStatus,
-      parsed_at: version.parsedAt,
-      retry_count: version.retryCount,
-      created_at: version.createdAt,
-    };
-    if (version.parseStatus === 'parsed' && version.fileType === 'docx') {
-      base.content_html = version.contentHtml;
-      base.file_download_url = null;
-    } else if (version.parseStatus === 'parsed' && version.fileType === 'pdf') {
-      base.content_html = null;
-      base.file_download_url = `/api/v1/regulations/${regulationId}/versions/${versionId}/file`;
-    } else {
-      base.content_html = null;
-      base.file_download_url = null;
-    }
-    return base;
-  }
-
   /** 解析失败重试：failed → pending 重新入队（retry_count +1，05 册 3.4.3） */
   async retryParse(regulationId: string, versionId: string, actor: { id: number; name: string }, ip: string | null) {
     const version = await this.versionRepo.findOne({ where: { id: versionId, regulationId } });
@@ -228,23 +179,7 @@ export class RegulationVersionService {
       actor_id: actor.id, actor_name: actor.name, action: 'regulation.version.retry', object_type: 'regulation_version',
       object_id: versionId, detail: { retry_count: version.retryCount }, result: 'success', source_ip: ip,
     });
-    return { version_id: Number(version.id), parse_status: version.parseStatus, retry_count: version.retryCount };
-  }
-
-  /** 切换生效版本（05 册 3.4.4）：目标版本须 parsed；draft/published 可切换；archived 不再切换（C-08） */
-  async switchCurrentVersion(regulationId: string, versionId: string, actor: { id: number; name: string }, ip: string | null) {
-    const regulation = await this.regRepo.findOne({ where: { id: regulationId } });
-    if (!regulation) throw Errors.notFound('制度不存在');
-    if (regulation.status === RegulationStatus.ARCHIVED) throw Errors.param('制度已归档，不可切换生效版本');
-    const version = await this.versionRepo.findOne({ where: { id: versionId, regulationId } });
-    if (!version) throw Errors.notFound('版本不存在');
-    if (version.parseStatus !== 'parsed') throw Errors.param('目标版本未解析成功，不能设为生效版本');
-    regulation.currentVersionId = version.id;
-    await this.regRepo.save(regulation);
-    this.audit.log({
-      actor_id: actor.id, actor_name: actor.name, action: 'regulation.version.switch', object_type: 'regulation',
-      object_id: regulationId, detail: { current_version_id: Number(versionId) }, result: 'success', source_ip: ip,
-    });
+    return { version_id: String(version.id), parse_status: version.parseStatus, retry_count: version.retryCount };
   }
 
   /** PDF 文件受控流式下发（05 册 3.4.6：不暴露静态 URL，经应用层鉴权后提供） */

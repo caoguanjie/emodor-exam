@@ -28,7 +28,6 @@ export interface ReleaseQuestionSnapshot {
   options: QuestionOption[];
   answer: number[];
   analysis: string | null;
-  rubric: string | null;
   scoreCents: number;
   conceptId?: string;
   regulationId?: string;
@@ -65,7 +64,7 @@ export interface RegulationPublishedPaper extends PublishedPaperBase {
 export type PublishedPaper = TrainingPublishedPaper | RegulationPublishedPaper;
 export type PublishedQuestionSnapshot = QuestionVersionSnapshot | ReleaseQuestionSnapshot;
 
-const QUESTION_TYPES = new Set<QuestionType>(['single', 'multiple', 'judgment', 'image']);
+const QUESTION_TYPES = new Set<QuestionType>(['single', 'multiple', 'judgment']);
 const DIFFICULTIES = new Set<Difficulty>(['easy', 'medium', 'hard']);
 
 function deepClone<T>(value: T): T {
@@ -100,7 +99,6 @@ function snapshotFromEntity(version: QuestionVersion): QuestionVersionSnapshot {
     options: deepClone(version.options as QuestionOption[]),
     answer: [...version.answer],
     analysis: version.analysis,
-    rubric: version.rubric,
     scoreCents: Number(version.scoreCents),
     conceptId: version.conceptId || undefined,
     regulationId: version.regulationId || undefined,
@@ -126,7 +124,6 @@ function releaseSnapshotFromEntity(version: QuestionVersion): ReleaseQuestionSna
     options: deepClone(version.options as QuestionOption[]),
     answer: [...version.answer],
     analysis: version.analysis,
-    rubric: version.rubric,
     scoreCents: Number(version.scoreCents),
     conceptId: version.conceptId || undefined,
     regulationId: version.regulationId || undefined,

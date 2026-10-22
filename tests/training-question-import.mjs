@@ -12,7 +12,7 @@ const { MediaAsset } = require('./dist/entities/media-asset.entity.js');
 const { MediaService } = require('./dist/modules/media/media.service.js');
 const { QuestionVersionService } = require('./dist/modules/questions/question-version.service.js');
 
-const HEADERS = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'rubric', 'score'];
+const HEADERS = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'score'];
 
 async function captchaAnswer(ctx, captchaId) {
   const redis = new Redis({
@@ -65,16 +65,17 @@ function baseRows() {
     category: '', type: 'single', difficulty: 'easy', concept: '受限空间',
     stem: '<p>B4：进入受限空间前首先应做什么？</p>',
     options: JSON.stringify([{ key: 'A', text: '先通风检测' }, { key: 'B', text: '直接进入' }]),
-    answer: JSON.stringify([0]), analysis: '<p>应先通风并检测。</p>', rubric: '', score: '5',
+    answer: JSON.stringify([0]), analysis: '<p>应先通风并检测。</p>', score: '5',
   };
   return [
     single,
     { ...single, type: 'essay', stem: '<p>B4：未知题型。</p>' },
     { ...single },
     {
-      category: '', type: 'image', difficulty: 'hard', concept: '',
-      stem: '<p>B4：上传现场照片并指出隐患。</p>', options: '[]', answer: '[]', analysis: '',
-      rubric: '<p>识别隐患完整，位置准确。</p>', score: '10',
+      category: '', type: 'judgment', difficulty: 'hard', concept: '',
+      stem: '<p>B4：未检测不得进入受限空间。</p>',
+      options: JSON.stringify([{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]),
+      answer: JSON.stringify([0]), analysis: '<p>应先完成通风检测。</p>', score: '10',
     },
   ];
 }
@@ -165,7 +166,6 @@ async function validateMediaWithSaturatedCallerPool(ctx, actorId, categoryId, me
       options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }],
       answer: [0],
       analysis: null,
-      rubric: null,
       scoreCents: 500,
       source: 'import',
     };
@@ -289,11 +289,15 @@ async function runBody(ctx) {
   const otherUsername = `b4_admin_${suffix}`;
   const otherName = `B4管理员${suffix}`;
   const otherPassword = randomStrongPassword(otherUsername, otherName);
-  const otherUser = await ctx.request(admin.actor, 'POST', '/users', {
-    username: otherUsername,
-    password: otherPassword,
-    real_name: otherName,
-    role: 'super_admin',
+  const otherRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
+    code: `b4_other_${suffix}`,
+    name: `B4 其他导入员 ${suffix}`,
+    permissions: ['questions:write'],
+  });
+  assert.equal(otherRole.status, 200, JSON.stringify(otherRole));
+  const otherUser = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
+    username: otherUsername, password: otherPassword, real_name: otherName,
+    role_ids: [String(otherRole.data.id)],
   });
   assert.equal(otherUser.status, 200, JSON.stringify(otherUser));
   const other = await accountLogin(ctx, otherUsername, otherPassword, otherName);
@@ -322,23 +326,17 @@ async function runBody(ctx) {
   const scopedUsername = `b4_scoped_${suffix}`;
   const scopedName = `B4窄权限${suffix}`;
   const scopedPassword = randomStrongPassword(scopedUsername, scopedName);
-  const scopedUser = await ctx.request(admin.actor, 'POST', '/users', {
-    username: scopedUsername,
-    password: scopedPassword,
-    real_name: scopedName,
-    role: 'employee',
-  });
-  assert.equal(scopedUser.status, 200, JSON.stringify(scopedUser));
   const scopedRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
     code: `b4_import_${suffix}`,
     name: `B4 导入权限 ${suffix}`,
     permissions: ['questions:write', 'students:write'],
   });
   assert.equal(scopedRole.status, 200, JSON.stringify(scopedRole));
-  const scopedAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${scopedUser.data.id}/roles`, {
+  const scopedUser = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
+    username: scopedUsername, password: scopedPassword, real_name: scopedName,
     role_ids: [String(scopedRole.data.id)],
   });
-  assert.equal(scopedAssigned.status, 200, JSON.stringify(scopedAssigned));
+  assert.equal(scopedUser.status, 200, JSON.stringify(scopedUser));
   const scoped = await accountLogin(ctx, scopedUsername, scopedPassword, scopedName);
   const deniedStem = `<p>B4：撤权后不得导入 ${suffix}</p>`;
   const deniedRows = [{ ...baseRows()[0], concept: '', stem: deniedStem }];
@@ -462,13 +460,13 @@ async function runBody(ctx) {
       category: categoryId, type: 'multiple', difficulty: 'medium', concept: '',
       stem: '<p>B4：哪些属于作业前检查？</p>',
       options: JSON.stringify([{ key: 'A', text: '检查防护用品' }, { key: 'B', text: '确认许可' }, { key: 'C', text: '跳过交底' }]),
-      answer: '[0,1]', analysis: '<p>前两项正确。</p>', rubric: '', score: '10',
+      answer: '[0,1]', analysis: '<p>前两项正确。</p>', score: '10',
     },
     {
       category: categoryId, type: 'judgment', difficulty: 'hard', concept: '',
       stem: '<p>B4：未交底可以直接作业。</p>',
       options: JSON.stringify([{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]),
-      answer: '[1]', analysis: '<p>必须先交底。</p>', rubric: '', score: '5',
+      answer: '[1]', analysis: '<p>必须先交底。</p>', score: '5',
     },
   ];
   const correctedPreview = await previewFile(ctx, admin.actor, 'txt', txtBytes(correctedRows), categoryId);
@@ -486,7 +484,7 @@ async function runBody(ctx) {
     allIds,
   );
   assert.equal(stored.length, 4);
-  assert.deepEqual(new Set(stored.map((row) => row.type)), new Set(['single', 'multiple', 'judgment', 'image']));
+  assert.deepEqual(new Set(stored.map((row) => row.type)), new Set(['single', 'multiple', 'judgment']));
   assert.deepEqual(new Set(stored.map((row) => row.difficulty)), new Set(['easy', 'medium', 'hard']));
   for (const row of stored) {
     assert.equal(row.status, 'approved');

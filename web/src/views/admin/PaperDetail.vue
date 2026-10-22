@@ -59,9 +59,9 @@
         <el-form-item label="试卷标题"><el-input v-model="form.title" maxlength="128" :disabled="!editable" /></el-form-item>
         <el-form-item label="组卷模式"><el-radio-group v-model="form.mode" :disabled="!editable"><el-radio-button value="fixed">固定组卷</el-radio-button><el-radio-button value="random">随机组卷</el-radio-button></el-radio-group></el-form-item>
         <el-form-item label="培训类别"><el-select v-model="form.category_id" filterable style="width:100%" :disabled="!editable" @change="onCategoryChange"><el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
-        <el-form-item label="制度筛选"><el-select v-model="form.regulation_ids" multiple filterable clearable style="width:100%" :disabled="!editable"><el-option v-for="item in regulationOptions" :key="item.id" :label="item.title" :value="item.id" /></el-select><div class="hint">留空时同类别无制度来源题也可用；选择后只保留指定制度来源题。</div></el-form-item>
+        <el-form-item label="资料来源筛选"><el-select v-model="form.regulation_ids" multiple filterable clearable style="width:100%" :disabled="!editable"><el-option v-for="item in regulationOptions" :key="item.id" :label="item.title" :value="item.id" /></el-select><div class="hint">留空时同类别无资料来源的人工/导入题也可用；选择后只保留指定资料来源题。</div></el-form-item>
         <el-form-item label="关联课程"><el-select v-model="form.course_ids" multiple filterable clearable style="width:100%" :disabled="!editable"><el-option v-for="item in courseOptions" :key="item.id" :label="item.title" :value="item.id" /></el-select><div class="hint">只作覆盖范围说明，不参与题池交并，也不强制学完。</div></el-form-item>
-        <el-form-item label="学习门槛"><el-switch v-model="form.requires_learning" :disabled="!editable" /><span class="hint inline">培训默认关闭；制度专项卷仍沿用原学习门槛。</span></el-form-item>
+        <el-form-item label="学习门槛"><el-switch v-model="form.requires_learning" :disabled="!editable" /><span class="hint inline">培训默认关闭；历史固定卷仍沿用原学习门槛。</span></el-form-item>
         <el-form-item label="及格线 / 限时"><el-input-number v-model="form.pass_score" :min="1" :max="100" :disabled="!editable" /><el-input-number v-model="form.duration_minutes" :min="1" :max="1440" :disabled="!editable" style="margin-left:12px" /></el-form-item>
         <el-form-item label="次数 / 漏选比例"><el-input-number v-model="form.max_attempts" :min="1" :max="100" :disabled="!editable" /><el-input-number v-model="form.partial_credit_ratio" :min="0" :max="1" :step="0.1" :disabled="!editable" style="margin-left:12px" /></el-form-item>
         <el-form-item v-if="form.mode === 'random'" label="题型规则">
@@ -75,7 +75,7 @@
       <el-table :data="fixedQuestions">
         <el-table-column prop="sort" label="顺序" width="70" /><el-table-column prop="stem" label="题干" min-width="260" show-overflow-tooltip />
         <el-table-column label="题型 / 难度" width="130"><template #default="{ row }">{{ typeLabel(row.type) }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column>
-        <el-table-column label="来源" width="120"><template #default="{ row }">{{ row.regulation_id ? `制度 ${row.regulation_id}` : '无制度人工题' }}</template></el-table-column>
+        <el-table-column label="来源" width="120"><template #default="{ row }">{{ row.regulation_id ? `资料 ${row.regulation_id}` : '无资料来源' }}</template></el-table-column>
         <el-table-column label="分值" width="180"><template #default="{ row }"><el-input-number v-model="row.score_cents" :min="1" :max="10000" :disabled="!editable" /><span class="hint inline">整数分</span></template></el-table-column>
         <el-table-column label="操作" width="90"><template #default="{ row }"><el-button v-if="editable" text type="danger" @click="removeFixed(row)">移除</el-button></template></el-table-column>
       </el-table>
@@ -204,7 +204,7 @@ const previewDifficulty = ref<'easy' | 'hard'>('easy');
 const previewLoading = ref(false);
 const previewRenderAttempt = ref(0);
 const previewQuestionReady = ref<Record<string, boolean>>({});
-const questionTypes: QuestionType[] = ['single', 'multiple', 'judgment', 'image'];
+const questionTypes: QuestionType[] = ['single', 'multiple', 'judgment'];
 const previewResourcesReady = computed(() => {
   if (previewLoading.value || !previewSession.value) return false;
   return previewSession.value.data.questions.every((question) => previewQuestionReady.value[question.question_version_id] === true);
@@ -249,7 +249,7 @@ watch(form, syncDirty, { deep: true });
 watch(fixedQuestions, syncDirty, { deep: true });
 watch(previewVisible, (visible) => { if (!visible) invalidatePreview(); }, { flush: 'sync' });
 
-function typeLabel(type: QuestionType | string) { return ({ single: '单选', multiple: '多选', judgment: '判断', image: '图片作答' } as Record<string, string>)[type] || type; }
+function typeLabel(type: QuestionType | string) { return ({ single: '单选', multiple: '多选', judgment: '判断' } as Record<string, string>)[type] || type; }
 function difficultyLabel(value: Difficulty | string) { return ({ easy: '初级', medium: '中级', hard: '高级' } as Record<string, string>)[value] || value; }
 function statusLabel(status: TrainingPaperStatus | string) { return ({ draft: '草稿', published: '已发布', withdrawn: '已撤回', archived: '已归档' } as Record<string, string>)[status] || status; }
 function statusType(status: TrainingPaperStatus | string) { return status === 'published' ? 'success' : status === 'draft' ? 'info' : 'warning'; }

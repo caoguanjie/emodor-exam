@@ -31,12 +31,10 @@ function answerView(row: ExamAnswer | undefined, item: GradingSnapshotItem): Ans
     ? row.selected.map(Number).map((original) => item.displayToOriginal.indexOf(original))
       .filter((display) => display >= 0).sort((left, right) => left - right)
     : [];
-  const assetIds = Array.isArray(row.assetIds) ? row.assetIds.map(String) : [];
-  if (!selected.length && !assetIds.length) return null;
+  if (!selected.length) return null;
   return {
     item_id: String(item.itemId),
     ...(selected.length ? { selected } : {}),
-    ...(assetIds.length ? { asset_ids: assetIds } : {}),
   };
 }
 
@@ -46,18 +44,15 @@ export function projectResultItem(item: GradingSnapshotItem, recordId: Id, row?:
     type: item.type, scoreCents: Number(item.scoreCents), position: Number(item.position),
     displayToOriginal: [...item.displayToOriginal], snapshotJson: item,
   } as any);
-  const correctAnswer = item.type === 'image'
-    ? null
-    : item.answer.map((original) => item.displayToOriginal.indexOf(Number(original))).filter((display) => display >= 0);
+  const correctAnswer = item.answer
+    .map((original) => item.displayToOriginal.indexOf(Number(original)))
+    .filter((display) => display >= 0);
   return {
     ...question,
     answer: answerView(row, item),
     correct_answer: correctAnswer,
     analysis: item.analysis ?? null,
-    rubric: item.rubric ?? null,
     gained_score: row?.gainedScore === null || row?.gainedScore === undefined ? null : Number(row.gainedScore),
-    comment: row?.comment || null,
-    grading_version: Number(row?.gradingVersion || 0),
   };
 }
 
@@ -73,7 +68,6 @@ export function projectFinalResult(record: ResultRecord, snapshot: GradingSnapsh
   return {
     record_id: String(record.id),
     grading_state: record.gradingState || (record.score === null ? 'not_submitted' : 'finalized'),
-    grading_revision: Number(record.gradingRevision || 0),
     submission_method: record.submissionMethod || null,
     legacy: !record.submissionMethod,
     submitted_at: new Date(record.submittedAt).toISOString(),
@@ -93,7 +87,6 @@ function projectSnapshotlessLegacy(record: ResultRecord): FinalResult {
   return {
     record_id: String(record.id),
     grading_state: finalized ? 'finalized' : record.gradingState,
-    grading_revision: Number(record.gradingRevision || 0),
     submission_method: record.submissionMethod || null,
     legacy: true,
     submitted_at: new Date(record.submittedAt).toISOString(),
@@ -134,7 +127,7 @@ export class ExamHistoryService {
 
   async adminResult(viewerId: Id, recordId: Id): Promise<FinalResult> {
     const permissions = await this.access.permissions(String(viewerId));
-    if (!permissions.includes('exam_records:review') && !permissions.includes('exam_records:read')) {
+    if (!permissions.includes('exam_records:read')) {
       throw Errors.forbidden();
     }
     return this.dataSource.transaction('REPEATABLE READ', async (manager) => {

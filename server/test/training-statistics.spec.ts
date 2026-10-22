@@ -9,6 +9,7 @@ import {
   type StatisticsRecord,
 } from '../src/modules/statistics/ranking';
 import { TrainingStatisticsService } from '../src/modules/statistics/training-statistics.service';
+import { StatisticsService } from '../src/modules/statistics/statistics.service';
 import { AdminDashboardController, TrainingStatisticsController } from '../src/modules/statistics/training-statistics.controller';
 import { TrainingStatisticsQueryDto } from '../src/modules/statistics/training-statistics.dto';
 
@@ -53,7 +54,7 @@ describe('training statistics aggregation', () => {
     }),
   ];
 
-  it('keeps current participation separate from historical starts and never treats pending as zero', () => {
+  it('keeps current participation separate from historical starts without exposing removed pending metrics', () => {
     const summary = buildExamSummary({
       records: rows,
       eligibleUserIds: new Set(['1', '2', '3', '4']),
@@ -70,11 +71,11 @@ describe('training statistics aggregation', () => {
       historical_only_started_count: 1,
       submitted_attempts: 5,
       submitted_users: 4,
-      pending_attempts: 1,
-      pending_users: 1,
       finalized_users: 3,
       participation_rate: 1,
     });
+    expect(summary).not.toHaveProperty('pending_attempts');
+    expect(summary).not.toHaveProperty('pending_users');
     expect(summary.score_groups).toEqual([
       {
         difficulty: 'easy', finalized_users: 2, average_score: 80, pass_rate: 1,
@@ -235,8 +236,7 @@ describe('TrainingStatisticsService', () => {
     expect(summary.uncompleted_reasons).toEqual([
       { reason: 'learning_incomplete', users: 1 },
       { reason: 'not_started', users: 0 },
-      { reason: 'pending_manual', users: 1 },
-      { reason: 'not_passed', users: 0 },
+      { reason: 'not_passed', users: 1 },
     ]);
   });
 
@@ -289,6 +289,33 @@ describe('TrainingStatisticsService', () => {
     expect(dashboard).not.toHaveProperty('metrics.pending_grading_count');
     expect(dashboard.timezone).toBe('Asia/Shanghai');
     expect(dashboard.exam_trend?.find((item) => item.date === '2026-10-20')?.count).toBe(6);
+  });
+
+  it('does not revive the removed pending-grading metric for legacy permissions', async () => {
+    const { service } = serviceFixture(['exam_records:review']);
+    const dashboard = await service.dashboard('99', new Date('2026-10-22T02:00:00.000Z'));
+    expect(dashboard.metrics).not.toHaveProperty('pending_grading_count');
+  });
+});
+
+describe('legacy statistics compatibility', () => {
+  it('keeps the old report readable without returning removed switch-monitor data', async () => {
+    const service = Object.create(StatisticsService.prototype) as StatisticsService & Record<string, any>;
+    Object.assign(service, {
+      userRepo: { findOne: async () => ({
+        id: '1', username: 'student', realName: '学员', employeeNo: null, departmentId: null, role: 'employee',
+      }) },
+      learningRepo: { find: async () => [] },
+      regRepo: { find: async () => [] },
+      examRepo: { find: async () => [{
+        id: '11', paperId: '21', attemptNo: 1, status: 'passed', score: '80.00', switchCount: 9,
+        startedAt: new Date('2026-10-20T00:00:00.000Z'), submittedAt: new Date('2026-10-20T00:10:00.000Z'),
+      }] },
+      paperRepo: { find: async () => [{ id: '21', title: '历史试卷' }] },
+    });
+
+    const report = await service.personal('1');
+    expect(report.exams[0].records[0]).not.toHaveProperty('switch_count');
   });
 });
 

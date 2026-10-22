@@ -9,6 +9,7 @@ function serviceFor(input: {
   manager: any;
   media?: any;
   reader?: any;
+  permissions?: string[];
 }) {
   const dataSource: any = {
     transaction: vi.fn(async (_isolation: string, work: (manager: any) => unknown) => work(input.manager)),
@@ -21,7 +22,7 @@ function serviceFor(input: {
     {} as any,
     {} as any,
     reader,
-    { permissions: vi.fn(async () => []) } as any,
+    { permissions: vi.fn(async () => input.permissions || []) } as any,
     media,
     dataSource,
   );
@@ -31,7 +32,7 @@ function serviceFor(input: {
 function terminalRecord(overrides: Record<string, unknown> = {}) {
   return {
     id: '41', userId: '7', assignmentId: '31', ruleSnapshot: { totalCents: 10000 },
-    status: 'passed', score: '88.00', gradingState: 'finalized', gradingRevision: 0,
+    status: 'passed', score: '88.00', gradingState: 'finalized',
     submissionMethod: 'manual', submittedAt: new Date('2026-10-22T02:00:00.000Z'), gradedAt: new Date(),
     ...overrides,
   } as any;
@@ -49,6 +50,20 @@ function queryBuilder(idRows: Array<{ item_id: string; record_id: string }>) {
 }
 
 describe('ExamHistoryService snapshot integrity', () => {
+  it('uses the retained record-read permission instead of the removed review permission', async () => {
+    const record = terminalRecord({ assignmentId: null, ruleSnapshot: null });
+    const manager = { getRepository: (entity: unknown) => {
+      if (entity === ExamRecord) return { findOne: vi.fn(async () => record) };
+      throw new Error('unexpected repository');
+    } };
+
+    const reviewOnly = serviceFor({ manager, permissions: ['exam_records:review'] });
+    await expect(reviewOnly.service.adminResult('8', '41')).rejects.toMatchObject({ code: 40301 });
+
+    const reader = serviceFor({ manager, permissions: ['exam_records:read'] });
+    await expect(reader.service.adminResult('8', '41')).resolves.toMatchObject({ record_id: '41', score: 88 });
+  });
+
   it.each([
     ['missing rule snapshot', terminalRecord({ ruleSnapshot: null }), 1],
     ['missing frozen items', terminalRecord(), 0],
@@ -86,21 +101,21 @@ describe('ExamHistoryService result media repair', () => {
         id: '501', recordId: '41', questionId: '101', type: 'single', scoreCents: 100,
         position: 0, displayToOriginal: [0], snapshotJson: {
           questionId: '101', type: 'single', stem: '题一', options: [{ key: 'A', text: '甲' }], answer: [0],
-          analysis: '<img data-media-id="802">', rubric: '<img data-media-id="801">', scoreCents: 100,
+          analysis: '<img data-media-id="802"><img data-media-id="801">', scoreCents: 100,
         },
       },
       {
         id: '502', recordId: '42', questionId: '102', type: 'single', scoreCents: 100,
         position: 0, displayToOriginal: [0], snapshotJson: {
           questionId: '102', type: 'single', stem: '题二', options: [{ key: 'A', text: '甲' }], answer: [0],
-          analysis: '<img data-media-id="801">', rubric: '<img data-media-id="803">', scoreCents: 100,
+          analysis: '<img data-media-id="801"><img data-media-id="803">', scoreCents: 100,
         },
       },
     ];
     const records: any[] = [terminalRecord({ id: '41' }), terminalRecord({ id: '42' })];
     const answers: any[] = [
-      { examRecordId: '41', recordQuestionId: '501', selected: [], assetIds: null, gainedScore: '0.00', gradingVersion: 0 },
-      { examRecordId: '42', recordQuestionId: '502', selected: [], assetIds: null, gainedScore: '0.00', gradingVersion: 0 },
+      { examRecordId: '41', recordQuestionId: '501', selected: [], gainedScore: '0.00' },
+      { examRecordId: '42', recordQuestionId: '502', selected: [], gainedScore: '0.00' },
     ];
     const builder = queryBuilder([{ item_id: '501', record_id: '41' }, { item_id: '502', record_id: '42' }]);
     const itemRepo = { createQueryBuilder: vi.fn(() => builder), find: vi.fn(async () => items) };

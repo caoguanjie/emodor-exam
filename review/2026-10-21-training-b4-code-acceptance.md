@@ -1,5 +1,7 @@
 # B4 Excel/TXT 题库导入代码验收
 
+> **状态更新（2026-10-22）**：本文保留 B4 当时十列/四题型候选的验收事实，现行导题契约已由[培训 Demo 瘦身验收报告](./2026-10-22-training-demo-slimming-acceptance.md)取代。当前模板为九列、三题型，无图片答案或 `rubric` 字段；下文数字与测试结果不作事后改写。
+
 - 已审候选：`565c7f08f458ace4457655035e31c662953d0481`，来源基线 `1dad012`；合入已接受 B2 的 `78b356d`。
 - 范围：统一十列 Excel/TXT 模板、严格预检查、合法行确认、幂等批次、四题型/三级难度、approved 题目版本，以及 PC 导入页面。
 - 独立审查：原 I1—I5 与 root 补充 I6 全部由 fix1 修复，review2 的 Spec Compliance / Task Quality 均 Approved，无未关闭 Critical/Important。

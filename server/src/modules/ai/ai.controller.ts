@@ -67,6 +67,10 @@ class SetPaperQuestionsDto {
 }
 
 const REG_ADMIN = [RoleEnum.SUPER_ADMIN, RoleEnum.REGULATION_ADMIN] as const;
+const GENERATE_QUESTION_KEYS = [
+  'material_id', 'material_version_id', 'category_id', 'difficulty',
+  'question_count_single', 'question_count_multiple', 'score_single', 'score_multiple',
+] as const;
 
 function assertRequestKeys(value: unknown, allowed: readonly string[], label: string) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Errors.param(`${label} 必须是对象`);
@@ -146,13 +150,14 @@ export class AiController {
   @Roles(...REG_ADMIN)
   @Permissions('ai:write')
   async generate(
-    @Body(new StrictDtoValidationPipe(['regulation_id', 'category_id', 'difficulty', 'question_count_single', 'question_count_multiple', 'score_single', 'score_multiple'])) dto: GenerateQuestionsDto,
+    @Body(new StrictDtoValidationPipe(GENERATE_QUESTION_KEYS)) dto: GenerateQuestionsDto,
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
-    assertRequestKeys(req.body, ['regulation_id', 'category_id', 'difficulty', 'question_count_single', 'question_count_multiple', 'score_single', 'score_multiple'], 'AI 出题请求');
+    assertRequestKeys(req.body, GENERATE_QUESTION_KEYS, 'AI 出题请求');
     return this.generation.start({
-      regulationId: dto.regulation_id,
+      materialId: dto.material_id,
+      materialVersionId: dto.material_version_id,
       categoryId: dto.category_id,
       difficulty: dto.difficulty,
       questionCountSingle: dto.question_count_single ?? 20,

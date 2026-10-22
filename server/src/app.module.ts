@@ -39,7 +39,6 @@ import { ExamRecord } from './entities/exam-record.entity';
 import { ExamAssignment } from './entities/exam-assignment.entity';
 import { ExamRecordQuestion } from './entities/exam-record-question.entity';
 import { ExamAnswer } from './entities/exam-answer.entity';
-import { ExamReviewEvent } from './entities/exam-review-event.entity';
 import { SchemaMigration } from './entities/schema-migration.entity';
 import { MediaAsset } from './entities/media-asset.entity';
 import { MediaReference } from './entities/media-reference.entity';
@@ -61,16 +60,13 @@ import { CaptchaService } from './modules/auth/captcha.service';
 import { SessionService } from './modules/auth/session.service';
 import { AccessController } from './modules/access/access.controller';
 import { AccessService } from './modules/access/access.service';
-import { DepartmentsController } from './modules/departments/departments.controller';
 import { DepartmentService } from './modules/departments/department.service';
-import { MeProfileController, StudentsController, UsersController } from './modules/users/users.controller';
+import { MeProfileController, StudentsController } from './modules/users/users.controller';
 import { UsersService } from './modules/users/users.service';
-import { UserImportService } from './modules/users/user-import.service';
 import { CategoryController } from './modules/training/category.controller';
 import { CategoryService } from './modules/training/category.service';
 import { ImportBatchService } from './modules/imports/import-batch.service';
-import { RegulationsController } from './modules/regulations/regulations.controller';
-import { RegulationService } from './modules/regulations/regulation.service';
+import { RegulationContentController } from './modules/regulations/regulation-content.controller';
 import { RegulationVersionService } from './modules/regulations/regulation-version.service';
 import { RegulationScopeService } from './modules/regulations/regulation-scope.service';
 import { ParsePipelineService } from './modules/regulations/parse-pipeline.service';
@@ -82,6 +78,8 @@ import { PdfVisionService } from './modules/ai/pdf-vision.service';
 import { QuestionGenerationService } from './modules/ai/question-generation.service';
 import { QuestionReviewService } from './modules/ai/question-review.service';
 import { PaperService } from './modules/ai/paper.service';
+import { QuestionMaterialsController } from './modules/question-materials/question-materials.controller';
+import { QuestionMaterialsService } from './modules/question-materials/question-materials.service';
 import { LearningController } from './modules/learning/learning.controller';
 import { LearningSessionService } from './modules/learning/learning-session.service';
 import { ExamsController } from './modules/exams/exams.controller';
@@ -90,14 +88,11 @@ import { AttemptService } from './modules/exams/attempt.service';
 import { AttemptReaderService } from './modules/exams/attempt-reader.service';
 import { LegacyExamAdapter } from './modules/exams/legacy-exam-adapter';
 import { TrainingExamsController } from './modules/exams/training-exams.controller';
-import { AnswerMediaController } from './modules/exams/answer-media.controller';
 import { AnswerDraftService } from './modules/exams/answer-draft.service';
 import { SubmissionService } from './modules/exams/submission.service';
 import { ExamAdminController } from './modules/exams/exam-admin.controller';
-import { ExamMonitorService } from './modules/exams/exam-monitor.service';
+import { ExamRecordsService } from './modules/exams/exam-records.service';
 import { ExamHistoryService } from './modules/exams/exam-history.service';
-import { ManualGradingService } from './modules/exams/manual-grading.service';
-import { GradingAdminController } from './modules/exams/grading-admin.controller';
 import { ShuffleService } from './modules/exams/shuffle.service';
 import { GradingService } from './modules/exams/grading.service';
 import { PaperAdminController } from './modules/exams/paper-admin.controller';
@@ -134,7 +129,7 @@ const config = loadConfig();
     TypeOrmModule.forFeature([
       SysDepartment, SysUser, Regulation, RegulationVersion, RegulationScope,
       LearningSession, LearningRecord, Question, ExamPaper, PaperQuestion, PaperRelease, PaperReleaseQuestion,
-      ExamAssignment, ExamRecord, ExamRecordQuestion, ExamAnswer, ExamReviewEvent, SchemaMigration,
+      ExamAssignment, ExamRecord, ExamRecordQuestion, ExamAnswer, SchemaMigration,
       TrainingCategory, ImportBatch,
       SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
       MediaAsset, MediaReference,
@@ -147,8 +142,8 @@ const config = loadConfig();
     ScheduleModule.forRoot(),
   ],
   controllers: [
-    AuthController, AccessController, DepartmentsController, UsersController, StudentsController, MeProfileController, CategoryController,
-    RegulationsController, AiController, LearningController, ExamsController, TrainingExamsController, AnswerMediaController, PaperAdminController, ExamAdminController, GradingAdminController,
+    AuthController, AccessController, StudentsController, MeProfileController, CategoryController,
+    RegulationContentController, QuestionMaterialsController, AiController, LearningController, ExamsController, TrainingExamsController, PaperAdminController, ExamAdminController,
     StatisticsController, TrainingStatisticsController, AdminDashboardController, HealthController,
     MediaController,
     CourseAdminController, LearnerHomeController, MyCoursesController,
@@ -158,11 +153,11 @@ const config = loadConfig();
   providers: [
     // 全局配置单例（loadConfig 启动时读取环境变量）
     { provide: AppConfig, useValue: config },
-    AuthService, CaptchaService, SessionService, AccessService, DepartmentService, UsersService, UserImportService, CategoryService, ImportBatchService,
-    RegulationService, RegulationVersionService, RegulationScopeService, ParsePipelineService, ContentService,
+    AuthService, CaptchaService, SessionService, AccessService, DepartmentService, UsersService, CategoryService, ImportBatchService,
+    RegulationVersionService, RegulationScopeService, ParsePipelineService, ContentService, QuestionMaterialsService,
     AiConfigService, AiGatewayService, PdfVisionService, QuestionGenerationService, QuestionReviewService, PaperService,
     LearningSessionService, ExamService, AttemptService, AttemptReaderService, LegacyExamAdapter, AnswerDraftService, SubmissionService,
-    ExamHistoryService, ManualGradingService, ExamMonitorService,
+    ExamHistoryService, ExamRecordsService,
     ShuffleService, GradingService, PaperReleaseService, SamplingService, StatisticsService, TrainingStatisticsService,
     RedisService, AuditService, TasksService,
     MediaService, MediaProbeService,

@@ -148,16 +148,14 @@ test('training harness supports JSON, multipart, targeted queries, and restart p
   const { actor: reloginActor, login: relogin } = await captchaLogin(updatedPassword);
   assert.equal(relogin.status, 200);
   const actor = { accessToken: relogin.data.access_token, cookie: reloginActor.cookie };
-  const department = await harness.request(actor, 'POST', '/departments', {
-    parent_id: '1',
+  const category = await harness.request(actor, 'POST', '/admin/training-categories', {
     name: `Harness ${randomBytes(4).toString('hex')}`,
   });
-  assert.equal(department.status, 200);
-  const departmentId = String(department.data.id);
+  assert.equal(category.status, 200);
+  const categoryId = String(category.data.id);
 
-  const regulation = await harness.request(actor, 'POST', '/regulations', {
+  const regulation = await harness.request(actor, 'POST', '/admin/question-materials', {
     title: 'Harness multipart regulation',
-    category: '测试',
   });
   assert.equal(regulation.status, 200);
   const regulationId = String(regulation.data.id);
@@ -165,26 +163,26 @@ test('training harness supports JSON, multipart, targeted queries, and restart p
   const zip = new JSZip();
   zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
   zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>');
-  const upload = await harness.upload(actor, `/regulations/${regulationId}/versions`, await zip.generateAsync({ type: 'nodebuffer' }), 'harness.docx');
+  const upload = await harness.upload(actor, `/admin/question-materials/${regulationId}/versions`, await zip.generateAsync({ type: 'nodebuffer' }), 'harness.docx');
   assert.equal(upload.status, 200);
   assert.equal(upload.code, 0);
-  assert.ok(upload.data?.version_id);
+  assert.ok(upload.data?.id);
 
   const [rows] = await harness.queryTestDb(
-    'SELECT id, name FROM sys_department WHERE id = ?',
-    [departmentId],
+    'SELECT id, name FROM training_category WHERE id = ?',
+    [categoryId],
   );
-  assert.equal(String(rows.id), departmentId);
+  assert.equal(String(rows.id), categoryId);
 
   await harness.restartApi();
   const profile = await harness.request(actor, 'GET', '/auth/profile');
   assert.equal(profile.status, 200);
   assert.equal(profile.data?.username, 'admin');
   const [persistedRows] = await harness.queryTestDb(
-    'SELECT id, name FROM sys_department WHERE id = ?',
-    [departmentId],
+    'SELECT id, name FROM training_category WHERE id = ?',
+    [categoryId],
   );
-  assert.equal(String(persistedRows.id), departmentId);
+  assert.equal(String(persistedRows.id), categoryId);
 });
 
 test('registered suites expose run(ctx) and unknown suites are rejected', async () => {

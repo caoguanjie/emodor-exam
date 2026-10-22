@@ -9,11 +9,10 @@ const require = createRequire(new URL('../server/package.json', import.meta.url)
 const Redis = require('ioredis');
 const JSZip = require('jszip');
 const ExcelJS = require('exceljs');
-const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // One dataset crosses the real HTTP boundaries. A broken publication snapshot,
-// lost confirmed draft, premature manual score, or mixed-difficulty report must
+// lost confirmed draft, incorrect automatic score, or mixed-difficulty report must
 // fail the independent literal expectations below, not merely a helper mock.
 async function ok(ctx, actor, method, path, body, headers) {
   const response = await ctx.request(actor, method, path, body, headers);
@@ -72,7 +71,7 @@ async function regulationDocx() {
   const paragraphs = [
     '第一章 总则：为加强安全生产管理，制定本制度。本制度适用于全部生产场所和机构学员。',
     '第二章 动火作业必须事先审批，审批有效期不超过二十四小时，清理现场可燃物。',
-    '第三章 新员工必须完成三级安全教育；每年复训，考试和阅卷结果必须保留。',
+    '第三章 新员工必须完成三级安全教育；每年复训，考试结果必须保留。',
     '第四章 受限空间作业先通风再检测，安排监护人员，进入前核验防护设备。',
     '第五章 定期开展安全隐患排查，重大隐患立即上报并建立整改台账。',
   ];
@@ -124,25 +123,42 @@ export async function prepareTrainingFlow(ctx) {
     learners.push({ ...signedIn, source, difficulty: source === 'institution' ? 'easy' : 'hard' });
   }
 
-  const regulation = await ok(ctx, admin.actor, 'POST', '/regulations', { title: `全链安全制度 ${tag}`, category: '安全教育', category_id: categoryId });
+  const regulation = await ok(ctx, admin.actor, 'POST', '/admin/question-materials', { title: `全链安全资料 ${tag}`, description: '安全生产出题依据' });
   const regulationId = String(regulation.id);
-  const version = await upload(ctx, admin.actor, `/regulations/${regulationId}/versions`, {}, await regulationDocx(), 'safety.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-  const parsed = await poll(() => ok(ctx, admin.actor, 'GET', `/regulations/${regulationId}/versions/${version.version_id}`), (value) => value.parse_status === 'parsed', 'regulation parsing');
-  assert.match(parsed.content_html, /安全/);
-  await ok(ctx, admin.actor, 'PUT', `/regulations/${regulationId}/current-version`, { version_id: String(version.version_id) });
+  const version = await upload(ctx, admin.actor, `/admin/question-materials/${regulationId}/versions`, {}, await regulationDocx(), 'safety.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  await poll(() => ok(ctx, admin.actor, 'GET', `/admin/question-materials/${regulationId}/versions/${version.id}/status`), (value) => value.parse_status === 'parsed', 'material parsing');
 
   const mock = await startMockAi(0);
   try {
     await ok(ctx, admin.actor, 'PUT', '/ai/config', { base_url: `http://127.0.0.1:${mock.address().port}/v1`, api_key: `mock-${randomBytes(18).toString('hex')}`, model: 'mock-model' });
     assert.equal((await ok(ctx, admin.actor, 'POST', '/ai/config/test')).ok, true);
     const generated = await ok(ctx, admin.actor, 'POST', '/ai/generate-questions', {
-      regulation_id: regulationId, category_id: categoryId, difficulty: 'easy', question_count_single: 10, question_count_multiple: 5, score_single: 6, score_multiple: 8,
+      material_id: regulationId, material_version_id: String(version.id), category_id: categoryId, difficulty: 'easy', question_count_single: 10, question_count_multiple: 5, score_single: 6, score_multiple: 8,
     });
     const task = await poll(() => ok(ctx, admin.actor, 'GET', `/ai/generate-status/${generated.task_id}`), (value) => value.status === 'completed', 'AI generation');
     assert.equal(task.questions.length, 15);
     assert.ok(task.questions.every((question) => question.source === 'ai' && question.status === 'pending'));
     const aiQuestion = task.questions.find((question) => question.type === 'single');
     await ok(ctx, admin.actor, 'PUT', `/ai/questions/${aiQuestion.id}/review`, { expected_version_id: String(aiQuestion.current_version_id), status: 'approved' });
+    // Materials are category-neutral. Their questions establish the source
+    // filter relationship; no removed regulation editor may be required.
+    const sources = await ok(ctx, admin.actor, 'GET', `/admin/papers/regulation-options?category_id=${categoryId}`);
+    assert.ok(sources.items.some(item => item.id === regulationId), 'new AI material must be selectable as a paper source');
+    const sourcedPaper = await ok(ctx, admin.actor, 'POST', '/admin/papers', {
+      title: `资料来源固定卷 ${tag}`, mode: 'fixed', category_id: categoryId, regulation_ids: [regulationId],
+    });
+    await ok(ctx, admin.actor, 'PUT', `/admin/papers/${sourcedPaper.id}`, { regulation_ids: [regulationId], title: `资料来源固定卷已编辑 ${tag}` });
+    await ok(ctx, admin.actor, 'PUT', `/admin/papers/${sourcedPaper.id}/questions`, {
+      items: [{ question_version_id: String(aiQuestion.current_version_id), score_cents: 10000 }],
+    });
+    await ok(ctx, admin.actor, 'POST', `/admin/papers/${sourcedPaper.id}/publish`);
+    const otherCategory = await ok(ctx, admin.actor, 'POST', '/admin/training-categories', { name: `无题来源类别 ${tag}` });
+    const otherSources = await ok(ctx, admin.actor, 'GET', `/admin/papers/regulation-options?category_id=${otherCategory.id}`);
+    assert.equal(otherSources.items.some(item => item.id === regulationId), false);
+    const invalidSource = await ctx.request(admin.actor, 'POST', '/admin/papers', {
+      title: `不能跨类别选择资料 ${tag}`, mode: 'fixed', category_id: String(otherCategory.id), regulation_ids: [regulationId],
+    });
+    assert.equal(invalidSource.status, 409, 'source must contain questions in this paper category');
   } finally {
     mock.closeAllConnections();
     await new Promise((resolve, reject) => mock.close((error) => error ? reject(error) : resolve()));
@@ -150,19 +166,19 @@ export async function prepareTrainingFlow(ctx) {
 
   const question = (difficulty, type) => ({
     category_id: categoryId, difficulty, type, stem: `<p>${difficulty} ${type} ${tag}</p>`, score: 25,
-    options: type === 'image' ? [] : type === 'judgment' ? [{ text: '正确' }, { text: '错误' }] : [{ text: '安全核验' }, { text: '现场监护' }, { text: '忽略隐患' }],
-    answer: type === 'image' ? [] : type === 'multiple' ? [0, 1] : [0],
-    analysis: type === 'image' ? null : '<p>遵守安全制度。</p>', rubric: type === 'image' ? '<p>检查风险识别和防护。</p>' : null,
+    options: type === 'judgment' ? [{ text: '正确' }, { text: '错误' }] : [{ text: '安全核验' }, { text: '现场监护' }, { text: '忽略隐患' }],
+    answer: type === 'multiple' ? [0, 1] : [0],
+    analysis: '<p>遵守安全制度。</p>',
   });
   for (const difficulty of ['easy', 'hard']) {
-    for (const type of ['single', 'multiple', 'judgment', 'image']) {
+    for (const type of ['single', 'multiple', 'judgment']) {
       if ((difficulty === 'easy' && type === 'single') || (difficulty === 'hard' && type === 'multiple')) continue;
       await ok(ctx, admin.actor, 'POST', '/ai/questions', question(difficulty, type));
     }
   }
   const imported = question('hard', 'multiple');
-  const headers = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'rubric', 'score'];
-  const row = { ...imported, category: '', concept: '', options: JSON.stringify(imported.options), answer: JSON.stringify(imported.answer), rubric: '' };
+  const headers = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'score'];
+  const row = { ...imported, category: '', concept: '', options: JSON.stringify(imported.options), answer: JSON.stringify(imported.answer) };
   const bytes = Buffer.from(`\uFEFF${headers.join('\t')}\r\n${headers.map((key) => row[key] ?? '').join('\t')}\r\n`);
   const preview = await upload(ctx, admin.actor, '/admin/questions/import-preview', { format: 'txt', category_id: categoryId }, bytes, 'questions.txt', 'text/plain; charset=utf-8');
   assert.deepEqual(preview.valid_rows, [2]);
@@ -186,20 +202,16 @@ export async function prepareTrainingFlow(ctx) {
 
   const paper = await ok(ctx, admin.actor, 'POST', '/admin/papers', {
     title: `同场分难度考试 ${tag}`, category_id: categoryId, mode: 'random', requires_learning: false,
-    course_ids: [courseId], rules: ['single', 'multiple', 'judgment', 'image'].map((type) => ({ type, count: 1, score_cents: 2500 })),
+    course_ids: [courseId], rules: ['single', 'multiple', 'judgment'].map((type) => ({ type, count: 1, score_cents: type === 'multiple' ? 2000 : 4000 })),
   });
   const paperId = String(paper.id);
   const release = await ok(ctx, admin.actor, 'POST', `/admin/papers/${paperId}/publish`);
   for (const learner of learners) {
     learner.attempt = await ok(ctx, learner.actor, 'POST', `/me/exams/${paperId}/start`);
     assert.equal(learner.attempt.difficulty, learner.difficulty);
-    assert.equal(learner.attempt.questions.length, 4);
+    assert.equal(learner.attempt.questions.length, 3);
     assertSafe(learner.attempt);
-    const image = learner.attempt.questions.find((item) => item.type === 'image');
-    const answer = await upload(ctx, learner.actor, `/me/exam-records/${learner.attempt.record_id}/answer-images`, { item_id: image.item_id }, PNG, 'answer.png', 'image/png');
-    learner.imageItemId = image.item_id;
     learner.answers = learner.attempt.questions.flatMap((item) => {
-      if (item.type === 'image') return [{ item_id: item.item_id, asset_ids: [String(answer.asset_id)] }];
       if (learner.source === 'external' && item.type !== 'multiple') return [];
       const selected = item.options.flatMap((option, index) => {
         const correct = item.type === 'judgment' ? option.text === '正确' : /安全核验|现场监护|（正确）/.test(option.text);
@@ -222,33 +234,23 @@ export async function prepareTrainingFlow(ctx) {
   return { admin, learners, categoryId, regulationId, courseId, paperId, releaseId: String(release.release_id) };
 }
 
-export async function finishTrainingFlow(ctx, flow, { verifyStatistics = false } = {}) {
+export async function finishTrainingFlow(ctx, flow) {
   const [institution, external] = flow.learners;
   const manual = await ok(ctx, institution.actor, 'POST', `/me/exam-records/${institution.attempt.record_id}/submit`);
-  assert.equal(manual.grading_state, 'pending_manual');
-  assert.equal(manual.score, null);
+  assert.equal(manual.grading_state, 'finalized');
+  assert.equal(manual.score, 90);
   // Advance only the owned fixture's deadline, never the persisted answer/score.
   await ctx.queryTestDb('UPDATE exam_record SET deadline_at = DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 SECOND) WHERE id = ?', [external.attempt.record_id]);
   const timeout = await ok(ctx, external.actor, 'POST', `/me/exam-records/${external.attempt.record_id}/submit`);
   assert.equal(timeout.submission_method, 'timeout');
-  assert.equal(timeout.grading_state, 'pending_manual');
-  if (verifyStatistics) {
-    const pending = await ok(ctx, flow.admin.actor, 'GET', `/statistics/training/summary?paper_id=${flow.paperId}`);
-    assert.equal(pending.pending_users, 2);
-    assert.equal(pending.pending_attempts, 2);
-    assert.equal(pending.finalized_users, 0, 'pending image answers must not enter final statistics');
-    for (const difficulty of ['easy', 'hard']) {
-      const ranking = await ok(ctx, flow.admin.actor, 'GET', `/statistics/training/ranking?paper_id=${flow.paperId}&difficulty=${difficulty}`);
-      assert.deepEqual(ranking.items, [], 'pending results must not be displayed as zero-score ranking entries');
-    }
-  }
-  for (const [learner, cents, expected] of [[institution, 1750, 80], [external, 1000, 35]]) {
-    await ok(ctx, flow.admin.actor, 'PUT', `/admin/exam-records/${learner.attempt.record_id}/grades/${learner.imageItemId}`, { score_cents: cents, comment: '全链验收受控评分', expected_version: 0 });
+  assert.equal(timeout.grading_state, 'finalized');
+  assert.equal(timeout.score, 20);
+  for (const [learner, expected] of [[institution, 90], [external, 20]]) {
     const result = await ok(ctx, learner.actor, 'GET', `/me/exam-records/${learner.attempt.record_id}/result`);
     assert.equal(result.grading_state, 'finalized');
     assert.equal(result.score, expected);
     assert.equal(result.passed, expected >= 60);
-    assert.equal(result.items.length, 4);
+    assert.equal(result.items.length, 3);
     const administrative = await ok(ctx, flow.admin.actor, 'GET', `/admin/exam-records/${learner.attempt.record_id}/result`);
     assert.deepEqual(administrative, result, 'admin and learner must consume the same final result');
     learner.result = result;
@@ -257,28 +259,28 @@ export async function finishTrainingFlow(ctx, flow, { verifyStatistics = false }
 
 export async function run(ctx) {
   const flow = await prepareTrainingFlow(ctx);
-  const monitorPath = `/admin/exams/${flow.paperId}/monitor`;
-  const active = await ok(ctx, flow.admin.actor, 'GET', monitorPath);
+  const recordsPath = `/admin/exam-records?paper_id=${flow.paperId}`;
+  const active = await ok(ctx, flow.admin.actor, 'GET', recordsPath);
   assert.equal(active.total, 2);
   assertSafe(active);
   for (const learner of flow.learners) {
     const row = active.items.find((item) => item.record_id === learner.attempt.record_id);
     assert.equal(row.source, learner.source);
     assert.equal(row.difficulty, learner.difficulty);
-    assert.equal(row.answered_count, learner.source === 'institution' ? 4 : 2);
-    assert.equal(row.total_count, 4);
     assert.equal(row.grading_state, 'not_submitted');
   }
-  await finishTrainingFlow(ctx, flow, { verifyStatistics: true });
-  const ended = await ok(ctx, flow.admin.actor, 'GET', monitorPath);
-  assert.ok(ended.items.every((row) => row.connection_state === 'ended' && row.grading_state === 'finalized'));
+  await finishTrainingFlow(ctx, flow);
+  const ended = await ok(ctx, flow.admin.actor, 'GET', recordsPath);
+  assert.ok(ended.items.every((row) => row.grading_state === 'finalized'));
+  for (const path of ['/users', '/departments/tree', '/regulations', '/admin/grading', `/admin/exams/${flow.paperId}/monitor`]) {
+    assert.equal((await ctx.request(flow.admin.actor, 'GET', path)).status, 404, `retired interface must not remain callable: ${path}`);
+  }
   const summary = await ok(ctx, flow.admin.actor, 'GET', `/statistics/training/summary?paper_id=${flow.paperId}`);
   assert.equal(summary.release_id, flow.releaseId);
   assert.equal(summary.eligible_count, 2);
   assert.equal(summary.eligible_started_count, 2);
   assert.equal(summary.historical_started_count, 2);
   assert.equal(summary.participation_rate, 1);
-  assert.equal(summary.pending_users, 0);
   assert.equal(summary.finalized_users, 2);
   for (const path of [
     '/statistics/training/options?unexpected=1',
@@ -292,7 +294,7 @@ export async function run(ctx) {
     assert.equal(rejected.code, 40001);
   }
   assert.equal((await ctx.request(flow.admin.actor, 'GET', `/statistics/training/ranking?paper_id=${flow.paperId}`)).status, 400);
-  for (const [learner, expectedScore] of [[flow.learners[0], 80], [flow.learners[1], 35]]) {
+  for (const [learner, expectedScore] of [[flow.learners[0], 90], [flow.learners[1], 20]]) {
     const group = summary.score_groups.find((item) => item.difficulty === learner.difficulty);
     assert.equal(group.finalized_users, 1);
     assert.equal(group.average_score, expectedScore);
@@ -315,5 +317,5 @@ export async function run(ctx) {
     assert.deepEqual(rows, ranking.items.map((row) => [row.rank, row.user_id, row.name, row.source, row.difficulty, row.score, row.duration_seconds, row.record_id]), 'export and screen must use identical query rows');
   }
   assert.equal((await ctx.request(flow.learners[0].actor, 'GET', `/statistics/training/summary?paper_id=${flow.paperId}`)).status, 403);
-  console.log('[training-full-flow] regulation/AI/review/import/video/dual-difficulty/restart/submit/grade/monitor/statistics/export passed');
+  console.log('[training-full-flow] materials/AI/review/import/video/dual-difficulty/restart/automatic-scoring/records/statistics/export passed');
 }

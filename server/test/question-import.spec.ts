@@ -20,11 +20,12 @@ describe('question import format', () => {
     const txtRows = await parseQuestionImportFile(txt, 'txt');
 
     expect(xlsxRows).toEqual(txtRows);
-    expect(xlsxRows.map((row) => row.row)).toEqual([2, 3, 4, 5]);
+    expect(xlsxRows.map((row) => row.row)).toEqual([2, 3, 4]);
+    expect(Object.keys(xlsxRows[0])).not.toContain('rubric');
   });
 
   it('accepts a BOM and CRLF while keeping JSON cells unambiguous', async () => {
-    const header = 'category\ttype\tdifficulty\tconcept\tstem\toptions\tanswer\tanalysis\trubric\tscore';
+    const header = 'category\ttype\tdifficulty\tconcept\tstem\toptions\tanswer\tanalysis\tscore';
     const row = [
       '',
       'single',
@@ -34,7 +35,6 @@ describe('question import format', () => {
       JSON.stringify([{ key: 'A', text: '检测' }, { key: 'B', text: '直接进入' }]),
       JSON.stringify([0]),
       '<p>先检测。</p>',
-      '',
       '5',
     ].join('\t');
 
@@ -55,48 +55,48 @@ describe('question import format', () => {
     sheet.addRow(HEADER.split('\t'));
     sheet.addRow(singleRow('<p>原题干</p>'));
     sheet.getRow(2).getCell(5).value = { formula: '1+1', result: '<p>缓存结果</p>' };
-    sheet.getRow(2).getCell(11).value = '额外列';
+    sheet.getRow(2).getCell(10).value = '额外列';
 
     const rows = await parseQuestionImportFile(Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer), 'xlsx');
 
     expect(rows[0].stem).toBe('');
     expect(rows[0].format_errors).toEqual(expect.arrayContaining([
       expect.stringContaining('不允许使用公式'),
-      expect.stringContaining('10 列'),
+      expect.stringContaining('9 列'),
     ]));
   });
 
-  it('reports text in column K even when optional cells make the Excel row sparse', async () => {
+  it('reports text in column J even when optional cells make the Excel row sparse', async () => {
     const workbook = sparseQuestionWorkbook();
-    workbook.worksheets[0].getRow(2).getCell(11).value = '额外文本';
+    workbook.worksheets[0].getRow(2).getCell(10).value = '额外文本';
 
     const rows = await parseQuestionImportFile(Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer), 'xlsx');
 
-    expect(rows[0].format_errors).toContain('Excel 每行必须使用 10 列');
+    expect(rows[0].format_errors).toContain('Excel 每行必须使用 9 列');
   });
 
-  it('reports a formula in sparse column K without trusting its cached result', async () => {
+  it('reports a formula in sparse column J without trusting its cached result', async () => {
     const workbook = sparseQuestionWorkbook();
-    workbook.worksheets[0].getRow(2).getCell(11).value = { formula: '1+1', result: '' };
+    workbook.worksheets[0].getRow(2).getCell(10).value = { formula: '1+1', result: '' };
 
     const rows = await parseQuestionImportFile(Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer), 'xlsx');
 
-    expect(rows[0].format_errors).toContain('Excel 每行必须使用 10 列');
+    expect(rows[0].format_errors).toContain('Excel 每行必须使用 9 列');
   });
 
-  it('accepts a ten-column Excel row whose optional cells are genuinely empty', async () => {
+  it('accepts a nine-column Excel row whose optional cells are genuinely empty', async () => {
     const workbook = sparseQuestionWorkbook();
 
     const rows = await parseQuestionImportFile(Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer), 'xlsx');
 
     expect(rows).toEqual([expect.objectContaining({
-      row: 2, category: '', concept: '', analysis: '', rubric: '', type: 'single', score: '5',
+      row: 2, category: '', concept: '', analysis: '', type: 'single', score: '5',
     })]);
     expect(rows[0].format_errors).toBeUndefined();
   });
 });
 
-const HEADER = 'category\ttype\tdifficulty\tconcept\tstem\toptions\tanswer\tanalysis\trubric\tscore';
+const HEADER = 'category\ttype\tdifficulty\tconcept\tstem\toptions\tanswer\tanalysis\tscore';
 
 function sparseQuestionWorkbook(): ExcelJS.Workbook {
   const workbook = new ExcelJS.Workbook();
@@ -108,7 +108,7 @@ function sparseQuestionWorkbook(): ExcelJS.Workbook {
   row.getCell(5).value = '<p>稀疏行题干</p>';
   row.getCell(6).value = JSON.stringify([{ key: 'A', text: '是' }, { key: 'B', text: '否' }]);
   row.getCell(7).value = '[0]';
-  row.getCell(10).value = '5';
+  row.getCell(9).value = '5';
   row.commit();
   return workbook;
 }
@@ -121,10 +121,10 @@ function singleRow(stem: string, overrides: Partial<Record<string, string>> = {}
   const row = {
     category: '', type: 'single', difficulty: 'easy', concept: '受限空间', stem,
     options: JSON.stringify([{ key: 'A', text: '先检测' }, { key: 'B', text: '直接进入' }]),
-    answer: JSON.stringify([0]), analysis: '<p>应先检测。</p>', rubric: '', score: '5',
+    answer: JSON.stringify([0]), analysis: '<p>应先检测。</p>', score: '5',
     ...overrides,
   };
-  return ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'rubric', 'score']
+  return ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'score']
     .map((key) => row[key]);
 }
 
@@ -225,14 +225,15 @@ describe('question import preview', () => {
       singleRow('  <p>进入前应做什么？</p>  '),
       singleRow('<p>上传现场照片。</p>', {
         type: 'image', difficulty: '', concept: '', options: '[]', answer: '[]', analysis: '',
-        rubric: '<p>识别隐患位置。</p>', score: '10',
+        score: '10',
       }),
     ]);
 
     const preview = await service.preview('1', file, 'txt', { categoryId: '10', difficulty: 'hard' });
 
-    expect(preview.valid_rows).toEqual([2, 5]);
+    expect(preview.valid_rows).toEqual([2]);
     expect(preview.errors.some((item) => item.row === 3 && item.message.includes('题型'))).toBe(true);
+    expect(preview.errors.some((item) => item.row === 5 && item.message.includes('题型'))).toBe(true);
     expect(preview.duplicates).toEqual([4]);
     expect(versions.validateImportDraft).toHaveBeenCalled();
   });
@@ -241,7 +242,7 @@ describe('question import preview', () => {
     const existing = [{
       categoryId: '10', type: 'single', difficulty: 'easy', stem: '<p>已有题目</p>',
       options: [{ key: 'A', text: '先检测' }, { key: 'B', text: '直接进入' }], answer: [0],
-      analysis: '<p>应先检测。</p>', rubric: null,
+      analysis: '<p>应先检测。</p>',
     }];
     const { service } = questionImportFixture(existing);
 
@@ -335,7 +336,7 @@ function importDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraft
   return {
     categoryId: '10', difficulty: 'easy', type: 'single', stem: '<p>导入题目</p>',
     options: [{ key: 'A', text: '正确项' }, { key: 'B', text: '干扰项' }], answer: [0],
-    analysis: '<p>解析</p>', rubric: null, scoreCents: 500, source: 'import', ...overrides,
+    analysis: '<p>解析</p>', scoreCents: 500, source: 'import', ...overrides,
   };
 }
 
@@ -372,7 +373,7 @@ describe('approved import adapter for the versioned question bank', () => {
 
     await expect(service.createApprovedImportsInManager(
       manager,
-      [importDraft({ categoryId: '20' }), importDraft({ type: 'image', rubric: null })],
+      [importDraft({ categoryId: '20' }), importDraft({ type: 'image' as any })],
       '7',
     )).rejects.toMatchObject({ code: 40001 });
 

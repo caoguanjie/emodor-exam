@@ -3,7 +3,7 @@
     <div class="page-head">
       <div class="eyebrow">我的学习</div>
       <h2>我的成绩</h2>
-      <p class="desc">每次作答的得分与切屏记录，成绩由系统自动判定、不可修改</p>
+      <p class="desc">每次作答的最终得分，成绩由系统自动判定、不可修改</p>
     </div>
     <el-table v-loading="loading" :data="list">
       <el-table-column prop="paper_title" label="试卷" min-width="200" />
@@ -19,7 +19,6 @@
           <span class="re-mono score-cell" :class="{ passed: row.status === 'passed', failed: row.status === 'failed' }">{{ row.score ?? '—' }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="switch_count" label="切屏次数" width="90" />
       <el-table-column label="交卷时间" min-width="150">
         <template #default="{ row }">{{ formatDateTime(row.submitted_at) }}</template>
       </el-table-column>

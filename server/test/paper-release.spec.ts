@@ -41,7 +41,6 @@ function snapshot(
     options: [{ key: 'A', text: '发布时选项' }, { key: 'B', text: '干扰项' }],
     answer: [0],
     analysis: '发布时解析',
-    rubric: null,
     scoreCents: 800,
     regulationId,
     source: 'manual',
@@ -322,11 +321,11 @@ function paperAdminFixture(paperOverride: Record<string, unknown> = {}) {
     save: vi.fn(async (values: any[]) => { savedQuestions.push(...values); return values; }),
     find: vi.fn(async () => savedQuestions),
   };
-  const versions = ['single', 'multiple', 'judgment', 'image'].map((type, index) => ({
+  const versions = ['single', 'multiple', 'judgment', 'single'].map((type, index) => ({
     id: String(501 + index), questionId: String(101 + index), revision: 1, categoryId: '7', difficulty: 'medium', type,
-    stem: `${type} 题`, options: type === 'image' ? [] : [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }],
-    answer: type === 'image' ? [] : type === 'multiple' ? [0, 1] : [0], analysis: null,
-    rubric: type === 'image' ? '按风险点评分' : null, scoreCents: 2500, conceptId: `concept-${index + 1}`,
+    stem: `${type} 题`, options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }],
+    answer: type === 'multiple' ? [0, 1] : [0], analysis: null,
+    scoreCents: 2500, conceptId: `concept-${index + 1}`,
     regulationId: index === 0 ? '1' : index === 1 ? '2' : null, regulationVersionId: null,
     sourcePageGroup: null, sourcePageStart: null, sourcePageEnd: null, source: 'manual', status: 'approved',
     approvedBy: '9', approvedAt: new Date('2026-10-21T08:00:00.000Z'), reviewedBy: '9', reviewedAt: new Date(),
@@ -337,8 +336,14 @@ function paperAdminFixture(paperOverride: Record<string, unknown> = {}) {
     getRepository(entity: unknown) {
       if (entity === ExamPaper) return paperRepo;
       if (entity === PaperQuestion) return paperQuestionRepo;
-      if (entity === QuestionVersion) return { findBy: vi.fn(async () => versions) };
-      if (entity === Question) return { findBy: vi.fn(async () => questions) };
+      if (entity === QuestionVersion) return { findBy: vi.fn(async ({ id }: any) => {
+        const requested = Array.isArray(id?._value) ? id._value.map(String) : [];
+        return versions.filter((version) => requested.includes(String(version.id)));
+      }) };
+      if (entity === Question) return { findBy: vi.fn(async ({ id }: any) => {
+        const requested = Array.isArray(id?._value) ? id._value.map(String) : [];
+        return questions.filter((question) => requested.includes(String(question.id)));
+      }) };
       if (entity === Regulation || entity === TrainingCourse) return { findBy: vi.fn(async () => []) };
       throw new Error(`unexpected repository ${(entity as any)?.name}`);
     },
@@ -369,18 +374,17 @@ describe('training paper draft configuration', () => {
     expect(paper.ruleConfig).toMatchObject({ totalCents: 10000, passCents: 6000, rules: [{ scoreCents: 5000 }] });
   });
 
-  it('accepts all four approved types and medium difficulty in one fixed same-category paper across regulations', async () => {
+  it('accepts all three approved types and medium difficulty in one fixed same-category paper across regulations', async () => {
     const { service, savedQuestions } = paperAdminFixture();
 
     const detail = await service.setTrainingQuestions('11', [
-      { question_version_id: '501', score_cents: 2500 },
-      { question_version_id: '502', score_cents: 2500 },
-      { question_version_id: '503', score_cents: 2500 },
-      { question_version_id: '504', score_cents: 2500 },
+      { question_version_id: '501', score_cents: 3000 },
+      { question_version_id: '502', score_cents: 3000 },
+      { question_version_id: '503', score_cents: 4000 },
     ], { id: '9', name: 'admin' }, null);
 
-    expect(savedQuestions.map((item) => item.questionVersionId)).toEqual(['501', '502', '503', '504']);
-    expect(new Set(savedQuestions.map((item) => item.conceptId)).size).toBe(4);
+    expect(savedQuestions.map((item) => item.questionVersionId)).toEqual(['501', '502', '503']);
+    expect(new Set(savedQuestions.map((item) => item.conceptId)).size).toBe(3);
     expect(detail.sum_score_cents).toBe(10000);
   });
 

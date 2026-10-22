@@ -64,8 +64,8 @@ export async function ensureSeedData(ds: DataSource): Promise<void> {
   }
   const roleDefinitions = [
     { code: 'super_admin', name: '超级管理员', isSystem: 1, permissions: [...PERMISSION_CATALOG] },
-    { code: 'regulation_admin', name: '制度管理员', isSystem: 1, permissions: LEGACY_REGULATION_ADMIN_PERMISSIONS },
-    { code: 'employee', name: '员工', isSystem: 1, permissions: [] as string[] },
+    { code: 'regulation_admin', name: '业务管理员', isSystem: 1, permissions: LEGACY_REGULATION_ADMIN_PERMISSIONS },
+    { code: 'employee', name: '学员', isSystem: 1, permissions: [] as string[] },
   ];
   for (const definition of roleDefinitions) {
     let role = await roleRepo.findOne({ where: { code: definition.code } });

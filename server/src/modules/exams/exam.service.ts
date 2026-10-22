@@ -23,14 +23,11 @@ import { AnswerDraftService } from './answer-draft.service';
 import { SubmissionService } from './submission.service';
 
 const SUBMIT_LOCK_TTL = 30; // exam:lock:submit:{record_id} TTL = 判分 P99 × 3（07 册 3.2.4）
-const SWITCH_DEBOUNCE_SECONDS = 1; // 服务端 1 秒窗口二次去抖（05 册 6.4.4）
-const SWITCH_WARN_THRESHOLD = 3; // >3 前端全屏警告
-const SWITCH_RISK_THRESHOLD = 5; // ≥5 风控标记 + 审计
 
 /**
  * 考试评分服务（05 册 6.4，06 册 §4）：
  * 五步资格校验链 → 开考事务（deadline_at 快照 + Redis 计时）→ 确定性 seed 乱序下发
- * → 作答暂存 / 切屏去抖计数 → 三层幂等交卷 → 自动评分落库 → 超时自动交卷（定时扫描）。
+ * → 作答暂存 → 三层幂等交卷 → 自动评分落库 → 超时自动交卷（定时扫描）。
  */
 @Injectable()
 export class ExamService {
@@ -70,10 +67,6 @@ export class ExamService {
 
   private answerKey(recordId: string | number) {
     return `exam:answer:${recordId}`;
-  }
-
-  private switchKey(recordId: string | number) {
-    return `exam:switch:${recordId}`;
   }
 
   private async userContext(userId: number) {
@@ -166,7 +159,6 @@ export class ExamService {
         score: r.score === null ? null : Number(r.score),
         started_at: r.startedAt,
         submitted_at: r.submittedAt,
-        switch_count: r.switchCount,
       })),
       total,
       page,
@@ -277,7 +269,7 @@ export class ExamService {
     return out;
   }
 
-  // ================= 作答 / 切屏 =================
+  // ================= 作答 =================
 
   /** 考试心跳（POST /exams/records/{id}/heartbeat）：作答暂存 + 服务端时间校准（05 册 6.4.3） */
   async heartbeat(recordId: string, userId: number, answers: { question_id: number | string; selected?: number[] }[]) {
@@ -327,48 +319,6 @@ export class ExamService {
       remaining_seconds: Math.max(0, Math.floor((deadline - now) / 1000)),
       deadline_at: record.deadlineAt,
     };
-  }
-
-  /** 切屏上报（POST /exams/records/{id}/switch）：Redis INCR + 1 秒窗口去抖（05 册 6.4.4） */
-  async reportSwitch(recordId: string, userId: number) {
-    const record = await this.recordRepo.findOne({ where: { id: recordId } });
-    if (!record) throw Errors.notFound('考试记录不存在');
-    if (Number(record.userId) !== userId) throw Errors.dataForbidden();
-    this.assertLegacyRecordRoute(record);
-    if (record.status !== ExamStatus.IN_PROGRESS) {
-      const switchCount = record.switchCount;
-      return { switch_count: switchCount, warning: switchCount > SWITCH_WARN_THRESHOLD, risk_flag: switchCount >= SWITCH_RISK_THRESHOLD };
-    }
-    if (record.assignmentId) {
-      const result = await this.submissions.reportSwitch(String(userId), String(record.id));
-      const count = Number(result.switch_count);
-      const warning = count > SWITCH_WARN_THRESHOLD;
-      const riskFlag = count >= SWITCH_RISK_THRESHOLD;
-      if (riskFlag) {
-        this.audit.log({
-          actor_id: userId, actor_name: '', action: 'exam.switch.risk', object_type: 'exam_record',
-          object_id: recordId, detail: { switch_count: count }, result: 'success', source_ip: null,
-        });
-      }
-      return { switch_count: count, warning, risk_flag: riskFlag };
-    }
-    // 1 秒窗口去抖：窗口内的重复上报合并计 1 次（防事件风暴与伪造 flooding）
-    const debounced = await this.redis.setNx(`exam:switch:deb:${recordId}`, '1', SWITCH_DEBOUNCE_SECONDS);
-    if (!debounced) {
-      const current = Number((await this.redis.get(this.switchKey(recordId))) || record.switchCount || 0);
-      return { switch_count: current, warning: current > SWITCH_WARN_THRESHOLD, risk_flag: current >= SWITCH_RISK_THRESHOLD };
-    }
-    const count = await this.redis.incr(this.switchKey(recordId), 24 * 3600);
-    const warning = count > SWITCH_WARN_THRESHOLD;
-    const riskFlag = count >= SWITCH_RISK_THRESHOLD;
-    if (riskFlag) {
-      // ≥5 风控标记 + 审计日志（人工复核，不强制交卷，07 册 3.2.2）
-      this.audit.log({
-        actor_id: userId, actor_name: '', action: 'exam.switch.risk', object_type: 'exam_record',
-        object_id: recordId, detail: { switch_count: count }, result: 'success', source_ip: null,
-      });
-    }
-    return { switch_count: count, warning, risk_flag: riskFlag };
   }
 
   // ================= 交卷与评分 =================
@@ -434,8 +384,8 @@ export class ExamService {
       }
 
       const result = await this.gradeAndPersist(record, merged, isTimeout ? 'timeout' : 'submitted', user.username);
-      // 成功清理顺序：提交事务 → DEL 答案暂存 → DEL 防重锁 → DEL deadline / 切屏（07 册 3.2.4）
-      await this.redis.del(this.answerKey(recordId), `exam:lock:submit:${recordId}`, this.deadlineKey(recordId), this.switchKey(recordId));
+      // 成功清理顺序：提交事务 → DEL 答案暂存 → DEL 防重锁 → DEL deadline
+      await this.redis.del(this.answerKey(recordId), `exam:lock:submit:${recordId}`, this.deadlineKey(recordId));
       return result;
     } catch (e: any) {
       // 判分事务回滚：DEL 防重锁（考生可立即重试）、保留作答暂存（07 册 3.2.4 失败释放约定）
@@ -476,7 +426,6 @@ export class ExamService {
     const graded = this.grading.grade(restored, paper, pqs, qMap);
     const passed = this.grading.isPassed(graded.total, Number(paper.passScore));
     const finalStatus = passed ? ExamStatus.PASSED : ExamStatus.FAILED;
-    const switchCount = Number((await this.redis.get(this.switchKey(record.id))) || 0);
     const submittedAt = new Date();
 
     let savedRecord: ExamRecord | null = null;
@@ -486,7 +435,7 @@ export class ExamService {
       const upd = await recordRepo
         .createQueryBuilder()
         .update(ExamRecord)
-        .set({ status: submitStatus, score: String(graded.total), submittedAt, switchCount })
+        .set({ status: submitStatus, score: String(graded.total), submittedAt })
         .where('id = :id AND status = :status', { id: record.id, status: ExamStatus.IN_PROGRESS })
         .execute();
       if (!upd.affected) throw Errors.submitConflict();
@@ -517,7 +466,7 @@ export class ExamService {
       object_id: record.id, detail: { status: finalStatus, score: graded.total, timeout: submitStatus === 'timeout' },
       result: 'success', source_ip: null,
     });
-    return this.submitResultView(savedRecord || ({ ...record, status: finalStatus, score: String(graded.total), submittedAt, switchCount } as ExamRecord));
+    return this.submitResultView(savedRecord || ({ ...record, status: finalStatus, score: String(graded.total), submittedAt } as ExamRecord));
   }
 
   private async submitResultView(record: ExamRecord) {
@@ -533,7 +482,6 @@ export class ExamService {
       status: record.status,
       score: record.score === null ? null : Number(record.score),
       pass_score: paper ? Number(paper.passScore) : null,
-      switch_count: record.switchCount,
       submitted_at: record.submittedAt,
       best_score: bestScore,
       answer_summary: answers.map((a) => ({
@@ -571,7 +519,6 @@ export class ExamService {
       status: record.status,
       score: record.score === null ? null : Number(record.score),
       pass_score: paper ? Number(paper.passScore) : null,
-      switch_count: record.switchCount,
       started_at: record.startedAt,
       submitted_at: record.submittedAt,
       best_score: scores.length ? Math.max(...scores) : null,
@@ -639,7 +586,7 @@ export class ExamService {
         } catch { /* ignore */ }
       }
       await this.gradeAndPersist(record, merged, 'timeout', 'system');
-      await this.redis.del(this.answerKey(record.id), this.deadlineKey(record.id), this.switchKey(record.id));
+      await this.redis.del(this.answerKey(record.id), this.deadlineKey(record.id));
     } finally {
       await this.redis.del(`exam:lock:submit:${record.id}`);
     }

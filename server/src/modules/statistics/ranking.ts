@@ -174,7 +174,6 @@ export function buildExamSummary(input: {
   const historicalUsers = new Set(input.records.map((record) => record.userId));
   const eligibleStarted = new Set([...historicalUsers].filter((userId) => input.eligibleUserIds.has(userId)));
   const submitted = input.records.filter((record) => record.submittedAt !== null);
-  const pending = input.records.filter((record) => record.gradingState === 'pending_manual');
   const finalizedUsers = new Set(input.records
     .filter((record) => record.gradingState === 'finalized' && record.score !== null
       && compatible(record, input.scoringReleaseId, input.scoringRule))
@@ -191,8 +190,6 @@ export function buildExamSummary(input: {
     historical_only_started_count: [...historicalUsers].filter((userId) => !input.eligibleUserIds.has(userId)).length,
     submitted_attempts: submitted.length,
     submitted_users: new Set(submitted.map((record) => record.userId)).size,
-    pending_attempts: pending.length,
-    pending_users: new Set(pending.map((record) => record.userId)).size,
     finalized_users: finalizedUsers.size,
     participation_rate: input.eligibleUserIds.size
       ? Math.round((eligibleStarted.size / input.eligibleUserIds.size) * 10000) / 10000

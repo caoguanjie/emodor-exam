@@ -1,6 +1,9 @@
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import { startMockAi } from './e2e-smoke.mjs';
+import { randomStrongPassword } from './support/password-fixture.mjs';
+
+export { randomStrongPassword } from './support/password-fixture.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
@@ -10,20 +13,6 @@ const fixtureJwt = new JwtService({});
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
-}
-
-export function randomStrongPassword(...personalValues) {
-  const forbidden = personalValues
-    .map((value) => String(value || '').trim().toLowerCase())
-    .filter((value) => value.length >= 3)
-    .flatMap((value) => Array.from(
-      { length: value.length - 2 },
-      (_, index) => value.slice(index, index + 3),
-    ));
-  while (true) {
-    const password = `Q${randomBytes(16).toString('hex')}Z9`;
-    if (!forbidden.some((value) => password.toLowerCase().includes(value))) return password;
-  }
 }
 
 async function readCaptchaAnswer(ctx, captchaId) {
@@ -117,7 +106,7 @@ async function seedScopedPublishedRegulation(ctx, createdBy) {
   const title = `A3 scope fixture ${randomBytes(4).toString('hex')}`;
   const inserted = await ctx.queryTestDb(
     'INSERT INTO regulation (title, category, status, current_version_id, required_minutes, scroll_segments, created_by) VALUES (?, ?, ?, NULL, 1, 10, ?)',
-    [title, 'A3', 'published', String(createdBy)],
+    [title, 'question_material', 'published', String(createdBy)],
   );
   const regulationId = String(inserted.insertId);
   const version = await ctx.queryTestDb(
@@ -125,8 +114,8 @@ async function seedScopedPublishedRegulation(ctx, createdBy) {
     [regulationId, `a3-fixture-${regulationId}.docx`, 'docx', 'a'.repeat(64), '<p>A3 scope fixture</p>', 'A3 scope fixture', 'parsed', String(createdBy)],
   );
   await ctx.queryTestDb('UPDATE regulation SET current_version_id = ? WHERE id = ?', [String(version.insertId), regulationId]);
-  await ctx.queryTestDb('INSERT INTO regulation_scope (regulation_id, department_id, is_all) VALUES (?, 1, 0)', [regulationId]);
-  return regulationId;
+  await ctx.queryTestDb('INSERT INTO regulation_scope (regulation_id, department_id, is_all) VALUES (?, NULL, 1)', [regulationId]);
+  return { materialId: regulationId, versionId: String(version.insertId) };
 }
 
 function signLegacyNoSidAccessToken(ctx, user, authVersion) {
@@ -205,11 +194,17 @@ async function runBody(ctx, mockPort) {
   const missingCaptcha = await ctx.request(null, 'POST', '/auth/login', { username: 'admin', password: ctx.adminPassword });
   assert(missingCaptcha.status === 400, `adminWithoutCaptcha expected 400, got ${missingCaptcha.status}`);
 
+  const fixtureCategory = await ctx.request(admin.actor, 'POST', '/admin/training-categories', {
+    name: `A3 账号夹具 ${randomBytes(4).toString('hex')}`,
+  });
+  assert(fixtureCategory.status === 200 && fixtureCategory.data?.id, `fixture category create failed: ${fixtureCategory.status}`);
+  const fixtureCategoryId = String(fixtureCategory.data.id);
+
   const employeeUsername = `employee_${randomBytes(4).toString('hex')}`;
   const employeePassword = randomStrongPassword(employeeUsername, '临时员工');
-  const employee = await ctx.request(admin.actor, 'POST', '/users', {
+  const employee = await ctx.request(admin.actor, 'POST', '/admin/students', {
     username: employeeUsername, password: employeePassword,
-    real_name: '临时员工', role: 'employee',
+    real_name: '临时员工', category_id: fixtureCategoryId, source: 'institution',
   });
   assert(employee.status === 200, `employee fixture create failed: ${employee.status} ${JSON.stringify(employee.json || employee.data)}`);
   const loginCountBeforeSessionFailure = await ctx.queryTestDb(
@@ -279,8 +274,9 @@ async function runBody(ctx, mockPort) {
 
   const ordinaryUsername = `ordinary_${randomBytes(4).toString('hex')}`;
   const ordinaryPassword = randomStrongPassword(ordinaryUsername);
-  const ordinary = await ctx.request(admin.actor, 'POST', '/users', {
-    username: ordinaryUsername, password: ordinaryPassword, real_name: '普通树读取者', role: 'employee',
+  const ordinary = await ctx.request(admin.actor, 'POST', '/admin/students', {
+    username: ordinaryUsername, password: ordinaryPassword, real_name: '普通候选账号',
+    category_id: fixtureCategoryId, source: 'institution',
   });
   assert(ordinary.status === 200 && ordinary.data?.id, `ordinary tree fixture create failed: ${ordinary.status}`);
   const ordinaryLogin = await completeFirstLogin(
@@ -289,18 +285,15 @@ async function runBody(ctx, mockPort) {
     ordinaryUsername, ordinaryPassword, 'OrdinaryTreeReader',
   );
   const ordinaryTree = await ctx.request(ordinaryLogin.actor, 'GET', '/departments/tree');
-  assert(ordinaryTree.status === 200 && Array.isArray(ordinaryTree.data?.list), `ordinary department tree read failed: ${ordinaryTree.status}`);
+  assert(ordinaryTree.status === 404, `removed department tree unexpectedly reachable: ${ordinaryTree.status}`);
 
   const readUsername = `admin_read_${randomBytes(4).toString('hex')}`;
   const readPassword = randomStrongPassword(readUsername);
-  const readUser = await ctx.request(admin.actor, 'POST', '/users', {
-    username: readUsername, password: readPassword, real_name: '管理员只读账号', role: 'employee',
-  });
-  assert(readUser.status === 200 && readUser.data?.id, `administrator read fixture create failed: ${readUser.status}`);
-  const readAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${readUser.data.id}/roles`, {
+  const readUser = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
+    username: readUsername, password: readPassword, real_name: '管理员只读账号',
     role_ids: [String(adminReadRole.data.id)],
   });
-  assert(readAssigned.status === 200, `administrator read fixture assignment failed: ${readAssigned.status}`);
+  assert(readUser.status === 200 && readUser.data?.id, `administrator read fixture create failed: ${readUser.status}`);
   const readLogin = await completeFirstLogin(
     ctx,
     await captchaLogin(ctx, readUsername, readPassword),
@@ -313,7 +306,7 @@ async function runBody(ctx, mockPort) {
   const readOptionsDenied = await ctx.request(readLogin.actor, 'GET', '/admin/administrators/assignable-roles');
   assert(readOptionsDenied.status === 403, `administrator read role options unexpectedly allowed: ${readOptionsDenied.status}`);
   const readTree = await ctx.request(readLogin.actor, 'GET', '/departments/tree');
-  assert(readTree.status === 200 && Array.isArray(readTree.data?.list), `delegated department tree read failed: ${readTree.status}`);
+  assert(readTree.status === 404, `removed department tree unexpectedly reachable: ${readTree.status}`);
   const departmentWrites = [
     ['POST', '/departments', { parent_id: null, name: `forbidden_${randomBytes(4).toString('hex')}` }],
     ['PUT', '/departments/1', { name: '不得修改根部门' }],
@@ -323,19 +316,16 @@ async function runBody(ctx, mockPort) {
   ];
   for (const [method, path, body] of departmentWrites) {
     const denied = await ctx.request(readLogin.actor, method, path, body);
-    assert(denied.status === 403, `delegated department write unexpectedly allowed: ${method} ${path} ${denied.status}`);
+    assert(denied.status === 404, `removed department write unexpectedly reachable: ${method} ${path} ${denied.status}`);
   }
 
   const writeUsername = `admin_write_${randomBytes(4).toString('hex')}`;
   const writePassword = randomStrongPassword(writeUsername);
-  const writeUser = await ctx.request(admin.actor, 'POST', '/users', {
-    username: writeUsername, password: writePassword, real_name: '管理员分配账号', role: 'employee',
-  });
-  assert(writeUser.status === 200 && writeUser.data?.id, `administrator write fixture create failed: ${writeUser.status}`);
-  const writeAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${writeUser.data.id}/roles`, {
+  const writeUser = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
+    username: writeUsername, password: writePassword, real_name: '管理员分配账号',
     role_ids: [String(adminWriteRole.data.id)],
   });
-  assert(writeAssigned.status === 200, `administrator write fixture assignment failed: ${writeAssigned.status}`);
+  assert(writeUser.status === 200 && writeUser.data?.id, `administrator write fixture create failed: ${writeUser.status}`);
   const writeLogin = await completeFirstLogin(
     ctx,
     await captchaLogin(ctx, writeUsername, writePassword),
@@ -403,7 +393,7 @@ async function runBody(ctx, mockPort) {
   const employeeRoleCode = `employee_admin_${randomBytes(4).toString('hex')}`;
   const employeeRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
     code: employeeRoleCode, name: '员工运营管理员', permissions: [
-      'statistics:read', 'regulations:read', 'regulations:write',
+      'statistics:read',
       'questions:read', 'questions:write', 'ai:read', 'ai:write',
       'papers:read', 'papers:write',
       'training_categories:read', 'training_categories:write', 'students:read', 'students:write',
@@ -436,11 +426,12 @@ async function runBody(ctx, mockPort) {
   assert(employeeStats.status !== 403, `employee custom statistics permission denied: ${employeeStats.status}`);
   const employeeQuestions = await ctx.request(employeeAdminLogin.actor, 'GET', '/ai/questions');
   assert(employeeQuestions.status !== 403, `employee custom AI permission denied: ${employeeQuestions.status}`);
-  const scopedRegulationId = await seedScopedPublishedRegulation(ctx, admin.result.data.user.id);
+  const scopedMaterial = await seedScopedPublishedRegulation(ctx, admin.result.data.user.id);
+  const scopedRegulationId = scopedMaterial.materialId;
   const employeePreview = await ctx.request(
     employeeAdminLogin.actor,
     'GET',
-    `/regulations/${scopedRegulationId}/preview`,
+    `/regulations/${scopedRegulationId}/content`,
   );
   assert(employeePreview.status === 200, `employee custom regulation preview denied: ${employeePreview.status}`);
   const employeeOtherUserStats = await ctx.request(employeeAdminLogin.actor, 'GET', '/statistics/users/1');
@@ -464,8 +455,9 @@ async function runBody(ctx, mockPort) {
   assert(legacyAfterPasswordChange.status === 401, `legacy no-sid token survived password change: ${legacyAfterPasswordChange.status}`);
   const raceUsername = `race_employee_${randomBytes(4).toString('hex')}`;
   const racePassword = randomStrongPassword(raceUsername, '并发员工');
-  const raceEmployee = await ctx.request(admin.actor, 'POST', '/users', {
-    username: raceUsername, password: racePassword, real_name: '并发员工', role: 'employee',
+  const raceEmployee = await ctx.request(admin.actor, 'POST', '/admin/students', {
+    username: raceUsername, password: racePassword, real_name: '并发员工',
+    category_id: fixtureCategoryId, source: 'institution',
   });
   assert(raceEmployee.status === 200 && raceEmployee.data?.id, `concurrent login fixture create failed: ${raceEmployee.status}/${raceEmployee.code}/${raceEmployee.message}`);
   const raceInitialActor = {};
@@ -534,8 +526,9 @@ async function runBody(ctx, mockPort) {
 
   const passwordRaceUsername = `password_race_${randomBytes(4).toString('hex')}`;
   const passwordRacePassword = randomStrongPassword(passwordRaceUsername, '并发改密');
-  const passwordRaceUser = await ctx.request(admin.actor, 'POST', '/users', {
-    username: passwordRaceUsername, password: passwordRacePassword, real_name: '并发改密', role: 'employee',
+  const passwordRaceUser = await ctx.request(admin.actor, 'POST', '/admin/students', {
+    username: passwordRaceUsername, password: passwordRacePassword, real_name: '并发改密',
+    category_id: fixtureCategoryId, source: 'institution',
   });
   assert(passwordRaceUser.status === 200 && passwordRaceUser.data?.id, `password race fixture create failed: ${passwordRaceUser.status}`);
   const passwordRaceLogin = await completeFirstLogin(
@@ -557,7 +550,7 @@ async function runBody(ctx, mockPort) {
   let passwordRaceReleased = false;
   let resetPromise;
   try {
-    resetPromise = ctx.request(admin.actor, 'PUT', `/users/${passwordRaceUser.data.id}/password`, { password: passwordRaceResetPassword });
+    resetPromise = ctx.request(admin.actor, 'PUT', `/admin/students/${passwordRaceUser.data.id}/password`, { password: passwordRaceResetPassword });
     try {
       await waitForLockWaits(ctx, 1, 'password reset');
     } catch (error) {
@@ -590,8 +583,9 @@ async function runBody(ctx, mockPort) {
 
   const equalIatUsername = `equal_iat_${randomBytes(4).toString('hex')}`;
   const equalIatPassword = randomStrongPassword(equalIatUsername, '同秒令牌');
-  const equalIatUser = await ctx.request(admin.actor, 'POST', '/users', {
-    username: equalIatUsername, password: equalIatPassword, real_name: '同秒令牌', role: 'employee',
+  const equalIatUser = await ctx.request(admin.actor, 'POST', '/admin/students', {
+    username: equalIatUsername, password: equalIatPassword, real_name: '同秒令牌',
+    category_id: fixtureCategoryId, source: 'institution',
   });
   assert(equalIatUser.status === 200 && equalIatUser.data?.id, `equal-iat fixture create failed: ${equalIatUser.status}`);
   const equalIatInitial = await ctx.request(null, 'POST', '/auth/login', {
@@ -620,7 +614,7 @@ async function runBody(ctx, mockPort) {
   assert(fixtureJwt.verify(equalIatSidTokenA, { secret: ctx.env.JWT_SECRET }).iat === equalIat, 'equal-iat sid A fixture drifted');
   assert(fixtureJwt.verify(equalIatSidTokenB, { secret: ctx.env.JWT_SECRET }).iat === equalIat, 'equal-iat sid B fixture drifted');
   assert(fixtureJwt.verify(equalIatNoSidToken, { secret: ctx.env.JWT_SECRET }).iat === equalIat, 'equal-iat no-sid fixture drifted');
-  const equalIatReset = await ctx.request(admin.actor, 'PUT', `/users/${equalIatUser.data.id}/password`, {
+  const equalIatReset = await ctx.request(admin.actor, 'PUT', `/admin/students/${equalIatUser.data.id}/password`, {
     password: randomStrongPassword(equalIatUsername, '重置同秒'),
   });
   assert(equalIatReset.status === 200, `equal-iat reset failed: ${equalIatReset.status}`);
@@ -630,9 +624,9 @@ async function runBody(ctx, mockPort) {
   }
   const refreshedEmployeeAdmin = await captchaLogin(ctx, employee.data.username, employeeAdminLogin.password);
   employeeAdminLogin.actor = refreshedEmployeeAdmin.actor;
-  const delegatedRegulation = await ctx.request(employeeAdminLogin.actor, 'POST', '/regulations', {
-    title: `A3 delegated regulation ${randomBytes(4).toString('hex')}`,
-    category: 'A3', description: 'delegated write fixture',
+  const delegatedRegulation = await ctx.request(employeeAdminLogin.actor, 'POST', '/admin/question-materials', {
+    title: `A3 delegated material ${randomBytes(4).toString('hex')}`,
+    description: 'delegated write fixture',
   });
   assert(delegatedRegulation.status === 200 && delegatedRegulation.data?.id, `employee custom regulation write denied: ${delegatedRegulation.status}`);
   const categoryName = `培训类别_${randomBytes(4).toString('hex')}`;
@@ -641,7 +635,7 @@ async function runBody(ctx, mockPort) {
   });
   assert(createdCategory.status === 200 && createdCategory.data?.id, `delegated category write denied: ${createdCategory.status}`);
   const delegatedQuestion = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/questions', {
-    regulation_id: scopedRegulationId, category_id: String(createdCategory.data.id), difficulty: 'easy',
+    category_id: String(createdCategory.data.id), difficulty: 'easy',
     type: 'single', stem: 'A3 delegated question',
     options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }],
     answer: [0], score: 10,
@@ -661,7 +655,8 @@ async function runBody(ctx, mockPort) {
     `run-owned AI config setup failed: ${ownedAiConfig.status}/${ownedAiConfig.code}`,
   );
   const delegatedGeneration = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/generate-questions', {
-    regulation_id: scopedRegulationId, category_id: String(createdCategory.data.id), difficulty: 'easy',
+    material_id: scopedRegulationId, material_version_id: scopedMaterial.versionId,
+    category_id: String(createdCategory.data.id), difficulty: 'easy',
     question_count_single: 1, question_count_multiple: 0,
     score_single: 100, score_multiple: 1,
   });
@@ -811,7 +806,7 @@ async function runBody(ctx, mockPort) {
   assert(disabledStudentToken.status === 403 && disabledStudentToken.code === 40105, `disabled student live session expected 40105/403, got ${disabledStudentToken.status}/${disabledStudentToken.code}`);
 
   const oldUsersDenied = await ctx.request(employeeAdminLogin.actor, 'GET', '/users');
-  assert(oldUsersDenied.status === 403, `delegated manager reached legacy users API: ${oldUsersDenied.status}`);
+  assert(oldUsersDenied.status === 404, `removed legacy users API remained reachable: ${oldUsersDenied.status}`);
   const systemRoleDenied = await ctx.request(employeeAdminLogin.actor, 'GET', '/admin/roles');
   assert(systemRoleDenied.status === 403, `delegated manager reached system roles API: ${systemRoleDenied.status}`);
 
@@ -822,12 +817,11 @@ async function runBody(ctx, mockPort) {
   assert(readOnlyRole.status === 200 && readOnlyRole.data?.id, `training read-only role create failed: ${readOnlyRole.status}`);
   const readOnlyUsername = `training_readonly_${randomBytes(4).toString('hex')}`;
   const readOnlyPassword = randomStrongPassword(readOnlyUsername, '培训只读');
-  const readOnlyUser = await ctx.request(admin.actor, 'POST', '/users', {
-    username: readOnlyUsername, password: readOnlyPassword, real_name: '培训只读', role: 'employee',
+  const readOnlyUser = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
+    username: readOnlyUsername, password: readOnlyPassword, real_name: '培训只读',
+    role_ids: [String(readOnlyRole.data.id)],
   });
   assert(readOnlyUser.status === 200 && readOnlyUser.data?.id, `training read-only fixture create failed: ${readOnlyUser.status}`);
-  const readOnlyAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${readOnlyUser.data.id}/roles`, { role_ids: [String(readOnlyRole.data.id)] });
-  assert(readOnlyAssigned.status === 200, `training read-only role assignment failed: ${readOnlyAssigned.status}`);
   const readOnlyLogin = await completeFirstLogin(
     ctx,
     await captchaLogin(ctx, readOnlyUsername, readOnlyPassword),
@@ -849,31 +843,13 @@ async function runBody(ctx, mockPort) {
   assert(Number(employeeStatsRows[0]?.force_password_change || 0) === 0, 'password change did not clear force_password_change');
   assert(employeeStatsRows[0]?.last_login_at && employeeStatsRows[0]?.last_login_ip, 'successful login stats missing timestamp or IP');
 
-  const employeeTokenBeforeReset = employeeAdminLogin.actor.accessToken;
-  const employeeBeforeResetProfile = await ctx.request(employeeAdminLogin.actor, 'GET', '/auth/profile');
-  assert(employeeBeforeResetProfile.status === 200, `employee pre-reset profile failed: ${employeeBeforeResetProfile.status}`);
-  const employeeResetPassword = randomStrongPassword(employee.data.username, '临时员工');
-  const employeeBeforeResetRows = await ctx.queryTestDb('SELECT login_count FROM sys_user WHERE id = ?', [String(employee.data.id)]);
-  const employeeReset = await ctx.request(admin.actor, 'PUT', `/users/${employee.data.id}/password`, { password: employeeResetPassword });
-  assert(employeeReset.status === 200, `employee password reset failed: ${employeeReset.status}`);
-  const employeeAfterResetRows = await ctx.queryTestDb(
-    'SELECT login_count, force_password_change FROM sys_user WHERE id = ?',
-    [String(employee.data.id)],
-  );
-  assert(Number(employeeAfterResetRows[0]?.login_count) === Number(employeeBeforeResetRows[0]?.login_count), 'password reset changed truthful login_count');
-  assert(Number(employeeAfterResetRows[0]?.force_password_change || 0) === 1, 'password reset did not set force_password_change');
-  const employeeOldToken = await ctx.request({ accessToken: employeeTokenBeforeReset }, 'GET', '/statistics/regulations');
-  assert(employeeOldToken.status === 401 && employeeOldToken.code === 40107, `employee token after reset expected 40107, got ${employeeOldToken.status}/${employeeOldToken.code}`);
-
   const restrictedUsername = `restricted_${randomBytes(4).toString('hex')}`;
   const restrictedPassword = randomStrongPassword(restrictedUsername, '受限管理员');
-  const restricted = await ctx.request(admin.actor, 'POST', '/users', {
+  const restricted = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
     username: restrictedUsername, password: restrictedPassword,
-    real_name: '受限管理员', role: 'regulation_admin',
+    real_name: '受限管理员', role_ids: [String(role.data.id)],
   });
   assert(restricted.status === 200 && restricted.data?.id, `restricted fixture create failed: ${restricted.status} ${JSON.stringify(restricted.json || restricted.data)}`);
-  const assigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${restricted.data.id}/roles`, { role_ids: [role.data.id] });
-  assert(assigned.status === 200, `restricted role assignment failed: ${assigned.status}`);
   const restrictedLogin = await completeFirstLogin(
     ctx,
     await captchaLogin(ctx, restricted.data.username, restrictedPassword),
@@ -908,7 +884,8 @@ async function runBody(ctx, mockPort) {
     restricted.data.username, restrictedLogin.password, 'RestrictedAfterRemoval',
   );
   const deniedRemovedGeneration = await ctx.request(postRemovalLogin.actor, 'POST', '/ai/generate-questions', {
-    regulation_id: scopedRegulationId, category_id: String(createdCategory.data.id), difficulty: 'easy',
+    material_id: scopedRegulationId, material_version_id: scopedMaterial.versionId,
+    category_id: String(createdCategory.data.id), difficulty: 'easy',
     question_count_single: 1, question_count_multiple: 0,
     score_single: 100, score_multiple: 1,
   });
@@ -916,7 +893,7 @@ async function runBody(ctx, mockPort) {
   const deniedRemovedQuestionRead = await ctx.request(postRemovalLogin.actor, 'GET', '/ai/questions');
   assert(deniedRemovedQuestionRead.status === 403, `removed role question read expected 403, got ${deniedRemovedQuestionRead.status}`);
   const deniedRemovedQuestionWrite = await ctx.request(postRemovalLogin.actor, 'POST', '/ai/questions', {
-    regulation_id: scopedRegulationId, category_id: String(createdCategory.data.id), difficulty: 'easy',
+    category_id: String(createdCategory.data.id), difficulty: 'easy',
     type: 'single', stem: 'removed role question',
     options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], answer: [0], score: 10,
   });
@@ -926,7 +903,7 @@ async function runBody(ctx, mockPort) {
   });
   assert(deniedRemovedPaperWrite.status === 403, `removed role paper write expected 403, got ${deniedRemovedPaperWrite.status}`);
   const scopedContentAfterRoleRemoval = await ctx.request(postRemovalLogin.actor, 'GET', `/regulations/${scopedRegulationId}/content`);
-  assert(scopedContentAfterRoleRemoval.status === 404 && scopedContentAfterRoleRemoval.code === 40402, `cleared role content scope expected hidden 40402, got ${scopedContentAfterRoleRemoval.status}/${scopedContentAfterRoleRemoval.code}`);
+  assert(scopedContentAfterRoleRemoval.status === 200, `learning content must remain independent from removed management permissions: ${scopedContentAfterRoleRemoval.status}`);
 
   const sessions = await ctx.request(admin.actor, 'GET', '/admin/sessions');
   assert(sessions.status === 200 && Array.isArray(sessions.data?.items), `session list failed: ${sessions.status}`);

@@ -5,7 +5,8 @@ const ROOT = join(import.meta.dirname, '..', '..');
 const LEGACY_SMOKE = join(ROOT, 'tests', 'e2e-smoke.mjs');
 
 /**
- * The legacy smoke suite keeps its 94 explicit assertions and fetch helpers.
+ * The smoke suite verifies material ingestion plus retained historical learning,
+ * fixed-paper scoring and statistics; removed management APIs are negative cases.
  * This adapter is the registered suite boundary; new suites receive ctx and
  * export run(ctx) without turning arbitrary paths into child processes.
  */

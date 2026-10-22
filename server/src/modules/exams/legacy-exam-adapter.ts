@@ -54,9 +54,10 @@ function sameSelection(left: number[], right: number[]): boolean {
  */
 export function gradeFrozenSnapshot(snapshot: GradingSnapshot, answers: Map<string, number[]>): FrozenGrade {
   const details = snapshot.items.map((item): FrozenGradeDetail => {
-    const selected = item.type === 'image'
-      ? null
-      : normalizedSelection(answers.get(String(item.itemId)), item.displayToOriginal);
+    if (!['single', 'multiple', 'judgment'].includes(item.type)) {
+      throw Errors.submitConflict('题型不支持自动评分');
+    }
+    const selected = normalizedSelection(answers.get(String(item.itemId)), item.displayToOriginal);
     if (!selected) return { itemId: String(item.itemId), selected: null, isCorrect: null, gainedCents: 0 };
 
     const expected = [...new Set(item.answer.map(Number))].sort((left, right) => left - right);
@@ -200,7 +201,6 @@ export class LegacyExamAdapter {
       status: record.status,
       score: record.score === null ? null : Number(record.score),
       pass_score: record.ruleSnapshot ? Number(record.ruleSnapshot.passCents) / 100 : paper ? Number(paper.passScore) : null,
-      switch_count: record.switchCount,
       submitted_at: record.submittedAt,
       best_score: scores.length ? Math.max(...scores) : null,
       answer_summary: answers.map((answer) => ({
@@ -230,7 +230,6 @@ export class LegacyExamAdapter {
       status: record.status,
       score: record.score === null ? null : Number(record.score),
       pass_score: Number(snapshot.rule.passCents) / 100,
-      switch_count: record.switchCount,
       started_at: record.startedAt,
       submitted_at: record.submittedAt,
       best_score: scores.length ? Math.max(...scores) : null,

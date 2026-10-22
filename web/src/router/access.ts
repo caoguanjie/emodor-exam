@@ -3,6 +3,20 @@ export const COURSE_ROUTE_PERMISSIONS = ['courses:read', 'courses:write'] as con
 export const LEARNER_HOME_PATH = '/my/regulations';
 export const ADMIN_HOME_PATH = '/admin/dashboard';
 
+const RETIRED_ADMIN_PATHS = [
+  '/admin/departments',
+  '/admin/users',
+  '/admin/regulations',
+  '/admin/exam-monitor',
+  '/admin/grading',
+  '/admin/statistics',
+] as const;
+
+export function isRetiredAdminPath(value: string): boolean {
+  const path = String(value || '').split(/[?#]/, 1)[0].replace(/\/+$/, '') || '/';
+  return RETIRED_ADMIN_PATHS.some((retired) => path === retired || path.startsWith(retired + '/'));
+}
+
 export function defaultHomePath(isAdmin: boolean): string {
   return isAdmin ? ADMIN_HOME_PATH : LEARNER_HOME_PATH;
 }

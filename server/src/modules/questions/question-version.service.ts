@@ -45,7 +45,6 @@ type QuestionMediaFields = {
   stem?: unknown;
   options?: unknown;
   analysis?: unknown;
-  rubric?: unknown;
 };
 
 function questionMediaField(fields: QuestionMediaFields, assetId: string): 'prompt' | 'answer' | null {
@@ -63,7 +62,6 @@ function questionMediaField(fields: QuestionMediaFields, assetId: string): 'prom
   if (promptIds.includes(assetId)) return 'prompt';
   const answerIds = controlledQuestionMediaIds([
     typeof fields.analysis === 'string' ? fields.analysis : null,
-    typeof fields.rubric === 'string' ? fields.rubric : null,
   ]);
   return answerIds.includes(assetId) ? 'answer' : null;
 }
@@ -196,7 +194,6 @@ export class QuestionVersionService implements OnModuleInit {
       options: draft.options,
       answer: draft.answer,
       analysis: draft.analysis,
-      rubric: draft.rubric,
       scoreCents: draft.scoreCents,
       conceptId: draft.conceptId || null,
       regulationId: draft.regulationId || null,
@@ -228,7 +225,6 @@ export class QuestionVersionService implements OnModuleInit {
     question.options = version.options;
     question.answer = version.answer;
     question.analysis = version.analysis;
-    question.rubric = version.rubric;
     question.score = (version.scoreCents / 100).toFixed(2);
     question.status = version.status;
     question.source = version.source;
@@ -259,7 +255,6 @@ export class QuestionVersionService implements OnModuleInit {
       options: question.options,
       answer: question.answer,
       analysis: question.analysis,
-      rubric: question.rubric,
       scoreCents: Math.round(Number(question.score) * 100),
       conceptId: question.conceptId,
       regulationId: question.regulationId,
@@ -300,7 +295,6 @@ export class QuestionVersionService implements OnModuleInit {
       options: draft.options,
       answer: draft.answer,
       analysis: draft.analysis,
-      rubric: draft.rubric,
       score: (draft.scoreCents / 100).toFixed(2),
       status: approval ? 'approved' : 'pending',
       source: draft.source,
@@ -398,7 +392,6 @@ export class QuestionVersionService implements OnModuleInit {
       const existingMediaIds = new Set(controlledQuestionMediaIds([
         question.stem,
         question.analysis,
-        question.rubric,
         ...question.options.map((option) => option.text),
       ]));
       await this.assertMediaUsable(
@@ -595,7 +588,7 @@ export class QuestionVersionService implements OnModuleInit {
       questionId: String(version.questionId), versionId: String(version.id), revision: Number(version.revision),
       categoryId: String(version.categoryId), difficulty: version.difficulty as Difficulty, type: version.type as QuestionType,
       stem: version.stem, options: version.options as QuestionOption[], answer: version.answer, analysis: version.analysis,
-      rubric: version.rubric, scoreCents: Number(version.scoreCents), conceptId: version.conceptId || undefined,
+      scoreCents: Number(version.scoreCents), conceptId: version.conceptId || undefined,
       regulationId: version.regulationId || undefined, regulationVersionId: version.regulationVersionId || undefined,
       sourcePageGroup: version.sourcePageGroup ?? undefined,
       sourcePageStart: version.sourcePageStart ?? undefined,

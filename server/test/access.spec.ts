@@ -7,7 +7,7 @@ import { SessionService } from '../src/modules/auth/session.service';
 import { DtoValidationPipe } from '../src/common/dto-validation.pipe';
 import { legacyPermissionForRequest, PermissionsGuard } from '../src/common/guards/permissions.guard';
 import { RoleEnum } from '../src/common/errors';
-import { RolesGuard } from '../src/common/guards/roles.guard';
+import { PERMISSION_SET } from '../src/modules/access/permission-catalog';
 
 const require = createRequire(import.meta.url);
 const { AuthController } = require('../dist/modules/auth/auth.controller.js') as {
@@ -124,23 +124,31 @@ describe('A3 captcha and access contracts', () => {
     expect(session.expiresAt.getTime()).toBe(session.lastSeenAt.getTime() + 7 * 86400 * 1000);
   });
 
-  it('keeps self statistics data-scope checks and marks import templates as writes', () => {
+  it('keeps self statistics data-scope checks without mapping removed management routes', () => {
     expect(legacyPermissionForRequest({ originalUrl: '/api/v1/statistics/users/9', method: 'GET', user: { role: 'employee' } })).toBeUndefined();
     expect(legacyPermissionForRequest({ originalUrl: '/api/v1/statistics/users/9', method: 'GET', user: { role: 'regulation_admin' } })).toBe('statistics:read');
-    expect(legacyPermissionForRequest({ originalUrl: '/api/v1/users/import-template', method: 'GET' })).toBe('students:write');
+    for (const path of ['/api/v1/users/import-template', '/api/v1/departments', '/api/v1/regulations/7/publish']) {
+      expect(legacyPermissionForRequest({ originalUrl: path, method: 'POST' })).toBeUndefined();
+    }
+    expect(legacyPermissionForRequest({ originalUrl: '/api/v1/regulations/7/content', method: 'GET' })).toBeUndefined();
   });
 
-  it('preserves the authenticated department-tree lookup while mapping every write to write permission', () => {
-    expect(legacyPermissionForRequest({ originalUrl: '/api/v1/departments/tree', method: 'GET' })).toBeUndefined();
-    expect(legacyPermissionForRequest({ originalUrl: '/api/v1/departments/tree?status=1', method: 'GET' })).toBeUndefined();
-    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
-      expect(legacyPermissionForRequest({ originalUrl: '/api/v1/departments', method })).toBe('departments:write');
-      expect(legacyPermissionForRequest({ originalUrl: '/api/v1/departments/7/status', method })).toBe('departments:write');
+  it('removes canceled management and exam-review capabilities from the permission registry', () => {
+    for (const code of [
+      'departments:read', 'departments:write',
+      'regulations:read', 'regulations:write', 'regulations:publish',
+      'exam_records:monitor', 'exam_records:review',
+    ]) {
+      expect(PERMISSION_SET.has(code)).toBe(false);
     }
   });
 
-  it('allows the exact department-tree lookup for ordinary and delegated users, but denies all management writes', async () => {
-    const reflector = { getAllAndOverride: vi.fn().mockReturnValue(undefined) };
+  it('fails closed if a removed role-gated management controller is accidentally registered again', async () => {
+    const reflector = {
+      getAllAndOverride: vi.fn()
+        .mockReturnValueOnce(undefined)
+        .mockReturnValueOnce([RoleEnum.SUPER_ADMIN]),
+    };
     const access = { assertAllowed: vi.fn() };
     const permissions = new PermissionsGuard(reflector as any, access as any);
     const context = (request: any) => ({
@@ -149,20 +157,9 @@ describe('A3 captcha and access contracts', () => {
       getClass: () => ({}),
     }) as any;
 
-    for (const role of [RoleEnum.EMPLOYEE, RoleEnum.REGULATION_ADMIN]) {
-      await expect(permissions.canActivate(context({
-        originalUrl: '/api/v1/departments/tree', method: 'GET', user: { id: 9, role },
-      }))).resolves.toBe(true);
-    }
+    await expect(permissions.canActivate(context({
+      originalUrl: '/api/v1/departments', method: 'POST', user: { id: 9, role: RoleEnum.SUPER_ADMIN },
+    }))).rejects.toMatchObject({ code: 40301 });
     expect(access.assertAllowed).not.toHaveBeenCalled();
-
-    const roles = new RolesGuard({ getAllAndOverride: vi.fn().mockReturnValue([RoleEnum.SUPER_ADMIN]) } as any);
-    for (const role of [RoleEnum.EMPLOYEE, RoleEnum.REGULATION_ADMIN]) {
-      for (const path of ['/api/v1/departments', '/api/v1/departments/7', '/api/v1/departments/7/parent', '/api/v1/departments/7/status']) {
-        expect(() => roles.canActivate(context({
-          originalUrl: path, method: 'PUT', user: { role }, permission_authorized: true,
-        }))).toThrowError(expect.objectContaining({ code: 40301 }));
-      }
-    }
   });
 });

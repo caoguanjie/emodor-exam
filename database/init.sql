@@ -1,6 +1,6 @@
 -- =====================================================================
 -- EmodorRuleExam 制度学习及考试系统 · 数据库初始化脚本
--- 依据 docs/design/03-数据库设计.md 逐字建 legacy、A2—A5、B1 与 B3 业务表（当前 30 张业务表 + 1 张迁移元数据表，InnoDB + utf8mb4）
+-- 依据 docs/design/03-数据库设计.md 建表（当前 36 张业务表 + 1 张迁移元数据表，InnoDB + utf8mb4）
 -- 时间字段 DATETIME(3)；无数据库级外键（03 册 1.6 节，应用层维护）
 -- 枚举字段 VARCHAR + 应用层校验（03 册 1.7 节）
 -- 种子数据（根部门 / 超级管理员）由 database/seed.mjs 按环境变量生成，
@@ -256,12 +256,11 @@ CREATE TABLE IF NOT EXISTS `question` (
   `difficulty`         VARCHAR(16) NULL COMMENT 'easy / medium / hard；旧题未知保持 NULL',
   `concept_id`         BIGINT UNSIGNED NULL COMMENT '可选同考点组',
   `current_version_id` BIGINT UNSIGNED NULL COMMENT '当前题目版本；旧题首次编辑/审核时捕获',
-  `type`               VARCHAR(16)  NOT NULL COMMENT 'single / multiple / judgment / image',
+  `type`               VARCHAR(16)  NOT NULL COMMENT 'single / multiple / judgment',
   `stem`               TEXT         NOT NULL COMMENT '题干',
   `options`            JSON         NOT NULL COMMENT '选项数组 [{key,text}]',
   `answer`             JSON         NOT NULL COMMENT '正确答案（选项下标数组）',
   `analysis`           TEXT         NULL COMMENT '答案解析',
-  `rubric`             TEXT         NULL COMMENT '图片题评分参考；其他题为 NULL',
   `score`              DECIMAL(5,2) NOT NULL COMMENT '题库建议分值；考试实际分值另存',
   `status`             VARCHAR(16)  NOT NULL DEFAULT 'pending' COMMENT 'pending / approved / rejected',
   `source`             VARCHAR(16)  NOT NULL COMMENT 'ai / manual / import',
@@ -279,7 +278,7 @@ CREATE TABLE IF NOT EXISTS `question` (
 CREATE TABLE IF NOT EXISTS `question_concept` (
   `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `category_id` BIGINT UNSIGNED NOT NULL COMMENT '培训类别',
-  `type`        VARCHAR(16) NOT NULL COMMENT 'single / multiple / judgment / image',
+  `type`        VARCHAR(16) NOT NULL COMMENT 'single / multiple / judgment',
   `name`        VARCHAR(128) NOT NULL COMMENT '考点名称',
   `created_by`  BIGINT UNSIGNED NOT NULL,
   `created_at`  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -294,12 +293,11 @@ CREATE TABLE IF NOT EXISTS `question_version` (
   `revision`              INT UNSIGNED NOT NULL,
   `category_id`           BIGINT UNSIGNED NULL,
   `difficulty`            VARCHAR(16) NULL COMMENT 'easy / medium / hard；旧捕获版本可 NULL',
-  `type`                  VARCHAR(16) NOT NULL COMMENT 'single / multiple / judgment / image',
+  `type`                  VARCHAR(16) NOT NULL COMMENT 'single / multiple / judgment',
   `stem`                  TEXT NOT NULL,
   `options`               JSON NOT NULL,
   `answer`                JSON NOT NULL,
   `analysis`              TEXT NULL,
-  `rubric`                TEXT NULL,
   `score_cents`           INT UNSIGNED NOT NULL COMMENT '题库建议分值，整数分；考试实际分值另存',
   `concept_id`            BIGINT UNSIGNED NULL,
   `regulation_id`         BIGINT UNSIGNED NULL,
@@ -437,13 +435,9 @@ CREATE TABLE IF NOT EXISTS `exam_record` (
   `draft_revision` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '服务端确认草稿版本',
   `draft_payload_hash` CHAR(64) NULL COMMENT '当前确认草稿的规范化哈希',
   `draft_saved_at` DATETIME(3) NULL COMMENT '当前草稿确认时间',
-  `last_heartbeat_at` DATETIME(3) NULL COMMENT '最后一次服务端确认心跳',
-  `device_summary` VARCHAR(255) NULL COMMENT '考生设备摘要',
   `submission_method` VARCHAR(16) NULL COMMENT 'manual / timeout；历史未知为 NULL',
-  `grading_state` VARCHAR(32) NOT NULL DEFAULT 'not_submitted' COMMENT 'not_submitted / pending_manual / finalized',
-  `grading_revision` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '有效阅卷修订号',
-  `graded_at` DATETIME(3) NULL COMMENT '最终结算时间；待人工批改或历史未知为 NULL',
-  `switch_count`  INT          NOT NULL DEFAULT 0 COMMENT '切屏次数',
+  `grading_state` VARCHAR(32) NOT NULL DEFAULT 'not_submitted' COMMENT 'not_submitted / finalized',
+  `graded_at` DATETIME(3) NULL COMMENT '最终结算时间；历史未知为 NULL',
   `created_at`    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at`    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
@@ -467,7 +461,7 @@ CREATE TABLE IF NOT EXISTS `exam_record_question` (
   `score_cents`         INT UNSIGNED NOT NULL,
   `position`            INT UNSIGNED NOT NULL COMMENT '本次题面显示顺序',
   `display_to_original` JSON NOT NULL COMMENT '显示选项下标到原始下标的完整映射',
-  `snapshot_json`       JSON NOT NULL COMMENT '题干、选项、答案、解析、rubric 与来源版本事实',
+  `snapshot_json`       JSON NOT NULL COMMENT '题干、选项、答案、解析与来源版本事实',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_exam_record_question_position` (`record_id`, `position`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='每次作答冻结的个人题单与显示映射';
@@ -478,11 +472,8 @@ CREATE TABLE IF NOT EXISTS `exam_answer` (
   `question_id`    BIGINT UNSIGNED NOT NULL COMMENT '来源题目；C2 临时 item ID 经 010 恢复',
   `record_question_id` BIGINT UNSIGNED NULL COMMENT '个人题单项；legacy 无题单记录为 NULL',
   `selected`       JSON         NULL COMMENT '考生所选选项（原始下标数组）；NULL/空=未作答',
-  `asset_ids`      JSON         NULL COMMENT '已确认图片答案附件 ID',
   `is_correct`     TINYINT(1)   NULL COMMENT '1=全对，0=非全对（含漏选），NULL=未作答',
-  `gained_score`   DECIMAL(5,2) NULL DEFAULT NULL COMMENT '客观题或人工评分；待批图片为 NULL',
-  `comment`        TEXT         NULL COMMENT '阅卷评语',
-  `grading_version` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '本题评分版本',
+  `gained_score`   DECIMAL(5,2) NULL DEFAULT NULL COMMENT '客观题自动得分；未交卷为 NULL',
   `created_at`     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at`     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
@@ -490,22 +481,6 @@ CREATE TABLE IF NOT EXISTS `exam_answer` (
   UNIQUE KEY `uk_record_item` (`exam_record_id`, `record_question_id`),
   KEY `idx_question` (`question_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='答题明细';
-
-CREATE TABLE IF NOT EXISTS `exam_review_event` (
-  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `exam_record_id` BIGINT UNSIGNED NOT NULL,
-  `record_question_id` BIGINT UNSIGNED NOT NULL,
-  `reviewer_id` BIGINT UNSIGNED NOT NULL,
-  `before_score` DECIMAL(5,2) NULL,
-  `after_score` DECIMAL(5,2) NOT NULL,
-  `before_comment` TEXT NULL,
-  `after_comment` TEXT NULL,
-  `grading_version` INT UNSIGNED NOT NULL,
-  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_exam_review_event_version` (`exam_record_id`, `record_question_id`, `grading_version`),
-  KEY `idx_exam_review_event_record_created` (`exam_record_id`, `created_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='图片题逐次人工评分不可变审计';
 
 -- ---------------------------------------------------------------------
 -- 5. 受控媒体域（2 张，A4）
@@ -515,7 +490,7 @@ CREATE TABLE IF NOT EXISTS `media_asset` (
   `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `owner_id`      BIGINT UNSIGNED NOT NULL COMMENT '业务拥有者；由服务端从身份/管理目标确定',
   `uploaded_by`   BIGINT UNSIGNED NOT NULL COMMENT '上传操作者',
-  `purpose`       VARCHAR(32) NOT NULL COMMENT 'avatar / course_cover / video / question / answer（仅内部）/ branding',
+  `purpose`       VARCHAR(32) NOT NULL COMMENT 'avatar / course_cover / video / question / branding',
   `media_kind`    VARCHAR(16) NOT NULL COMMENT 'image / video',
   `original_name` VARCHAR(255) NULL COMMENT '仅展示元数据，不参与路径拼接',
   `mime_type`     VARCHAR(128) NOT NULL,
@@ -701,8 +676,7 @@ CREATE TABLE IF NOT EXISTS `site_setting` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='站点公开展示配置白名单';
 
 INSERT INTO `sys_permission` (`code`, `name`) VALUES
-  ('exam_records:read', '查看考试记录'),
-  ('exam_records:monitor', '查看考试监控')
+  ('exam_records:read', '查看考试记录')
 ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
 
 INSERT INTO `sys_dictionary` (`type`, `code`, `label`, `sort`, `status`, `is_system`, `remark`) VALUES
@@ -714,7 +688,6 @@ INSERT INTO `sys_dictionary` (`type`, `code`, `label`, `sort`, `status`, `is_sys
   ('question_type','single','单选题',10,1,1,'业务固定枚举'),
   ('question_type','multiple','多选题',20,1,1,'业务固定枚举'),
   ('question_type','judgment','判断题',30,1,1,'业务固定枚举'),
-  ('question_type','image','图片作答题',40,1,1,'业务固定枚举'),
   ('regulation_status','draft','草稿',10,1,1,'业务固定枚举'),
   ('regulation_status','published','已发布',20,1,1,'业务固定枚举'),
   ('regulation_status','archived','已归档',30,1,1,'业务固定枚举'),
@@ -737,53 +710,41 @@ INSERT INTO `site_setting` (`id`, `setting_key`, `value_json`, `updated_by`) VAL
 ON DUPLICATE KEY UPDATE `id` = `id`;
 
 INSERT INTO `sys_permission` (`code`, `name`) VALUES
-  ('exam_records:review', '人工阅卷')
+  ('exam_records:read', '查看考试记录')
 ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
 
 INSERT INTO `sys_menu` (`id`, `parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`) VALUES
-  (1,NULL,'管理台','directory',NULL,NULL,'Grid',10,1),
-  (2,NULL,'系统治理','directory',NULL,NULL,'Setting',20,1),
-  (10,1,'制度管理','menu','/admin/regulations','regulations:read','Document',10,1),
-  (11,1,'题库与出题','menu','/admin/questions',NULL,'EditPen',20,1),
-  (12,1,'试卷管理','menu','/admin/papers','papers:read','Tickets',30,1),
-  (13,1,'统计报表','menu','/admin/statistics','statistics:read','DataAnalysis',40,1),
-  (14,1,'部门管理','menu','/admin/departments','departments:read','OfficeBuilding',50,1),
-  (15,1,'员工管理','menu','/admin/users','students:read','User',60,1),
-  (16,1,'学员管理','menu','/admin/students','students:read','UserFilled',70,1),
-  (17,1,'培训类别','menu','/admin/training-categories','training_categories:read','CollectionTag',80,1),
-  (19,1,'课程管理','menu','/admin/courses',NULL,'Notebook',85,1),
-  (18,1,'AI 服务配置','menu','/admin/ai-config',NULL,'Cpu',90,1),
-  (20,2,'管理员','menu','/admin/administrators','administrators:read','UserFilled',10,1),
-  (21,2,'角色权限','menu','/admin/roles','roles:read','SetUp',20,1),
-  (22,2,'在线会话','menu','/admin/sessions','sessions:read','Monitor',30,1),
-  (23,2,'菜单配置','menu','/admin/system/menus','system_settings:read','Menu',40,1),
+  (1,NULL,'培训管理','directory',NULL,NULL,'Reading',20,1),
+  (2,NULL,'系统设置','directory',NULL,NULL,'Setting',50,1),
+  (3,NULL,'考试管理','directory',NULL,NULL,'Tickets',30,1),
+  (11,3,'题库管理','menu','/admin/questions',NULL,'EditPen',10,1),
+  (12,3,'试卷管理','menu','/admin/papers','papers:read','Tickets',20,1),
+  (13,1,'统计报表','menu','/admin/statistics','statistics:read','DataAnalysis',90,0),
+  (16,1,'学员管理','menu','/admin/students','students:read','UserFilled',20,1),
+  (17,1,'培训类别','menu','/admin/training-categories','training_categories:read','CollectionTag',10,1),
+  (19,1,'课程管理','menu','/admin/courses',NULL,'Notebook',30,1),
+  (18,2,'AI 服务配置','menu','/admin/ai-config',NULL,'Cpu',10,1),
+  (20,2,'管理员','menu','/admin/administrators','administrators:read','UserFilled',20,1),
+  (21,2,'角色权限','menu','/admin/roles','roles:read','SetUp',30,1),
+  (22,2,'在线会话','menu','/admin/sessions','sessions:read','Monitor',70,1),
+  (23,2,'菜单配置','menu','/admin/system/menus','system_settings:read','Menu',60,1),
   (24,2,'字典配置','menu','/admin/system/dictionaries','system_settings:read','Notebook',50,1),
-  (25,2,'网站配置','menu','/admin/system/site-settings','system_settings:read','Picture',60,1),
-  (26,2,'审计日志','menu','/admin/system/audit-logs','system_settings:read','DocumentChecked',70,1)
+  (25,2,'网站配置','menu','/admin/system/site-settings','system_settings:read','Picture',40,1),
+  (26,2,'审计日志','menu','/admin/system/audit-logs','system_settings:read','DocumentChecked',80,1)
 ON DUPLICATE KEY UPDATE `id` = `id`;
 
 INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
-SELECT 1, '考试记录', 'menu', '/admin/exam-records', 'exam_records:read', 'DocumentChecked', 35, 1
-FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory'
+SELECT 3, '考试记录', 'menu', '/admin/exam-records', 'exam_records:read', 'DocumentChecked', 30, 1
+FROM `sys_menu` WHERE `id` = 3 AND `type` = 'directory'
   AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/exam-records');
 
 INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
-SELECT 1, '考试监控', 'menu', '/admin/exam-monitor', 'exam_records:monitor', 'Monitor', 36, 1
-FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory'
-  AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/exam-monitor');
-
-INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
-SELECT 1, '人工阅卷', 'menu', '/admin/grading', 'exam_records:review', 'EditPen', 37, 1
-WHERE EXISTS (SELECT 1 FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory')
-  AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/grading');
-
-INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
-SELECT 1, '业务首页', 'menu', '/admin/dashboard', NULL, 'Grid', 5, 1
+SELECT NULL, '业务首页', 'menu', '/admin/dashboard', NULL, 'Grid', 10, 1
 WHERE EXISTS (SELECT 1 FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory')
   AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/dashboard');
 
 INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
-SELECT 1, '培训统计', 'menu', '/admin/training-statistics', 'statistics:read', 'DataAnalysis', 41, 1
+SELECT NULL, '统计分析', 'menu', '/admin/training-statistics', 'statistics:read', 'DataAnalysis', 40, 1
 WHERE EXISTS (SELECT 1 FROM `sys_menu` WHERE `id` = 1 AND `type` = 'directory')
   AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/training-statistics');
 

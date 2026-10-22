@@ -47,9 +47,6 @@ export class Question {
   @Column({ type: 'text', nullable: true })
   analysis: string | null;
 
-  @Column({ type: 'text', nullable: true })
-  rubric: string | null;
-
   /** 题库建议分值；实际判分以 paper_question.score 为准 */
   @Column({ type: 'decimal', precision: 5, scale: 2 })
   score: string;

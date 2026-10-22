@@ -6,7 +6,6 @@
         <span class="exam-meta">第 {{ attemptNo }} 次作答 · 及格线 {{ paper?.pass_score }} 分</span>
       </div>
       <div class="exam-right">
-        <el-tag type="warning" effect="light" size="default">切屏 {{ switchCount }} 次（＞3 次将警告，≥5 次计入风控复核）</el-tag>
         <div class="countdown" :class="{ danger: remaining <= 300 }">
           <span class="cd-label">剩余时间</span>
           <span class="cd-value re-mono">{{ countdownText }}</span>
@@ -14,15 +13,15 @@
       </div>
     </div>
 
-    <el-alert v-if="isMobile" type="warning" :closable="false" title="建议使用桌面端参加考试；切屏将计时照走并计数留痕" />
+    <el-alert v-if="isMobile" type="warning" :closable="false" title="建议使用桌面端参加考试；离开页面不会暂停服务端计时" />
 
     <div v-for="(q, idx) in questions" :key="q.question_id" class="question-card">
       <div class="stem">
         <span class="q-no re-mono">{{ idx + 1 }}</span>
         <span class="q-text">{{ q.stem }}</span>
-        <el-tag size="small" class="q-type">{{ q.type === 'single' ? '单选' : '多选' }}（{{ q.score }} 分）</el-tag>
+        <el-tag size="small" class="q-type">{{ q.type === 'single' ? '单选' : q.type === 'judgment' ? '判断' : '多选' }}（{{ q.score }} 分）</el-tag>
       </div>
-      <el-radio-group v-if="q.type === 'single'"
+      <el-radio-group v-if="q.type === 'single' || q.type === 'judgment'"
         :model-value="answers[q.question_id]?.[0]"
         @update:model-value="(v: number) => setSingle(q.question_id, v)">
         <el-radio v-for="(o, i) in q.options" :key="i" :value="i" class="option-row">{{ o.key }}. {{ o.text }}</el-radio>
@@ -41,7 +40,7 @@
       <div v-if="result" class="result-stage">
         <el-result :icon="result.status === 'passed' ? 'success' : 'error'"
           :title="result.status === 'passed' ? '恭喜，考试通过！' : '未通过'"
-          :sub-title="`得分 ${result.score} / 及格线 ${result.pass_score} · 切屏 ${result.switch_count} 次 · 历次最高 ${result.best_score}`" />
+          :sub-title="`得分 ${result.score} / 及格线 ${result.pass_score} · 历次最高 ${result.best_score}`" />
         <div v-if="result.status === 'passed'" class="passed-seal re-display">通<br />过</div>
         <div style="text-align:center; padding-bottom:16px">
           <el-button @click="router.push('/my/scores')">查看成绩明细</el-button>
@@ -63,8 +62,7 @@ import { useAuthStore } from '../../stores/auth';
  * 考试作答页（FR-EXM-01~06，07 册 3.2 考试侧防线前端层）：
  * - 服务端 deadline 权威计时（每 30 秒心跳校准，不信任本地时钟）；
  * - 作答暂存：题目变更防抖 1.2 秒随 heartbeat 覆盖写 + pagehide keepalive 补发，
- *   缩小「答完即崩/直接关页」在 30 秒节拍间隙内丢答案的窗口；倒计时归零自动交卷；
- * - visibilitychange/blur 触发切屏上报（前端 500ms 事件合并）。
+ *   缩小「答完即崩/直接关页」在 30 秒节拍间隙内丢答案的窗口；倒计时归零自动交卷。
  */
 const route = useRoute();
 const router = useRouter();
@@ -74,7 +72,6 @@ const paper = ref<any>(null);
 const questions = ref<any[]>([]);
 const attemptNo = ref(1);
 const answers = reactive<Record<string, number[]>>({});
-const switchCount = ref(0);
 const remaining = ref(0);
 const submitting = ref(false);
 const resultVisible = ref(false);
@@ -142,26 +139,6 @@ function flushOnPageHide() {
       body: JSON.stringify({ answers: payload }),
     }).catch(() => { /* 尽力投递 */ });
   } catch { /* 尽力投递 */ }
-}
-
-// 500ms 事件合并（07 册 3.2.2）
-let switchPending = 0;
-let switchFlushTimer: number | null = null;
-function queueSwitch() {
-  switchPending++;
-  if (switchFlushTimer === null) {
-    switchFlushTimer = window.setTimeout(async () => {
-      switchFlushTimer = null;
-      const n = switchPending;
-      switchPending = 0;
-      if (!examRecordId || !n) return;
-      try {
-        const d: any = await http.post(`/exams/records/${examRecordId}/switch`);
-        switchCount.value = d.switch_count;
-        if (d.warning) ElMessageBox.alert('您已多次离开考试页面，切屏行为将被记录', '切屏警告', { type: 'warning' });
-      } catch { /* ignore */ }
-    }, 500);
-  }
 }
 
 async function startOrRecover() {
@@ -236,18 +213,7 @@ function stopTimers() {
   if (beatTimer) window.clearInterval(beatTimer);
   beatTimer = null;
   if (saveTimer) { window.clearTimeout(saveTimer); saveTimer = null; }
-  document.removeEventListener('visibilitychange', onVis);
-  window.removeEventListener('blur', onBlurSwitch);
   window.removeEventListener('pagehide', flushOnPageHide);
-}
-
-function onVis() {
-  if (document.visibilityState === 'hidden') queueSwitch();
-}
-
-/** blur 独立触发（07 册 3.2.2：visibilitychange 与 window blur 均触发切屏上报），不去查 visibilityState */
-function onBlurSwitch() {
-  queueSwitch();
 }
 
 onMounted(async () => {
@@ -255,8 +221,6 @@ onMounted(async () => {
   if (!examRecordId) return;
   timer = window.setInterval(onTimeoutBeat, 1000);
   beatTimer = window.setInterval(beat, 30_000);
-  document.addEventListener('visibilitychange', onVis);
-  window.addEventListener('blur', onBlurSwitch);
   window.addEventListener('pagehide', flushOnPageHide);
   window.onbeforeunload = () => '考试进行中，确认离开？';
 });

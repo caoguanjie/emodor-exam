@@ -42,7 +42,7 @@ type MenuType = 'directory' | 'menu' | 'button';
 interface MenuRow { id:string; parent_id:string|null; name:string; type:MenuType; route_path:string|null; permission_code:string|null; icon:string|null; sort:number; status:number; children:MenuRow[] }
 interface TreeOption { value:string; label:string; children?:TreeOption[] }
 interface MenuForm { id:string; parent_id:string|null; name:string; type:MenuType; route_path:string|null; permission_code:string|null; icon:string|null; sort:number; status:number }
-const routeOptions = ['/admin/dashboard','/admin/departments','/admin/users','/admin/students','/admin/training-categories','/admin/courses','/admin/regulations','/admin/questions','/admin/papers','/admin/exam-records','/admin/exam-monitor','/admin/grading','/admin/statistics','/admin/training-statistics','/admin/ai-config','/admin/administrators','/admin/roles','/admin/sessions','/admin/system/menus','/admin/system/dictionaries','/admin/system/site-settings','/admin/system/audit-logs'];
+const routeOptions = ['/admin/dashboard','/admin/students','/admin/training-categories','/admin/courses','/admin/questions','/admin/papers','/admin/exam-records','/admin/training-statistics','/admin/ai-config','/admin/administrators','/admin/roles','/admin/sessions','/admin/system/menus','/admin/system/dictionaries','/admin/system/site-settings','/admin/system/audit-logs'];
 const typeLabel: Record<MenuType,string> = { directory:'目录', menu:'菜单', button:'按钮' };
 const auth = useAuthStore();
 const canWrite = computed(() => auth.can('system_settings:write'));

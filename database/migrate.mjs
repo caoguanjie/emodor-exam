@@ -294,7 +294,9 @@ function normalizeMigrationSql(sql, migrationId, stepId) {
   const statement = normalizeSingleStatement(sql, `migration step ${migrationId}/${stepId}`);
   rejectUnsafeSql(statement, `migration step ${migrationId}/${stepId}`);
   if (/\b(?:USE|CREATE\s+DATABASE|DROP\s+DATABASE)\b/i.test(statement)) throw new Error(`migration step ${migrationId}/${stepId} cannot switch or destroy databases`);
-  if (!/^(?:CREATE\s+TABLE|ALTER\s+TABLE|CREATE\s+(?:UNIQUE\s+)?INDEX|INSERT\s+INTO|INSERT\s+IGNORE|UPDATE)\b/i.test(statement)) {
+    const scopedDelete = /^DELETE\s+FROM\s+(?:`[A-Za-z_][A-Za-z0-9_]*`|[A-Za-z_][A-Za-z0-9_]*)\s+WHERE\s+\S/i.test(statement);
+    const singleTableDrop = /^DROP\s+TABLE\s+IF\s+EXISTS\s+(?:`[A-Za-z_][A-Za-z0-9_]*`|[A-Za-z_][A-Za-z0-9_]*)$/i.test(statement);
+    if (!scopedDelete && !singleTableDrop && !/^(?:CREATE\s+TABLE|ALTER\s+TABLE|CREATE\s+(?:UNIQUE\s+)?INDEX|INSERT\s+INTO|INSERT\s+IGNORE|UPDATE)\b/i.test(statement)) {
     throw new Error(`migration step ${migrationId}/${stepId} uses an unsupported SQL statement`);
   }
   if (/^INSERT\b/i.test(statement) && !/\b(?:ON\s+DUPLICATE\s+KEY\s+UPDATE|INSERT\s+IGNORE)\b/i.test(statement)) {
@@ -527,6 +529,35 @@ async function activeExamPreflight(connection) {
   return count;
 }
 
+// Cancellation is not permission to discard historical answers or grades.
+// Every identifier below is static; only the explicitly selected database is read.
+async function slimmingPreflight(connection, migrations) {
+  if (!migrations.some((migration) => migration.id === '015_demo_slimming')) return;
+  const checks = [
+    ['exam_review_event', null, '1=1'],
+    ...['question', 'question_version', 'question_concept', 'paper_release_question', 'exam_record_question']
+      .map((table) => [table, 'type', "type = 'image'"]),
+    ...[['exam_paper', 'rule_config'], ['paper_release', 'rule_snapshot'], ['exam_assignment', 'rule_snapshot'], ['exam_record', 'rule_snapshot']]
+      .map(([table, column]) => [table, column, `JSON_CONTAINS(JSON_EXTRACT(${column}, '$.rules[*].type'), '"image"') = 1`]),
+    ['exam_record', 'grading_state', "grading_state = 'pending_manual'"],
+    ['exam_answer', 'asset_ids', 'COALESCE(JSON_LENGTH(asset_ids),0) > 0'],
+    ['exam_answer', 'comment', "comment IS NOT NULL AND comment <> ''"],
+    ['exam_answer', 'grading_version', 'grading_version > 0'],
+    ['question', 'rubric', "rubric IS NOT NULL AND rubric <> ''"],
+    ['question_version', 'rubric', "rubric IS NOT NULL AND rubric <> ''"],
+    ['media_asset', 'purpose', "purpose = 'answer'"],
+    ['media_reference', 'owner_type', "owner_type IN ('exam_answer_item','answer_attempt')"],
+  ];
+  for (const [table, column, predicate] of checks) {
+    if (!await tableExists(connection, table)) continue;
+    if (column && !await columnExists(connection, table, column)) continue;
+    const [[row]] = await connection.execute(`SELECT COUNT(*) AS count FROM \`${table}\` WHERE ${predicate}`);
+    if (Number(row.count) > 0) {
+      throw new Error(`retired examination data block slimming migration: ${table} (${row.count}); review and preserve historical data before retrying`);
+    }
+  }
+}
+
 async function readRegistryColumns(connection) {
   if (!await tableExists(connection, REGISTRY_TABLE)) return new Set();
   const [rows] = await connection.execute(
@@ -619,6 +650,7 @@ function isComplete(progress, migration) {
 export async function inspectMigrations({ connection, database, migrations, allowApplying = false } = {}) {
   const definitions = await prepareMigrations(migrations);
   await readPreflight(connection, database);
+  await slimmingPreflight(connection, definitions);
   const rows = await registryRows(connection);
   const byId = new Map(rows.map((row) => [row.migration_id, row]));
   const pending = [];
@@ -837,6 +869,7 @@ export async function applyMigrations({ connection, database, migrations, onChec
   const definitions = await prepareMigrations(migrations);
   validateMigrationTarget(database);
   await readPreflight(connection, database);
+  await slimmingPreflight(connection, definitions);
   const lockName = await acquireMigrationLock(connection, database);
   try {
     await readPreflight(connection, database);

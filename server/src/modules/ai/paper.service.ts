@@ -381,12 +381,12 @@ export class PaperService {
       count: Number(item.count),
       scoreCents: Number(item.score_cents ?? item.scoreCents),
     }));
-    if (requireUniqueTypes && (normalized.length > 4
+    if (requireUniqueTypes && (normalized.length > 3
       || new Set(normalized.map((item) => item.type)).size !== normalized.length)) {
       throw Errors.paperRuleInvalid('同一题型只能配置一项随机规则');
     }
     for (const item of normalized) {
-      if (!['single', 'multiple', 'judgment', 'image'].includes(item.type)
+      if (!['single', 'multiple', 'judgment'].includes(item.type)
         || !Number.isInteger(item.count) || item.count < 1
         || !Number.isInteger(item.scoreCents) || item.scoreCents < 1) {
         throw Errors.paperRuleInvalid('题型、题量或分值规则不合法');
@@ -438,8 +438,13 @@ export class PaperService {
     if (!categoryLocked) await this.categories.lockActive(manager, categoryId);
     if (regulationIds.length) {
       const rows = await manager.getRepository(Regulation).findBy({ id: In(regulationIds) });
-      if (rows.length !== regulationIds.length || rows.some((row) => String(row.categoryId) !== categoryId)) {
-        throw Errors.paperRuleInvalid('制度筛选项必须全部属于试卷培训类别');
+      const categoryNeutralIds = rows.filter((row) => String(row.categoryId) !== categoryId).map(row => String(row.id));
+      const sourcedQuestions = categoryNeutralIds.length
+        ? await manager.getRepository(Question).findBy({ categoryId, regulationId: In(categoryNeutralIds) })
+        : [];
+      const sourcedIds = new Set(sourcedQuestions.map(row => String(row.regulationId)));
+      if (rows.length !== regulationIds.length || categoryNeutralIds.some(id => !sourcedIds.has(id))) {
+        throw Errors.paperRuleInvalid('资料来源必须有当前培训类别的题目，或属于该类别的既有资料');
       }
     }
     if (courseIds.length) {
@@ -658,7 +663,7 @@ export class PaperService {
     const paper = await this.paperRepo.findOne({ where: { id: String(id) } });
     this.assertTrainingPaper(paper);
     if (!paper.categoryId) throw Errors.paperRuleInvalid('培训试卷缺少培训类别');
-    const types = query.type ? [query.type] : ['single', 'multiple', 'judgment', 'image'] as QuestionType[];
+    const types = query.type ? [query.type] : ['single', 'multiple', 'judgment'] as QuestionType[];
     const difficulties = query.difficulty ? [query.difficulty] : ['easy', 'medium', 'hard'] as Difficulty[];
     const regulationIds = (paper.regulationIds || []).map(String);
     const snapshots: QuestionVersionSnapshot[] = [];
@@ -688,7 +693,8 @@ export class PaperService {
     const safeSize = Math.min(100, Math.max(1, Number(pageSize || 100)));
     await this.categories.assertActive(String(categoryId));
     const qb = this.regulationRepo.createQueryBuilder('regulation')
-      .where('regulation.category_id = :categoryId', { categoryId: String(categoryId) })
+      // 新资料不绑定类别，题目建立实际类别/来源关联；保留既有分类资料兼容。
+      .where('(regulation.category_id = :categoryId OR EXISTS (SELECT 1 FROM question source_question WHERE source_question.regulation_id = regulation.id AND source_question.category_id = :categoryId))', { categoryId: String(categoryId) })
       .orderBy('regulation.id', 'DESC');
     const [rows, total] = await qb.skip((safePage - 1) * safeSize).take(safeSize).getManyAndCount();
     return {

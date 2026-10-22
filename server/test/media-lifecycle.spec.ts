@@ -67,16 +67,18 @@ describe('media lifecycle contracts', () => {
     expect(globalFindOne).not.toHaveBeenCalled();
   });
 
-  it('keeps answer upload internal while rejecting the generic public purpose', async () => {
+  it('rejects cancelled answer uploads without storing a file, but preserves question image uploads', async () => {
     expect(() => assertPublicMediaPurpose('answer')).toThrowError();
     const root = await mkdtemp(join(tmpdir(), 'ruleexam-media-lifecycle-'));
     roots.push(root);
     const media = serviceFor(root);
-    const result = await media.uploadAnswer('7', {
-      buffer: Buffer.from('answer fixture'),
-      originalname: 'answer.bin',
+    const file = {
+      buffer: Buffer.from('question fixture'),
+      originalname: 'question.bin',
       mimetype: 'application/octet-stream',
-    } as any);
+    } as any;
+    await expect(media.upload('7', 'answer' as any, file)).rejects.toThrow();
+    const result = await media.upload('7', 'question', file);
     expect(result.status).toBe('ready');
     expect(result.assetId).toBe('99');
     const tempEntries = await readdir(join(root, 'tmp', 'media'));
@@ -89,14 +91,14 @@ describe('media lifecycle contracts', () => {
     const root = await mkdtemp(join(tmpdir(), 'ruleexam-media-lifecycle-'));
     roots.push(root);
     const media = serviceFor(root);
-    media.registerOwnerPolicy('answer_attempt', {
-      allowedPurposes: ['answer'],
+    media.registerOwnerPolicy('question_content', {
+      allowedPurposes: ['question'],
       authorizeRead: () => true,
     });
-    const asset = { id: '99', ownerId: '7', purpose: 'answer', mediaKind: 'image', status: 'ready' };
+    const asset = { id: '99', ownerId: '7', purpose: 'question', mediaKind: 'image', status: 'ready' };
     const { manager, inserted } = managerFor(asset);
-    await media.bind(manager, '99', 'answer_attempt', 'attempt-123');
-    expect(inserted).toEqual([{ assetId: '99', ownerType: 'answer_attempt', ownerId: 'attempt-123' }]);
+    await media.bind(manager, '99', 'question_content', 'question-123');
+    expect(inserted).toEqual([{ assetId: '99', ownerType: 'question_content', ownerId: 'question-123' }]);
   });
 
   it('uses a current locking read for the idempotent reference check after the asset lock', async () => {

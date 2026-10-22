@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
+import * as bcrypt from 'bcryptjs';
 import { AppConfig } from '../../config/configuration';
 import { Errors, RoleEnum } from '../../common/errors';
+import { validatePasswordStrength } from '../../common/password-policy';
 import { RedisService } from '../../common/redis.service';
 import { AuditService } from '../../common/audit.service';
 import { SysUser } from '../../entities/sys-user.entity';
@@ -283,6 +285,88 @@ export class AccessService {
         role_ids: links.map((link) => String(link.roleId)), permissions: await this.permissions(user.id),
       };
     }));
+  }
+
+  async createAdministrator(input: {
+    username: string;
+    password: string;
+    real_name: string;
+    phone?: string | null;
+    email?: string | null;
+    role_ids: string[];
+  }, actor: { id: number; name: string }, sourceIp: string | null) {
+    const roleIds = [...new Set((input.role_ids || []).map(String))];
+    if (!roleIds.length || roleIds.length !== input.role_ids.length || roleIds.some((id) => !/^[1-9]\d*$/.test(id))) {
+      throw Errors.param('管理员必须选择至少一个不重复的业务角色');
+    }
+    const username = input.username.trim();
+    const realName = input.real_name.trim();
+    if (!username || !realName) throw Errors.param('管理员用户名和姓名不能为空');
+    validatePasswordStrength(input.password, { username, realName }, '初始密码');
+    const passwordHash = await bcrypt.hash(input.password, 12);
+    let created!: SysUser;
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        const roleRepo = manager.getRepository(SysRole);
+        const roles = await roleRepo.createQueryBuilder('r')
+          .setLock('pessimistic_write')
+          .where('r.id IN (:...roleIds)', { roleIds })
+          .orderBy('r.id', 'ASC')
+          .getMany();
+        if (roles.length !== roleIds.length || roles.some((role) => role.status !== 1 || role.isSystem)) {
+          throw Errors.param('只能分配启用的非系统业务角色');
+        }
+        const userRepo = manager.getRepository(SysUser);
+        created = await userRepo.save(userRepo.create({
+          username,
+          passwordHash,
+          realName,
+          employeeNo: null,
+          departmentId: null,
+          categoryId: null,
+          source: null,
+          role: RoleEnum.EMPLOYEE,
+          phone: input.phone?.trim() || null,
+          email: input.email?.trim() || null,
+          status: 1,
+          authVersion: 0,
+          forcePasswordChange: 1,
+          loginCount: 0,
+          lastLoginAt: null,
+          lastLoginIp: null,
+          rolesConfigured: 1,
+        }));
+        const userRoleRepo = manager.getRepository(SysUserRole);
+        await userRoleRepo.save(roleIds.map((roleId) => userRoleRepo.create({
+          userId: String(created.id), roleId,
+        })));
+      });
+    } catch (error: any) {
+      if (String(error?.code) === 'ER_DUP_ENTRY') throw Errors.param('用户名已存在');
+      throw error;
+    }
+    await this.invalidate(created.id);
+    const permissions = await this.permissions(created.id, { useCache: false });
+    this.audit?.log({
+      actor_id: actor.id,
+      actor_name: actor.name,
+      action: 'access.administrator.create',
+      object_type: 'sys_user',
+      object_id: String(created.id),
+      detail: { role_ids: roleIds },
+      result: 'success',
+      source_ip: sourceIp,
+    });
+    return {
+      id: String(created.id),
+      username: created.username,
+      real_name: created.realName,
+      system_role: created.role,
+      status: Number(created.status),
+      last_login_at: created.lastLoginAt,
+      role_ids: roleIds,
+      permissions,
+    };
   }
 
   async assignRoles(userId: string, roleIds: string[], actorId: string | number) {

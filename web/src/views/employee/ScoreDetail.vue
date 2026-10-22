@@ -12,7 +12,6 @@
       </div>
       <div class="hero-meta">
         <div class="meta-item"><span>作答次数</span><b>第 {{ record.attempt_no }} 次</b></div>
-        <div class="meta-item"><span>切屏记录</span><b>{{ record.switch_count }} 次</b></div>
         <div class="meta-item"><span>历次最高</span><b class="re-mono">{{ record.best_score }}</b></div>
       </div>
     </div>

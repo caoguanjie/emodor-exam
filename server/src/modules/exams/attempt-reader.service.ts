@@ -37,10 +37,10 @@ export function promptMediaIds(snapshot: PublishedQuestionSnapshot): string[] {
 }
 
 export function resultMediaIds(snapshot: PublishedQuestionSnapshot): string[] {
-  return controlledQuestionMediaIds([snapshot.analysis, snapshot.rubric]);
+  return controlledQuestionMediaIds([snapshot.analysis]);
 }
 
-/** Public in-progress view. Standard answers, analysis and rubric never cross this boundary. */
+/** Public in-progress view. Standard answers and analysis never cross this boundary. */
 export function attemptQuestionView(row: AttemptQuestionRow): AttemptQuestion {
   const snapshot = row.snapshotJson;
   const mapping = row.displayToOriginal;
@@ -94,7 +94,7 @@ export class AttemptReaderService implements OnModuleInit {
     const terminal = resolved.record.status !== ExamStatus.IN_PROGRESS && Boolean(resolved.record.submittedAt);
     if (String(resolved.record.userId) === String(actorId)) return prompt || (resultOnly && terminal);
     const permissions = await this.access.permissions(String(actorId));
-    const canReadRecord = permissions.includes('exam_records:review') || permissions.includes('exam_records:read');
+    const canReadRecord = permissions.includes('exam_records:read');
     return canReadRecord && (prompt || (resultOnly && terminal));
   }
 
@@ -120,12 +120,10 @@ export class AttemptReaderService implements OnModuleInit {
         ? row.selected.map(Number).map((original) => item.displayToOriginal.indexOf(original))
           .filter((display) => display >= 0).sort((left, right) => left - right)
         : [];
-      const assetIds = Array.isArray(row.assetIds) ? row.assetIds.map(String) : [];
-      if (!selected.length && !assetIds.length) continue;
+      if (!selected.length) continue;
       answers.push({
         item_id: String(itemId),
         ...(selected.length ? { selected } : {}),
-        ...(assetIds.length ? { asset_ids: assetIds } : {}),
       });
     }
     return answers.sort((left, right) => BigInt(left.item_id) < BigInt(right.item_id) ? -1 : 1);

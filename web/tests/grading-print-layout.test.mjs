@@ -99,38 +99,6 @@ async function productionCss() {
   return productionCssPromise;
 }
 
-test('grading print stylesheet releases the real application shell for paginated output', async () => {
-  const layoutSource = await readFile(resolve(webRoot, 'src/layouts/MainLayout.vue'), 'utf8');
-  const gradingSource = await readFile(resolve(webRoot, 'src/views/admin/GradingDetail.vue'), 'utf8');
-  const layout = parseSfc(layoutSource, { filename: 'MainLayout.vue' }).descriptor;
-  const grading = parseSfc(gradingSource, { filename: 'GradingDetail.vue' }).descriptor;
-  assert.ok(layout.template?.ast, 'MainLayout template must compile');
-  assert.ok(grading.template?.ast, 'GradingDetail template must compile');
-
-  const layoutClasses = collectStaticClasses(layout.template.ast);
-  for (const name of ['shell', 'aside', 'content-shell', 'header', 'tabs-bar', 'main', 'page-enter']) {
-    assert.ok(layoutClasses.has(name), `real shell template must expose .${name}`);
-  }
-  const gradingClasses = collectStaticClasses(grading.template.ast);
-  for (const name of ['detail-toolbar', 'summary', 'question-card']) {
-    assert.ok(gradingClasses.has(name), `real grading template must expose .${name}`);
-  }
-
-  const css = await productionCss();
-  assert.match(css, /\.detail-toolbar\[/, 'production CSS must contain GradingDetail scoped styles');
-  const root = postcss.parse(css);
-
-  for (const selector of ['.aside', '.header', '.tabs-bar']) {
-    assertImportantDeclaration(root, selector, 'display', 'none');
-  }
-  for (const selector of ['html', 'body', '#app', '.shell', '.content-shell', '.main', '.page-enter']) {
-    assertImportantDeclaration(root, selector, 'height', 'auto');
-    assertImportantDeclaration(root, selector, 'overflow', 'visible');
-  }
-  for (const selector of ['.shell', '.content-shell', '.main', '.page-enter']) {
-    assertImportantDeclaration(root, selector, 'display', 'block');
-  }
-});
 
 test('paper preview print isolates the active dialog and releases every paginating ancestor', async () => {
   const paperSource = await readFile(resolve(webRoot, 'src/views/admin/PaperDetail.vue'), 'utf8');

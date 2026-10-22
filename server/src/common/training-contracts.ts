@@ -7,7 +7,7 @@ export type Id = string;
 export type LearnerSource = 'institution' | 'external';
 export type Difficulty = 'easy' | 'medium' | 'hard';
 export type ExamDifficulty = Difficulty | 'mixed' | 'unknown';
-export type QuestionType = 'single' | 'multiple' | 'judgment' | 'image';
+export type QuestionType = 'single' | 'multiple' | 'judgment';
 
 export interface Page<T> {
   items: T[];
@@ -45,7 +45,6 @@ export interface RuleSnapshot {
 export interface AnswerInput {
   item_id: Id;
   selected?: number[];
-  asset_ids?: Id[];
 }
 
 export interface DraftInput {
@@ -59,7 +58,7 @@ export interface DraftAck {
   answered_count: number;
 }
 
-export type GradeState = 'not_submitted' | 'pending_manual' | 'finalized';
+export type GradeState = 'not_submitted' | 'finalized';
 export type SubmissionMethod = 'manual' | 'timeout';
 
 export interface ImportPreview {
@@ -106,16 +105,12 @@ export interface FinalResultItem extends AttemptQuestion {
   answer: AnswerInput | null;
   correct_answer: number[] | null;
   analysis: string | null;
-  rubric: string | null;
   gained_score: number | null;
-  comment: string | null;
-  grading_version: number;
 }
 
 export interface FinalResult {
   record_id: Id;
   grading_state: GradeState;
-  grading_revision: number;
   submission_method: SubmissionMethod | null;
   legacy: boolean;
   submitted_at: string;
@@ -148,22 +143,6 @@ export interface WrongItem extends FinalResultItem {
   submitted_at: string;
 }
 
-export interface GradingQueueItem {
-  record_id: Id;
-  paper_id: Id;
-  paper_title: string;
-  user_id: Id;
-  user_name: string;
-  source: LearnerSource | null;
-  grading_state: GradeState;
-  submitted_at: string;
-  graded_at: string | null;
-  score: number | null;
-  pending_items: number;
-  graded_items: number;
-  image_items: number;
-}
-
 export interface StatsFilter {
   paperId: Id;
   categoryId?: Id;
@@ -194,7 +173,7 @@ export interface TrainingCourseCompletion {
   completion_rate: number | null;
 }
 
-export type TrainingUncompletedReason = 'learning_incomplete' | 'not_started' | 'pending_manual' | 'not_passed';
+export type TrainingUncompletedReason = 'learning_incomplete' | 'not_started' | 'not_passed';
 
 export interface TrainingExamSummary {
   release_id: Id | null;
@@ -204,8 +183,6 @@ export interface TrainingExamSummary {
   historical_only_started_count: number;
   submitted_attempts: number;
   submitted_users: number;
-  pending_attempts: number;
-  pending_users: number;
   finalized_users: number;
   participation_rate: number | null;
   score_groups: ScoreGroup[];
@@ -238,7 +215,6 @@ export interface AdminDashboard {
     learner_count?: number;
     question_count?: number;
     paper_count?: number;
-    pending_grading_count?: number;
   };
   exam_trend?: Array<{ date: string; count: number }>;
 }
@@ -251,9 +227,6 @@ export const TRAINING_DEFAULTS = Object.freeze({
   partialCreditRatio: 0.5,
   pageSize: 20,
   maxPageSize: 100,
-  imageAssetsPerItem: 9,
-  monitoringPollSeconds: 5,
-  monitoringStaleSeconds: 90,
   videoHeartbeatSeconds: 30,
   videoHeartbeatCapSeconds: 45,
   videoPositionToleranceSeconds: 2,

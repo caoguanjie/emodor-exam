@@ -36,9 +36,6 @@ export class QuestionVersion {
   @Column({ type: 'text', nullable: true })
   analysis: string | null;
 
-  @Column({ type: 'text', nullable: true })
-  rubric: string | null;
-
   @Column({ name: 'score_cents', type: 'int', unsigned: true })
   scoreCents: number;
 

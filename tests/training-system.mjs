@@ -92,11 +92,11 @@ export async function run(ctx) {
   const writerUsername = `a5_menu_writer_${randomBytes(4).toString('hex')}`;
   const writerRealName = 'A5 菜单维护员';
   const writerPassword = randomStrongPassword(writerUsername, writerRealName);
-  const writerUser = await ctx.request(admin, 'POST', '/users', {
+  const writerUser = await ctx.request(admin, 'POST', '/admin/administrators', {
     username: writerUsername,
     password: writerPassword,
     real_name: writerRealName,
-    role: 'employee',
+    role_ids: [String(writerRole.data.id)],
   });
   assert(writerUser.status === 200 && writerUser.data?.id, `menu writer user create failed: ${writerUser.status}`);
   const writerAssigned = await ctx.request(admin, 'PUT', `/admin/administrators/${writerUser.data.id}/roles`, {

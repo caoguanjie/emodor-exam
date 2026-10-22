@@ -86,7 +86,6 @@ function legacySnapshot(version: QuestionVersion, scoreCents: number): ReleaseQu
     options: deepClone(version.options as QuestionOption[]),
     answer: [...version.answer],
     analysis: version.analysis,
-    rubric: version.rubric,
     scoreCents,
     conceptId: version.conceptId || undefined,
     regulationId: version.regulationId || undefined,
@@ -251,7 +250,6 @@ export class AttemptService {
     const ttlSeconds = Math.max(1, Math.floor((deadline - now) / 1000));
     try {
       await this.redis.set(`exam:deadline:${record.id}`, String(deadline), ttlSeconds + 60);
-      await this.redis.set(`exam:switch:${record.id}`, '0', ttlSeconds + 24 * 3600);
     } catch {
       this.logger.warn(`考试 ${record.id} Redis 初始化失败，期限仍以数据库为准`);
     }
@@ -401,7 +399,6 @@ export class AttemptService {
         startedAt,
         deadlineAt,
         submittedAt: null,
-        switchCount: 0,
       }));
 
       const seed = this.shuffle.deriveSeed(String(record.id));

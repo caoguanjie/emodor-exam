@@ -83,10 +83,9 @@ export async function run(ctx) {
     real_name: '旧用户',
     role: 'employee',
   });
-  assert.equal(legacy.status, 200);
-  const legacyProfile = await ctx.request(admin, 'GET', `/users/${legacy.data.id}`);
-  assert.equal(legacyProfile.status, 200);
-  assert.equal(legacyProfile.data.category_id, undefined);
+  assert.equal(legacy.status, 404, '旧员工创建接口必须删除');
+  const legacyProfile = await ctx.request(admin, 'GET', '/users/1');
+  assert.equal(legacyProfile.status, 404, '旧员工详情接口必须删除');
   const trainingProfile = await ctx.request(admin, 'GET', `/me/profile`);
   assert.equal(trainingProfile.status, 200);
   assert.equal(trainingProfile.data.source, null);
@@ -157,8 +156,12 @@ export async function run(ctx) {
 
   const owner2Username = `a2_owner_${randomBytes(3).toString('hex')}`;
   const owner2Password = randomStrongPassword(owner2Username, '第二管理员');
-  const owner2Created = await ctx.request(admin, 'POST', '/users', {
-    username: owner2Username, password: owner2Password, real_name: '第二管理员', role: 'super_admin',
+  const owner2Role = await ctx.request(admin, 'POST', '/admin/roles', {
+    code: `a2_importer_${randomBytes(4).toString('hex')}`, name: '学员导入管理员', permissions: ['students:read', 'students:write'],
+  });
+  assert.equal(owner2Role.status, 200);
+  const owner2Created = await ctx.request(admin, 'POST', '/admin/administrators', {
+    username: owner2Username, password: owner2Password, real_name: '第二管理员', role_ids: [String(owner2Role.data.id)],
   });
   assert.equal(owner2Created.status, 200);
   const owner2Login = await login(ctx, owner2Username, owner2Password);

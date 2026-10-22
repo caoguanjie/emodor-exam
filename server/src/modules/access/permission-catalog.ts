@@ -5,12 +5,10 @@
 export const PERMISSION_CATALOG = [
   'training_categories:read', 'training_categories:write',
   'students:read', 'students:write',
-  'departments:read', 'departments:write',
-  'regulations:read', 'regulations:write', 'regulations:publish',
   'ai:read', 'ai:write', 'ai_config:read', 'ai_config:write', 'ai:publish', 'ai:review',
   'questions:read', 'questions:write', 'questions:publish', 'questions:review', 'questions:export',
   'papers:read', 'papers:write', 'papers:publish', 'papers:review', 'papers:export',
-  'exam_records:read', 'exam_records:monitor', 'exam_records:review',
+  'exam_records:read',
   'statistics:read', 'statistics:export',
   'roles:read', 'roles:write',
   'administrators:read', 'administrators:write',
@@ -28,11 +26,6 @@ export const PERMISSION_NAMES: Record<PermissionCode, string> = {
   'training_categories:write': '维护培训类别',
   'students:read': '查看学员',
   'students:write': '维护学员',
-  'departments:read': '查看部门',
-  'departments:write': '维护部门',
-  'regulations:read': '查看制度',
-  'regulations:write': '维护制度',
-  'regulations:publish': '发布制度',
   'ai:read': '查看 AI 任务',
   'ai:write': '发起 AI 出题任务',
   'ai_config:read': '查看 AI 服务配置',
@@ -50,8 +43,6 @@ export const PERMISSION_NAMES: Record<PermissionCode, string> = {
   'papers:review': '审核试卷',
   'papers:export': '导出试卷',
   'exam_records:read': '查看考试记录',
-  'exam_records:monitor': '查看考试监控',
-  'exam_records:review': '人工阅卷',
   'statistics:read': '查看统计',
   'statistics:export': '导出统计',
   'roles:read': '查看角色',
@@ -74,8 +65,6 @@ export function isRegisteredPermission(code: string): code is PermissionCode {
 }
 
 export const LEGACY_REGULATION_ADMIN_PERMISSIONS: PermissionCode[] = [
-  'departments:read',
-  'regulations:read', 'regulations:write', 'regulations:publish',
   'ai:read', 'ai:write', 'ai:review',
   'questions:read', 'questions:write', 'questions:review',
   'papers:read', 'papers:write', 'papers:publish',

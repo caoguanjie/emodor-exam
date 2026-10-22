@@ -1,7 +1,7 @@
 import { Errors } from '../../common/errors';
 
-/** Internal purpose union. `answer` is intentionally unavailable to the generic HTTP DTO. */
-export const MEDIA_PURPOSES = ['avatar', 'course_cover', 'video', 'question', 'answer', 'branding'] as const;
+/** Only retained business media purposes may be uploaded or bound. */
+export const MEDIA_PURPOSES = ['avatar', 'course_cover', 'video', 'question', 'branding'] as const;
 export type MediaPurpose = (typeof MEDIA_PURPOSES)[number];
 export const MEDIA_UPLOAD_PURPOSES = ['avatar', 'course_cover', 'video', 'question', 'branding'] as const;
 export type MediaUploadPurpose = (typeof MEDIA_UPLOAD_PURPOSES)[number];
@@ -28,13 +28,13 @@ export type MediaLimits = {
 
 export function assertMediaPurpose(value: unknown): asserts value is MediaPurpose {
   if (typeof value !== 'string' || !MEDIA_PURPOSES.includes(value as MediaPurpose)) {
-    throw Errors.param('媒体用途不支持；answer 必须由考试答案专用接口包装');
+    throw Errors.param('媒体用途不支持');
   }
 }
 
 export function assertPublicMediaPurpose(value: unknown): asserts value is MediaUploadPurpose {
   if (typeof value !== 'string' || !MEDIA_UPLOAD_PURPOSES.includes(value as MediaUploadPurpose)) {
-    throw Errors.param('媒体用途不支持；answer 必须由考试答案专用接口包装');
+    throw Errors.param('媒体用途不支持');
   }
 }
 

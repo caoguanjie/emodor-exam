@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { deflateSync } from 'node:zlib';
 import {
   DEFAULT_MEDIA_LIMITS,
-  MEDIA_PURPOSES,
-  MEDIA_UPLOAD_PURPOSES,
   mediaKindForPurpose,
   assertMediaPurpose,
   assertPublicMediaPurpose,
@@ -13,11 +11,10 @@ import {
 import { MediaProbeService } from '../src/modules/media/media-probe.service';
 
 describe('media policy', () => {
-  it('keeps answer available internally but rejects it on the generic public upload contract', () => {
-    expect(MEDIA_PURPOSES).toContain('answer');
-    expect(() => assertMediaPurpose('answer')).not.toThrow();
-    expect(MEDIA_UPLOAD_PURPOSES).not.toContain('answer');
+  it('rejects the cancelled answer attachment purpose on internal and public boundaries', () => {
+    expect(() => assertMediaPurpose('answer')).toThrowError();
     expect(() => assertPublicMediaPurpose('answer')).toThrowError();
+    expect(() => assertMediaPurpose('question')).not.toThrow();
   });
 
   it('keeps the configured upload limits bounded and reports media kinds', () => {
