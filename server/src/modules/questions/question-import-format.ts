@@ -167,11 +167,18 @@ export async function parseQuestionImportFile(
 }
 
 export async function buildQuestionImportTemplate(format: QuestionImportFormat): Promise<Buffer> {
+  return buildQuestionImportFile(format, TEMPLATE_ROWS);
+}
+
+export async function buildQuestionImportFile(
+  format: QuestionImportFormat,
+  rows: Array<Record<QuestionImportHeader, string>>,
+): Promise<Buffer> {
   assertFormat(format);
   if (format === 'txt') {
     const lines = [
       QUESTION_IMPORT_HEADERS.join('\t'),
-      ...TEMPLATE_ROWS.map((row) => QUESTION_IMPORT_HEADERS.map((header) => row[header]).join('\t')),
+      ...rows.map((row) => QUESTION_IMPORT_HEADERS.map((header) => row[header].replace(/[\t\r\n]/g, ' ')).join('\t')),
     ];
     return Buffer.from(`\uFEFF${lines.join('\r\n')}\r\n`, 'utf8');
   }
@@ -179,7 +186,7 @@ export async function buildQuestionImportTemplate(format: QuestionImportFormat):
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('题库导入模板');
   worksheet.addRow([...QUESTION_IMPORT_HEADERS]);
-  for (const row of TEMPLATE_ROWS) worksheet.addRow(QUESTION_IMPORT_HEADERS.map((header) => row[header]));
+  for (const row of rows) worksheet.addRow(QUESTION_IMPORT_HEADERS.map((header) => row[header]));
   worksheet.getRow(1).font = { bold: true };
   worksheet.columns.forEach((column, index) => {
     column.width = ['stem', 'options', 'answer', 'analysis'].includes(QUESTION_IMPORT_HEADERS[index]) ? 36 : 16;

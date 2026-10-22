@@ -13,7 +13,7 @@ import { validatePasswordStrength } from '../../common/password-policy';
 import { AuditService } from '../../common/audit.service';
 import { CategoryService } from '../training/category.service';
 
-export type ImportKind = 'students' | 'questions';
+export type ImportKind = 'students' | 'questions' | 'questions_ai';
 
 export interface ImportAdapter {
   preview(ownerId: Id, rows: unknown[]): Promise<ImportPreview>;
@@ -90,7 +90,7 @@ export class ImportBatchService {
   async preview(ownerId: Id, kind: ImportKind, rows: unknown[]): Promise<ImportPreview> {
     if (!Array.isArray(rows) || rows.length === 0) throw Errors.param('导入数据不能为空');
     if (rows.length > 1000) throw Errors.param('单次导入上限 1000 行');
-    if (kind === 'questions') {
+    if (kind === 'questions' || kind === 'questions_ai') {
       const adapter = this.adapters.get(kind);
       if (!adapter) throw Errors.param('题库导入适配器尚未注册');
       return adapter.preview(String(ownerId), rows);

@@ -47,6 +47,16 @@ export const useTabsStore = defineStore('tabs', {
       const next = this.tabs[Math.min(index, this.tabs.length - 1)]?.path || fallbackPath;
       return { closed: true, nextPath: next };
     },
+    async closePaths(paths: string[]) {
+      const requested = new Set(paths);
+      const targets = this.tabs.filter((tab) => requested.has(tab.path) && tab.closable !== false).map((tab) => tab.path);
+      if (!targets.length) return true;
+      if (!await confirmUnsavedRoutes(targets)) return false;
+      const closing = new Set(targets);
+      this.tabs = this.tabs.filter((tab) => !closing.has(tab.path) || tab.closable === false);
+      this.persist();
+      return true;
+    },
     async closeOthers(path: string) {
       if (!await confirmUnsavedRoutes(this.tabs.filter((tab) => tab.path !== path).map((tab) => tab.path))) return false;
       this.tabs = this.tabs.filter((tab) => tab.path === path);

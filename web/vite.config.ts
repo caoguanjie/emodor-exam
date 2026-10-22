@@ -16,6 +16,9 @@ export default defineConfig({
     },
   },
   build: {
+    // 发布目录与 web/、mobile/ 同级；后续 H5 产物在 PC 构建完成后合并至 dist/mobile/。
+    outDir: '../dist',
+    emptyOutDir: true,
     chunkSizeWarningLimit: 2000,
   },
 });

@@ -204,6 +204,38 @@ export interface ImportResult {
   committed_rows: number[];
 }
 
+export interface AiQuestionImportTask {
+  task_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  total_count: number;
+  completed_count: number;
+  generated_count: number;
+  failed_count: number;
+  batch_id?: Id;
+  message?: string;
+}
+
+/** Only generated questions are exposed here; reference rows never enter this view. */
+export interface AiQuestionImportRow {
+  row_number: number;
+  category: Id;
+  type: QuestionType;
+  difficulty: 'easy' | 'hard';
+  concept: Id | '';
+  stem: string;
+  options: QuestionOption[];
+  answer: number[];
+  analysis: string;
+  score: string;
+  errors: string[];
+}
+
+export interface AiQuestionImportPreview extends ImportPreview {
+  rows: AiQuestionImportRow[];
+}
+
+export type AiQuestionImportEdit = Pick<AiQuestionImportRow, 'stem' | 'options' | 'answer' | 'analysis'>;
+
 export interface QuestionOption {
   key: string;
   text: string;

@@ -1,31 +1,27 @@
 <template>
   <div class="page-card">
-    <div class="page-head">
-      <div class="eyebrow">系统治理</div>
-      <h2>管理员</h2>
-      <p class="desc">查看管理员登录状态与业务角色，角色权限由服务端实时校验。</p>
-    </div>
-    <div class="toolbar">
-      <el-button v-if="auth.can('administrators:write')" type="primary" @click="openCreate">新建管理员</el-button>
-      <el-button v-if="auth.can('administrators:write')" type="primary" @click="openAssignment">为账号配置角色</el-button>
-      <div style="flex:1" />
-      <el-button @click="load">刷新</el-button>
-    </div>
-    <el-table v-loading="loading" :data="rows" stripe>
-      <el-table-column prop="username" label="账号" width="160" />
-      <el-table-column prop="real_name" label="姓名" width="140" />
-      <el-table-column label="系统身份" width="150">
-        <template #default="{ row }"><el-tag :type="row.system_role === 'super_admin' ? 'danger' : 'primary'">{{ roleName(row.system_role) }}</el-tag></template>
-      </el-table-column>
-      <el-table-column label="当前权限" min-width="300">
-        <template #default="{ row }"><el-tag v-for="code in row.permissions" :key="code" size="small" effect="plain" class="permission-tag">{{ code }}</el-tag></template>
-      </el-table-column>
-      <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag></template></el-table-column>
-      <el-table-column prop="last_login_at" label="最后登录" min-width="170" />
-      <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }"><el-button v-if="auth.can('administrators:write')" text type="primary" :disabled="row.system_role === 'super_admin'" @click="openRoles(row)">配置角色</el-button></template></el-table-column>
-    </el-table>
+    <FitsTable>
+      <template #actions>
+        <el-button v-if="auth.can('administrators:write')" type="primary" @click="openCreate">新建管理员</el-button>
+        <el-button v-if="auth.can('administrators:write')" type="primary" @click="openAssignment">为账号配置角色</el-button>
+        <el-button @click="load">刷新</el-button>
+      </template>
+      <el-table v-loading="loading" :data="rows" stripe>
+        <el-table-column prop="username" label="账号" width="160" />
+        <el-table-column prop="real_name" label="姓名" width="140" />
+        <el-table-column label="系统身份" width="150">
+          <template #default="{ row }"><el-tag :type="row.system_role === 'super_admin' ? 'danger' : 'primary'">{{ roleName(row.system_role) }}</el-tag></template>
+        </el-table-column>
+        <el-table-column label="当前权限" min-width="300">
+          <template #default="{ row }"><el-tag v-for="code in row.permissions" :key="code" size="small" effect="plain" class="permission-tag">{{ code }}</el-tag></template>
+        </el-table-column>
+        <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag></template></el-table-column>
+        <el-table-column prop="last_login_at" label="最后登录" min-width="170" />
+        <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }"><el-button v-if="auth.can('administrators:write')" text type="primary" :disabled="row.system_role === 'super_admin'" @click="openRoles(row)">配置角色</el-button></template></el-table-column>
+      </el-table>
+    </FitsTable>
 
-    <el-dialog v-model="createDialog" title="新建管理员" width="520px">
+    <el-dialog v-model="createDialog" title="新建管理员" width="520px" class="re-form-dialog">
       <el-form label-width="96px" :disabled="createSaving">
         <el-form-item label="账号" required><el-input v-model="createForm.username" maxlength="64" /></el-form-item>
         <el-form-item label="初始密码" required><el-input v-model="createForm.password" show-password placeholder="至少 8 位，且包含字母和数字" /></el-form-item>
@@ -67,7 +63,7 @@
       <template #footer><el-button @click="candidateDialog = false">取消</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="dialog" :title="selected ? `配置业务角色：${selected.username}` : '配置业务角色'" width="480px" :before-close="beforeRoleDialogClose">
+    <el-dialog v-model="dialog" :title="selected ? `配置业务角色：${selected.username}` : '配置业务角色'" width="480px" class="re-form-dialog" :before-close="beforeRoleDialogClose">
       <div class="dialog-note">保存后旧令牌立即重新计算权限；清空角色表示移除该账号的业务角色。</div>
       <el-checkbox-group v-model="selectedRoleIds" class="role-list">
         <el-checkbox v-for="role in editableRoles" :key="role.id" :label="role.id">{{ role.name }}（{{ role.code }}）</el-checkbox>
@@ -81,6 +77,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import http from '../../api/http';
+import { FitsTable } from '../../components/FitsTable';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 

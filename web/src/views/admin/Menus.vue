@@ -1,21 +1,22 @@
 <template>
   <section class="page-card">
-    <div class="page-head">
-      <div><h2>菜单配置</h2><p>菜单只映射已注册页面和权限，不加载任意组件或脚本。</p></div>
-      <div class="actions"><el-button @click="load">刷新</el-button><el-button v-if="canWrite" type="primary" @click="openCreate">新增节点</el-button></div>
-    </div>
-    <el-alert v-if="error" :title="error" type="error" show-icon :closable="false"><el-button link @click="load">重试</el-button></el-alert>
-    <el-table v-loading="loading" :data="rows" row-key="id" :tree-props="{ children: 'children' }" default-expand-all empty-text="暂无菜单配置">
-      <el-table-column prop="name" label="名称" min-width="180" />
-      <el-table-column prop="type" label="类型" width="100"><template #default="{ row }">{{ typeLabel[row.type as MenuType] }}</template></el-table-column>
-      <el-table-column prop="route_path" label="注册路由" min-width="210" show-overflow-tooltip />
-      <el-table-column prop="permission_code" label="权限标识" min-width="190" show-overflow-tooltip />
-      <el-table-column prop="sort" label="排序" width="80" />
-      <el-table-column prop="status" label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status ? 'success' : 'info'">{{ row.status ? '启用' : '停用' }}</el-tag></template></el-table-column>
-      <el-table-column v-if="canWrite" label="操作" width="150" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openEdit(row)">编辑</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template></el-table-column>
-    </el-table>
+    <FitsTable>
+      <template #actions>
+        <el-button @click="load">刷新</el-button><el-button v-if="canWrite" type="primary" @click="openCreate">新增节点</el-button>
+      </template>
+      <el-alert v-if="error" :title="error" type="error" show-icon :closable="false"><el-button link @click="load">重试</el-button></el-alert>
+      <el-table v-loading="loading" :data="rows" row-key="id" :tree-props="{ children: 'children' }" default-expand-all empty-text="暂无菜单配置">
+        <el-table-column prop="name" label="名称" min-width="180" />
+        <el-table-column prop="type" label="类型" width="100"><template #default="{ row }">{{ typeLabel[row.type as MenuType] }}</template></el-table-column>
+        <el-table-column prop="route_path" label="注册路由" min-width="210" show-overflow-tooltip />
+        <el-table-column prop="permission_code" label="权限标识" min-width="190" show-overflow-tooltip />
+        <el-table-column prop="sort" label="排序" width="80" />
+        <el-table-column prop="status" label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status ? 'success' : 'info'">{{ row.status ? '启用' : '停用' }}</el-tag></template></el-table-column>
+        <el-table-column v-if="canWrite" label="操作" width="150" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openEdit(row)">编辑</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template></el-table-column>
+      </el-table>
+    </FitsTable>
 
-    <el-dialog v-model="dialogVisible" :title="form.id ? '编辑菜单节点' : '新增菜单节点'" width="600px" :before-close="beforeDialogClose">
+    <el-dialog v-model="dialogVisible" :title="form.id ? '编辑菜单节点' : '新增菜单节点'" width="600px" class="re-form-dialog" :before-close="beforeDialogClose">
       <el-form label-width="96px">
         <el-form-item label="名称"><el-input v-model="form.name" maxlength="128" /></el-form-item>
         <el-form-item label="类型"><el-radio-group v-model="form.type"><el-radio-button value="directory">目录</el-radio-button><el-radio-button value="menu">菜单</el-radio-button><el-radio-button value="button">按钮</el-radio-button></el-radio-group></el-form-item>
@@ -35,6 +36,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
+import { FitsTable } from '../../components/FitsTable';
 import { useAuthStore } from '../../stores/auth';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 
@@ -42,7 +44,7 @@ type MenuType = 'directory' | 'menu' | 'button';
 interface MenuRow { id:string; parent_id:string|null; name:string; type:MenuType; route_path:string|null; permission_code:string|null; icon:string|null; sort:number; status:number; children:MenuRow[] }
 interface TreeOption { value:string; label:string; children?:TreeOption[] }
 interface MenuForm { id:string; parent_id:string|null; name:string; type:MenuType; route_path:string|null; permission_code:string|null; icon:string|null; sort:number; status:number }
-const routeOptions = ['/admin/dashboard','/admin/students','/admin/training-categories','/admin/courses','/admin/questions','/admin/papers','/admin/exam-records','/admin/training-statistics','/admin/ai-config','/admin/administrators','/admin/roles','/admin/sessions','/admin/system/menus','/admin/system/dictionaries','/admin/system/site-settings','/admin/system/audit-logs'];
+const routeOptions = ['/admin/dashboard','/admin/students','/admin/training-categories','/admin/courses','/admin/questions','/admin/papers','/admin/questions/import','/admin/exam-records','/admin/training-statistics','/admin/ai-config','/admin/administrators','/admin/roles','/admin/sessions','/admin/system/menus','/admin/system/dictionaries','/admin/system/site-settings','/admin/system/audit-logs'];
 const typeLabel: Record<MenuType,string> = { directory:'目录', menu:'菜单', button:'按钮' };
 const auth = useAuthStore();
 const canWrite = computed(() => auth.can('system_settings:write'));
@@ -75,5 +77,5 @@ void load();
 </script>
 
 <style scoped>
-.page-card{background:#fff;border:1px solid var(--re-border);border-radius:12px;padding:20px;min-height:420px}.page-head{display:flex;justify-content:space-between;gap:16px;margin-bottom:18px}.page-head h2{margin:0 0 5px}.page-head p{margin:0;color:var(--re-text-3)}.actions{display:flex;align-items:flex-start;gap:8px}
+.page-card{background:#fff;border:1px solid var(--re-border);border-radius:12px;padding:20px;min-height:420px}
 </style>

@@ -137,7 +137,10 @@ export function controlledQuestionMediaIds(values: Array<string | null | undefin
   return [...ids].sort((a, b) => BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0);
 }
 
-export function validateAndSanitizeQuestionDraft(input: QuestionDraftInput): ValidatedQuestionDraft {
+export function validateAndSanitizeQuestionDraft(
+  input: QuestionDraftInput,
+  validationOptions: { allowReferenceAi?: boolean } = {},
+): ValidatedQuestionDraft {
   const type = input?.type;
   if (!TYPES.includes(type)) throw Errors.param('题型非法（single / multiple / judgment）');
   if (!DIFFICULTIES.includes(input.difficulty)) throw Errors.param('难度非法（easy / medium / hard）');
@@ -148,7 +151,8 @@ export function validateAndSanitizeQuestionDraft(input: QuestionDraftInput): Val
   const regulationId = decimalId(input.regulationId, 'regulation_id');
   const regulationVersionId = decimalId(input.regulationVersionId, 'regulation_version_id');
   if (regulationVersionId && !regulationId) throw Errors.param('regulation_version_id 必须同时提供 regulation_id');
-  if (input.source === 'ai' && (!regulationId || !regulationVersionId)) {
+  const unboundReference = validationOptions.allowReferenceAi && !regulationId && !regulationVersionId;
+  if (input.source === 'ai' && !unboundReference && (!regulationId || !regulationVersionId)) {
     throw Errors.param('AI 题必须记录实际制度及来源版本');
   }
   const provenance = [input.sourcePageGroup, input.sourcePageStart, input.sourcePageEnd];

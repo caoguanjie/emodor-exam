@@ -308,6 +308,33 @@ describe('A5 system configuration safety contracts', () => {
     })).not.toThrow();
   });
 
+  it('saves the independent question import menu and exposes it only to question writers', async () => {
+    const rows: any[] = [{ id: '77', parentId: null, name: '考试管理', type: 'directory', routePath: null, permissionCode: null, icon: 'Tickets', sort: 30, status: 1 }];
+    const menus = {
+      async find() { return rows; },
+      async findOne({ where }: any) { return rows.find((row) => row.id === where.id) || null; },
+      create(value: any) { return { ...value }; },
+      async save(value: any) { const row = { id: '91', ...value }; rows.push(row); return row; },
+    };
+    const manager = {
+      getRepository(entity: any) { return entity === SiteSetting ? { async findOne() { return { id: '1' }; } } : menus; },
+    };
+    const service = new SystemService(
+      menus as any, {} as any, {} as any, {} as any, {} as any,
+      { async transaction(work: any) { return work(manager); } } as any,
+      { registerOwnerPolicy() {} } as any, {} as any, { log() {} } as any,
+    );
+    const saved = await service.createMenu({
+      parent_id: '77', name: '试题导入', type: 'menu', route_path: '/admin/questions/import',
+      permission_code: 'questions:write', icon: 'Upload', sort: 30, status: 1,
+    }, { id: '1', name: 'admin' }, null);
+    expect(saved).toMatchObject({ id: '91', parent_id: '77', route_path: '/admin/questions/import', permission_code: 'questions:write' });
+    const writable = await service.menuTree({ permissions: ['questions:write'], activeOnly: true });
+    expect(writable[0].children).toEqual([expect.objectContaining({ id: '91', name: '试题导入', route_path: '/admin/questions/import' })]);
+    const readable = await service.menuTree({ permissions: ['questions:read'], activeOnly: true });
+    expect(readable[0].children).toEqual([]);
+  });
+
   it('does not allow canceled management and monitoring routes to be recreated as menus', () => {
     for (const route_path of [
       '/admin/departments', '/admin/users', '/admin/regulations',

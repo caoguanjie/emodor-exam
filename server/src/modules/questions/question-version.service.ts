@@ -313,7 +313,7 @@ export class QuestionVersionService implements OnModuleInit {
 
   async createMany(inputs: QuestionDraft[], actorId: string): Promise<Array<{ questionId: string; versionId: string }>> {
     if (!inputs.length) return [];
-    const drafts = inputs.map(validateAndSanitizeQuestionDraft);
+    const drafts = inputs.map((input) => validateAndSanitizeQuestionDraft(input));
     await Promise.all(drafts.map((draft) => this.assertSource(draft)));
     await this.assertMediaUsable(String(actorId), [...new Set(drafts.flatMap((draft) => draft.mediaAssetIds))]);
     return this.dataSource.transaction(async (manager) => {
@@ -343,6 +343,37 @@ export class QuestionVersionService implements OnModuleInit {
     await this.assertSource(draft, manager);
     await this.assertMediaUsable(String(actorId), draft.mediaAssetIds, manager);
     return draft;
+  }
+
+  /** Only the dedicated ephemeral-reference import may create unbound AI rows. */
+  async validateAiImportDraft(input: QuestionDraft, actorId: string, manager?: EntityManager): Promise<ValidatedQuestionDraft> {
+    if (input.source !== 'ai' || input.regulationId || input.regulationVersionId
+      || input.sourcePageGroup !== undefined || input.sourcePageStart !== undefined || input.sourcePageEnd !== undefined) {
+      throw Errors.param('参考题生成只能创建无资料绑定的 AI 题目');
+    }
+    if (input.difficulty !== 'easy' && input.difficulty !== 'hard') throw Errors.param('参考题生成只支持 easy / hard');
+    const draft = validateAndSanitizeQuestionDraft(input, { allowReferenceAi: true });
+    await this.assertMediaUsable(String(actorId), draft.mediaAssetIds, manager);
+    return draft;
+  }
+
+  async createPendingAiImportsInManager(
+    manager: EntityManager,
+    inputs: QuestionDraft[],
+    actorId: string,
+    afterRelationsLocked?: (manager: EntityManager, drafts: readonly ValidatedQuestionDraft[]) => Promise<void>,
+  ): Promise<Array<{ questionId: string; versionId: string }>> {
+    const drafts = await Promise.all(inputs.map((input) => this.validateAiImportDraft(input, actorId, manager)));
+    const categoryIds = [...new Set(drafts.map((draft) => draft.categoryId))]
+      .sort((a, b) => BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0);
+    for (const categoryId of categoryIds) await this.categories.lockActive(manager, categoryId);
+    for (const draft of drafts) {
+      if (draft.conceptId) await this.concepts.assertCompatible(manager, draft.conceptId, draft.categoryId, draft.type);
+    }
+    await afterRelationsLocked?.(manager, drafts);
+    const created: Array<{ questionId: string; versionId: string }> = [];
+    for (const draft of drafts) created.push(await this.createInManager(manager, draft, actorId));
+    return created;
   }
 
   /**
@@ -380,7 +411,9 @@ export class QuestionVersionService implements OnModuleInit {
     actorId: string,
     expectedVersionId?: string | null,
   ): Promise<string> {
-    const draft = validateAndSanitizeQuestionDraft(input);
+    // Input provenance is copied from the existing identity by the question
+    // workflow. Reference-generated AI questions intentionally have no material.
+    const draft = validateAndSanitizeQuestionDraft(input, { allowReferenceAi: true });
     await this.assertSource(draft);
     return this.dataSource.transaction(async (manager) => {
       await this.assertRelations(manager, draft);

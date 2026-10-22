@@ -15,7 +15,7 @@ import { MediaService, type ContentDescriptor } from '../media/media.service';
 export const REGISTERED_ADMIN_ROUTES = new Set([
   '/admin/dashboard',
   '/admin/students', '/admin/training-categories',
-  '/admin/courses', '/admin/questions', '/admin/papers',
+  '/admin/courses', '/admin/questions', '/admin/papers', '/admin/questions/import',
   '/admin/exam-records', '/admin/training-statistics',
   '/admin/ai-config', '/admin/administrators', '/admin/roles', '/admin/sessions',
   '/admin/system/menus', '/admin/system/dictionaries', '/admin/system/site-settings',

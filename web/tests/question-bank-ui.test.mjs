@@ -10,6 +10,7 @@ const webRoot = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const previewClientId = '\0question-preview-client-test';
 const editorClientId = '\0question-editor-client-test';
 const questionsClientId = '\0questions-client-test';
+const importClientId = '\0question-import-client-test';
 const mediaStubId = '\0question-media-test';
 const httpStubId = '\0question-http-test';
 const authStubId = '\0question-auth-test';
@@ -50,6 +51,8 @@ const context = {
   materials: [],
   materialDetail: null,
   http: null,
+  navigations: [],
+  downloads: [],
 };
 
 const stubs = new Map([
@@ -66,8 +69,11 @@ const stubs = new Map([
       get(url, config) { return context.http('get', url, undefined, config); },
       post(url, body, config) { return context.http('post', url, body, config); },
       put(url, body, config) { return context.http('put', url, body, config); },
+      patch(url, body, config) { return context.http('patch', url, body, config); },
     };
+    export class ApiError extends Error { constructor(code, message) { super(message); this.code = code; } }
     export function upload(url, file, field, fields) { return context.http('upload', url, { file, field, fields }); }
+    export async function download(url, filename, params) { context.downloads.push({ url, filename, params }); }
   `],
   [authStubId, `
     const context = globalThis.__questionBankUiTest;
@@ -107,7 +113,7 @@ const stubs = new Map([
   `],
   [previewStubId, `
     import { h } from 'vue';
-    export default { props: ['question'], setup(props) { return () => h('question-preview-stub', { stem: props.question?.stem || '' }); } };
+    export default { props: ['question'], setup(props) { return () => h('question-preview-stub', { stem: props.question?.stem || '', score: props.question?.score }); } };
   `],
   [mediaUploadStubId, `
     import { h } from 'vue';
@@ -132,7 +138,7 @@ const stubs = new Map([
       return { markClean: source.markClean, confirmDiscard: source.confirmDiscard };
     }
   `],
-  [routeStubId, `export function useRouter() { return { push() {} }; }`],
+  [routeStubId, `export function useRouter() { return { push(path) { globalThis.__questionBankUiTest.navigations.push(path); } }; }`],
   [iconsStubId, `
     import { h } from 'vue';
     export const Filter = { setup() { return () => h('filter-icon'); } };
@@ -143,6 +149,8 @@ let vite;
 let QuestionPreview;
 let QuestionEditor;
 let Questions;
+let QuestionImport;
+let importWorkflow;
 let trainingTypes;
 
 function plugin() {
@@ -153,13 +161,14 @@ function plugin() {
       if (virtualStubs.has(source)) return virtualStubs.get(source);
       if (clientCode.has(source) || stubs.has(source)) return source;
       const owner = String(importer || '');
-      if (owner.includes('/src/views/admin/Questions.vue')) {
+      if (owner.includes('/src/views/admin/Questions.vue') || owner.includes('/src/views/admin/QuestionImport.vue')) {
         if (source === 'vue-router') return routeStubId;
         if (source === '@element-plus/icons-vue') return iconsStubId;
       }
       if ((source === '../api/media' || source === '/src/api/media.ts') && owner.includes('question-preview')) return mediaStubId;
       if ((source === './MediaUpload.vue' || source === '/src/components/MediaUpload.vue') && owner.includes('question-editor-client-test')) return mediaUploadStubId;
-      if (owner.includes('questions-client-test')) {
+      if (owner.includes('/utils/question-import-workflow') && (source === '../api/http' || source === '/src/api/http.ts')) return httpStubId;
+      if (owner.includes('questions-client-test') || owner.includes('question-import-client-test')) {
         if (source === 'element-plus') return elementStubId;
         if (source === '../../api/http' || source === '/src/api/http.ts') return httpStubId;
         if (source === '../../stores/auth' || source === '/src/stores/auth.ts') return authStubId;
@@ -185,7 +194,7 @@ function stripViteClientGlue(code, path) {
     output = output.replace(/from "\/src\/api\/media\.ts"/g, 'from "virtual:question-media-test"');
   } else if (path.endsWith('/QuestionEditor.vue')) {
     output = output.replace(/from "\/src\/components\/MediaUpload\.vue"/g, 'from "virtual:question-media-upload-test"');
-  } else if (path.endsWith('/Questions.vue')) {
+  } else if (path.endsWith('/Questions.vue') || path.endsWith('/QuestionImport.vue')) {
     output = output
       .replace(/from "\/node_modules\/\.vite\/deps\/element-plus\.js[^"]*"/g, 'from "virtual:question-element-test"')
       .replace(/from "\/src\/api\/http\.ts"/g, 'from "virtual:question-http-test"')
@@ -258,7 +267,10 @@ const Dialog = {
   props: { modelValue: Boolean, beforeClose: Function },
   setup(props, { attrs, slots }) {
     return () => props.modelValue
-      ? h('dialog', { ...attrs, beforeClose: props.beforeClose }, [...(slots.default?.() || []), ...(slots.footer?.() || [])])
+      ? h('dialog', { ...attrs, beforeClose: props.beforeClose }, [
+        h('dialog-content', {}, slots.default?.()),
+        h('dialog-footer', {}, slots.footer?.()),
+      ])
       : null;
   },
 };
@@ -267,7 +279,7 @@ const Table = {
   props: { data: { type: Array, default: () => [] } },
   setup(props, { attrs, slots }) {
     provide('question-table-row', computed(() => props.data[0] || null));
-    return () => h('table', attrs, slots.default?.());
+    return () => h('table', { ...attrs, data: props.data }, slots.default?.());
   },
 };
 const TableColumn = {
@@ -338,7 +350,7 @@ function registerUi(app) {
   const wrappers = [
     'el-alert', 'el-empty', 'el-tag', 'el-input', 'el-form', 'el-form-item', 'el-select', 'el-option',
     'el-input-number', 'el-checkbox', 'el-radio-group', 'el-radio', 'el-text', 'el-divider', 'el-timeline',
-    'el-timeline-item', 'el-result', 'el-tabs', 'el-tab-pane', 'el-upload', 'el-icon',
+    'el-timeline-item', 'el-result', 'el-tabs', 'el-tab-pane', 'el-upload', 'el-icon', 'el-radio-button',
   ];
   for (const name of wrappers) app.component(name, Wrapper);
   app.component('el-button', Button);
@@ -603,6 +615,8 @@ before(async () => {
   QuestionPreview = await loadClientSfc('/src/components/QuestionPreview.vue', previewClientId);
   QuestionEditor = await loadClientSfc('/src/components/QuestionEditor.vue', editorClientId);
   Questions = await loadClientSfc('/src/views/admin/Questions.vue', questionsClientId);
+  QuestionImport = await loadClientSfc('/src/views/admin/QuestionImport.vue', importClientId);
+  importWorkflow = await vite.ssrLoadModule('/src/utils/question-import-workflow.ts');
 });
 
 after(async () => {
@@ -621,6 +635,8 @@ beforeEach(() => {
   context.historyTotal = 41;
   context.unsavedSources = [];
   context.confirmDecisions = [];
+  context.navigations = [];
+  context.downloads = [];
   context.materials = [{ id: 'material-1', title: '安全资料', description: 'AI 出题依据' }];
   context.materialDetail = {
     id: 'material-1', title: '安全资料', description: 'AI 出题依据',
@@ -761,88 +777,47 @@ test('renders a malicious legacy stem as list text without an innerHTML sink', a
   mounted.unmount();
 });
 
-test('AI generation selects a parsed question-material version and sends the new source contract', async () => {
+test('question management exposes manual editing and single-question regeneration without bulk import workflows', async () => {
   context.permissions = new Set(['questions:read', 'questions:write', 'questions:review', 'ai:read', 'ai:write']);
-  context.row = null;
   const mounted = mount(Questions);
-  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/admin/question-materials'), 'question materials');
-  await click(button(mounted.root, 'AI 出题'));
-
-  const materialSelect = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '选择出题资料')[0];
-  assert.ok(materialSelect);
-  materialSelect.props['onUpdate:modelValue']?.('material-1');
-  await materialSelect.props.onChange?.('material-1');
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
   await nextTick();
-
-  const versionSelect = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '选择已解析版本')[0];
-  assert.ok(versionSelect);
-  const versionOptions = walk(mounted.root, (node) => node.type === 'el-wrapper' && String(node.props.value || '').startsWith('version-'));
-  assert.equal(versionOptions.find((node) => node.props.value === 'version-pending')?.props.disabled, true);
-  assert.notEqual(versionOptions.find((node) => node.props.value === 'version-parsed')?.props.disabled, true);
-  versionSelect.props['onUpdate:modelValue']?.('version-parsed');
-  await nextTick();
-  await click(button(mounted.root, '发起'));
-
-  const generation = context.calls.find((call) => call.method === 'post' && call.url === '/ai/generate-questions');
-  assert.equal(generation.body.material_id, 'material-1');
-  assert.equal(generation.body.material_version_id, 'version-parsed');
-  assert.equal(Object.hasOwn(generation.body, 'regulation_id'), false);
-  mounted.unmount();
+  try {
+    assert.ok(button(mounted.root, '人工录题'));
+    assert.ok(button(mounted.root, '修订'));
+    assert.ok(button(mounted.root, '重生成'));
+    assert.equal(!!button(mounted.root, 'AI 出题'), false, 'bulk AI generation belongs in the import page');
+    assert.equal(!!button(mounted.root, 'Excel / TXT 导题'), false, 'file import belongs in its standalone menu');
+    assert.equal(walk(mounted.root, (node) => node.type === 'dialog' && /AI 出题|出题资料管理/.test(node.props.title || '')).length, 0);
+    assert.equal(context.calls.some((call) => /question-materials|generate-questions|import-preview/.test(call.url)), false);
+  } finally { mounted.unmount(); }
 });
 
-test('question-material manager creates a source and uploads an immutable version through the frozen API', async () => {
-  context.permissions = new Set(['questions:read', 'questions:write', 'ai:read', 'ai:write']);
-  const mounted = mount(Questions);
-  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/admin/question-materials'), 'question materials');
-  await click(button(mounted.root, 'AI 出题'));
-  await click(button(mounted.root, '管理资料'));
-
-  const title = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '资料标题')[0];
-  const description = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '资料说明（可选）')[0];
-  title.props['onUpdate:modelValue']?.('新安全资料');
-  description.props['onUpdate:modelValue']?.('仅用于 AI 出题');
-  await nextTick();
-  await click(button(mounted.root, '创建资料'));
-  await waitFor(() => context.calls.some((call) => call.method === 'post' && call.url === '/admin/question-materials'), 'material create');
-
-  const created = context.calls.find((call) => call.method === 'post' && call.url === '/admin/question-materials');
-  assert.deepEqual(created.body, { title: '新安全资料', description: '仅用于 AI 出题' });
-  assert.equal(mounted.instance.$.setupState.genForm.material_id, 'material-created');
-
-  const uploader = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.accept === '.pdf,.docx')[0];
-  assert.ok(uploader);
-  await mounted.instance.$.setupState.onMaterialUpload({ raw: { name: 'source.pdf', type: 'application/pdf', size: 12 } });
-  await waitFor(() => context.calls.some((call) => call.method === 'upload'), 'material version upload');
-  const uploaded = context.calls.find((call) => call.method === 'upload');
-  assert.equal(uploaded.url, '/admin/question-materials/material-created/versions');
-  assert.equal(uploaded.body.field, 'file');
-  mounted.unmount();
+test('question create and preview dialogs keep their overlays inside the content area', async () => {
+  for (const label of ['人工录题', '预览']) {
+    context.calls = [];
+    const mounted = mount(Questions);
+    try {
+      await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
+      await nextTick();
+      await click(button(mounted.root, label));
+      const dialog = walk(mounted.root, (node) => node.type === 'dialog')[0];
+      assert.ok(dialog);
+      assert.equal(Object.hasOwn(dialog.props, 'appendToBody') || Object.hasOwn(dialog.props, 'append-to-body'), false, `${label} overlay must stay inside content`);
+      if (label === '人工录题') assert.match(dialog.props.class || '', /re-form-dialog/);
+    } finally { mounted.unmount(); }
+  }
 });
 
-test('question workflow teleports dialogs, avoids stacking the material manager, and closes the whole flow', async () => {
-  context.permissions = new Set(['questions:read', 'questions:write', 'ai:read', 'ai:write']);
+test('AI questions from transient reference imports do not expose source-material regeneration', async () => {
+  context.row = legacyRow({ regulation_id: null, regulation_version_id: null, difficulty: 'easy' });
   const mounted = mount(Questions);
-  await waitFor(() => context.calls.some((call) => call.url === '/admin/question-materials'), 'question materials');
-  await click(button(mounted.root, 'AI 出题'));
-  const generationDialog = walk(mounted.root, (node) => node.type === 'dialog' && node.props.title === '发起 AI 出题')[0];
-  assert.equal(Object.hasOwn(generationDialog?.props || {}, 'appendToBody') || Object.hasOwn(generationDialog?.props || {}, 'append-to-body'), true);
-
-  await click(button(mounted.root, '管理资料'));
-  assert.equal(mounted.instance.$.setupState.genVisible, false);
-  assert.equal(mounted.instance.$.setupState.materialVisible, true);
-  const materialDialog = walk(mounted.root, (node) => node.type === 'dialog' && node.props.title === '出题资料管理')[0];
-  assert.equal(Object.hasOwn(materialDialog?.props || {}, 'appendToBody') || Object.hasOwn(materialDialog?.props || {}, 'append-to-body'), true);
-
-  mounted.instance.$.setupState.genVisible = true;
-  mounted.instance.$.setupState.materialVisible = true;
-  mounted.instance.$.setupState.taskStatus = 'completed';
-  mounted.instance.$.setupState.taskVisible = true;
-  await nextTick();
-  await click(button(mounted.root, '查看题库'));
-  assert.equal(mounted.instance.$.setupState.genVisible, false);
-  assert.equal(mounted.instance.$.setupState.materialVisible, false);
-  assert.equal(mounted.instance.$.setupState.taskVisible, false);
-  mounted.unmount();
+  try {
+    await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
+    await nextTick();
+    assert.equal(!!button(mounted.root, '重生成'), false, 'the legacy regenerate API requires permanent source material');
+    assert.ok(button(mounted.root, '修订'));
+  } finally { mounted.unmount(); }
 });
 
 test('requires an explicit difficulty for a legacy edit and sends expected_version_id as an owned null key', async () => {
@@ -1151,4 +1126,447 @@ test('keeps a question draft when a successful mutation response has no valid re
   assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'hard');
   assert.equal(source.dirty.value, true);
   mounted.unmount();
+});
+
+function aiImportBatch() {
+  const question = {
+    category: '7', type: 'single', concept: '9',
+    options: [{ key: 'A', text: '先确认风险' }, { key: 'B', text: '直接作业' }],
+    answer: [0], analysis: '应先完成风险确认。', score: '5', errors: [],
+  };
+  return {
+    batch_id: '301', valid_rows: [2, 3], duplicates: [], errors: [{ row: 4, message: '答案无效' }],
+    rows: [
+      { ...question, row_number: 2, difficulty: 'easy', stem: '简单生成题' },
+      { ...question, row_number: 3, difficulty: 'hard', stem: '困难生成题' },
+      { ...question, row_number: 4, difficulty: 'easy', stem: '异常生成题', answer: [], errors: ['答案无效'] },
+    ],
+  };
+}
+
+function aiTask(status = 'running', overrides = {}) {
+  return {
+    task_id: 'ai-task-1', status, total_count: 2, completed_count: status === 'completed' ? 2 : 0,
+    generated_count: status === 'completed' ? 3 : 0, failed_count: status === 'completed' ? 1 : 0,
+    ...(status === 'completed' ? { batch_id: '301' } : {}), ...overrides,
+  };
+}
+
+async function switchImportTab(mounted, value) {
+  const tabs = walk(mounted.root, (node) => node.type === 'el-wrapper' && (node.props.modelValue ?? node.props['model-value']) === 'file')[0];
+  assert.ok(tabs, 'file/AI import tabs should be available');
+  await (tabs.props['onUpdate:modelValue'] || tabs.props['onUpdate:model-value'])?.(value);
+  await nextTick();
+}
+
+test('AI import uploads a transient reference file, polls its task and renders only generated easy/hard rows', async () => {
+  context.permissions = new Set(['questions:write', 'ai:read', 'ai:write']);
+  const normalHttp = context.http;
+  context.http = async (method, url, body, config) => {
+    if (url.includes('/ai-import-')) {
+      context.calls.push({ method, url, body, config });
+      if (method === 'upload') return aiTask();
+      if (url.includes('/ai-import-tasks/')) return aiTask('completed');
+      return aiImportBatch();
+    }
+    return normalHttp(method, url, body, config);
+  };
+  const mounted = mount(QuestionImport);
+  try {
+    await switchImportTab(mounted, 'ai');
+    const uploader = walk(mounted.root, (node) => node.type === 'el-wrapper' && (node.props['on-change'] || node.props.onChange))[0];
+    assert.ok(uploader);
+    const reference = new File(['原始参考题不得进入预览'], 'reference.xlsx');
+    await (uploader.props['on-change'] || uploader.props.onChange)({ raw: reference });
+    await waitFor(() => walk(mounted.root, (node) => node.type === 'table' && node.props.data?.length === 3).length > 0, 'AI generated preview');
+    const uploadCall = context.calls.find((call) => call.method === 'upload');
+    assert.equal(uploadCall.url, '/admin/questions/ai-import-tasks');
+    assert.deepEqual(uploadCall.body.fields, { format: 'xlsx' });
+    assert.ok(context.calls.some((call) => call.method === 'get' && call.url === '/admin/questions/ai-import-tasks/ai-task-1'));
+    const rows = walk(mounted.root, (node) => node.type === 'table').at(-1).props.data;
+    assert.deepEqual(rows.map((row) => row.difficulty), ['easy', 'hard', 'easy']);
+    assert.equal(rows.some((row) => row.stem.includes('原始参考题')), false);
+    assert.ok(button(mounted.root, '确认导入 2 道待审核题目'));
+    const stateValues = Object.values(mounted.instance.$.setupState);
+    assert.equal(stateValues.some((value) => value instanceof File), false, 'the page must not retain reference files');
+  } finally { mounted.unmount(); }
+});
+
+test('AI preview filters by difficulty and commits only selected valid server row numbers', async () => {
+  const calls = [];
+  const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    readTask: async () => aiTask('completed'),
+    readBatch: async () => aiImportBatch(),
+    commitBatch: async (id, rows) => {
+      calls.push({ id, rows });
+      return { batch_id: id, created_ids: ['701'], committed_rows: rows };
+    },
+    onCommitted: (result) => calls.push({ result }), onWarning() {},
+  });
+  await workflow.startTask(async () => aiTask('completed'));
+  assert.deepEqual(workflow.selectedRows.value, [2, 3], 'invalid rows must not be selected by default');
+  workflow.difficulty.value = 'hard';
+  assert.deepEqual(workflow.visibleRows.value.map((row) => row.row_number), [3]);
+  workflow.setSelected(2, false);
+  workflow.setSelected(4, true);
+  await workflow.commitImport();
+  assert.deepEqual(calls[0], { id: '301', rows: [3] });
+  assert.equal(calls[1].result.created_ids[0], '701');
+  workflow.deactivate();
+});
+
+test('AI import clears polling on departure and ignores a late task result', async () => {
+  const gate = deferred();
+  let reads = 0;
+  let batchReads = 0;
+  const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    readTask: async () => { reads += 1; return gate.promise; },
+    readBatch: async () => { batchReads += 1; return aiImportBatch(); },
+    commitBatch: async () => ({}), onCommitted() {}, onWarning() {},
+  });
+  await workflow.startTask(async () => aiTask());
+  await waitFor(() => reads === 1, 'first task status');
+  workflow.deactivate();
+  gate.resolve(aiTask('completed'));
+  await nextTick();
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+  assert.equal(batchReads, 0);
+  assert.equal(workflow.preview.value, null);
+});
+
+test('AI preview edits only generated content, regenerates one row, downloads and lands in question management', async () => {
+  context.permissions = new Set(['questions:write', 'ai:read', 'ai:write']);
+  const batch = aiImportBatch();
+  const normalHttp = context.http;
+  context.http = async (method, url, body, config) => {
+    if (url.includes('/ai-import-')) {
+      context.calls.push({ method, url, body, config });
+      if (method === 'upload') return aiTask('completed');
+      if (method === 'patch') { Object.assign(batch.rows[0], body); return structuredClone(batch); }
+      if (url.endsWith('/regenerate')) { batch.rows[0].stem = '重新生成的简单题'; return structuredClone(batch); }
+      if (url.endsWith('/commit')) return { batch_id: '301', created_ids: ['701', '702'], committed_rows: body.row_numbers };
+      return structuredClone(batch);
+    }
+    return normalHttp(method, url, body, config);
+  };
+  const mounted = mount(QuestionImport);
+  try {
+    await switchImportTab(mounted, 'ai');
+    const uploader = walk(mounted.root, (node) => node.type === 'el-wrapper' && (node.props['on-change'] || node.props.onChange))[0];
+    await (uploader.props['on-change'] || uploader.props.onChange)({ raw: new File(['reference'], 'reference.xlsx') });
+    await nextTick();
+    await click(button(mounted.root, '预览'));
+    let dialog = walk(mounted.root, (node) => node.type === 'dialog')[0];
+    assert.equal(Object.hasOwn(dialog.props, 'appendToBody') || Object.hasOwn(dialog.props, 'append-to-body'), false);
+    assert.equal(walk(mounted.root, (node) => node.type === 'question-preview-stub')[0]?.props.score, 5);
+    await click(button(mounted.root, '修改'));
+    dialog = walk(mounted.root, (node) => node.type === 'dialog' && node.props.title === '修改生成题')[0];
+    assert.equal(Object.hasOwn(dialog.props, 'appendToBody') || Object.hasOwn(dialog.props, 'append-to-body'), false);
+    assert.match(dialog.props.class || '', /re-form-dialog/);
+    const stem = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '修改生成题题干')[0];
+    assert.ok(stem);
+    stem.props['onUpdate:modelValue']('人工校对的简单题');
+    await nextTick();
+    await click(button(mounted.root, '保存修改'));
+    const patch = context.calls.find((call) => call.method === 'patch');
+    assert.deepEqual(Object.keys(patch.body).sort(), ['analysis', 'answer', 'options', 'stem']);
+    assert.equal(patch.body.stem, '人工校对的简单题');
+    await click(button(mounted.root, '重新生成'));
+    assert.ok(context.calls.some((call) => call.url === '/admin/questions/ai-import-batches/301/rows/2/regenerate'));
+    await click(button(mounted.root, '下载 Excel'));
+    await click(button(mounted.root, '下载 TXT'));
+    assert.deepEqual(context.downloads.map((item) => item.params.format), ['xlsx', 'txt']);
+    await click(button(mounted.root, '确认导入 2 道待审核题目'));
+    assert.deepEqual(context.calls.find((call) => call.url.endsWith('/commit')).body, { row_numbers: [2, 3] });
+    assert.deepEqual(context.navigations, ['/admin/questions']);
+  } finally { mounted.unmount(); }
+});
+
+test('ordinary file import keeps template defaults and commits its original valid rows', async () => {
+  context.permissions = new Set(['questions:write']);
+  const normalHttp = context.http;
+  context.http = async (method, url, body, config) => {
+    if (url.includes('/admin/questions/import-')) {
+      context.calls.push({ method, url, body, config });
+      if (method === 'upload') return { batch_id: '401', valid_rows: [2, 5], duplicates: [3], errors: [{ row: 4, message: '选项格式错误' }] };
+      return { batch_id: '401', created_ids: ['801', '802'], committed_rows: body.row_numbers };
+    }
+    return normalHttp(method, url, body, config);
+  };
+  const mounted = mount(QuestionImport);
+  try {
+    await nextTick();
+    const category = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '文件 category 为空时使用')[0];
+    category.props['onUpdate:modelValue']('7');
+    const difficulty = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '文件 difficulty 为空时使用')[0];
+    difficulty.props['onUpdate:modelValue']('medium');
+    await click(button(mounted.root, '下载 XLSX 模板'));
+    const uploader = walk(mounted.root, (node) => node.type === 'el-wrapper' && (node.props['on-change'] || node.props.onChange))[0];
+    await (uploader.props['on-change'] || uploader.props.onChange)({ raw: new File(['ordinary'], 'ordinary.xlsx') });
+    await nextTick();
+    assert.deepEqual(context.calls.find((call) => call.method === 'upload').body.fields, { format: 'xlsx', category_id: '7', difficulty: 'medium' });
+    await click(button(mounted.root, '确认导入 2 行'));
+    assert.deepEqual(context.calls.find((call) => call.url.endsWith('/commit')).body, { row_numbers: [2, 5] });
+    assert.equal(context.downloads[0].url, '/admin/questions/import-template');
+    assert.deepEqual(context.navigations, ['/admin/questions']);
+  } finally { mounted.unmount(); }
+});
+
+test('AI confirmation with an unknown result queries the original batch without resending a write', async () => {
+  let commits = 0;
+  let reads = 0;
+  const receipts = [];
+  const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    readTask: async () => aiTask('completed'),
+    readBatch: async (id) => {
+      reads += 1;
+      return reads === 1 ? aiImportBatch() : { batch_id: id, created_ids: ['701'], committed_rows: [3] };
+    },
+    commitBatch: async () => { commits += 1; throw new Error('response lost'); },
+    onCommitted: (receipt) => receipts.push(receipt), onWarning() {},
+  });
+  await workflow.startTask(async () => aiTask('completed'));
+  workflow.setSelected(2, false);
+  await workflow.commitImport();
+  assert.equal(workflow.commitUnknown.value, true);
+  await workflow.commitImport();
+  assert.equal(commits, 1, 'a response loss must not silently resubmit the selection');
+  await workflow.queryBatchStatus();
+  assert.equal(reads, 2);
+  assert.deepEqual(receipts, [{ batch_id: '301', created_ids: ['701'], committed_rows: [3] }]);
+  assert.equal(workflow.preview.value, null);
+  workflow.deactivate();
+});
+
+test('ordinary preview loading can restart after deactivation without a late response locking the cached page', async () => {
+  const gate = deferred();
+  const workflow = importWorkflow.useQuestionImportWorkflow({
+    readBatch: async () => ({}), commitBatch: async () => ({}), onCommitted() {}, onWarning() {},
+  });
+  const firstLoad = workflow.loadPreview(() => gate.promise);
+  assert.equal(workflow.previewBusy.value, true);
+  assert.equal(workflow.dirty.value, false);
+  workflow.deactivate();
+  assert.equal(workflow.previewBusy.value, false);
+  workflow.activate();
+  assert.equal(workflow.interactionLocked.value, false);
+  await workflow.loadPreview(async () => ({ batch_id: '402', valid_rows: [2], errors: [], duplicates: [] }));
+  gate.resolve({ batch_id: '401', valid_rows: [3], errors: [], duplicates: [] });
+  await firstLoad;
+  assert.equal(workflow.preview.value.batch_id, '402');
+  assert.equal(workflow.previewBusy.value, false);
+  assert.equal(workflow.canReset.value, true);
+  workflow.deactivate();
+});
+
+test('AI batch loading can restart after its completed task leaves the cached page', async () => {
+  const gate = deferred();
+  let reads = 0;
+  const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    readTask: async () => aiTask('completed'),
+    readBatch: async () => { reads += 1; return reads === 1 ? gate.promise : { ...aiImportBatch(), batch_id: '302' }; },
+    commitBatch: async () => ({}), onCommitted() {}, onWarning() {},
+  });
+  const firstStart = workflow.startTask(async () => aiTask('completed'));
+  await waitFor(() => reads === 1, 'pending generated batch read');
+  assert.equal(workflow.previewBusy.value, true);
+  workflow.deactivate();
+  workflow.activate();
+  assert.equal(workflow.interactionLocked.value, false);
+  await workflow.startTask(async () => aiTask('completed', { task_id: 'ai-task-2', batch_id: '302' }));
+  gate.resolve(aiImportBatch());
+  await firstStart;
+  assert.equal(workflow.preview.value.batch_id, '302');
+  assert.equal(workflow.previewBusy.value, false);
+  assert.equal(workflow.taskBusy.value, false);
+  workflow.deactivate();
+});
+
+test('deactivating a pending confirmation clears busy state but keeps the original batch locked for reconciliation', async () => {
+  const gate = deferred();
+  let commits = 0;
+  const preview = { batch_id: '401', valid_rows: [2], errors: [], duplicates: [] };
+  const workflow = importWorkflow.useQuestionImportWorkflow({
+    readBatch: async () => preview,
+    commitBatch: async () => { commits += 1; return gate.promise; }, onCommitted() {}, onWarning() {},
+  });
+  await workflow.loadPreview(async () => preview);
+  const pending = workflow.commitImport();
+  workflow.deactivate();
+  workflow.activate();
+  assert.equal(workflow.commitBusy.value, false);
+  assert.equal(workflow.commitUnknown.value, true);
+  await workflow.commitImport();
+  assert.equal(commits, 1);
+  await workflow.queryBatchStatus();
+  assert.equal(workflow.commitUnknown.value, false);
+  gate.resolve({ batch_id: '401', created_ids: ['801'], committed_rows: [2] });
+  await pending;
+  assert.equal(workflow.preview.value.batch_id, '401', 'the invalidated response cannot clear the reconciled preview');
+  workflow.deactivate();
+});
+
+for (const operation of ['editing', 'regenerating']) {
+  test(`AI ${operation} with a lost response locks writes until the original batch is read`, async () => {
+    let serverBatch = aiImportBatch();
+    let commits = 0;
+    let mutations = 0;
+    let readMode = 'valid';
+    const batchReads = [];
+    const workflow = importWorkflow.useAiQuestionImportWorkflow({
+      readTask: async () => aiTask('completed'),
+      readBatch: async (id) => {
+        batchReads.push(id);
+        if (readMode === 'invalid') return { batch_id: '999', valid_rows: [], errors: [], duplicates: [] };
+        if (readMode === 'unavailable') throw new Error('status unavailable');
+        return structuredClone(serverBatch);
+      },
+      commitBatch: async (id, rows) => { commits += 1; return { batch_id: id, created_ids: ['701'], committed_rows: rows }; },
+      onCommitted() {}, onWarning() {},
+    });
+    await workflow.startTask(async () => aiTask('completed'));
+    const accepted = await workflow.updateRow(2, async () => {
+      mutations += 1;
+      serverBatch.rows[0].stem = `${operation} changed on server`;
+      throw new Error('write response lost');
+    });
+    assert.equal(accepted, false);
+    assert.equal(workflow.commitUnknown.value, true);
+    assert.equal(workflow.canReset.value, false);
+    await workflow.commitImport();
+    await workflow.updateRow(2, async () => { mutations += 1; return aiImportBatch(); });
+    assert.equal(commits, 0);
+    assert.equal(mutations, 1);
+    for (const unavailable of ['invalid', 'unavailable']) {
+      readMode = unavailable;
+      await workflow.queryBatchStatus();
+      assert.equal(workflow.commitUnknown.value, true);
+      await workflow.commitImport();
+      assert.equal(commits, 0);
+    }
+    readMode = 'valid';
+    await workflow.queryBatchStatus();
+    assert.equal(workflow.commitUnknown.value, false);
+    assert.equal(workflow.preview.value.rows[0].stem, `${operation} changed on server`);
+    assert.deepEqual(batchReads, ['301', '301', '301', '301']);
+    assert.equal(commits, 0, 'a status query never confirms import automatically');
+    await workflow.commitImport();
+    assert.equal(commits, 1);
+    workflow.deactivate();
+  });
+}
+
+test('an unverifiable AI row mutation response also requires original-batch reconciliation', async () => {
+  const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    readTask: async () => aiTask('completed'), readBatch: async () => aiImportBatch(),
+    commitBatch: async () => ({}), onCommitted() {}, onWarning() {},
+  });
+  await workflow.startTask(async () => aiTask('completed'));
+  await workflow.updateRow(2, async () => ({}));
+  assert.equal(workflow.commitUnknown.value, true);
+  await workflow.queryBatchStatus();
+  assert.equal(workflow.commitUnknown.value, false);
+  workflow.deactivate();
+});
+
+test('an explicit business rejection of an AI row mutation preserves the confirmed preview without an unknown lock', async () => {
+  const { ApiError } = await vite.ssrLoadModule(httpStubId);
+  const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    readTask: async () => aiTask('completed'), readBatch: async () => aiImportBatch(),
+    commitBatch: async () => ({}), onCommitted() {}, onWarning() {},
+  });
+  await workflow.startTask(async () => aiTask('completed'));
+  const accepted = await workflow.updateRow(2, async () => { throw new ApiError(40001, 'invalid answer'); });
+  assert.equal(accepted, false);
+  assert.equal(workflow.commitUnknown.value, false);
+  assert.equal(workflow.rowBusy.value, false);
+  assert.equal(workflow.preview.value.rows[0].stem, '简单生成题');
+  assert.equal(workflow.canReset.value, true);
+  workflow.deactivate();
+});
+
+test('AI editing reconciles a lost write response from inside the dialog before enabling import', async () => {
+  context.permissions = new Set(['questions:write', 'ai:read', 'ai:write']);
+  const batch = aiImportBatch();
+  const normalHttp = context.http;
+  context.http = async (method, url, body, config) => {
+    if (url.includes('/ai-import-')) {
+      context.calls.push({ method, url, body, config });
+      if (method === 'upload') return aiTask('completed');
+      if (method === 'patch') {
+        Object.assign(batch.rows[0], body);
+        throw new Error('response lost after server applied the edit');
+      }
+      return structuredClone(batch);
+    }
+    return normalHttp(method, url, body, config);
+  };
+  const mounted = mount(QuestionImport);
+  try {
+    await switchImportTab(mounted, 'ai');
+    const uploader = walk(mounted.root, (node) => node.type === 'el-wrapper' && (node.props['on-change'] || node.props.onChange))[0];
+    await (uploader.props['on-change'] || uploader.props.onChange)({ raw: new File(['reference'], 'reference.xlsx') });
+    await click(button(mounted.root, '修改'));
+    const stem = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '修改生成题题干')[0];
+    stem.props['onUpdate:modelValue']('服务端已修改的新题干');
+    await nextTick();
+    await click(button(mounted.root, '保存修改'));
+    const dialog = walk(mounted.root, (node) => node.type === 'dialog' && node.props.title === '修改生成题')[0];
+    assert.ok(dialog);
+    assert.equal(button(dialog, '保存修改').props.disabled, true);
+    assert.equal(button(mounted.root, '确认导入 2 道待审核题目').props.disabled, true);
+    assert.equal(button(mounted.root, '下载 Excel').props.disabled, true);
+    assert.equal(button(mounted.root, '预览').props.disabled, true);
+    await click(button(dialog, '查询原批次状态'));
+    assert.equal(context.calls.filter((call) => call.method === 'patch').length, 1);
+    assert.equal(context.calls.filter((call) => call.method === 'get' && call.url === '/admin/questions/ai-import-batches/301').length, 2);
+    assert.equal(walk(mounted.root, (node) => node.type === 'dialog' && node.props.title === '修改生成题').length, 0);
+    const rows = walk(mounted.root, (node) => node.type === 'table').at(-1).props.data;
+    assert.equal(rows[0].stem, '服务端已修改的新题干');
+    assert.equal(button(mounted.root, '确认导入 2 道待审核题目').props.disabled, false);
+  } finally { mounted.unmount(); }
+});
+
+test('an interrupted batch reconciliation clears only busy state and remains locked until a new GET confirms it', async () => {
+  const gate = deferred();
+  let reads = 0;
+  const preview = { batch_id: '401', valid_rows: [2], errors: [], duplicates: [] };
+  const workflow = importWorkflow.useQuestionImportWorkflow({
+    readBatch: async () => { reads += 1; return reads === 1 ? gate.promise : preview; },
+    commitBatch: async () => { throw new Error('response lost'); }, onCommitted() {}, onWarning() {},
+  });
+  await workflow.loadPreview(async () => preview);
+  await workflow.commitImport();
+  const pendingRead = workflow.queryBatchStatus();
+  workflow.deactivate();
+  workflow.activate();
+  assert.equal(workflow.statusBusy.value, false);
+  assert.equal(workflow.commitUnknown.value, true);
+  await workflow.queryBatchStatus();
+  assert.equal(reads, 2);
+  assert.equal(workflow.commitUnknown.value, false);
+  gate.resolve({ batch_id: '401', created_ids: ['801'], committed_rows: [2] });
+  await pendingRead;
+  assert.equal(workflow.preview.value.batch_id, '401');
+  workflow.deactivate();
+});
+
+test('deactivating an in-flight AI row edit retains its unknown lock when the cached page returns', async () => {
+  const gate = deferred();
+  const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    readTask: async () => aiTask('completed'), readBatch: async () => aiImportBatch(),
+    commitBatch: async () => ({}), onCommitted() {}, onWarning() {},
+  });
+  await workflow.startTask(async () => aiTask('completed'));
+  const pendingEdit = workflow.updateRow(2, () => gate.promise);
+  workflow.deactivate();
+  workflow.activate();
+  assert.equal(workflow.rowBusy.value, false);
+  assert.equal(workflow.commitUnknown.value, true);
+  await workflow.queryBatchStatus();
+  assert.equal(workflow.commitUnknown.value, false);
+  gate.resolve({ ...aiImportBatch(), rows: aiImportBatch().rows.map((row) => ({ ...row, stem: '迟到响应' })) });
+  await pendingEdit;
+  assert.equal(workflow.preview.value.rows[0].stem, '简单生成题');
+  workflow.deactivate();
 });

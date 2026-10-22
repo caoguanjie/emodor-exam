@@ -67,7 +67,7 @@
       </el-collapse>
     </el-card>
 
-    <el-dialog v-model="chapterVisible" :title="editingChapterId ? '编辑章节' : '新增章节'" width="480px" :before-close="beforeChapterClose">
+    <el-dialog v-model="chapterVisible" :title="editingChapterId ? '编辑章节' : '新增章节'" width="480px" class="re-form-dialog" :before-close="beforeChapterClose">
       <el-form label-width="82px">
         <el-form-item label="章节标题"><el-input v-model="chapterForm.title" maxlength="255" /></el-form-item>
         <el-form-item label="排序"><el-input-number v-model="chapterForm.sort_order" :min="0" /></el-form-item>
@@ -75,7 +75,7 @@
       <template #footer><el-button @click="closeChapter">取消</el-button><el-button type="primary" :loading="chapterSaving" :disabled="chapterSaving" @click="saveChapter">保存</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="lessonVisible" :title="editingLessonId ? '编辑视频课时' : '新增视频课时'" width="620px" destroy-on-close :before-close="beforeLessonClose">
+    <el-dialog v-model="lessonVisible" :title="editingLessonId ? '编辑视频课时' : '新增视频课时'" width="620px" class="re-form-dialog" destroy-on-close :before-close="beforeLessonClose">
       <el-form label-width="92px">
         <el-form-item label="课时标题"><el-input v-model="lessonForm.title" maxlength="255" /></el-form-item>
         <el-form-item label="必学"><el-switch v-model="lessonForm.required" /></el-form-item>
@@ -90,7 +90,7 @@
       <template #footer><el-button @click="closeLesson">取消</el-button><el-button type="primary" :loading="lessonSaving" :disabled="lessonSaving" @click="saveLesson">保存</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="videoVisible" title="追加视频版本" width="620px" destroy-on-close :before-close="beforeVideoClose">
+    <el-dialog v-model="videoVisible" title="追加视频版本" width="620px" class="re-form-dialog" destroy-on-close :before-close="beforeVideoClose">
       <el-alert type="info" :closable="false" title="新视频将生成新版本；旧版本与已有引用不会被覆盖。" style="margin-bottom:14px" />
       <MediaUpload v-model="replacementAssetId" purpose="video" />
       <template #footer><el-button @click="closeVideo">取消</el-button><el-button type="primary" :disabled="!replacementAssetId" @click="replaceVideo">保存新版本</el-button></template>

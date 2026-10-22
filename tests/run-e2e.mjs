@@ -33,6 +33,7 @@ export const SUITE_REGISTRY = Object.freeze({
   'training-video-learning': join(ROOT, 'tests', 'training-video-learning.mjs'),
   'training-question-bank': join(ROOT, 'tests', 'training-question-bank.mjs'),
   'training-question-import': join(ROOT, 'tests', 'training-question-import.mjs'),
+  'training-ai-question-import': join(ROOT, 'tests', 'training-ai-question-import.mjs'),
   'training-publishing': join(ROOT, 'tests', 'training-publishing.mjs'),
   'training-attempts': join(ROOT, 'tests', 'training-attempts.mjs'),
   'training-submissions': join(ROOT, 'tests', 'training-submissions.mjs'),

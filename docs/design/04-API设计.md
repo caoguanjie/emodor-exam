@@ -6,6 +6,8 @@
 
 > **状态边界（2026-10-22）**：现行接口只支持 single/multiple/judgment、持久草稿、主动/超时统一终结、自动评分、本人历史/错题和管理端考试记录。图片答案、人工阅卷、实时监控、切屏上报，以及 `/users`、`/departments`、制度管理写接口已删除。题库资料使用 `/admin/question-materials`，外部 AI 生成参数为 `material_id + material_version_id`；底层来源字段仍为 `regulation_id/regulation_version_id`。旧 `/learning`、旧 `/exams`、旧 `/statistics` 与制度内容/文件只读路由继续兼容。
 
+> **试题入口增量（2026-10-22）**：PC 考试管理依次为试题管理、试卷管理、试题导入、考试记录。`/admin/questions` 保留列表、人工录题、修改、审核、预览及单题重新生成；`/admin/questions/import` 独立承载文件导入与 AI 生成两个 Tab。资料管理和整批资料 AI 生成接口继续兼容，但列表页不再提供这些入口。AI 参考题导入见 §3.5.3，是 `source=ai` 不绑定永久制度版本的明确例外。
+
 ---
 
 ## 1. API 总体规范
@@ -109,8 +111,8 @@
 | 路由前缀 | 所属模块 | 状态 | 说明 |
 |---|---|---|---|
 | /auth | 身份与权限 | 现行 | 验证码、登录、刷新、个人信息、改密、登出 |
-| /admin/training-categories | 培训管理 | 现行 | 培训类别分页、详情、增改、启停、引用保护删除 |
-| /admin/students | 培训管理 | 现行 | 无部门学员增改查、头像、启停、重置密码、xlsx 模板/预检/确认；不提供删除 |
+| /admin/training-categories | 学习管理 | 现行 | 培训类别分页、详情、增改、启停、引用保护删除 |
+| /admin/students | 学习管理 | 现行 | 无部门学员增改查、头像、启停、重置密码、xlsx 模板/预检/确认；不提供删除 |
 | /admin/administrators、/admin/roles 等 | 系统设置 | 现行 | 管理员创建必须提交非空 `role_ids`；另含权限、会话与公共配置治理 |
 | /admin/question-materials | 题库资料 | 现行 | 资料创建、列表/详情、版本上传、解析状态和重试；版本 `id` 为字符串 |
 | /admin/questions | 题库导入 | 现行 | 9 列 Excel/TXT 模板、预检、批次状态与幂等确认 |
@@ -267,7 +269,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | GET | `/site-config` | 公开 | 严格返回 `{logo_asset_id,banners}` 两个键 |
 | GET | `/site-config/assets/{id}/content` | 公开 | 仅当 ID 仍在当前 Logo/轮播白名单、有 `site_config` 引用且资源为 ready branding image 时返回原始流；其他 ID 统一 40401，支持单 Range |
 
-菜单写入 DTO 固定为 `parent_id? / name / type / route_path? / permission_code? / icon? / sort / status`。`type=directory` 不得带路由或权限；`type=menu` 的 `route_path` 必须在前端注册管理路由集中；`type=button` 不得带路由且必须使用服务端注册权限。新增、修改、删除先锁定初始化保证且业务不可删除的 `site_setting.logo_asset_id` 实存行，再在同一事务重读菜单树关系；因此空树双创建可依次成功，互挂父级、建子与删父、建子与父节点改按钮只会提交合法一侧。互斥行缺失时返回 50004/HTTP 503，不自动修复、不把数据库死锁当业务冲突。默认 Questions 导航不在数据库层先限制 `questions:read`，前端注册路由精确以 `questions:read OR questions:write` 判定；这不改变各 API 守卫的单接口权限。
+菜单写入 DTO 固定为 `parent_id? / name / type / route_path? / permission_code? / icon? / sort / status`。`type=directory` 不得带路由或权限；`type=menu` 的 `route_path` 必须在前端及服务端菜单白名单注册，包含独立 `/admin/questions/import`；`type=button` 不得带路由且必须使用服务端注册权限。新增、修改、删除先锁定初始化保证且业务不可删除的 `site_setting.logo_asset_id` 实存行，再在同一事务重读菜单树关系；因此空树双创建可依次成功，互挂父级、建子与删父、建子与父节点改按钮只会提交合法一侧。互斥行缺失时返回 50004/HTTP 503，不自动修复、不把数据库死锁当业务冲突。默认试题管理导航不在数据库层先限制 `questions:read`，前端注册路由精确以 `questions:read OR questions:write` 判定；试题导入菜单和路由要求 `questions:write`。只缓存试题导入页，试题管理返回时重新加载列表，API 仍按各端点权限裁决。
 
 字典写入 DTO 固定为 `type/code/label/sort/status/remark?`，`(type,code)` 唯一。服务端固定 type 是 `learner_source/difficulty/question_type/regulation_status/paper_status/question_status/exam_status`；这些项只是显示镜像，不能借 CRUD 改变来源映射、题型、状态或考试规则。
 
@@ -329,7 +331,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | 14 | POST | /ai/questions | `questions:write`；人工录入三类客观题，首版本由录入管理员确认 approved |
 | 15 | PUT | /ai/questions/{id}/review | `questions:review`；审核当前版本及驳回意见 |
 | 16 | PUT | /ai/questions/{id} | `questions:write`；修订生成 pending revision；在考核心编辑仍拒绝 40908 |
-| 17 | POST | /ai/questions/{id}/regenerate | `questions:write`；single/multiple 单题重生成新 revision |
+| 17 | POST | /ai/questions/{id}/regenerate | `questions:write`；有真实资料/版本的 AI single/multiple 单题重生成新 revision；无永久来源的参考题 AI 不展示此入口 |
 | 18 | GET | /ai/questions/{id}/history | `questions:read`；revision 历史与真实审核元数据，返回 Page |
 | 19 | GET | /ai/questions/{id} | `questions:read`；题目当前兼容视图 |
 | 20 | GET | /ai/papers | 试卷列表（筛选 regulation_id/status） |
@@ -360,7 +362,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 **GET /ai/config**（`ai_config:read`）：读取 AI 服务配置，`api_key` 掩码回显（如 `sk-****xxxx`，完整键值永不返回，07 册 4.2）。**PUT /ai/config**（`ai_config:write`）：保存 `base_url` / `api_key` / `model`——权威副本为 AES-256-GCM 加密后的配置文件，Redis 仅作缓存（07 册 4.2），并返回同样的脱敏配置结果。**POST /ai/config/test**（`ai_config:write`）：以已保存配置发起一次连通性测试，返回成功 / 失败与脱敏错误摘要（失败 → 50005）。`ai:read/write` 仅代表出题任务/题库工作流，不自动授予配置权限；管理端入口要求 `ai_config:read` 或 `ai_config:write`，但 writer-only 页面不得调用 GET、不得伪造现有配置值，只能提交空白表单并使用 PUT 返回的脱敏结果；`super_admin` 天然拥有全部注册权限。
 
-**人工题 create/edit DTO**：create 的 `category_id/difficulty/type/stem/options/answer/score` 必填，`concept_id/analysis` 可选；edit 为部分更新并必须携带 `expected_version_id`。两者都严格拒绝 `material_id`、`regulation_id`、`regulation_version_id` 和 source，防止客户端伪造 AI/资料来源。仅 AI 生成服务在校验 `material_id + material_version_id` 后把可信来源映射为内部 `regulation_id/regulation_version_id`；实体字段不全局改名。single 恰一答案，multiple 至少两答案，judgment 固定正确/错误。富文本仅允许白名单标签与 `<img data-media-id="数字">`；题干、选项和解析图片经 `/media/{id}/content` 鉴权读取。
+**人工题 create/edit DTO**：create 的 `category_id/difficulty/type/stem/options/answer/score` 必填，`concept_id/analysis` 可选；edit 为部分更新并必须携带 `expected_version_id`。两者都严格拒绝 `material_id`、`regulation_id`、`regulation_version_id` 和 source，防止客户端伪造 AI/资料来源。资料 AI 生成服务在校验 `material_id + material_version_id` 后把可信来源映射为内部 `regulation_id/regulation_version_id`；§3.5.3 的专用 `questions_ai` 导入确认允许 `source=ai` 且两项来源均为空，不能借人工 DTO 伪造该例外。实体字段不全局改名。single 恰一答案，multiple 至少两答案，judgment 固定正确/错误。富文本仅允许白名单标签与 `<img data-media-id="数字">`；题干、选项和解析图片经 `/media/{id}/content` 鉴权读取。
 
 **版本与审核语义**：POST 人工题创建 revision 1 并记录录入管理员的 `approved_by/approved_at`；PUT 编辑或 regenerate 创建新的 pending revision，不覆盖旧版本。`PUT /questions/{id}`、`PUT /questions/{id}/review`、`POST /questions/{id}/regenerate` 的 body 必须显式携带 `expected_version_id`：已版本化题传用户当前看到的十进制字符串 ID，未版本化 legacy 题明确传 `null`；省略或非法值返回 40001。服务在数据库锁内比较 identity 的实际 current_version_id，长时 regenerate 在发起与提交前各校验一次；不一致返回 40940，且不得创建错误 revision 或误审新版本。`POST /ai/questions` 与 `PUT /ai/questions/{id}` 的成功响应在既有兼容 view 外额外返回十进制字符串 `saved_version_id`，它是该请求实际创建的 revision receipt；写后查询得到的 `current_version_id` 可能已被另一并发修订推进，继续编辑本地提交快照时只能把 `saved_version_id` 作为下一次 `expected_version_id`。普通 GET/list view 不返回虚假的 `saved_version_id`。列表可按 `category_id/difficulty/concept_id/type/status/regulation_id/keyword` 筛选；响应同时保留旧 `id/version_id` 兼容字段并提供字符串 `question_id/current_version_id/regulation_version_id`、revision、审核元数据。旧题首次编辑/审核才捕获 revision 1，`legacy_captured_at` 明示升级快照，未知类别/难度/历史确认人/时间均保持 null，不自动补 easy。
 
@@ -418,6 +420,26 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 模板固定九列 `category/type/difficulty/concept/stem/options/answer/analysis/score`。TXT 仅接受制表符分列，`options/answer` 是 JSON 数组；支持 BOM/CRLF，不支持逗号等多义手工分隔。文件上限 5MB、数据行上限 1000；Excel 公式单元格不执行并落为行级错误，超出 I 列的真实非空值或公式按超列拒绝。完整填写说明见 [`docs/templates/question-import-format.md`](../templates/question-import-format.md)。
 
 预检逐行复用三类客观题、富文本、受控媒体、类别、考点与来源校验。重复指纹覆盖类别、题型、难度、规范化内容与答案；已存在或本批较晚重复行列入 `duplicates`，默认不进入 `valid_rows`。确认事务锁定 owner+batch 并创建 `source=import` 的 approved identity/revision；同一行集合重试返回首次结果，换集合返回 40911。questions 入口访问他人或 students 批次返回 40302 且不暴露批次内容；不确定响应先 GET 原批次对账，不创建新预览。
+
+### 3.5.3 AI 参考题导入 /admin/questions（一次性参考文件）
+
+| 方法 | 路径 | 输入与成功结果 |
+|---|---|---|
+| POST | `/admin/questions/ai-import-tasks` | `ai:write`；multipart 仅 `file + format=xlsx\|txt`，返回任务状态 |
+| GET | `/admin/questions/ai-import-tasks/{id}` | `ai:read`；读取本人任务状态 |
+| GET | `/admin/questions/ai-import-batches/{id}` | `ai:read`；读取本人 `questions_ai` 预览批次或已确认回执 |
+| PATCH | `/admin/questions/ai-import-batches/{id}/rows/{row}` | `ai:write`；修改生成行的可编辑题面并重新校验，返回完整批次 |
+| POST | `/admin/questions/ai-import-batches/{id}/rows/{row}/regenerate` | `ai:write`；按该生成行可信类别、题型、考点、建议分与 easy/hard 难度重新生成，返回完整批次 |
+| GET | `/admin/questions/ai-import-batches/{id}/download?format=xlsx\|txt` | `ai:read`；导出生成题的标准九列文件；二进制流，不包业务信封 |
+| POST | `/admin/questions/ai-import-batches/{id}/commit` | `questions:write`；`{row_numbers:number[]}` 只接受合法生成行，返回 `ImportResult` |
+
+输入仍严格使用九列 `category,type,difficulty,concept,stem,options,answer,analysis,score`，文件上限 5MB、参考数据最多 50 行。每道参考题最多生成一对 easy/hard；参考行的 difficulty 不作为生成结果难度。服务端从已校验参考行固定类别、题型、考点与建议分，再按目标难度覆盖模型返回值；来源、状态、审核人和制度版本不得来自模型或客户端。
+
+任务状态固定为 `{task_id,status,total_count,completed_count,generated_count,failed_count,batch_id?,message?}`。参考文件与参考正文只存在于任务内存；完成、失败、超时后释放，禁止写入磁盘、MySQL、Redis、资料/媒体表、审计详情或日志。Redis 仅保存无参考正文的任务状态，TTL 24 小时；服务重启后仍未完成的任务读取为 failed，要求重新上传。
+
+批次返回 `{batch_id,status,valid_rows,errors,duplicates,rows,created_ids?,committed_rows?}`，`rows` 为生成题数组，每项含 `row_number`、同名九字段及 `errors:[]`，其中 options/answer 为数组。批次只保存生成题，不保存参考行；未确认批次自 createdAt 起 24 小时有效，已确认回执不按此期限失效。有效行默认选中，异常行排除；支持全部/easy/hard 筛选、题面修改、单行重新生成与下载。
+
+确认前 `question/question_version` 零写入。确认在批次锁事务中原子创建选中题目、revision 1 和回执，强制 `source=ai,status=pending,regulation_id=NULL,version_id=NULL`，不记录伪造的审核人/时间；人工审核后才可入卷。相同行集合重复确认返回首次结果，不同集合拒绝。全部失败不创建预览批次；部分失败只保留生成结果并报告失败数量。所有任务和批次操作必须校验 owner，批次还必须固定 `kind=questions_ai`；不得通过普通 `questions` 或 `students` 路径确认并自动审核。请求结果未知时查询原批次对账，不重发新的确认。
 
 ### 3.6 学习模块 /learning（权限：员工，数据范围自动收口为本人）
 

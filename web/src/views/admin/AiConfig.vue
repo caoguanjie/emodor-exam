@@ -1,13 +1,5 @@
 <template>
   <div class="page-card" style="max-width:640px">
-    <div class="page-head">
-      <div class="eyebrow">管理台</div>
-      <h2>AI 服务配置</h2>
-      <p class="desc">
-        兼容智谱 GLM、DeepSeek、通义千问等 OpenAI 兼容端点。api_key 以 AES-256-GCM 加密保存于应用数据目录配置文件（不落业务库），
-        界面仅掩码回显；切换服务商 = 改配置，无需改代码、无需停机。扫描版 PDF 会自动按页面发送给支持视觉输入的模型，保存后可单独测试视觉输入。
-      </p>
-    </div>
     <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" show-icon>
       <template #default>
         <el-button link type="primary" :loading="initializing" @click="loadConfig">重新加载</el-button>

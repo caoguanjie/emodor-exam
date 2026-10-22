@@ -1,83 +1,83 @@
 <template>
   <section class="page-card">
-    <div class="page-head">
-      <div>
-        <h2>考试记录</h2>
-        <p>只读查看服务端确认的考试记录、作答进度与最终状态。</p>
-      </div>
-      <el-button :loading="loading" @click="load">刷新</el-button>
-    </div>
+    <FitsTable>
+      <template #search>
+        <FitsListSearch @submit.prevent="search">
+          <el-form-item label="关键字">
+            <el-input v-model="query.keyword" clearable placeholder="学员姓名、账号或试卷" @keyup.enter="search" />
+          </el-form-item>
+          <el-form-item label="试卷 ID">
+            <el-input v-model="query.paper_id" clearable placeholder="精确 ID" @keyup.enter="search" />
+          </el-form-item>
+          <el-form-item label="来源">
+            <el-select v-model="query.source" clearable style="width: 130px">
+              <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="难度">
+            <el-select v-model="query.difficulty" clearable style="width: 130px">
+              <el-option label="初级" value="easy" /><el-option label="中级" value="medium" />
+              <el-option label="高级" value="hard" /><el-option label="混合" value="mixed" />
+              <el-option label="历史未知" value="unknown" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="考试状态">
+            <el-select v-model="query.status" clearable style="width: 140px">
+              <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="结果状态">
+            <el-select v-model="query.grading_state" clearable style="width: 140px">
+              <el-option v-for="item in gradingOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </el-form-item>
+          <template #actions><el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button></template>
+        </FitsListSearch>
+      </template>
+      <template #actions><el-button :loading="loading" @click="load">刷新</el-button></template>
 
-    <el-form inline class="filters" @submit.prevent="search">
-      <el-form-item label="关键字">
-        <el-input v-model="query.keyword" clearable placeholder="学员姓名、账号或试卷" @keyup.enter="search" />
-      </el-form-item>
-      <el-form-item label="试卷 ID">
-        <el-input v-model="query.paper_id" clearable placeholder="精确 ID" @keyup.enter="search" />
-      </el-form-item>
-      <el-form-item label="来源">
-        <el-select v-model="query.source" clearable style="width: 130px">
-          <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="难度">
-        <el-select v-model="query.difficulty" clearable style="width: 130px">
-          <el-option label="初级" value="easy" /><el-option label="中级" value="medium" />
-          <el-option label="高级" value="hard" /><el-option label="混合" value="mixed" />
-          <el-option label="历史未知" value="unknown" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="考试状态">
-        <el-select v-model="query.status" clearable style="width: 140px">
-          <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="结果状态">
-        <el-select v-model="query.grading_state" clearable style="width: 140px">
-          <el-option v-for="item in gradingOptions" :key="item.value" :label="item.label" :value="item.value" />
-        </el-select>
-      </el-form-item>
-      <el-form-item><el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button></el-form-item>
-    </el-form>
-
-    <el-alert v-if="errorMessage" :title="errorMessage" type="error" show-icon :closable="false">
-      <el-button link @click="load">重试</el-button>
-    </el-alert>
-    <el-table v-loading="loading" :data="items" empty-text="暂无考试记录">
-      <el-table-column prop="record_id" label="记录 ID" width="105" />
-      <el-table-column label="学员" min-width="150">
-        <template #default="{ row }"><b>{{ row.name }}</b><div class="muted">{{ row.username }}</div></template>
-      </el-table-column>
-      <el-table-column prop="paper_title" label="试卷" min-width="180" show-overflow-tooltip />
-      <el-table-column label="来源 / 难度" width="150">
-        <template #default="{ row }">{{ sourceLabel(row.source) }} / {{ difficultyLabel(row.difficulty) }}</template>
-      </el-table-column>
-      <el-table-column label="作答进度" width="110">
-        <template #default="{ row }">{{ row.answered_count }} / {{ row.total_count }}</template>
-      </el-table-column>
-      <el-table-column label="状态" width="125">
-        <template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template>
-      </el-table-column>
-      <el-table-column label="结果" width="115">
-        <template #default="{ row }">{{ gradingLabel(row.grading_state) }}</template>
-      </el-table-column>
-      <el-table-column label="成绩" width="90">
-        <template #default="{ row }">{{ row.score === null ? '—' : `${row.score} 分` }}</template>
-      </el-table-column>
-      <el-table-column label="开始时间" min-width="175">
-        <template #default="{ row }">{{ formatTime(row.started_at) }}</template>
-      </el-table-column>
-      <el-table-column label="操作" fixed="right" width="90">
-        <template #default="{ row }"><el-button link type="primary" @click="openDetail(row.record_id)">详情</el-button></template>
-      </el-table-column>
-    </el-table>
-    <el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" class="pager"
-      :total="total" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" @change="load" />
+      <el-alert v-if="errorMessage" :title="errorMessage" type="error" show-icon :closable="false">
+        <el-button link @click="load">重试</el-button>
+      </el-alert>
+      <el-table v-loading="loading" :data="items" empty-text="暂无考试记录">
+        <el-table-column prop="record_id" label="记录 ID" width="105" />
+        <el-table-column label="学员" min-width="150">
+          <template #default="{ row }"><b>{{ row.name }}</b><div class="muted">{{ row.username }}</div></template>
+        </el-table-column>
+        <el-table-column prop="paper_title" label="试卷" min-width="180" show-overflow-tooltip />
+        <el-table-column label="来源 / 难度" width="150">
+          <template #default="{ row }">{{ sourceLabel(row.source) }} / {{ difficultyLabel(row.difficulty) }}</template>
+        </el-table-column>
+        <el-table-column label="作答进度" width="110">
+          <template #default="{ row }">{{ row.answered_count }} / {{ row.total_count }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="125">
+          <template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template>
+        </el-table-column>
+        <el-table-column label="结果" width="115">
+          <template #default="{ row }">{{ gradingLabel(row.grading_state) }}</template>
+        </el-table-column>
+        <el-table-column label="成绩" width="90">
+          <template #default="{ row }">{{ row.score === null ? '—' : `${row.score} 分` }}</template>
+        </el-table-column>
+        <el-table-column label="开始时间" min-width="175">
+          <template #default="{ row }">{{ formatTime(row.started_at) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" fixed="right" width="90">
+          <template #default="{ row }"><el-button link type="primary" @click="openDetail(row.record_id)">详情</el-button></template>
+        </el-table-column>
+      </el-table>
+      <template #pagination>
+        <el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size"
+          :total="total" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" @change="load" />
+      </template>
+    </FitsTable>
   </section>
 </template>
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { FitsTable, FitsListSearch } from '../../components/FitsTable';
 import { useRouter } from 'vue-router';
 import http from '../../api/http';
 import type { ExamRecordSummary, Page } from '../../api/training-types';
@@ -133,6 +133,5 @@ onBeforeUnmount(requestScope.stop);
 </script>
 
 <style scoped>
-.pager { margin-top: 16px; justify-content: flex-end; }
 .muted { color: var(--el-text-color-secondary); font-size: 12px; margin-top: 3px; }
 </style>

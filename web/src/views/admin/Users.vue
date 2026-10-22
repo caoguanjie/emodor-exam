@@ -1,20 +1,23 @@
 <template>
   <div class="page-card">
-      <div class="page-head">
-        <div class="eyebrow">管理台</div>
-        <h2>学员管理</h2>
-        <p class="desc">维护培训学员的类别与来源；来源只影响后续组卷策略，不改变权限。</p>
-      </div>
-      <div class="toolbar">
-        <el-input v-model="studentQuery.keyword" placeholder="用户名 / 姓名 / 工号" style="width:210px" clearable @keyup.enter="loadStudents" />
-        <el-select v-model="studentQuery.category_id" clearable placeholder="全部类别" style="width:180px" @change="loadStudents">
-          <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
-        </el-select>
-        <el-select v-model="studentQuery.source" clearable placeholder="全部来源" style="width:150px" @change="loadStudents">
-          <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
-        </el-select>
-        <el-button type="primary" @click="loadStudents">查询</el-button>
-        <div style="flex:1" />
+    <FitsTable>
+      <template #search>
+        <FitsListSearch @submit.prevent>
+          <el-form-item label="关键字"><el-input v-model="studentQuery.keyword" placeholder="用户名 / 姓名 / 工号" style="width:210px" clearable @keyup.enter="loadStudents" /></el-form-item>
+          <el-form-item label="培训类别">
+            <el-select v-model="studentQuery.category_id" clearable placeholder="全部类别" style="width:180px" @change="loadStudents">
+              <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="来源">
+            <el-select v-model="studentQuery.source" clearable placeholder="全部来源" style="width:150px" @change="loadStudents">
+              <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
+            </el-select>
+          </el-form-item>
+          <template #actions><el-button type="primary" @click="loadStudents">查询</el-button></template>
+        </FitsListSearch>
+      </template>
+      <template v-if="auth.can('students:write')" #actions>
         <el-select v-if="auth.can('students:write')" v-model="studentImportDefaults.source" clearable placeholder="导入默认来源" style="width:150px">
           <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
         </el-select>
@@ -26,8 +29,9 @@
           <el-button type="success">预览导入</el-button>
         </el-upload>
         <el-button v-if="auth.can('students:write')" type="primary" @click="openStudentCreate">新增学员</el-button>
-      </div>
+      </template>
       <el-table v-loading="studentLoading" :data="students">
+        <template #empty><el-empty v-if="!studentLoading" description="暂无学员" /></template>
         <el-table-column prop="username" label="用户名" width="130" />
         <el-table-column prop="real_name" label="姓名" width="110" />
         <el-table-column prop="employee_no" label="工号" width="110" />
@@ -42,10 +46,12 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!studentLoading && students.length === 0" description="暂无学员" />
-      <el-pagination v-model:current-page="studentQuery.page" style="margin-top:16px; justify-content:flex-end" layout="total, prev, pager, next" :total="studentTotal" :page-size="studentQuery.page_size" @current-change="loadStudents" />
+      <template #pagination>
+        <el-pagination v-model:current-page="studentQuery.page" layout="total, prev, pager, next" :total="studentTotal" :page-size="studentQuery.page_size" @current-change="loadStudents" />
+      </template>
+    </FitsTable>
 
-      <el-dialog v-model="studentDialog" :title="studentForm.id ? '编辑学员' : '新增学员'" width="500px" destroy-on-close :before-close="beforeStudentDialogClose">
+      <el-dialog v-model="studentDialog" :title="studentForm.id ? '编辑学员' : '新增学员'" width="500px" class="re-form-dialog" destroy-on-close :before-close="beforeStudentDialogClose">
         <el-form label-width="88px" :disabled="studentSaveBusy">
           <el-form-item label="用户名"><el-input v-model="studentForm.username" :disabled="!!studentForm.id" maxlength="64" /></el-form-item>
           <el-form-item label="姓名"><el-input v-model="studentForm.real_name" maxlength="64" /></el-form-item>
@@ -81,6 +87,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { FitsTable, FitsListSearch } from '../../components/FitsTable';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { UploadFile } from 'element-plus';
 import http, { download, upload } from '../../api/http';

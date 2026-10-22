@@ -13,7 +13,7 @@ export class ImportBatch {
   ownerId: string;
 
   @Column({ type: 'varchar', length: 32 })
-  kind: 'students' | 'questions';
+  kind: 'students' | 'questions' | 'questions_ai';
 
   @Column({ name: 'input_hash', type: 'char', length: 64 })
   inputHash: string;

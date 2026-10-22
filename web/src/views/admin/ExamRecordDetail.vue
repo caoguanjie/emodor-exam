@@ -1,8 +1,7 @@
 <template>
   <section class="page-card">
-    <div class="page-head">
-      <div><h2>考试记录详情</h2><p>在考仅展示服务端确认进度；交卷后可查看冻结题目、作答与自动评分结果。</p></div>
-      <div><el-button @click="router.back()">返回</el-button><el-button :loading="loading" @click="load">刷新</el-button></div>
+    <div class="toolbar">
+      <el-button @click="router.back()">返回</el-button><el-button :loading="loading" @click="load">刷新</el-button>
     </div>
     <el-alert v-if="errorMessage" :title="errorMessage" type="error" show-icon :closable="false"><el-button link @click="load">重试</el-button></el-alert>
     <el-skeleton v-if="loading && !record" :rows="7" animated />

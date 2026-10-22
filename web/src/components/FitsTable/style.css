@@ -1,0 +1,63 @@
+/* Structure adapted from FitsTable/FitsListSeach. Colors remain RuleExam tokens. */
+.fits-table { min-width: 0; }
+
+.fits-table__search {
+  padding-bottom: 18px;
+  margin-bottom: 18px;
+  border-bottom: 6px solid var(--re-bg);
+}
+
+.fits-list-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 20px;
+}
+
+.fits-list-search .el-form-item {
+  margin: 0;
+  max-width: 100%;
+}
+
+.fits-list-search .el-form-item__content { min-width: 0; }
+.fits-list-search .el-input,
+.fits-list-search .el-select { width: 200px; max-width: 100%; }
+
+.fits-list-search__actions .el-form-item__content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fits-list-search__actions .el-button + .el-button,
+.fits-table__actions > .el-button + .el-button { margin-left: 0; }
+
+.fits-table__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.fits-table__body { min-width: 0; }
+.fits-table__body > .el-table { width: 100%; }
+
+.fits-table__pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.fits-table__pagination > .el-pagination { margin: 0; }
+
+@media (max-width: 768px) {
+  .fits-list-search { gap: 12px; }
+  .fits-list-search > .el-form-item:not(.fits-list-search__actions) { width: 100%; }
+  .fits-list-search > .el-form-item:not(.fits-list-search__actions) .el-form-item__content { flex: 1; }
+  .fits-list-search .el-input,
+  .fits-list-search .el-select { width: 100%; }
+  .fits-table__pagination { justify-content: flex-start; }
+}

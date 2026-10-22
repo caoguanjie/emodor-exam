@@ -42,12 +42,23 @@ async function fixture(schema) {
 }
 
 async function assertMenuContract(connection) {
-  const [rows] = await connection.query('SELECT name, type, route_path, parent_id, status FROM sys_menu ORDER BY sort,id');
+  const [rows] = await connection.query('SELECT id, name, type, route_path, parent_id, status FROM sys_menu ORDER BY sort,id');
   for (const path of retiredRoutes) assert.equal(rows.some((row) => row.route_path === path), false, path);
   const active = rows.filter((row) => row.status === 1);
   assert.deepEqual(active.filter((row) => row.parent_id === null).map((row) => row.name),
-    ['业务首页', '培训管理', '考试管理', '统计分析', '系统设置']);
-  assert.equal(active.filter((row) => row.type === 'menu').length, 16);
+    ['业务首页', '学习管理', '考试管理', '统计分析', '系统设置']);
+  for (const [name, children] of [
+    ['学习管理', ['培训类别', '学员管理', '课程管理']],
+    ['考试管理', ['试题管理', '试卷管理', '试题导入', '考试记录']],
+    ['系统设置', ['AI 服务配置', '管理员', '角色权限', '网站配置', '字典配置', '菜单配置', '在线会话', '审计日志']],
+  ]) {
+    const directory = active.find((row) => row.name === name && row.type === 'directory');
+    assert.ok(directory, name);
+    assert.deepEqual(active.filter((row) => row.parent_id === directory.id).map((row) => row.name), children, name);
+  }
+  assert.equal(active.filter((row) => row.type === 'menu').length, 17);
+  const [[importMenu]] = await connection.query("SELECT permission_code,sort FROM sys_menu WHERE route_path='/admin/questions/import'");
+  assert.deepEqual({ ...importMenu }, { permission_code: 'questions:write', sort: 30 });
   assert.equal(rows.find((row) => row.route_path === '/admin/statistics')?.status, 0);
   const [permissions] = await connection.query("SELECT code FROM sys_permission WHERE code LIKE 'departments:%' OR code LIKE 'regulations:%' OR code IN ('exam_records:monitor','exam_records:review')");
   assert.deepEqual(permissions, []);
@@ -71,18 +82,56 @@ test('fresh initialization exposes five groups and only the objective examinatio
   finally { await connection.end(); }
 });
 
-test('existing installation upgrades and repeated migration does not resurrect retired features', async () => {
+test('learning navigation renames the applied slimming directory without changing other menus or migration history', async () => {
   const { database, connection } = await fixture(previousSchema);
   try {
     const migrations = await listMigrations();
     assert.ok(migrations.some((item) => item.id === '015_demo_slimming'));
-    await applyMigrations({ connection, database, migrations: migrations.filter((item) => item.id < '015_demo_slimming') });
-    await applyMigrations({ connection, database, migrations });
-    await assertMenuContract(connection);
+    await applyMigrations({ connection, database, migrations: migrations.filter((item) => item.id <= '015_demo_slimming') });
+    const [menusBefore] = await connection.query('SELECT id,parent_id,name,type,route_path,permission_code,icon,sort,status FROM sys_menu ORDER BY id');
+    assert.equal(menusBefore.find((row) => row.id === 1)?.name, '培训管理');
+    const [historyBefore] = await connection.query('SELECT migration_id,checksum,status,attempts,progress FROM schema_migration ORDER BY migration_id');
+    const learningMigrations = migrations.filter((item) => item.id <= '016_learning_navigation');
+    await applyMigrations({ connection, database, migrations: learningMigrations });
     await assertObjectiveSchema(connection);
-    await applyMigrations({ connection, database, migrations });
-    await assertMenuContract(connection);
+    const [menusAfter] = await connection.query('SELECT id,parent_id,name,type,route_path,permission_code,icon,sort,status FROM sys_menu ORDER BY id');
+    assert.deepEqual(menusAfter.map((row) => ({ ...row })), menusBefore.map((row) => ({
+      ...row,
+      name: row.id === 1 ? '学习管理' : row.name,
+    })));
+    const [historyAfter] = await connection.query("SELECT migration_id,checksum,status,attempts,progress FROM schema_migration WHERE migration_id <= '015_demo_slimming' ORDER BY migration_id");
+    assert.deepEqual(historyAfter, historyBefore);
+    await applyMigrations({ connection, database, migrations: learningMigrations });
     await assertObjectiveSchema(connection);
+  } finally { await connection.end(); }
+});
+
+test('question navigation reuses route identities under a non-fixed exam directory and preserves custom menus', async () => {
+  const { database, connection } = await fixture(previousSchema);
+  try {
+    await connection.query("INSERT INTO sys_menu (id,parent_id,name,type,sort,status) VALUES (3,NULL,'保留目录','directory',990,0)");
+    const migrations = await listMigrations();
+    await applyMigrations({ connection, database, migrations: migrations.filter((item) => item.id <= '016_learning_navigation') });
+    const [[exam]] = await connection.query("SELECT id FROM sys_menu WHERE name='考试管理' AND type='directory' AND parent_id IS NULL");
+    assert.notEqual(exam.id, 3);
+    await connection.query("INSERT INTO sys_menu (parent_id,name,type,route_path,permission_code,icon,sort,status) VALUES (3,'旧导入入口','menu','/admin/questions/import',NULL,'Upload',990,0)");
+    await connection.query("INSERT INTO sys_menu (parent_id,name,type,route_path,icon,sort,status) VALUES (?,'自定义考试入口','menu','/admin/custom-exam','Star',25,1)", [exam.id]);
+    const [before] = await connection.query('SELECT * FROM sys_menu ORDER BY id');
+    const routeIds = Object.fromEntries(before.filter((row) => ['/admin/questions','/admin/papers','/admin/questions/import','/admin/exam-records'].includes(row.route_path)).map((row) => [row.route_path,row.id]));
+    const [historyBefore] = await connection.query('SELECT migration_id,checksum,status,attempts,progress FROM schema_migration ORDER BY migration_id');
+    const applied = await applyMigrations({ connection, database, migrations });
+    assert.deepEqual(applied.applied, ['017_exam_question_navigation']);
+    const [managed] = await connection.query("SELECT id,parent_id,name,route_path,permission_code,sort,status FROM sys_menu WHERE route_path IN ('/admin/questions','/admin/papers','/admin/questions/import','/admin/exam-records') ORDER BY sort,id");
+    assert.deepEqual(managed.map((row) => [row.name,row.sort,row.parent_id,row.status]), [
+      ['试题管理',10,exam.id,1], ['试卷管理',20,exam.id,1], ['试题导入',30,exam.id,1], ['考试记录',40,exam.id,1],
+    ]);
+    assert.deepEqual(Object.fromEntries(managed.map((row) => [row.route_path,row.id])), routeIds);
+    assert.equal(managed.find((row) => row.route_path === '/admin/questions/import').permission_code, 'questions:write');
+    const [after] = await connection.query('SELECT * FROM sys_menu ORDER BY id');
+    assert.deepEqual(after.filter((row) => !(row.route_path in routeIds)), before.filter((row) => !(row.route_path in routeIds)));
+    const [historyAfter] = await connection.query("SELECT migration_id,checksum,status,attempts,progress FROM schema_migration WHERE migration_id <= '016_learning_navigation' ORDER BY migration_id");
+    assert.deepEqual(historyAfter, historyBefore);
+    assert.deepEqual((await applyMigrations({ connection, database, migrations })).applied, []);
   } finally { await connection.end(); }
 });
 

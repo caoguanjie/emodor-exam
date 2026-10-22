@@ -247,7 +247,9 @@ test('disables the create form while its POST result is in flight', async () => 
   const save = mounted.state.saveStudent();
   await nextTick();
 
-  assert.equal(findNode(mounted.root, 'form')?.props.disabled, true);
+  const dialog = findNode(mounted.root, 'dialog');
+  assert.ok(dialog, 'student editor dialog should be mounted');
+  assert.equal(findNode(dialog, 'form')?.props.disabled, true);
 
   pending.resolve({ id: 'created-student' });
   await save;

@@ -1,13 +1,5 @@
 <template>
   <div class="page-card">
-    <div class="page-head statistics-head">
-      <div>
-        <div class="eyebrow">管理台</div>
-        <h2>统计分析</h2>
-        <p class="desc">按场次、当前类别、冻结来源与难度核算；排名必须明确难度</p>
-      </div>
-    </div>
-
     <el-alert v-if="summary" type="info" :closable="false" show-icon class="scope-note">
       <template #title>
         成绩与排名只比较当前发布版本（{{ summary?.release_id || '遗留无版本' }}）、相同冻结评分规则和所选难度；参与与提交人数属于该试卷历史范围。
@@ -90,7 +82,7 @@
         <div class="panel ranking-panel">
           <div class="panel-title">难度排名 <span>同分并列 1/1/3，用时不打破名次</span></div>
           <el-empty v-if="!filters.difficulty" :image-size="54" description="请先明确选择一个难度" />
-          <template v-else>
+          <FitsTable v-else>
             <el-table :data="ranking.items" empty-text="该难度暂无最终成绩">
               <el-table-column prop="rank" label="名次" width="72" />
               <el-table-column prop="name" label="姓名" min-width="120" />
@@ -100,9 +92,11 @@
               <el-table-column label="用时" width="110"><template #default="{ row }">{{ duration(row.duration_seconds) }}</template></el-table-column>
               <el-table-column prop="record_id" label="答卷 ID" width="120" />
             </el-table>
-            <el-pagination v-if="ranking.total" v-model:current-page="filters.page" v-model:page-size="filters.page_size"
-              :total="ranking.total" layout="total, prev, pager, next" class="pagination" @current-change="onRankingPageChange" />
-          </template>
+            <template v-if="ranking.total" #pagination>
+              <el-pagination v-if="ranking.total" v-model:current-page="filters.page" v-model:page-size="filters.page_size"
+                :total="ranking.total" layout="total, prev, pager, next" @current-change="onRankingPageChange" />
+            </template>
+          </FitsTable>
         </div>
         <p class="as-of">统计时点：{{ formatTime(summary.as_of) }}</p>
       </template>
@@ -113,6 +107,7 @@
 
 <script setup lang="ts">
 import { onActivated, onMounted, reactive, ref } from 'vue';
+import { FitsTable } from '../../components/FitsTable';
 import http, { download } from '../../api/http';
 import type {
   ExamDifficulty, LearnerSource, Page, RankRow, TrainingExamSummary, TrainingStatisticsOptions,
@@ -218,5 +213,5 @@ onActivated(() => {
 </script>
 
 <style scoped>
-.statistics-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.scope-note{margin-bottom:16px}.filters{flex-wrap:wrap}.kpi-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.kpi{display:flex;flex-direction:column;gap:5px;padding:16px;border:1px solid var(--re-border);border-radius:var(--re-radius);background:#fff}.kpi span{font-size:12px;color:var(--re-text-2)}.kpi strong{font-size:26px;color:var(--re-text)}.kpi small,.panel-title span,.panel p,.as-of{font-size:11px;color:var(--re-text-3)}.detail-row{margin-top:14px}.panel{height:100%;padding:18px;border:1px solid var(--re-border);border-radius:var(--re-radius);background:#fff}.panel-title{font-weight:600;margin-bottom:14px}.panel-title span{font-weight:400;margin-left:8px}.course-value{font-size:34px;font-weight:700;color:var(--re-primary)}.reason-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.reason-grid>div{display:flex;justify-content:space-between;padding:14px;border-radius:8px;background:#f7f8fb}.reason-grid b{font-size:20px}.score-panel,.ranking-panel{margin-top:14px;height:auto}.composition{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:-2px 0 14px}.composition-label,.composition-empty{font-size:12px;color:var(--re-text-3);margin-right:2px}.bucket{display:inline-block;margin:3px 8px 3px 0;padding:3px 7px;border-radius:5px;background:#f1f3f8;font-size:11px}.pagination{justify-content:flex-end;margin-top:14px}.as-of{text-align:right;margin:14px 0 0}@media(max-width:1280px){.kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.scope-note{margin-bottom:16px}.filters{flex-wrap:wrap}.kpi-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.kpi{display:flex;flex-direction:column;gap:5px;padding:16px;border:1px solid var(--re-border);border-radius:var(--re-radius);background:#fff}.kpi span{font-size:12px;color:var(--re-text-2)}.kpi strong{font-size:26px;color:var(--re-text)}.kpi small,.panel-title span,.panel p,.as-of{font-size:11px;color:var(--re-text-3)}.detail-row{margin-top:14px}.panel{height:100%;padding:18px;border:1px solid var(--re-border);border-radius:var(--re-radius);background:#fff}.panel-title{font-weight:600;margin-bottom:14px}.panel-title span{font-weight:400;margin-left:8px}.course-value{font-size:34px;font-weight:700;color:var(--re-primary)}.reason-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.reason-grid>div{display:flex;justify-content:space-between;padding:14px;border-radius:8px;background:#f7f8fb}.reason-grid b{font-size:20px}.score-panel,.ranking-panel{margin-top:14px;height:auto}.composition{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:-2px 0 14px}.composition-label,.composition-empty{font-size:12px;color:var(--re-text-3);margin-right:2px}.bucket{display:inline-block;margin:3px 8px 3px 0;padding:3px 7px;border-radius:5px;background:#f1f3f8;font-size:11px}.as-of{text-align:right;margin:14px 0 0}@media(max-width:1280px){.kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 </style>

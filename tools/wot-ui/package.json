@@ -1,0 +1,15 @@
+{
+  "name": "@emodor/ruleexam-wot-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "RuleExam 项目级 Wot UI v2 离线查询工具",
+  "scripts": {
+    "wot": "node ./node_modules/@wot-ui/cli/dist/index.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@wot-ui/cli": "1.1.0"
+  }
+}

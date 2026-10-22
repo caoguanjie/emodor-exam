@@ -116,6 +116,8 @@ import { QuestionConceptService } from './modules/questions/question-concept.ser
 import { QuestionVersionService } from './modules/questions/question-version.service';
 import { QuestionImportController } from './modules/questions/question-import.controller';
 import { QuestionImportService } from './modules/questions/question-import.service';
+import { AiQuestionImportController } from './modules/questions/ai-question-import.controller';
+import { AiQuestionImportService } from './modules/questions/ai-question-import.service';
 import { SiteConfigController, SystemController } from './modules/system/system.controller';
 import { SystemService } from './modules/system/system.service';
 import { AuditQueryService } from './modules/system/audit-query.service';
@@ -147,7 +149,7 @@ const config = loadConfig();
     StatisticsController, TrainingStatisticsController, AdminDashboardController, HealthController,
     MediaController,
     CourseAdminController, LearnerHomeController, MyCoursesController,
-    VideoLearningController, QuestionImportController,
+    VideoLearningController, QuestionImportController, AiQuestionImportController,
     SystemController, SiteConfigController,
   ],
   providers: [
@@ -163,7 +165,7 @@ const config = loadConfig();
     MediaService, MediaProbeService,
     CourseService, LessonVersionService,
     VideoSessionService,
-    QuestionConceptService, QuestionVersionService, QuestionImportService,
+    QuestionConceptService, QuestionVersionService, QuestionImportService, AiQuestionImportService,
     SystemService, AuditQueryService,
     // 守卫链（07 册 2.3.2）：① JWT 认证 → ② 细权限映射 → ③ 兼容角色边界
     { provide: APP_GUARD, useClass: JwtAuthGuard },

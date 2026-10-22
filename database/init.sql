@@ -714,10 +714,10 @@ INSERT INTO `sys_permission` (`code`, `name`) VALUES
 ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
 
 INSERT INTO `sys_menu` (`id`, `parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`) VALUES
-  (1,NULL,'培训管理','directory',NULL,NULL,'Reading',20,1),
+  (1,NULL,'学习管理','directory',NULL,NULL,'Reading',20,1),
   (2,NULL,'系统设置','directory',NULL,NULL,'Setting',50,1),
   (3,NULL,'考试管理','directory',NULL,NULL,'Tickets',30,1),
-  (11,3,'题库管理','menu','/admin/questions',NULL,'EditPen',10,1),
+  (11,3,'试题管理','menu','/admin/questions',NULL,'EditPen',10,1),
   (12,3,'试卷管理','menu','/admin/papers','papers:read','Tickets',20,1),
   (13,1,'统计报表','menu','/admin/statistics','statistics:read','DataAnalysis',90,0),
   (16,1,'学员管理','menu','/admin/students','students:read','UserFilled',20,1),
@@ -734,7 +734,12 @@ INSERT INTO `sys_menu` (`id`, `parent_id`, `name`, `type`, `route_path`, `permis
 ON DUPLICATE KEY UPDATE `id` = `id`;
 
 INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
-SELECT 3, '考试记录', 'menu', '/admin/exam-records', 'exam_records:read', 'DocumentChecked', 30, 1
+SELECT 3, '试题导入', 'menu', '/admin/questions/import', 'questions:write', 'Upload', 30, 1
+FROM `sys_menu` WHERE `id` = 3 AND `type` = 'directory'
+  AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/questions/import');
+
+INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
+SELECT 3, '考试记录', 'menu', '/admin/exam-records', 'exam_records:read', 'DocumentChecked', 40, 1
 FROM `sys_menu` WHERE `id` = 3 AND `type` = 'directory'
   AND NOT EXISTS (SELECT 1 FROM `sys_menu` WHERE `route_path` = '/admin/exam-records');
 

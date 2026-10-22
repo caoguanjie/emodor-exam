@@ -92,7 +92,7 @@ body {
 .page-title { font-size: 18px; font-weight: 600; margin: 0 0 16px; letter-spacing: 0.2px; }
 .toolbar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
 
-/* 页头：眉题 + 标题 + 说明（管理端统一开篇） */
+/* 兼容学习端等内容页；后台菜单页不重复展示导航栏已有的标题和介绍。 */
 .page-head { margin-bottom: 20px; }
 .page-head .eyebrow {
   font-size: 12px; font-weight: 600; color: var(--re-text-3);
@@ -148,6 +148,82 @@ body {
 .el-dialog { border-radius: 14px; box-shadow: var(--re-shadow-pop); }
 .el-dialog__header { margin-right: 0; padding-bottom: 12px; border-bottom: 1px solid var(--re-border); }
 .el-dialog__title { font-weight: 600; }
+
+/* FitsAdmin 表单弹窗外壳：只作用于新增、编辑与提交表单，不影响预览/结果弹窗。 */
+.el-dialog.re-form-dialog {
+  --el-dialog-margin-top: 5vh;
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100vw - 32px);
+  max-height: 85vh;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--re-radius-sm);
+  box-shadow: var(--re-shadow-pop);
+}
+.re-form-dialog .el-dialog__header {
+  flex: 0 0 auto;
+  min-height: 48px;
+  margin: 0;
+  padding: 12px 48px 12px 16px;
+  background: var(--el-fill-color-light);
+  border-bottom: 1px solid var(--re-border);
+  border-radius: var(--re-radius-sm) var(--re-radius-sm) 0 0;
+  box-sizing: border-box;
+}
+.re-form-dialog .el-dialog__title {
+  display: block;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  color: var(--re-text);
+}
+.re-form-dialog .el-dialog__headerbtn {
+  top: 0;
+  right: 0;
+  width: 48px;
+  height: 48px;
+}
+.re-form-dialog .el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 24px 32px 20px;
+  overflow-y: auto;
+  box-sizing: border-box;
+  background: var(--re-surface);
+}
+.re-form-dialog .el-dialog__footer {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  min-height: 60px;
+  padding: 10px 24px;
+  border-top: 1px solid var(--re-border);
+  box-sizing: border-box;
+  background: var(--re-surface);
+}
+.re-form-dialog .el-dialog__footer .el-button {
+  min-width: 76px;
+  height: 32px;
+  margin-left: 0;
+}
+/* 内容弹窗遮罩覆盖 Tab 下方的完整内容区，包括 16px 外层留白。
+   显式包含块不依赖页面入场 transform，prefers-reduced-motion 下也不会退化为全屏遮罩。 */
+.main > .page-enter {
+  position: relative;
+}
+.main > .page-enter > .el-overlay {
+  position: absolute;
+  inset: -16px;
+  width: auto;
+  height: auto;
+}
+@media (max-width: 640px) {
+  .re-form-dialog .el-dialog__body { padding: 20px 16px 16px; }
+  .re-form-dialog .el-dialog__footer { padding-right: 16px; padding-left: 16px; }
+}
 .el-message-box { border-radius: 12px; }
 .el-popover.el-popper, .el-select-dropdown { border-radius: 10px; }
 

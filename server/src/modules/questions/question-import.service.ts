@@ -30,6 +30,28 @@ interface NormalizedQuestionImportRow {
   draft: QuestionDraft;
 }
 
+type QuestionImportKind = 'questions' | 'questions_ai';
+export interface AiImportContentPatch {
+  stem?: string;
+  options?: QuestionOption[];
+  answer?: number[];
+  analysis?: string;
+}
+
+export function questionImportFields(draft: QuestionDraft) {
+  return {
+    category: draft.categoryId,
+    type: draft.type,
+    difficulty: draft.difficulty,
+    concept: draft.conceptId || '',
+    stem: draft.stem,
+    options: draft.options,
+    answer: draft.answer,
+    analysis: draft.analysis || '',
+    score: (draft.scoreCents / 100).toFixed(2),
+  };
+}
+
 interface CandidateRow extends NormalizedQuestionImportRow {
   normalizedDraft: QuestionDraft;
 }
@@ -134,6 +156,10 @@ export class QuestionImportService implements OnModuleInit {
       preview: (ownerId, rows) => this.previewRows(String(ownerId), rows),
       commit: (ownerId, batchId, rowNumbers) => this.commitRows(String(ownerId), String(batchId), rowNumbers),
     });
+    this.importBatches.registerAdapter('questions_ai', {
+      preview: (ownerId, rows) => this.previewRows(String(ownerId), rows, 'questions_ai'),
+      commit: (ownerId, batchId, rowNumbers) => this.commitRows(String(ownerId), String(batchId), rowNumbers, 'questions_ai'),
+    });
   }
 
   buildTemplate(format: QuestionImportFormat): Promise<Buffer> {
@@ -233,6 +259,7 @@ export class QuestionImportService implements OnModuleInit {
     row: ParsedQuestionImportRow,
     categoryCache: Map<string, TrainingCategory | null>,
     conceptCache: Map<string, QuestionConcept | null>,
+    kind: QuestionImportKind = 'questions',
   ): Promise<CandidateRow> {
     if (row.format_errors?.length) throw Errors.param(row.format_errors.join('；'));
     if (!TYPES.has(row.type as QuestionType)) throw Errors.param('题型 type 必须是 single / multiple / judgment');
@@ -253,9 +280,11 @@ export class QuestionImportService implements OnModuleInit {
       analysis: row.analysis || null,
       scoreCents: scoreCents(row.score),
       conceptId: concept ? String(concept.id) : undefined,
-      source: 'import',
+      source: kind === 'questions_ai' ? 'ai' : 'import',
     };
-    const normalizedDraft = await this.versions.validateImportDraft(draft, ownerId);
+    const normalizedDraft = kind === 'questions_ai'
+      ? await this.versions.validateAiImportDraft(draft, ownerId)
+      : await this.versions.validateImportDraft(draft, ownerId);
     return {
       row: row.row,
       fingerprint: fingerprint(normalizedDraft),
@@ -299,7 +328,7 @@ export class QuestionImportService implements OnModuleInit {
     return result;
   }
 
-  private async previewRows(ownerId: string, values: unknown[]): Promise<ImportPreview> {
+  private async previewRows(ownerId: string, values: unknown[], kind: QuestionImportKind = 'questions'): Promise<ImportPreview> {
     const errors: Array<{ row: number; message: string }> = [];
     const duplicates: number[] = [];
     const candidates: CandidateRow[] = [];
@@ -315,7 +344,7 @@ export class QuestionImportService implements OnModuleInit {
       }
       seenRows.add(row.row);
       try {
-        candidates.push(await this.candidate(ownerId, row, categoryCache, conceptCache));
+        candidates.push(await this.candidate(ownerId, row, categoryCache, conceptCache, kind));
       } catch (error: any) {
         errors.push({ row: row.row, message: error?.message || '导入行校验失败' });
       }
@@ -337,7 +366,7 @@ export class QuestionImportService implements OnModuleInit {
 
     const batch = await this.batchRepo.save(this.batchRepo.create({
       ownerId,
-      kind: 'questions',
+      kind,
       inputHash: inputHash(values),
       status: 'previewed',
       normalizedRows: normalizedRows as unknown as Record<string, unknown>[],
@@ -363,7 +392,9 @@ export class QuestionImportService implements OnModuleInit {
     return selected.sort((left, right) => left.row - right.row);
   }
 
-  private async commitRows(ownerId: string, batchId: string, rowNumbers: number[]): Promise<ImportResult> {
+  private async commitRows(
+    ownerId: string, batchId: string, rowNumbers: number[], kind: QuestionImportKind = 'questions',
+  ): Promise<ImportResult> {
     const requested = [...new Set((rowNumbers || []).map(Number))].sort((a, b) => a - b);
     let receipts: Array<{ questionId: string; versionId: string }> = [];
     try {
@@ -372,7 +403,8 @@ export class QuestionImportService implements OnModuleInit {
           where: { id: batchId, ownerId },
           lock: { mode: 'pessimistic_write' },
         });
-        if (!batch || batch.kind !== 'questions') throw Errors.dataForbidden();
+        if (!batch || batch.kind !== kind) throw Errors.dataForbidden();
+        if (kind === 'questions_ai') this.assertAiBatchActive(batch);
         const valid = [...new Set((batch.validRows || []).map(Number))].sort((a, b) => a - b);
         if (!requested.length || requested.some((row) => !Number.isInteger(row) || !valid.includes(row))) {
           throw Errors.param('只能确认预检查通过的行');
@@ -386,7 +418,10 @@ export class QuestionImportService implements OnModuleInit {
         const rows = this.storedRows(batch, requested);
         batch.status = 'committing';
         await manager.save(batch);
-        receipts = await this.versions.createApprovedImportsInManager(
+        const create = kind === 'questions_ai'
+          ? this.versions.createPendingAiImportsInManager.bind(this.versions)
+          : this.versions.createApprovedImportsInManager.bind(this.versions);
+        receipts = await create(
           manager,
           rows.map((row) => row.draft),
           ownerId,
@@ -425,5 +460,112 @@ export class QuestionImportService implements OnModuleInit {
       });
       throw error;
     }
+  }
+
+  /** Validate references without calling any preview/DB/cache/audit writer. */
+  async normalizeAiReferences(ownerId: string, rows: ParsedQuestionImportRow[]): Promise<QuestionDraft[]> {
+    const categoryCache = new Map<string, TrainingCategory | null>();
+    const conceptCache = new Map<string, QuestionConcept | null>();
+    const drafts: QuestionDraft[] = [];
+    for (const row of rows) {
+      try {
+        const candidate = await this.candidate(ownerId, { ...row, difficulty: 'easy' }, categoryCache, conceptCache);
+        drafts.push(candidate.draft);
+      } catch {
+        // Reference text or arbitrary cell contents must not escape in errors.
+        throw Errors.param(`参考题第 ${row.row} 行无效，请检查类别、考点和题目格式`);
+      }
+    }
+    return drafts;
+  }
+
+  async validateAiGenerated(ownerId: string, draft: QuestionDraft): Promise<QuestionDraft> {
+    return this.versions.validateAiImportDraft(draft, ownerId);
+  }
+
+  async previewAiGenerated(ownerId: string, drafts: QuestionDraft[]): Promise<ImportPreview> {
+    const rows = drafts.map((draft, index) => {
+      const fields = questionImportFields(draft);
+      return { row: index + 2, ...fields, options: JSON.stringify(fields.options), answer: JSON.stringify(fields.answer) };
+    });
+    return this.previewRows(ownerId, rows, 'questions_ai');
+  }
+
+  private assertAiBatchActive(batch: ImportBatch): void {
+    if (batch.status !== 'committed' && batch.createdAt
+      && Date.now() - new Date(batch.createdAt).getTime() >= 24 * 3600 * 1000) {
+      throw Errors.notFound('AI 预览批次已过期，请重新生成');
+    }
+  }
+
+  private async aiBatch(ownerId: string, id: string, manager?: EntityManager): Promise<ImportBatch> {
+    const batch = manager
+      ? await manager.findOne(ImportBatch, { where: { id }, lock: { mode: 'pessimistic_write' } })
+      : await this.batchRepo.findOne({ where: { id } });
+    if (!batch) throw Errors.notFound('导入批次不存在');
+    if (String(batch.ownerId) !== ownerId || batch.kind !== 'questions_ai') throw Errors.dataForbidden();
+    this.assertAiBatchActive(batch);
+    return batch;
+  }
+
+  async readAiGenerated(ownerId: string, id: string) {
+    const batch = await this.aiBatch(ownerId, id);
+    return {
+      ...publicPreview(batch),
+      status: batch.status,
+      rows: ((batch.normalizedRows || []) as unknown as NormalizedQuestionImportRow[]).map((row) => ({
+        row_number: row.row, ...questionImportFields(row.draft), errors: [] as string[],
+      })),
+      ...(batch.status === 'committed' ? { created_ids: batch.createdIds || [], committed_rows: batch.committedRows || [] } : {}),
+    };
+  }
+
+  async readAiGeneratedDraft(ownerId: string, id: string, rowNumber: number): Promise<QuestionDraft> {
+    const batch = await this.aiBatch(ownerId, id);
+    if (batch.status !== 'previewed') throw Errors.importBatchConflict('已确认批次不能修改');
+    const row = this.storedRows(batch, [rowNumber])[0];
+    return structuredClone(row.draft);
+  }
+
+  async updateAiGenerated(
+    ownerId: string, id: string, rowNumber: number, patch: AiImportContentPatch, expected?: QuestionDraft,
+  ) {
+    const keys = ['stem', 'options', 'answer', 'analysis'];
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch) || !Object.keys(patch).length
+      || Object.keys(patch).some((key) => !keys.includes(key))) throw Errors.param('只允许修改题干、选项、答案和解析');
+    if (patch.options !== undefined && !Array.isArray(patch.options)
+      || patch.answer !== undefined && !Array.isArray(patch.answer)) {
+      throw Errors.param('options / answer 必须是数组');
+    }
+    if (patch.stem !== undefined && (typeof patch.stem !== 'string' || patch.stem.length > 100_000)
+      || patch.analysis !== undefined && (typeof patch.analysis !== 'string' || patch.analysis.length > 100_000)) {
+      throw Errors.param('stem / analysis 必须是最多 100000 字符的字符串');
+    }
+    await this.dataSource.transaction(async (manager) => {
+      const batch = await this.aiBatch(ownerId, id, manager);
+      if (batch.status !== 'previewed') throw Errors.importBatchConflict('已确认批次不能修改');
+      const rows = batch.normalizedRows as unknown as NormalizedQuestionImportRow[];
+      const row = this.storedRows(batch, [rowNumber])[0];
+      if (expected && fingerprint(expected) !== row.fingerprint) throw Errors.importBatchConflict('题目已被修改，请刷新后重试');
+      const input = {
+        ...row.draft, ...patch,
+        ...(patch.options !== undefined ? { options: questionOptions(patch.options) } : {}),
+        ...(patch.answer !== undefined ? { answer: answerIndexes(patch.answer) } : {}),
+      };
+      const draft = await this.versions.validateAiImportDraft(input, ownerId, manager);
+      const nextFingerprint = fingerprint(draft);
+      if (rows.some((other) => other.row !== row.row && other.fingerprint === nextFingerprint)) {
+        throw Errors.importBatchConflict('批次中已存在相同题目');
+      }
+      row.draft = draft;
+      row.fingerprint = nextFingerprint;
+      await manager.save(batch);
+    });
+    return this.readAiGenerated(ownerId, id);
+  }
+
+  async commitAiGenerated(ownerId: string, id: string, rows: number[]): Promise<ImportResult> {
+    await this.aiBatch(ownerId, id);
+    return this.commitRows(ownerId, id, rows, 'questions_ai');
   }
 }

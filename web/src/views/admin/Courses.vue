@@ -1,58 +1,63 @@
 <template>
   <div class="page-card">
-    <div class="page-head">
-      <div class="eyebrow">管理台</div>
-      <h2>课程管理</h2>
-      <p class="desc">按培训类别组织章节与视频课时；上架前会校验全部必学视频资源。</p>
-    </div>
-
     <el-alert v-if="!canRead && canWrite" type="info" :closable="false" style="margin-bottom:16px"
       title="当前账号可新建课程，但无课程查看权限；创建后需由具备查看权限的管理员继续维护目录。" />
 
-    <div class="toolbar">
-      <el-input v-if="canRead" v-model="query.keyword" clearable placeholder="课程标题" style="width:220px" @keyup.enter="search" />
-      <el-select v-if="canRead && canWrite" v-model="query.category_id" clearable filterable placeholder="培训类别" style="width:190px" @change="search">
-        <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
-      </el-select>
-      <el-select v-if="canRead" v-model="query.status" clearable placeholder="全部状态" style="width:140px" @change="search">
-        <el-option label="草稿" value="draft" />
-        <el-option label="已上架" value="published" />
-        <el-option label="已下架" value="offline" />
-      </el-select>
-      <el-button v-if="canRead" type="primary" @click="search">查询</el-button>
-      <div style="flex:1" />
-      <el-button v-if="canWrite" type="primary" @click="openCreate">新建课程</el-button>
-    </div>
+    <FitsTable>
+      <template v-if="canRead" #search>
+        <FitsListSearch @submit.prevent>
+          <el-form-item label="课程标题"><el-input v-if="canRead" v-model="query.keyword" clearable placeholder="课程标题" style="width:220px" @keyup.enter="search" /></el-form-item>
+          <el-form-item v-if="canRead && canWrite" label="培训类别">
+            <el-select v-if="canRead && canWrite" v-model="query.category_id" clearable filterable placeholder="培训类别" style="width:190px" @change="search">
+              <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="状态">
+            <el-select v-if="canRead" v-model="query.status" clearable placeholder="全部状态" style="width:140px" @change="search">
+              <el-option label="草稿" value="draft" />
+              <el-option label="已上架" value="published" />
+              <el-option label="已下架" value="offline" />
+            </el-select>
+          </el-form-item>
+          <template #actions><el-button v-if="canRead" type="primary" @click="search">查询</el-button></template>
+        </FitsListSearch>
+      </template>
+      <template v-if="canWrite" #actions>
+        <el-button v-if="canWrite" type="primary" @click="openCreate">新建课程</el-button>
+      </template>
 
-    <el-table v-if="canRead" v-loading="loading" :data="items">
-      <el-table-column prop="title" label="课程" min-width="220" />
-      <el-table-column label="培训类别" width="170">
-        <template #default="{ row }">{{ categoryName(row.category_id) }}</template>
-      </el-table-column>
-      <el-table-column label="必学课时" width="100">
-        <template #default="{ row }">{{ row.required_lesson_count }}</template>
-      </el-table-column>
-      <el-table-column label="推荐 / 排序" width="130">
-        <template #default="{ row }">{{ row.is_recommended ? '推荐' : '普通' }} · {{ row.sort_order }}</template>
-      </el-table-column>
-      <el-table-column label="状态" width="100">
-        <template #default="{ row }">
-          <el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="250" fixed="right">
-        <template #default="{ row }">
-          <el-button text type="primary" @click="router.push(`/admin/courses/${row.id}`)">编辑内容</el-button>
-          <el-button v-if="row.status !== 'published' && auth.can('courses:publish')" text type="success" @click="publish(row)">上架</el-button>
-          <el-button v-if="row.status === 'published' && auth.can('courses:publish')" text type="warning" @click="offline(row)">下架</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
-    <el-empty v-if="canRead && !loading && items.length === 0" description="暂无课程" />
-    <el-pagination v-if="canRead" v-model:current-page="query.page" style="margin-top:16px; justify-content:flex-end" layout="total, prev, pager, next"
-      :total="total" :page-size="query.page_size" @current-change="load" />
+      <el-table v-if="canRead" v-loading="loading" :data="items">
+        <template #empty><el-empty v-if="!loading" description="暂无课程" /></template>
+        <el-table-column prop="title" label="课程" min-width="220" />
+        <el-table-column label="培训类别" width="170">
+          <template #default="{ row }">{{ categoryName(row.category_id) }}</template>
+        </el-table-column>
+        <el-table-column label="必学课时" width="100">
+          <template #default="{ row }">{{ row.required_lesson_count }}</template>
+        </el-table-column>
+        <el-table-column label="推荐 / 排序" width="130">
+          <template #default="{ row }">{{ row.is_recommended ? '推荐' : '普通' }} · {{ row.sort_order }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="250" fixed="right">
+          <template #default="{ row }">
+            <el-button text type="primary" @click="router.push(`/admin/courses/${row.id}`)">编辑内容</el-button>
+            <el-button v-if="row.status !== 'published' && auth.can('courses:publish')" text type="success" @click="publish(row)">上架</el-button>
+            <el-button v-if="row.status === 'published' && auth.can('courses:publish')" text type="warning" @click="offline(row)">下架</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template v-if="canRead" #pagination>
+        <el-pagination v-if="canRead" v-model:current-page="query.page" layout="total, prev, pager, next"
+          :total="total" :page-size="query.page_size" @current-change="load" />
+      </template>
+    </FitsTable>
 
-    <el-dialog v-model="createVisible" title="新建课程" width="620px" destroy-on-close :before-close="beforeCreateClose">
+    <el-dialog v-model="createVisible" title="新建课程" width="620px" class="re-form-dialog" destroy-on-close :before-close="beforeCreateClose">
       <el-form label-width="96px">
         <el-form-item label="课程标题"><el-input v-model="form.title" maxlength="255" /></el-form-item>
         <el-form-item label="培训类别">
@@ -75,6 +80,7 @@
 
 <script setup lang="ts">
 import { computed, onActivated, onMounted, reactive, ref, watch } from 'vue';
+import { FitsTable, FitsListSearch } from '../../components/FitsTable';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useRouter } from 'vue-router';
 import http from '../../api/http';

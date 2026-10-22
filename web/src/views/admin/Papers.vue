@@ -1,66 +1,80 @@
 <template>
   <div class="page-card">
-    <div class="page-head">
-      <div class="eyebrow">管理台</div>
-      <h2>试卷管理</h2>
-      <p class="desc">培训卷按发布版本冻结规则与题目内容；历史固定卷保留原学习门槛与冻结结果。</p>
-    </div>
-
     <el-tabs v-model="activeScope" @tab-change="load">
       <el-tab-pane label="培训考试" name="training" />
       <el-tab-pane label="历史固定卷" name="regulation" />
     </el-tabs>
 
     <template v-if="activeScope === 'training'">
-      <div class="toolbar">
-        <el-input v-model="trainingQuery.keyword" placeholder="试卷标题" clearable style="width:220px" @keyup.enter="searchTraining" />
-        <el-select v-model="trainingQuery.category_id" placeholder="培训类别" clearable style="width:180px" @change="searchTraining">
-          <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
-        </el-select>
-        <el-select v-model="trainingQuery.mode" placeholder="组卷模式" clearable style="width:140px" @change="searchTraining">
-          <el-option label="固定组卷" value="fixed" /><el-option label="随机组卷" value="random" />
-        </el-select>
-        <el-select v-model="trainingQuery.status" placeholder="状态" clearable style="width:140px" @change="searchTraining">
-          <el-option v-for="item in trainingStatuses" :key="item.value" :label="item.label" :value="item.value" />
-        </el-select>
-        <div style="flex:1" />
+      <FitsTable>
+        <template #search>
+          <FitsListSearch @submit.prevent>
+            <el-form-item label="试卷标题"><el-input v-model="trainingQuery.keyword" placeholder="试卷标题" clearable style="width:220px" @keyup.enter="searchTraining" /></el-form-item>
+            <el-form-item label="培训类别">
+              <el-select v-model="trainingQuery.category_id" placeholder="培训类别" clearable style="width:180px" @change="searchTraining">
+                <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="组卷模式">
+              <el-select v-model="trainingQuery.mode" placeholder="组卷模式" clearable style="width:140px" @change="searchTraining">
+                <el-option label="固定组卷" value="fixed" /><el-option label="随机组卷" value="random" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="状态">
+              <el-select v-model="trainingQuery.status" placeholder="状态" clearable style="width:140px" @change="searchTraining">
+                <el-option v-for="item in trainingStatuses" :key="item.value" :label="item.label" :value="item.value" />
+              </el-select>
+            </el-form-item>
+          </FitsListSearch>
+        </template>
+        <template v-if="auth.can('papers:write')" #actions>
         <el-button v-if="auth.can('papers:write')" type="primary" @click="openTrainingCreate">创建培训试卷</el-button>
-      </div>
-      <el-table v-loading="loading" :data="trainingItems">
-        <el-table-column prop="title" label="试卷" min-width="220" />
-        <el-table-column label="类别" min-width="150"><template #default="{ row }">{{ categoryName(row.category_id) }}</template></el-table-column>
-        <el-table-column label="模式" width="110"><template #default="{ row }">{{ row.mode === 'fixed' ? '固定组卷' : '随机组卷' }}</template></el-table-column>
-        <el-table-column label="规则" min-width="230"><template #default="{ row }">{{ ruleSummary(row) }}</template></el-table-column>
-        <el-table-column label="学习门槛" width="100"><template #default="{ row }">{{ row.requires_learning ? '开启' : '关闭' }}</template></el-table-column>
-        <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="openDetail(row.id, 'training')">配置</el-button></template></el-table-column>
-      </el-table>
-      <el-pagination class="pager" layout="total, prev, pager, next" :total="trainingTotal" :page-size="trainingQuery.page_size"
-        v-model:current-page="trainingQuery.page" @current-change="loadTraining" />
+        </template>
+        <el-table v-loading="loading" :data="trainingItems">
+          <el-table-column prop="title" label="试卷" min-width="220" />
+          <el-table-column label="类别" min-width="150"><template #default="{ row }">{{ categoryName(row.category_id) }}</template></el-table-column>
+          <el-table-column label="模式" width="110"><template #default="{ row }">{{ row.mode === 'fixed' ? '固定组卷' : '随机组卷' }}</template></el-table-column>
+          <el-table-column label="规则" min-width="230"><template #default="{ row }">{{ ruleSummary(row) }}</template></el-table-column>
+          <el-table-column label="学习门槛" width="100"><template #default="{ row }">{{ row.requires_learning ? '开启' : '关闭' }}</template></el-table-column>
+          <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
+          <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="openDetail(row.id, 'training')">配置</el-button></template></el-table-column>
+        </el-table>
+        <template #pagination>
+          <el-pagination layout="total, prev, pager, next" :total="trainingTotal" :page-size="trainingQuery.page_size"
+            v-model:current-page="trainingQuery.page" @current-change="loadTraining" />
+        </template>
+      </FitsTable>
     </template>
 
     <template v-else>
       <el-alert type="info" :closable="false" title="历史固定卷保留原学习门槛与冻结结果；资料管理和新建入口已取消。" style="margin-bottom:14px" />
-      <div class="toolbar">
-        <el-input v-model="legacyQuery.regulation_id" placeholder="按历史资料 ID 筛选" clearable style="width:220px" @keyup.enter="loadLegacy" />
-        <el-select v-model="legacyQuery.status" placeholder="状态" clearable style="width:140px" @change="loadLegacy">
-          <el-option label="草稿" value="draft" /><el-option label="已发布" value="published" /><el-option label="已归档" value="archived" />
-        </el-select>
-        <div style="flex:1" />
-      </div>
-      <el-table v-loading="loading" :data="legacyItems">
-        <el-table-column prop="title" label="试卷" min-width="220" />
-        <el-table-column label="历史资料 ID" min-width="150"><template #default="{ row }">{{ row.regulation_id }}</template></el-table-column>
-        <el-table-column label="及格线 / 限时 / 次数" min-width="220"><template #default="{ row }">{{ row.pass_score }} 分 · {{ row.duration_minutes }} 分钟 · {{ row.max_attempts }} 次</template></el-table-column>
-        <el-table-column label="发布快照" width="130"><template #default="{ row }"><el-tag :type="row.rules_locked ? 'success' : row.status === 'published' ? 'warning' : 'info'">{{ legacyReleaseLabel(row) }}</el-tag></template></el-table-column>
-        <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="openDetail(row.id, 'regulation')">{{ row.rules_locked ? '查看' : '组卷' }}</el-button></template></el-table-column>
-      </el-table>
-      <el-pagination class="pager" layout="total, prev, pager, next" :total="legacyTotal" :page-size="legacyQuery.page_size"
-        v-model:current-page="legacyQuery.page" @current-change="loadLegacy" />
+      <FitsTable>
+        <template #search>
+          <FitsListSearch @submit.prevent>
+            <el-form-item label="历史资料 ID"><el-input v-model="legacyQuery.regulation_id" placeholder="按历史资料 ID 筛选" clearable style="width:220px" @keyup.enter="loadLegacy" /></el-form-item>
+            <el-form-item label="状态">
+              <el-select v-model="legacyQuery.status" placeholder="状态" clearable style="width:140px" @change="loadLegacy">
+                <el-option label="草稿" value="draft" /><el-option label="已发布" value="published" /><el-option label="已归档" value="archived" />
+              </el-select>
+            </el-form-item>
+          </FitsListSearch>
+        </template>
+        <el-table v-loading="loading" :data="legacyItems">
+          <el-table-column prop="title" label="试卷" min-width="220" />
+          <el-table-column label="历史资料 ID" min-width="150"><template #default="{ row }">{{ row.regulation_id }}</template></el-table-column>
+          <el-table-column label="及格线 / 限时 / 次数" min-width="220"><template #default="{ row }">{{ row.pass_score }} 分 · {{ row.duration_minutes }} 分钟 · {{ row.max_attempts }} 次</template></el-table-column>
+          <el-table-column label="发布快照" width="130"><template #default="{ row }"><el-tag :type="row.rules_locked ? 'success' : row.status === 'published' ? 'warning' : 'info'">{{ legacyReleaseLabel(row) }}</el-tag></template></el-table-column>
+          <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
+          <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="openDetail(row.id, 'regulation')">{{ row.rules_locked ? '查看' : '组卷' }}</el-button></template></el-table-column>
+        </el-table>
+        <template #pagination>
+          <el-pagination layout="total, prev, pager, next" :total="legacyTotal" :page-size="legacyQuery.page_size"
+            v-model:current-page="legacyQuery.page" @current-change="loadLegacy" />
+        </template>
+      </FitsTable>
     </template>
 
-    <el-dialog v-model="trainingCreateVisible" title="创建培训试卷" width="720px" :before-close="beforeTrainingCreateClose">
+    <el-dialog v-model="trainingCreateVisible" title="创建培训试卷" width="720px" class="re-form-dialog" :before-close="beforeTrainingCreateClose">
       <el-form label-width="120px" :disabled="creating">
         <el-form-item label="试卷标题"><el-input v-model="trainingCreate.title" maxlength="128" /></el-form-item>
         <el-form-item label="组卷模式"><el-radio-group v-model="trainingCreate.mode"><el-radio-button value="fixed">固定组卷</el-radio-button><el-radio-button value="random">随机组卷</el-radio-button></el-radio-group></el-form-item>
@@ -85,6 +99,7 @@
 
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
+import { FitsTable, FitsListSearch } from '../../components/FitsTable';
 import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
 import http from '../../api/http';
@@ -202,7 +217,6 @@ onBeforeUnmount(() => { viewDestroyed = true; viewActive = false; invalidateView
 </script>
 
 <style scoped>
-.pager { margin-top:16px; justify-content:flex-end; }
 .hint { color:var(--el-text-color-secondary); font-size:12px; line-height:1.5; margin-top:4px; width:100%; }
 .hint.inline { margin-left:10px; width:auto; }
 .rules { width:100%; }

@@ -3,6 +3,12 @@
 培训机构管理与考试系统：资料上传解析 → AI 出题/人工导题 → 审核入库 → 组卷发布 → 自动评分 → 记录与统计；课程视频学习独立保留。
 **`docs/design/`（8 册）是实现基准**：改数据库/API/流程前先读对应分册，改动后保持文档、`database/init.sql`、`server/src/entities/` 三方一致。
 
+## 学员端架构讨论记录
+
+- 继续学员 H5 / 微信小程序架构讨论时，尤其每次上下文压缩或会话恢复后，先读[持续决策记录](docs/superpowers/specs/2026-10-22-learner-mobile-architecture-decisions.md)，回顾已确认范围、实施状态和当前讨论断点。
+- 按用户要求使用 `astra-workflow`，由专职子代理实时维护该记录；每次用户确认或修订关键决定后，主代理委派更新并校对结果。已有记录员可用时复用，否则新建记录员并传递该文件。
+- 区分已确认决定、待讨论建议和已实施事实；最新用户指令优先，旧决定被替代时保留变更依据。讨论方案的认可不自动授权业务代码、工程初始化或依赖变更。
+
 ## 目录
 
 - `docs/design/` 设计方案 8 册（01 需求 … 07 安全与非功能、README 对照表）
@@ -19,6 +25,7 @@
 cd server && npm run build        # tsc 构建到 dist/
 cd server && npm test             # vitest 单元测试（评分/乱序/心跳/位图）
 cd web && npm run dev             # Vite :5173，/api/v1 代理到 :3000
+npm --prefix web run build       # 仓库根执行：PC 产物输出到根目录 dist/，构建前清空该目录
 node tests/run-e2e.mjs --ephemeral --suite smoke   # 仓库根：自有临时服务、密钥运行期随机、Mock AI
 node tests/run-e2e.mjs --ephemeral --suite all     # 注册套件逐个隔离；all 必须使用 ephemeral
 DB_PASSWORD=... ADMIN_INITIAL_PASSWORD=... node database/seed.mjs   # 种子：根部门 + admin（口令 ≥8 位且含字母+数字）
@@ -29,6 +36,16 @@ AI_EGRESS_ALLOW_HOSTS=127.0.0.1 <其余密钥> node server/dist/main.js   # 本�
 ```
 
 API 启动后监听 :3000，全局前缀 `api/v1`。本机开发用宿主 MySQL 8.0（127.0.0.1:3306）与 Redis（6379），无 Docker；口令一律环境变量注入，不要把任何真实凭据写进代码或文档。
+
+## 学员端 Wot UI 与 AI 工具
+
+- 已选方向：独立学员端使用 uni-app + Vue 3 + TypeScript，优先 H5 与小程序，UI 使用 Wot UI v2；PC 管理端仍用 Element Plus。工具安装不代表学员端业务已实现。
+- 涉及 Wot 组件时，按需加载项目内 `.agents/skills/wot-ui-v2/SKILL.md`；CLI 使用问题加载 `wot-ui-cli`；品牌主题加载 `create-wot-ui-theme`；只有实际涉及 UnoCSS 时才加载 `wot-ui-unocss-preset-guide`。后两项 Skill 的安装不等于已经采用或安装对应运行时方案。
+- 官方文档索引：<https://wot-ui.cn/llms.txt>。仅在需要查指南、兼容性或补充 CLI 信息时读取索引，再读取相关页面；不要把全文复制进 AGENTS，也不要默认加载 `llms-full.txt`。
+- API、事件、插槽、Demo、CSS 变量优先使用项目内离线 CLI。在仓库根执行 `npm --prefix tools/wot-ui run --silent wot -- <命令>`；缺依赖时先 `npm ci --prefix tools/wot-ui --ignore-scripts`，不要回退到全局 `wot`、`npx @wot-ui/cli@latest` 或 `pnpm dlx`。
+- CLI 固定版本见 `tools/wot-ui/package-lock.json`。查询必须指定 Wot UI 数据版本：当前选型查询使用 `--version 2.3.2`；学员端建成后以其锁文件实际安装的 `@wot-ui/ui` 版本为准。不要把 CLI 版本、组件库版本和 `latest`/`v2` 别名混为一谈，也不要混用 `wot-design-uni` v1 文档。
+- 本项目只接入文档索引、CLI 和 Skills，**不配置或启动 Wot MCP**，不执行 `wot agent init`，不改用户级 Agent 配置。上游 Skill/README 中的全局安装和 MCP 示例不适用于本项目；其中维护 open-wot 源码的构建/发布步骤也不作为本仓库任务。
+- 安装来源、命令和更新方式见 [tools/wot-ui/README.md](tools/wot-ui/README.md)。
 
 ## 架构红线（改代码前必读）
 
@@ -44,6 +61,7 @@ API 启动后监听 :3000，全局前缀 `api/v1`。本机开发用宿主 MySQL 
 ## 已知坑
 
 - `web` 的 `npm run build` 只跑 `vite build`，**无类型检查**；需要类型把关时手动执行 `npx vue-tsc --noEmit`。
+- PC 构建输出为根目录 `dist/`。后续合包须在 PC 构建完成后将学员 H5 产物复制到 `dist/mobile/`；不要先合入 H5 再运行 PC 构建，后者会清空整个发布目录。
 - `server` 没有 lint 脚本；改动后以 `npm run build` 作为编译校验。
 - e2e 会重建测试数据库，勿对准开发库跑。
 - `.trae/` 目录已 gitignore，不要把其中文件提交进仓库。

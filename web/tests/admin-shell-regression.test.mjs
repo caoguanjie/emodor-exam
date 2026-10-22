@@ -1,12 +1,21 @@
 import test, { after, afterEach, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { createRenderer, defineComponent, h, nextTick, ref } from '@vue/runtime-core';
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
+import Menu from '../node_modules/element-plus/es/components/menu/src/menu.mjs';
+import { MENU_INJECTION_KEY } from '../node_modules/element-plus/es/components/menu/src/tokens.mjs';
 
 const webRoot = resolve(fileURLToPath(new URL('../', import.meta.url)));
+
+test('content dialog overlays keep a local containing block even with reduced motion', () => {
+  const css = readFileSync(resolve(webRoot, 'src/style.css'), 'utf8');
+  assert.match(css, /\.main\s*>\s*\.page-enter\s*\{[^}]*position:\s*relative/s);
+  assert.match(css, /\.main\s*>\s*\.page-enter\s*>\s*\.el-overlay\s*\{[^}]*position:\s*absolute[^}]*inset:\s*-16px/s);
+});
 const clientIds = {
   layout: '\0a5-main-layout-client-test',
   reading: '\0a5-reading-client-test',
@@ -15,10 +24,12 @@ const clientIds = {
   menus: '\0a5-menus-client-test',
   dictionaries: '\0a5-dictionaries-client-test',
   users: '\0a5-users-client-test',
+  courses: '\0a5-courses-client-test',
   trainingCategories: '\0a5-training-categories-client-test',
   administrators: '\0a5-administrators-client-test',
   roles: '\0a5-roles-client-test',
   aiConfig: '\0a5-ai-config-client-test',
+  businessTabs: '\0a5-business-tabs-client-test',
   unsaved: '\0a5-unsaved-client-test',
 };
 const elementStubId = '\0a5-element-test';
@@ -82,10 +93,10 @@ const elementStubCode = `
 `;
 
 const iconNames = [
-  'AlarmClock', 'ArrowLeft', 'ArrowRight', 'CollectionTag', 'Cpu', 'DataAnalysis',
-  'Document', 'DocumentChecked', 'EditPen', 'Grid', 'Menu', 'Medal', 'Monitor',
-  'MoreFilled', 'Notebook', 'OfficeBuilding', 'Picture', 'Reading', 'Setting',
-  'SetUp', 'Tickets', 'User', 'UserFilled',
+  'AlarmClock', 'ArrowLeft', 'ArrowRight', 'Back', 'Close', 'CollectionTag', 'Cpu', 'DataAnalysis',
+  'Document', 'DocumentChecked', 'EditPen', 'Grid', 'House', 'Menu', 'Medal', 'Monitor',
+  'MoreFilled', 'Notebook', 'OfficeBuilding', 'Picture', 'Reading', 'Refresh', 'Remove', 'Right', 'Setting',
+  'SetUp', 'SwitchButton', 'Tickets', 'User', 'UserFilled',
 ];
 const iconsStubCode = `
   import { h } from 'vue';
@@ -115,6 +126,8 @@ const httpStubCode = `
         return clone(context.students.find((item) => String(item.id) === id));
       }
       if (path === '/admin/training-categories') return { items: clone(context.trainingCategories), total: context.trainingCategories.length };
+      if (path === '/admin/courses/category-options') return { items: [], total: 0 };
+      if (path === '/admin/courses') return { items: [], total: 0 };
       if (path === '/admin/administrators') return clone(context.administrators);
       if (path === '/admin/administrators/assignable-roles') return [
         { id: 'role-1', code: 'role_one', name: '角色一', status: 1, is_system: false },
@@ -199,15 +212,27 @@ const authStubCode = `
 `;
 
 const tabsStubCode = `
+  import { reactive } from 'vue';
+  import { confirmUnsavedRoutes } from '../composables/useUnsavedChanges';
   const context = globalThis.__a5ShellTest;
-  const store = {
+  const store = reactive({
     tabs: [],
     visit() {},
     async close() { return { closed: false, nextPath: null }; },
     async closeOthers() { return true; },
     async closeAll() { return true; },
+    async closePaths(paths) {
+      const targets = new Set(paths);
+      const closing = store.tabs.filter((tab) => targets.has(tab.path) && tab.closable !== false).map((tab) => tab.path);
+      if (!closing.length) return true;
+      if (!await confirmUnsavedRoutes(closing)) return false;
+      const accepted = new Set(closing);
+      store.tabs = store.tabs.filter((tab) => !accepted.has(tab.path) || tab.closable === false);
+      return true;
+    },
     reset() { context.tabResetCalls += 1; store.tabs = []; },
-  };
+  });
+  context.tabsStore = store;
   export function useTabsStore() { return store; }
 `;
 
@@ -233,13 +258,17 @@ function testPlugin() {
       if (/\/node_modules\/(?:\.vite\/deps\/vue\.js|vue\/dist\/vue\.runtime\.esm-bundler\.js)/.test(source)) return { id: 'vue', external: true };
       if (source === 'element-plus' || source.includes('/node_modules/.vite/deps/element-plus') || source.includes('/node_modules/element-plus/')) return elementStubId;
       if (source === '@element-plus/icons-vue' || source.includes('/node_modules/.vite/deps/@element-plus_icons-vue') || source.includes('/node_modules/@element-plus/icons-vue/')) return iconsStubId;
+      if (source === '/@id/__x00__a5-element-test') return elementStubId;
+      if (source === '/@id/__x00__a5-icons-test') return iconsStubId;
+      if (source === '/@id/__x00__plugin-vue:export-helper') return '\0plugin-vue:export-helper';
       if (source === 'axios') return axiosStubId;
       if (source === '../api/http' || source === '../../api/http' || source === '/src/api/http.ts') return httpStubId;
       if (source === '../stores/auth' || source === '../../stores/auth' || source === '/src/stores/auth.ts') return authStubId;
       if (source === '../stores/tabs' || source === '/src/stores/tabs.ts') return tabsStubId;
+      if ((source === '../components/BusinessTabs.vue' || source === '/src/components/BusinessTabs.vue') && clientCode.has(clientIds.businessTabs)) return clientIds.businessTabs;
       if (source === '../components/MediaUpload.vue' || source === '../../components/MediaUpload.vue' || source === '/src/components/MediaUpload.vue') return mediaStubId;
       if (source === '../../components/ImportPreview.vue' || source === '/src/components/ImportPreview.vue') return importPreviewStubId;
-      if (source === '/src/composables/useUnsavedChanges.ts' && clientCode.has(clientIds.unsaved)) return clientIds.unsaved;
+      if ((source === '../composables/useUnsavedChanges' || source === '/src/composables/useUnsavedChanges.ts') && clientCode.has(clientIds.unsaved)) return clientIds.unsaved;
       return undefined;
     },
     load(id) {
@@ -311,8 +340,8 @@ const elementComponents = [
   'el-switch', 'el-table', 'el-table-column', 'el-tag', 'el-tree', 'el-tree-select', 'el-upload',
 ];
 
-function registerUi(app) {
-  for (const name of elementComponents) app.component(name, passthrough(name));
+function registerUi(app, { realMenu = false } = {}) {
+  for (const name of elementComponents) app.component(name, name === 'el-menu' && realMenu ? Menu : passthrough(name));
   app.directive('loading', {});
 }
 
@@ -405,14 +434,15 @@ function demoNavigation() {
   const directory = (id, name, children) => ({ id, name, type: 'directory', route_path: null, permission_code: null, icon: null, status: 1, children });
   return [
     menu('dashboard', '业务首页', '/admin/dashboard'),
-    directory('training', '培训管理', [
+    directory('training', '学习管理', [
       menu('categories', '培训类别', '/admin/training-categories'),
       menu('students', '学员管理', '/admin/students'),
       menu('courses', '课程管理', '/admin/courses'),
     ]),
     directory('exam', '考试管理', [
-      menu('questions', '题库管理', '/admin/questions'),
+      menu('questions', '试题管理', '/admin/questions'),
       menu('papers', '试卷管理', '/admin/papers'),
+      menu('question-import', '试题导入', '/admin/questions/import'),
       menu('records', '考试记录', '/admin/exam-records'),
     ]),
     menu('statistics', '统计分析', '/admin/training-statistics'),
@@ -437,6 +467,7 @@ let SiteSettings;
 let Menus;
 let Dictionaries;
 let Users;
+let Courses;
 let TrainingCategories;
 let Administrators;
 let Roles;
@@ -534,7 +565,7 @@ async function loadClientSfc(path, id) {
 const OtherPage = defineComponent({ name: 'OtherPage', render: () => h('other-page') });
 const LoginPage = defineComponent({ name: 'LoginPage', render: () => h('login-page') });
 
-async function mountShell(initialPath, extraChildren = []) {
+async function mountShell(initialPath, extraChildren = [], options = {}) {
   const routes = [
     {
       path: '/',
@@ -548,8 +579,9 @@ async function mountShell(initialPath, extraChildren = []) {
         { path: 'admin/students', component: Users, meta: { title: '学员管理', admin: true, cache: true } },
         { path: 'admin/training-categories', component: TrainingCategories, meta: { title: '培训类别', admin: true, cache: true } },
         { path: 'admin/dashboard', component: OtherPage, meta: { title: '业务首页', admin: true, cache: true } },
-        { path: 'admin/courses', component: OtherPage, meta: { title: '课程管理', admin: true, cache: true } },
-        { path: 'admin/questions', component: OtherPage, meta: { title: '题库管理', admin: true } },
+        { path: 'admin/courses', component: Courses, meta: { title: '课程管理', admin: true, cache: true } },
+        { path: 'admin/questions', component: OtherPage, meta: { title: '试题管理', admin: true } },
+        { path: 'admin/questions/import', component: OtherPage, meta: { title: '试题导入', admin: true, cache: true } },
         { path: 'admin/papers', component: OtherPage, meta: { title: '试卷管理', admin: true, cache: true } },
         { path: 'admin/exam-records', component: OtherPage, meta: { title: '考试记录', admin: true } },
         { path: 'admin/training-statistics', component: OtherPage, meta: { title: '统计分析', admin: true, cache: true } },
@@ -575,7 +607,7 @@ async function mountShell(initialPath, extraChildren = []) {
   const Root = defineComponent({ render: () => h(RouterView) });
   const app = host.createApp(Root);
   app.use(router);
-  registerUi(app);
+  registerUi(app, options);
   app.mount(rootNode);
   await flushUpdates();
   let active = true;
@@ -608,6 +640,7 @@ before(async () => {
     plugins: [testPlugin()],
   });
   ({ useUnsavedChanges } = await loadClientModule('/src/composables/useUnsavedChanges.ts', clientIds.unsaved));
+  await loadClientSfc('/src/components/BusinessTabs.vue', clientIds.businessTabs);
   MainLayout = await loadClientSfc('/src/layouts/MainLayout.vue', clientIds.layout);
   Reading = await loadClientSfc('/src/views/employee/Reading.vue', clientIds.reading);
   ExamRoom = await loadClientSfc('/src/views/employee/ExamRoom.vue', clientIds.exam);
@@ -615,6 +648,7 @@ before(async () => {
   Menus = await loadClientSfc('/src/views/admin/Menus.vue', clientIds.menus);
   Dictionaries = await loadClientSfc('/src/views/admin/Dictionaries.vue', clientIds.dictionaries);
   Users = await loadClientSfc('/src/views/admin/Users.vue', clientIds.users);
+  Courses = await loadClientSfc('/src/views/admin/Courses.vue', clientIds.courses);
   TrainingCategories = await loadClientSfc('/src/views/admin/TrainingCategories.vue', clientIds.trainingCategories);
   Administrators = await loadClientSfc('/src/views/admin/Administrators.vue', clientIds.administrators);
   Roles = await loadClientSfc('/src/views/admin/Roles.vue', clientIds.roles);
@@ -643,6 +677,7 @@ beforeEach(() => {
   testContext.aiConfigGet = null;
   testContext.logoutCalls = 0;
   testContext.tabResetCalls = 0;
+  if (testContext.tabsStore) testContext.tabsStore.tabs = [];
   testContext.permissions = new Set([
     'system_settings:read', 'system_settings:write', 'students:write',
     'training_categories:write', 'administrators:write', 'roles:write',
@@ -717,14 +752,172 @@ test('administrator navigation renders five planned roots with system settings c
     findHostNodes(menu, (node) => node.type === 'el-menu-item').map((node) => node.props.index).filter((value) => String(value).startsWith('/admin/')).sort(),
     [
       '/admin/administrators', '/admin/ai-config', '/admin/courses', '/admin/dashboard', '/admin/exam-records',
-      '/admin/papers', '/admin/questions', '/admin/roles', '/admin/sessions', '/admin/students',
+      '/admin/papers', '/admin/questions', '/admin/questions/import', '/admin/roles', '/admin/sessions', '/admin/students',
       '/admin/system/audit-logs', '/admin/system/dictionaries', '/admin/system/menus', '/admin/system/site-settings',
       '/admin/training-categories', '/admin/training-statistics',
     ].sort(),
   );
   assert.equal(hostText(menu).includes('我的学习'), false);
+  const examMenu = findHostNode(menu, (node) => node.type === 'el-sub-menu' && node.props.index === 'exam');
+  assert.deepEqual(findHostNodes(examMenu, (node) => node.type === 'el-menu-item').map((node) => hostText(findHostNode(node, (child) => child.type === 'span'))),
+    ['试题管理', '试卷管理', '试题导入', '考试记录']);
   mounted.unmount();
 });
+
+test('asynchronous navigation initializes the real menu with learning and exam expanded but settings closed', async () => {
+  const mounted = await mountShell('/admin/dashboard', [], { realMenu: true });
+  const menu = visitInstances(mounted.app._instance.subTree, (instance) => instance.type.name === 'ElMenu');
+  assert.ok(menu, 'the real menu should mount after navigation loads');
+  const opened = menu.provides[MENU_INJECTION_KEY].openedMenus;
+  assert.deepEqual([...opened], ['training', 'exam']);
+  assert.equal(opened.includes('system'), false);
+  mounted.unmount();
+});
+
+test('the shell toggle collapses the sidebar while keeping the current page title beside it', async () => {
+  const mounted = await mountShell('/admin/courses');
+  const header = findHostNode(mounted.rootNode, (node) => node.type === 'el-header');
+  const aside = findHostNode(mounted.rootNode, (node) => node.type === 'el-aside');
+  const menu = findHostNode(mounted.rootNode, (node) => node.type === 'el-menu');
+  assert.ok(header && aside && menu);
+  const headerStart = findHostNode(header, (node) => String(node.props.class || '').includes('header-start'));
+  assert.ok(headerStart, 'the toggle and page title share one vertically centered header group');
+  assert.ok(findHostNode(headerStart, (node) => node.type === 'button' && node.props['aria-label'] === '收起侧边栏'));
+  assert.ok(findHostNode(headerStart, (node) => String(node.props.class || '').includes('page-title') && hostText(node).includes('课程管理')));
+  assert.equal(aside.props.width, '232px');
+  assert.equal(menu.props.collapse, false);
+  assert.match(hostText(header), /课程管理/);
+
+  const collapse = findHostNode(header, (node) => node.type === 'button' && node.props['aria-label'] === '收起侧边栏');
+  await clickHost(collapse);
+  assert.equal(aside.props.width, '68px');
+  assert.equal(menu.props.collapse, true);
+  assert.match(String(aside.props.class || ''), /is-collapsed/);
+  for (const item of findHostNodes(menu, (node) => node.type === 'el-menu-item')) {
+    assert.ok(findHostNode(item, (node) => node.type === 'span'), 'menu text must be wrapped so Element Plus can hide it when collapsed');
+  }
+  assert.match(hostText(header), /课程管理/);
+  assert.ok(findHostNode(header, (node) => node.type === 'button' && node.props['aria-label'] === '展开侧边栏'));
+  mounted.unmount();
+});
+
+test('public business tabs keep a fixed home and expose all page operations', async () => {
+  const mounted = await mountShell('/admin/training-categories');
+  const shell = findInstance(mounted.app, 'profileVisible');
+  shell.setupState.tabs.tabs = [
+    { path: '/admin/dashboard', title: '业务首页', closable: false },
+    { path: '/admin/students', title: '学员管理', closable: true },
+    { path: '/admin/training-categories', title: '培训类别', closable: true },
+    { path: '/admin/courses', title: '课程管理', closable: true },
+  ];
+  await flushUpdates();
+
+  const tabNav = findHostNode(mounted.rootNode, (node) => node.props['aria-label'] === '页面标签');
+  assert.ok(tabNav, 'tabs are rendered by the public navigation component');
+  const home = findHostNode(tabNav, (node) => node.type === 'button' && node.props['aria-label'] === '首页');
+  assert.ok(home, 'home is a fixed non-closeable entry');
+  assert.equal(findHostNode(home, (node) => node.props['aria-label'] === '关闭首页'), null);
+  assert.ok(findHostNode(tabNav, (node) => node.props['aria-current'] === 'page' && hostText(node).includes('培训类别')));
+  const actionsTrigger = findHostNode(tabNav, (node) => node.props['aria-label'] === '标签页操作');
+  assert.ok(actionsTrigger);
+  const moreIcon = findHostNode(actionsTrigger, (node) => String(node.props.class || '').includes('business-tabs__more-icon'));
+  assert.ok(moreIcon, 'the action trigger uses the reference four-square mark instead of a generic grid icon');
+  assert.equal(
+    findHostNodes(moreIcon, (node) => String(node.props.class || '').includes('business-tabs__more-box')).length,
+    2,
+    'two rows render the four animated squares through their pseudo elements',
+  );
+  assert.deepEqual(
+    findHostNodes(tabNav, (node) => node.type === 'el-dropdown-item').map(hostText),
+    ['刷新', '关闭当前', '关闭其它', '关闭左侧', '关闭右侧', '关闭所有'],
+  );
+
+  await shell.setupState.onTabCommand('left');
+  assert.deepEqual(shell.setupState.tabs.tabs.map((tab) => tab.path), [
+    '/admin/dashboard', '/admin/training-categories', '/admin/courses',
+  ]);
+  await shell.setupState.onTabCommand('right');
+  assert.deepEqual(shell.setupState.tabs.tabs.map((tab) => tab.path), [
+    '/admin/dashboard', '/admin/training-categories',
+  ]);
+  mounted.unmount();
+});
+
+test('closing all confirms dirty routes once, stays atomic on cancel, and leaves before cache invalidation', async () => {
+  const mounted = await mountShell('/settings');
+  const shell = findInstance(mounted.app, 'profileVisible');
+  const settings = findInstance(mounted.app, 'saved');
+  shell.setupState.tabs.tabs = [
+    { path: '/admin/dashboard', title: '业务首页', closable: false },
+    { path: '/settings', title: '网站配置', closable: true },
+    { path: '/other', title: '其它管理页', closable: true },
+  ];
+  settings.setupState.form.logo_asset_id = 'logo-edited';
+  await nextTick();
+  const readsBeforeClose = testContext.settingsReads;
+
+  testContext.confirmDecisions.push(false);
+  await shell.setupState.onTabCommand('all');
+  assert.equal(mounted.router.currentRoute.value.fullPath, '/settings');
+  assert.deepEqual(shell.setupState.tabs.tabs.map((tab) => tab.path), ['/admin/dashboard', '/settings', '/other']);
+  assert.equal(settings.setupState.form.logo_asset_id, 'logo-edited');
+  assert.equal(settings.setupState.dirty, true);
+  assert.equal(testContext.confirmCalls.length, 1, 'bulk cancellation asks once and changes nothing');
+
+  testContext.confirmDecisions.push(true);
+  await shell.setupState.onTabCommand('all');
+  await flushUpdates();
+  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/dashboard');
+  assert.deepEqual(shell.setupState.tabs.tabs.map((tab) => tab.path), ['/admin/dashboard']);
+  assert.equal(settings.setupState.form.logo_asset_id, 'logo-saved');
+  assert.equal(settings.setupState.dirty, false);
+  assert.equal(testContext.confirmCalls.length, 2, 'the accepted bulk close also asks only once');
+  assert.equal(testContext.settingsReads, readsBeforeClose, 'the closing page must not remount before navigation');
+  mounted.unmount();
+});
+
+for (const [path, name, actions] of [
+  ['/admin/training-categories', '培训类别', ['查询', '新增类别']],
+  ['/admin/students', '学员管理', ['查询', '新增学员', '下载导入模板']],
+  ['/admin/administrators', '管理员', ['新建管理员', '刷新']],
+  ['/admin/roles', '角色权限', ['新建业务角色', '刷新']],
+  ['/admin/ai-config', 'AI 服务配置', ['保存配置', '连通性测试']],
+  ['/settings', '网站配置', ['撤销修改', '保存并发布']],
+  ['/dictionaries', '字典配置', ['新增字典项', '查询', '重置']],
+  ['/menus', '菜单配置', ['新增节点', '刷新']],
+]) {
+  test(`administration content omits redundant introductions but keeps actions: ${name}`, async () => {
+    const mounted = await mountShell(path);
+    const main = findHostNode(mounted.rootNode, (node) => node.type === 'el-main');
+    assert.ok(main);
+    assert.deepEqual(findHostNodes(main, (node) => node.type === 'h2').map(hostText), [], 'navigation already identifies the page');
+    assert.equal(findHostNodes(main, (node) => /(?:^|\s)(?:eyebrow|page-head)(?:\s|$)/.test(String(node.props.class || ''))).length, 0, 'no empty introduction wrapper remains');
+    for (const label of actions) {
+      assert.ok(findHostNode(main, (node) => node.type === 'el-button' && hostText(node) === label), `${name}: keep ${label}`);
+    }
+    const header = findHostNode(mounted.rootNode, (node) => node.type === 'el-header');
+    assert.ok(header && hostText(header).trim(), 'keep the shell navigation title');
+    mounted.unmount();
+  });
+}
+
+for (const [path, dialogTitle] of [
+  ['/admin/training-categories', '新增类别'],
+  ['/admin/students', '新增学员'],
+  ['/admin/courses', '新建课程'],
+  ['/admin/administrators', '新建管理员'],
+  ['/admin/roles', '新建业务角色'],
+  ['/dictionaries', '新增字典项'],
+  ['/menus', '新增菜单节点'],
+]) {
+  test(`form dialogs use the shared FitsAdmin shell: ${dialogTitle}`, async () => {
+    const mounted = await mountShell(path);
+    const dialog = findHostNode(mounted.rootNode, (node) => node.type === 'el-dialog' && node.props.title === dialogTitle);
+    assert.ok(dialog, `${dialogTitle}: form dialog exists`);
+    assert.match(String(dialog.props.class || ''), /(?:^|\s)re-form-dialog(?:\s|$)/, `${dialogTitle}: uses the shared form-dialog shell`);
+    mounted.unmount();
+  });
+}
 
 test('learner navigation keeps existing learning and exam entries without administrator roots', async () => {
   testContext.isAdmin = false;
@@ -735,6 +928,81 @@ test('learner navigation keeps existing learning and exam entries without admini
   assert.match(hostText(menu), /我的考试/);
   assert.equal(hostText(menu).includes('业务首页'), false);
   mounted.unmount();
+});
+
+for (const [path, actionLabel, requestPath] of [
+  ['/admin/training-categories', '新增类别', '/admin/training-categories'],
+  ['/admin/students', '新增学员', '/admin/students'],
+  ['/dictionaries', '新增字典项', '/admin/dictionaries'],
+]) {
+  test(`list queries and business actions stay separate without changing query clicks: ${path}`, async () => {
+    const mounted = await mountShell(path);
+    const main = findHostNode(mounted.rootNode, (node) => node.type === 'el-main');
+    const search = findHostNode(main, (node) => node.props['aria-label'] === '查询条件');
+    const actions = findHostNode(main, (node) => node.props['aria-label'] === '列表操作');
+    assert.ok(search, 'query fields have a common labelled region');
+    assert.ok(actions, 'business operations have their own region');
+    assert.ok(findHostNode(search, (node) => node.type === 'el-form-item' && !!node.props.label), 'filters retain visible labels');
+    assert.equal(findHostNode(search, (node) => node.type === 'el-button' && hostText(node) === actionLabel), null);
+    assert.ok(findHostNode(actions, (node) => node.type === 'el-button' && hostText(node) === actionLabel));
+    const before = testContext.calls.filter((call) => call.path === requestPath).length;
+    await clickHost(findHostNode(search, (node) => node.type === 'el-button' && hostText(node) === '查询'));
+    assert.equal(testContext.calls.filter((call) => call.path === requestPath).length, before + 1, 'one query click still makes one request');
+    mounted.unmount();
+  });
+}
+
+test('unfiltered role lists expose operations without a blank search area', async () => {
+  const mounted = await mountShell('/admin/roles');
+  const main = findHostNode(mounted.rootNode, (node) => node.type === 'el-main');
+  assert.equal(findHostNode(main, (node) => node.props['aria-label'] === '查询条件'), null);
+  const actions = findHostNode(main, (node) => node.props['aria-label'] === '列表操作');
+  assert.ok(actions, 'unfiltered list still uses the shared operation region');
+  assert.ok(findHostNode(actions, (node) => node.type === 'el-button' && hostText(node) === '新建业务角色'));
+  mounted.unmount();
+});
+
+test('the common menu list preserves tree expansion without adding pagination', async () => {
+  const mounted = await mountShell('/menus');
+  const main = findHostNode(mounted.rootNode, (node) => node.type === 'el-main');
+  assert.ok(findHostNode(main, (node) => node.props['aria-label'] === '列表操作'));
+  const table = findHostNode(main, (node) => node.type === 'el-table');
+  assert.equal(table.props['row-key'] ?? table.props.rowKey, 'id');
+  assert.deepEqual(table.props['tree-props'] ?? table.props.treeProps, { children: 'children' });
+  assert.notEqual(table.props['default-expand-all'] ?? table.props.defaultExpandAll, false);
+  assert.equal(findHostNode(main, (node) => node.type === 'el-pagination'), null);
+  mounted.unmount();
+});
+
+test('read-only dictionary users keep search but have no empty business operation row', async () => {
+  testContext.permissions = new Set(['system_settings:read']);
+  const mounted = await mountShell('/dictionaries');
+  const main = findHostNode(mounted.rootNode, (node) => node.type === 'el-main');
+  assert.ok(findHostNode(main, (node) => node.props['aria-label'] === '查询条件'));
+  assert.equal(findHostNode(main, (node) => node.props['aria-label'] === '列表操作'), null);
+  assert.equal(findHostNode(main, (node) => node.type === 'el-button' && hostText(node) === '新增字典项'), null);
+  mounted.unmount();
+});
+
+test('empty list illustrations render inside their tables without a duplicate outside state', async () => {
+  testContext.permissions.add('courses:read');
+  testContext.permissions.add('courses:write');
+  testContext.trainingCategories = [];
+  testContext.students = [];
+  for (const [path, description] of [
+    ['/admin/training-categories', '暂无培训类别'],
+    ['/admin/students', '暂无学员'],
+    ['/admin/courses', '暂无课程'],
+  ]) {
+    const mounted = await mountShell(path);
+    const main = findHostNode(mounted.rootNode, (node) => node.type === 'el-main');
+    const table = findHostNode(main, (node) => node.type === 'el-table');
+    assert.ok(table, `${path}: table should render`);
+    const emptyStates = findHostNodes(main, (node) => node.type === 'el-empty' && node.props.description === description);
+    assert.equal(emptyStates.length, 1, `${path}: render one empty illustration`);
+    assert.ok(findHostNode(table, (node) => node === emptyStates[0]), `${path}: empty illustration belongs to the table empty slot`);
+    mounted.unmount();
+  }
 });
 
 test('exam focus changes never call the cancelled switch endpoint', async () => {
@@ -871,6 +1139,16 @@ test('menu read-only users do not request permission options', async () => {
   await waitFor(() => testContext.calls.some((call) => call.path === '/admin/menus'), 'menu tree');
   assert.equal(testContext.calls.some((call) => call.path === '/admin/menus/permission-options'), false);
   assert.equal(testContext.calls.some((call) => call.path === '/admin/permissions'), false);
+  mounted.unmount();
+});
+
+test('menu configuration offers the independent question import route', async () => {
+  const mounted = await mountShell('/menus');
+  const menus = findInstance(mounted.app, 'permissionOptions');
+  menus.setupState.openCreate();
+  await nextTick();
+  const options = findHostNodes(mounted.rootNode, (node) => node.type === 'el-option');
+  assert.equal(options.some((node) => node.props.value === '/admin/questions/import'), true);
   mounted.unmount();
 });
 
