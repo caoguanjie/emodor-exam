@@ -14,6 +14,10 @@ import { QuestionReviewService } from '../src/modules/ai/question-review.service
 import { QuestionGenerationService } from '../src/modules/ai/question-generation.service';
 import { PaperService } from '../src/modules/ai/paper.service';
 import { ExamService } from '../src/modules/exams/exam.service';
+import { DtoValidationPipe, StrictDtoValidationPipe } from '../src/common/dto-validation.pipe';
+import {
+  CreateQuestionDto, GenerateQuestionsDto, QUESTION_CREATE_KEYS,
+} from '../src/modules/questions/question.dto';
 
 function baseDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraftInput {
   return {
@@ -27,7 +31,6 @@ function baseDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraftIn
     ],
     answer: [0],
     analysis: '<p>先通风、检测并履行审批。</p>',
-    rubric: null,
     scoreCents: 500,
     source: 'manual',
     ...overrides,
@@ -49,7 +52,7 @@ describe('training question bank validation', () => {
       .toThrow('题型非法');
   });
 
-  it('enforces all four question shapes', () => {
+  it('accepts the three objective question shapes and rejects image-answer questions', () => {
     expect(validateAndSanitizeQuestionDraft(baseDraft({ type: 'single', answer: [0] })).answer).toEqual([0]);
     expect(validateAndSanitizeQuestionDraft(baseDraft({ type: 'multiple', answer: [1, 0] })).answer).toEqual([0, 1]);
 
@@ -66,22 +69,42 @@ describe('training question bank validation', () => {
       { key: 'B', text: '错误' },
     ]);
 
-    const image = validateAndSanitizeQuestionDraft(baseDraft({
-      type: 'image',
+    expect(() => validateAndSanitizeQuestionDraft(baseDraft({
+      type: 'image' as any,
       options: [],
       answer: [],
-      rubric: '<p>能识别三项隐患，每项 2 分。</p>',
-    }));
-    expect(image.options).toEqual([]);
-    expect(image.answer).toEqual([]);
-    expect(image.rubric).toContain('三项隐患');
+    }))).toThrow('题型非法');
 
     expect(() => validateAndSanitizeQuestionDraft(baseDraft({ type: 'single', answer: [0, 1] })))
       .toThrow('单选题答案必须唯一');
     expect(() => validateAndSanitizeQuestionDraft(baseDraft({ type: 'multiple', answer: [0] })))
       .toThrow('多选题答案至少 2 个');
-    expect(() => validateAndSanitizeQuestionDraft(baseDraft({ type: 'image', options: [], answer: [], rubric: null })))
-      .toThrow();
+  });
+
+  it('accepts AI generation input by exact material and material-version ids', async () => {
+    const pipe = new DtoValidationPipe();
+
+    await expect(pipe.transform({
+      material_id: '21',
+      material_version_id: '34',
+      category_id: '11',
+      difficulty: 'medium',
+    }, { type: 'body', metatype: GenerateQuestionsDto } as any)).resolves.toMatchObject({
+      material_id: '21',
+      material_version_id: '34',
+      category_id: '11',
+      difficulty: 'medium',
+    });
+  });
+
+  it('rejects the removed image-scoring rubric from objective question input', async () => {
+    const pipe = new StrictDtoValidationPipe(QUESTION_CREATE_KEYS);
+
+    await expect(pipe.transform({
+      category_id: '11', difficulty: 'medium', type: 'single', stem: '<p>题干</p>',
+      options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }], answer: [0],
+      analysis: '<p>解析</p>', rubric: '<p>已取消字段</p>', score: 5,
+    }, { type: 'body', metatype: CreateQuestionDto } as any)).rejects.toMatchObject({ status: 400 });
   });
 
   it('sanitizes active content and records controlled media ids', () => {
@@ -122,7 +145,6 @@ function versionServiceFixture() {
     options: [{ key: 'A', text: '原答案' }, { key: 'B', text: '干扰项' }],
     answer: [0],
     analysis: '<p>原解析</p>',
-    rubric: null,
     score: '2.50',
     status: 'approved',
     source: 'ai',
@@ -208,7 +230,7 @@ describe('versioned question bank', () => {
       id: '5', regulationId: null, versionId: null, categoryId: null, difficulty: null, conceptId: null,
       currentVersionId: null, type: 'single', stem: storedStem,
       options: [{ key: 'A', text: '<b onmouseover="steal()">答案</b>' }, { key: 'B', text: '否' }],
-      answer: [0], analysis: '<a href="javascript:steal()">解析</a>', rubric: null, score: '5.00',
+      answer: [0], analysis: '<a href="javascript:steal()">解析</a>', score: '5.00',
       status: 'approved', source: 'manual', createdAt: new Date(), updatedAt: new Date(),
     } as any);
 
@@ -254,7 +276,7 @@ describe('versioned question bank', () => {
     versions.push({
       id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'medium', type: 'single',
       stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
-      rubric: null, scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
+      scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
       source: 'ai', status: 'approved', approvedBy: '1', approvedAt: new Date(), reviewedBy: '1',
       reviewedAt: new Date(), reviewReason: null, createdBy: '1', legacyCapturedAt: null,
     });
@@ -274,7 +296,7 @@ describe('versioned question bank', () => {
     const current = {
       id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'medium', type: 'single',
       stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
-      rubric: null, scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
+      scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
       source: 'ai', status: 'pending', approvedBy: null, approvedAt: null, reviewedBy: null,
       reviewedAt: null, reviewReason: null, createdBy: '1', legacyCapturedAt: null,
     };
@@ -308,7 +330,7 @@ describe('versioned question bank', () => {
     versions.push({
       id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'medium', type: 'single',
       stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
-      rubric: null, scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
+      scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
       source: 'ai', status: 'approved', approvedBy: '1', approvedAt: new Date(), reviewedBy: '1',
       reviewedAt: new Date(), reviewReason: null, createdBy: '1', legacyCapturedAt: null,
     });
@@ -331,7 +353,6 @@ describe('versioned question bank', () => {
         id: '701', stem: '<p><img data-media-id="11"></p>',
         options: [{ key: 'A', text: '<img data-media-id="12">' }],
         analysis: '<p><img data-media-id="13"></p>',
-        rubric: '<p><img data-media-id="14"></p>',
       },
     });
 
@@ -350,22 +371,19 @@ describe('versioned question bank', () => {
           : actorId === 'question-export-only' ? ['questions:export']
         : actorId === 'reader' ? ['papers:read'] : [],
       version: {
-        id: '701', stem: '<p><img data-media-id="91"></p>', options: [], analysis: null, rubric: null,
+        id: '701', stem: '<p><img data-media-id="91"></p>', options: [], analysis: null,
       },
       releaseSnapshots: [{
         versionId: '701', stem: '<p><img data-media-id="21"></p>',
         options: [{ key: 'A', text: '<img data-media-id="22">' }],
         analysis: '<p><img data-media-id="23"></p>',
-        rubric: '<p><img data-media-id="24"></p>',
       }],
     });
 
     await expect(policy.authorizeRead('reader', '701', '21')).resolves.toBe(true);
     await expect(policy.authorizeRead('reader', '701', '23')).resolves.toBe(false);
     await expect(policy.authorizeRead('exporter', '701', '23')).resolves.toBe(true);
-    await expect(policy.authorizeRead('exporter', '701', '24')).resolves.toBe(true);
     await expect(policy.authorizeRead('question-exporter', '701', '23')).resolves.toBe(true);
-    await expect(policy.authorizeRead('question-exporter', '701', '24')).resolves.toBe(true);
     await expect(policy.authorizeRead('question-export-only', '701', '23')).resolves.toBe(false);
     await expect(policy.authorizeRead('exporter', '701', '91')).resolves.toBe(false);
     await expect(policy.authorizeRead('none', '701', '21')).resolves.toBe(false);
@@ -377,12 +395,12 @@ describe('versioned question bank', () => {
         ? ['papers:read', 'questions:export']
         : ['papers:read'],
       version: {
-        id: '801', categoryId: '7', stem: '<p>current</p>', options: [], analysis: null, rubric: null,
+        id: '801', categoryId: '7', stem: '<p>current</p>', options: [], analysis: null,
       },
       randomCandidate: {
         versionId: '801', categoryId: '7', stem: '<p><img data-media-id="31"></p>',
         options: [{ key: 'A', text: '<img data-media-id="32">' }],
-        analysis: '<p><img data-media-id="33"></p>', rubric: '<p><img data-media-id="34"></p>',
+        analysis: '<p><img data-media-id="33"></p>',
       },
     });
 
@@ -390,11 +408,10 @@ describe('versioned question bank', () => {
     await expect(policy.authorizeRead('reader', '801', '32')).resolves.toBe(true);
     await expect(policy.authorizeRead('reader', '801', '33')).resolves.toBe(false);
     await expect(policy.authorizeRead('question-exporter', '801', '33')).resolves.toBe(true);
-    await expect(policy.authorizeRead('question-exporter', '801', '34')).resolves.toBe(true);
     await expect(policy.authorizeRead('question-exporter', '801', '99')).resolves.toBe(false);
 
     expect(randomResolver).toHaveBeenCalledWith('801', '7');
-    expect(query).toHaveBeenCalledTimes(6);
+    expect(query).toHaveBeenCalledTimes(5);
     expect(query.mock.calls.every(([sql]) => String(sql).includes('paper_release_question'))).toBe(true);
   });
 
@@ -412,7 +429,7 @@ describe('versioned question bank', () => {
     const { policy } = questionMediaPolicyFixture({
       permissions: () => ['papers:read'],
       version: {
-        id: '802', categoryId: '7', stem: '<p><img data-media-id="41"></p>', options: [], analysis: null, rubric: null,
+        id: '802', categoryId: '7', stem: '<p><img data-media-id="41"></p>', options: [], analysis: null,
       },
     });
 
@@ -440,7 +457,7 @@ describe('versioned question bank', () => {
       getMany: async () => [{
         id: '501', questionId: '41', revision: 3, categoryId: '11', difficulty: 'hard', type: 'multiple',
         stem: '<p>题干</p>', options: [{ key: 'A', text: 'A' }, { key: 'B', text: 'B' }], answer: [0, 1],
-        analysis: null, rubric: null, scoreCents: 800, conceptId: null, regulationId: '2', regulationVersionId: '3',
+        analysis: null, scoreCents: 800, conceptId: null, regulationId: '2', regulationVersionId: '3',
         source: 'ai', status: 'approved', approvedBy: '27', approvedAt: new Date('2026-10-21T08:00:00.000Z'),
       }],
     };
@@ -597,7 +614,7 @@ describe('versioned question bank', () => {
     const q: any = {
       id: '5', currentVersionId: '101', regulationId: '2', versionId: '3', categoryId: '11', difficulty: 'hard',
       conceptId: '7', type: 'single', stem: '<p>旧题干</p>', options: [{ key: 'A', text: '旧 A' }, { key: 'B', text: '旧 B' }],
-      answer: [0], analysis: '<p>旧解析</p>', rubric: null, score: '5.00', status: 'rejected', source: 'ai',
+      answer: [0], analysis: '<p>旧解析</p>', score: '5.00', status: 'rejected', source: 'ai',
     };
     const cleanup = vi.fn(async () => undefined);
     const renderGroup = vi.fn(async (group: number) => ({
@@ -667,7 +684,7 @@ describe('versioned question bank', () => {
     rows.push({
       id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'hard', type: 'single',
       stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
-      rubric: null, scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
+      scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
       sourcePageGroup: 1, sourcePageStart: 3, sourcePageEnd: 4,
       source: 'ai', status: 'rejected', approvedBy: null, approvedAt: null, reviewedBy: '1',
       reviewedAt: new Date(), reviewReason: '重做', createdBy: '1', legacyCapturedAt: null,
@@ -728,7 +745,7 @@ describe('versioned question bank', () => {
     const q: any = {
       id: '5', currentVersionId: '101', regulationId: '2', versionId: '3', categoryId: '11', difficulty: 'medium',
       conceptId: null, type: 'single', stem: '<p>原题</p>', options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }],
-      answer: [0], analysis: null, rubric: null, score: '5.00', status: 'approved', source: 'manual',
+      answer: [0], analysis: null, score: '5.00', status: 'approved', source: 'manual',
     };
     const service = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
     service.questionRepo = { findOne: vi.fn(async () => q) };
@@ -766,52 +783,6 @@ describe('versioned question bank', () => {
     expect(service.versions.approve).toHaveBeenCalledWith('201', '9');
   });
 
-  it('does not inherit PDF page provenance when an edit changes the regulation source version', async () => {
-    const { service: versions, question, versions: rows } = versionServiceFixture();
-    Object.assign(question, {
-      categoryId: '11', difficulty: 'hard', currentVersionId: '99', status: 'rejected',
-    });
-    rows.push({
-      id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'hard', type: 'single',
-      stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
-      rubric: null, scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
-      sourcePageGroup: 1, sourcePageStart: 3, sourcePageEnd: 4,
-      source: 'ai', status: 'rejected', approvedBy: null, approvedAt: null, reviewedBy: '1',
-      reviewedAt: new Date(), reviewReason: '重做', createdBy: '1', legacyCapturedAt: null,
-    });
-    (versions as any).regulationVersionRepo = {
-      findOne: vi.fn(async ({ where }: any) => (
-        String(where.id) === '4' && String(where.regulationId) === '2'
-          ? { id: '4', regulationId: '2' }
-          : null
-      )),
-    };
-    const review = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
-    review.questionRepo = { findOne: vi.fn(async () => question) };
-    review.versions = versions;
-    review.dataSource = {
-      createQueryBuilder: () => {
-        const builder: any = {
-          select: () => builder, from: () => builder, innerJoin: () => builder, where: () => builder,
-          andWhere: () => builder, limit: () => builder, getRawOne: async () => null,
-        };
-        return builder;
-      },
-    };
-    review.audit = { log: vi.fn() };
-
-    const edited = await review.edit(
-      '5', { regulation_version_id: '4', analysis: '<p>改用新制度版本</p>' },
-      { id: 9, name: 'admin' }, null, '99',
-    );
-
-    expect(edited.current_version_id).toBe('100');
-    expect(rows[1]).toMatchObject({
-      regulationId: '2', regulationVersionId: '4',
-      sourcePageGroup: null, sourcePageStart: null, sourcePageEnd: null,
-    });
-  });
-
   it('rejects a delayed regeneration when the current version changes and creates no wrong version', async () => {
     const { service: versions, question, versions: rows } = versionServiceFixture();
     question.categoryId = '11';
@@ -820,7 +791,7 @@ describe('versioned question bank', () => {
     rows.push({
       id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'medium', type: 'single',
       stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
-      rubric: null, scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
+      scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
       source: 'ai', status: 'rejected', approvedBy: null, approvedAt: null, reviewedBy: '1',
       reviewedAt: new Date(), reviewReason: '重做', createdBy: '1', legacyCapturedAt: null,
     });
@@ -868,7 +839,7 @@ describe('versioned question bank', () => {
     expect(review.audit.log).not.toHaveBeenCalled();
   });
 
-  it('rejects judgment and image questions at legacy fixed-paper editing and publish boundaries', async () => {
+  it('rejects judgment questions at legacy fixed-paper editing and publish boundaries', async () => {
     const unsupported = { id: '7', regulationId: '2', type: 'judgment', status: 'approved', score: '100.00', options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }] } as any;
     const paper = { id: '3', regulationId: '2', status: 'draft', totalScore: '100.00' } as any;
     const paperService = Object.create(PaperService.prototype) as PaperService & Record<string, any>;
@@ -946,7 +917,7 @@ describe('versioned question bank', () => {
     const q: any = {
       id: '5', currentVersionId: '101', regulationId: '2', versionId: '3', categoryId: '11', difficulty: 'medium',
       conceptId: null, type: 'single', stem: '题干', options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }],
-      answer: [0], analysis: null, rubric: null, score: '5.00', status: 'approved', source: 'manual',
+      answer: [0], analysis: null, score: '5.00', status: 'approved', source: 'manual',
     };
     let fromTable = '';
     const builder: any = {

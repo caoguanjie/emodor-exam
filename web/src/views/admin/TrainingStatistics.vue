@@ -3,10 +3,9 @@
     <div class="page-head statistics-head">
       <div>
         <div class="eyebrow">管理台</div>
-        <h2>培训统计</h2>
+        <h2>统计分析</h2>
         <p class="desc">按场次、当前类别、冻结来源与难度核算；排名必须明确难度</p>
       </div>
-      <el-button @click="router.push('/admin/statistics')">旧制度报表</el-button>
     </div>
 
     <el-alert v-if="summary" type="info" :closable="false" show-icon class="scope-note">
@@ -42,7 +41,6 @@
           <div class="kpi"><span>参考率</span><strong class="re-mono">{{ rate(summary.participation_rate) }}</strong><small>零分母显示空值</small></div>
           <div class="kpi"><span>历史已开考</span><strong class="re-mono">{{ summary.historical_started_count }}</strong><small>其中当前范围外 {{ summary.historical_only_started_count }}</small></div>
           <div class="kpi"><span>已交卷</span><strong class="re-mono">{{ summary.submitted_attempts }}</strong><small>{{ summary.submitted_users }} 人</small></div>
-          <div class="kpi"><span>待批改</span><strong class="re-mono">{{ summary.pending_attempts }}</strong><small>{{ summary.pending_users }} 人，不计零分</small></div>
         </div>
 
         <el-row :gutter="14" class="detail-row">
@@ -68,7 +66,7 @@
         </el-row>
 
         <div class="panel score-panel">
-          <div class="panel-title">按难度成绩分析 <span>每人 finalized 最高分</span></div>
+          <div class="panel-title">按难度成绩分析 <span>每人已出分记录的最高分</span></div>
           <div class="composition" aria-label="历史开考难度构成">
             <span class="composition-label">历史开考难度构成</span>
             <el-tag v-for="item in summary.difficulty_composition" :key="item.difficulty" effect="plain">
@@ -115,7 +113,6 @@
 
 <script setup lang="ts">
 import { onActivated, onMounted, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
 import http, { download } from '../../api/http';
 import type {
   ExamDifficulty, LearnerSource, Page, RankRow, TrainingExamSummary, TrainingStatisticsOptions,
@@ -124,7 +121,6 @@ import type {
 import { useAuthStore } from '../../stores/auth';
 
 const auth = useAuthStore();
-const router = useRouter();
 const loading = ref(false);
 const options = reactive<TrainingStatisticsOptions>({ papers: [], categories: [] });
 const summary = ref<TrainingExamSummary | null>(null);
@@ -154,7 +150,7 @@ function rate(value: number | null) { return value === null ? '—' : `${(value 
 function difficultyLabel(value: ExamDifficulty) { return difficultyOptions.find((item) => item.value === value)?.label || value; }
 function sourceLabel(value: LearnerSource | null) { return value === 'institution' ? '本机构' : value === 'external' ? '外来' : '未知'; }
 function reasonLabel(value: TrainingUncompletedReason) {
-  return ({ learning_incomplete: '未完成学习', not_started: '未参加考试', pending_manual: '考试待批改', not_passed: '考试未通过' })[value];
+  return ({ learning_incomplete: '未完成学习', not_started: '未参加考试', not_passed: '考试未通过' })[value];
 }
 function duration(seconds: number) { return `${Math.floor(seconds / 60)}分${seconds % 60}秒`; }
 function formatTime(value: string) { return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium', timeZone: 'Asia/Shanghai' }).format(new Date(value)); }
@@ -222,5 +218,5 @@ onActivated(() => {
 </script>
 
 <style scoped>
-.statistics-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.scope-note{margin-bottom:16px}.filters{flex-wrap:wrap}.kpi-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.kpi{display:flex;flex-direction:column;gap:5px;padding:16px;border:1px solid var(--re-border);border-radius:var(--re-radius);background:#fff}.kpi span{font-size:12px;color:var(--re-text-2)}.kpi strong{font-size:26px;color:var(--re-text)}.kpi small,.panel-title span,.panel p,.as-of{font-size:11px;color:var(--re-text-3)}.detail-row{margin-top:14px}.panel{height:100%;padding:18px;border:1px solid var(--re-border);border-radius:var(--re-radius);background:#fff}.panel-title{font-weight:600;margin-bottom:14px}.panel-title span{font-weight:400;margin-left:8px}.course-value{font-size:34px;font-weight:700;color:var(--re-primary)}.reason-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.reason-grid>div{display:flex;justify-content:space-between;padding:14px;border-radius:8px;background:#f7f8fb}.reason-grid b{font-size:20px}.score-panel,.ranking-panel{margin-top:14px;height:auto}.composition{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:-2px 0 14px}.composition-label,.composition-empty{font-size:12px;color:var(--re-text-3);margin-right:2px}.bucket{display:inline-block;margin:3px 8px 3px 0;padding:3px 7px;border-radius:5px;background:#f1f3f8;font-size:11px}.pagination{justify-content:flex-end;margin-top:14px}.as-of{text-align:right;margin:14px 0 0}@media(max-width:1280px){.kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.statistics-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.scope-note{margin-bottom:16px}.filters{flex-wrap:wrap}.kpi-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.kpi{display:flex;flex-direction:column;gap:5px;padding:16px;border:1px solid var(--re-border);border-radius:var(--re-radius);background:#fff}.kpi span{font-size:12px;color:var(--re-text-2)}.kpi strong{font-size:26px;color:var(--re-text)}.kpi small,.panel-title span,.panel p,.as-of{font-size:11px;color:var(--re-text-3)}.detail-row{margin-top:14px}.panel{height:100%;padding:18px;border:1px solid var(--re-border);border-radius:var(--re-radius);background:#fff}.panel-title{font-weight:600;margin-bottom:14px}.panel-title span{font-weight:400;margin-left:8px}.course-value{font-size:34px;font-weight:700;color:var(--re-primary)}.reason-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.reason-grid>div{display:flex;justify-content:space-between;padding:14px;border-radius:8px;background:#f7f8fb}.reason-grid b{font-size:20px}.score-panel,.ranking-panel{margin-top:14px;height:auto}.composition{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:-2px 0 14px}.composition-label,.composition-empty{font-size:12px;color:var(--re-text-3);margin-right:2px}.bucket{display:inline-block;margin:3px 8px 3px 0;padding:3px 7px;border-radius:5px;background:#f1f3f8;font-size:11px}.pagination{justify-content:flex-end;margin-top:14px}.as-of{text-align:right;margin:14px 0 0}@media(max-width:1280px){.kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 </style>

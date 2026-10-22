@@ -52,7 +52,7 @@ export function paperPreviewView(preview: Awaited<ReturnType<PaperReleaseService
       stem: item.stem,
       options: item.options,
       score: item.scoreCents / 100,
-      ...(includeAnswers ? { answer: item.answer, analysis: item.analysis, rubric: item.rubric } : {}),
+      ...(includeAnswers ? { answer: item.answer, analysis: item.analysis } : {}),
     })),
   };
 }

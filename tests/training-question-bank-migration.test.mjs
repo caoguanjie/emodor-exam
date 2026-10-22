@@ -119,11 +119,11 @@ test('B3 CLI check is read-only and apply preserves legacy questions while conve
   assert.ok(JSON.parse(apply.stdout).applied.includes('007_question_bank'));
 
   const [[legacy]] = await upgrade.query(
-    "SELECT stem, category_id, difficulty, concept_id, current_version_id, rubric FROM question WHERE stem = 'legacy stem'",
+    "SELECT stem, category_id, difficulty, concept_id, current_version_id FROM question WHERE stem = 'legacy stem'",
   );
   assert.deepEqual(
-    [legacy.stem, legacy.category_id, legacy.difficulty, legacy.concept_id, legacy.current_version_id, legacy.rubric],
-    ['legacy stem', null, null, null, null, null],
+    [legacy.stem, legacy.category_id, legacy.difficulty, legacy.concept_id, legacy.current_version_id],
+    ['legacy stem', null, null, null, null],
   );
   const [[captured]] = await upgrade.query('SELECT COUNT(*) AS count FROM question_version');
   assert.equal(Number(captured.count), 0, 'migration must not fabricate legacy version history');

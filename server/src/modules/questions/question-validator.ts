@@ -12,7 +12,6 @@ export interface QuestionDraftInput {
   options: QuestionOption[];
   answer: number[];
   analysis: string | null;
-  rubric: string | null;
   scoreCents: number;
   conceptId?: string;
   regulationId?: string;
@@ -27,7 +26,7 @@ export interface ValidatedQuestionDraft extends QuestionDraftInput {
   mediaAssetIds: string[];
 }
 
-const TYPES: readonly QuestionType[] = ['single', 'multiple', 'judgment', 'image'];
+const TYPES: readonly QuestionType[] = ['single', 'multiple', 'judgment'];
 const DIFFICULTIES: readonly Difficulty[] = ['easy', 'medium', 'hard'];
 const SOURCES: readonly QuestionSource[] = ['ai', 'manual', 'import'];
 
@@ -103,10 +102,6 @@ function cleanRichText(value: unknown, field: string, required: boolean): string
 
 function normalizeOptions(options: unknown, type: QuestionType): QuestionOption[] {
   if (!Array.isArray(options)) throw Errors.param('选项非法');
-  if (type === 'image') {
-    if (options.length !== 0) throw Errors.param('图片题不能设置选项');
-    return [];
-  }
   if (type === 'judgment') {
     if (options.length !== 2) throw Errors.param('判断题必须使用正确/错误两个固定选项');
     const labels = options.map((option) => sanitizeHtml(String(option?.text || ''), { allowedTags: [], allowedAttributes: {} }).trim());
@@ -122,10 +117,6 @@ function normalizeOptions(options: unknown, type: QuestionType): QuestionOption[
 
 function normalizeAnswer(answer: unknown, type: QuestionType, optionCount: number): number[] {
   if (!Array.isArray(answer)) throw Errors.param('答案不能为空');
-  if (type === 'image') {
-    if (answer.length !== 0) throw Errors.param('图片题不能设置客观答案');
-    return [];
-  }
   const normalized = [...new Set(answer.map(Number))].sort((a, b) => a - b);
   if (normalized.some((item) => !Number.isInteger(item) || item < 0 || item >= optionCount)) {
     throw Errors.param('答案下标越界');
@@ -148,7 +139,7 @@ export function controlledQuestionMediaIds(values: Array<string | null | undefin
 
 export function validateAndSanitizeQuestionDraft(input: QuestionDraftInput): ValidatedQuestionDraft {
   const type = input?.type;
-  if (!TYPES.includes(type)) throw Errors.param('题型非法（single / multiple / judgment / image）');
+  if (!TYPES.includes(type)) throw Errors.param('题型非法（single / multiple / judgment）');
   if (!DIFFICULTIES.includes(input.difficulty)) throw Errors.param('难度非法（easy / medium / hard）');
   if (!SOURCES.includes(input.source)) throw Errors.param('题目来源非法（ai / manual / import）');
 
@@ -177,10 +168,6 @@ export function validateAndSanitizeQuestionDraft(input: QuestionDraftInput): Val
   const options = normalizeOptions(input.options, type);
   const answer = normalizeAnswer(input.answer, type, options.length);
   const analysis = cleanRichText(input.analysis, '解析', false);
-  const rubric = type === 'image'
-    ? cleanRichText(input.rubric, '图片题评分参考', true)
-    : null;
-
   return {
     categoryId,
     difficulty: input.difficulty,
@@ -189,7 +176,6 @@ export function validateAndSanitizeQuestionDraft(input: QuestionDraftInput): Val
     options,
     answer,
     analysis,
-    rubric,
     scoreCents: input.scoreCents,
     conceptId,
     regulationId,
@@ -198,6 +184,6 @@ export function validateAndSanitizeQuestionDraft(input: QuestionDraftInput): Val
     sourcePageGroup: input.sourcePageGroup,
     sourcePageStart: input.sourcePageStart,
     sourcePageEnd: input.sourcePageEnd,
-    mediaAssetIds: controlledQuestionMediaIds([stem, analysis, rubric, ...options.map((option) => option.text)]),
+    mediaAssetIds: controlledQuestionMediaIds([stem, analysis, ...options.map((option) => option.text)]),
   };
 }

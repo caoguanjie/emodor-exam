@@ -167,7 +167,6 @@ export class TrainingStatisticsService {
     const counts: Record<TrainingUncompletedReason, number> = {
       learning_incomplete: learningIncomplete.size,
       not_started: 0,
-      pending_manual: 0,
       not_passed: 0,
     };
     for (const user of eligibleUsers) {
@@ -181,10 +180,9 @@ export class TrainingStatisticsService {
         : history.filter((record) => String(record.releaseId || '') === releaseId);
       const exactRule = scoring.filter((record) => ruleKey(record.ruleSnapshot) === ruleKey(scoringRule));
       if (exactRule.some((record) => record.gradingState === 'finalized' && record.status === 'passed')) continue;
-      if (exactRule.some((record) => record.gradingState === 'pending_manual')) counts.pending_manual += 1;
-      else if (exactRule.some((record) => record.gradingState === 'finalized' && record.score !== null)) counts.not_passed += 1;
+      if (exactRule.length) counts.not_passed += 1;
     }
-    return (['learning_incomplete', 'not_started', 'pending_manual', 'not_passed'] as TrainingUncompletedReason[])
+    return (['learning_incomplete', 'not_started', 'not_passed'] as TrainingUncompletedReason[])
       .map((reason) => ({ reason, users: counts[reason] }));
   }
 
@@ -280,10 +278,6 @@ export class TrainingStatisticsService {
     }
     if (permissions.has('questions:read')) metrics.question_count = await this.questionRepo.count();
     if (permissions.has('papers:read')) metrics.paper_count = await this.paperRepo.count();
-    if (permissions.has('exam_records:review')) {
-      metrics.pending_grading_count = await this.recordRepo.count({ where: { gradingState: 'pending_manual' } });
-    }
-
     const response: AdminDashboard = { as_of: now.toISOString(), timezone: 'Asia/Shanghai', metrics };
     if (permissions.has('statistics:read')) {
       const dates = Array.from({ length: 7 }, (_, index) => shanghaiDate(new Date(now.getTime() - (6 - index) * 86_400_000)));

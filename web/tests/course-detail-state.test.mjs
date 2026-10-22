@@ -39,7 +39,7 @@ const testContext = {
   calls: [],
   messages: [],
   failRequests: new Set(),
-  permissions: new Set(['courses:read', 'courses:write', 'courses:publish', 'media:write', 'regulations:read']),
+  permissions: new Set(['courses:read', 'courses:write', 'courses:publish', 'media:write']),
   routerPushes: [],
   unsavedSources: [],
   deferredRequests: new Map(),
@@ -349,7 +349,7 @@ async function mountCourseDetail() {
   for (const [name, component] of Object.entries(components)) app.component(name, component);
   app.mount(root);
   const state = app._instance.setupState;
-  await waitFor(() => state.course && state.regulations.length === 2, 1800, 'course detail load');
+  await waitFor(() => state.course && state.categories.length === 1, 1800, 'course detail load');
   await nextTick();
   return { app, root, state, unmount: () => app.unmount() };
 }
@@ -465,29 +465,21 @@ beforeEach(() => {
   testContext.calls = [];
   testContext.messages = [];
   testContext.failRequests = new Set();
-  testContext.permissions = new Set(['courses:read', 'courses:write', 'courses:publish', 'media:write', 'regulations:read']);
+  testContext.permissions = new Set(['courses:read', 'courses:write', 'courses:publish', 'media:write']);
   testContext.routerPushes = [];
   testContext.unsavedSources = [];
   testContext.deferredRequests = new Map();
   testContext.deferredResponses = new Map();
 });
 
-test('normalizes legacy numeric regulation options and saves add, echo, and removal as string IDs', async () => {
+test('does not expose removed regulation management data or overwrite legacy course associations', async () => {
   const mounted = await mountCourseDetail();
-  assert.deepEqual(mounted.state.regulations.map((item) => item.id), ['11', '12']);
-  assert.deepEqual(mounted.state.form.regulation_ids, ['11']);
-
-  const relationSelect = findNodes(mounted.root, (node) => node.type === 'select' && Object.hasOwn(node.props, 'multiple'))[0];
-  updateBinding(relationSelect, ['11', '12']);
+  assert.equal(testContext.calls.some((call) => call.method === 'GET' && call.path === '/regulations'), false);
+  assert.equal(findNodes(mounted.root, (node) => node.props.label === '制度关联').length, 0);
+  mounted.state.form.description = '更新简介';
   await mounted.state.saveCourse();
-  assert.deepEqual(coursePutCalls().at(-1).body.regulation_ids, ['11', '12']);
-  assert.deepEqual(mounted.state.form.regulation_ids, ['11', '12']);
-
-  const refreshedSelect = findNodes(mounted.root, (node) => node.type === 'select' && Object.hasOwn(node.props, 'multiple'))[0];
-  updateBinding(refreshedSelect, ['12']);
-  await mounted.state.saveCourse();
-  assert.deepEqual(coursePutCalls().at(-1).body.regulation_ids, ['12']);
-  assert.deepEqual(mounted.state.form.regulation_ids, ['12']);
+  assert.equal(Object.hasOwn(coursePutCalls().at(-1).body, 'regulation_ids'), false);
+  assert.deepEqual(testContext.course.regulation_ids, ['11']);
   mounted.unmount();
 });
 

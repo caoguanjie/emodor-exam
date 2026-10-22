@@ -19,7 +19,7 @@
         </li>
         <li>
           <span class="pt-icon"><el-icon><Lock /></el-icon></span>
-          <div><strong>风控考试</strong><em>权威计时 · 切屏监测 · 成绩不可改</em></div>
+          <div><strong>在线考试</strong><em>服务端计时 · 自动评分 · 成绩不可改</em></div>
         </li>
       </ul>
       <p class="brand-foot">海珠区安全教育培训中心</p>

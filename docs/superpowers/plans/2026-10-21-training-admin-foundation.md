@@ -1,6 +1,6 @@
 # 培训机构基础与后台治理 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **状态（2026-10-22）**：保留原任务与当时验收事实；现行实施以已批准瘦身计划为准，不采用 SDD。图片答案专用媒体、制度/员工/部门管理入口不再是任务缺口。
 
 **Goal:** 交付安全测试基础、学员类别与来源管理、细粒度权限、受控媒体和后台公共功能。
 
@@ -43,7 +43,7 @@
   assert.throws(() => validateTestTarget({ database: 'ruleexam_test_training', sql: sql + '\nUSE `other_db`;' }));
   ```
 - [x] **Step 2: 红灯。** `node --test tests/test-target.test.mjs`，预期缺少保护模块/断言失败；此步不得启动旧的删库脚本。
-- [x] **Step 3: 先修文档并定义共同类型。** 去除固定 12 表限制；明确受控图片阅卷不等于改最终总分、新培训考试不强制阅读、双端仍延期。将总计划字段/状态/API 命名纳入 03—06 册，旧业务盘点文档保持证据性质；不扩展设计默认业务范围。
+- [x] **Step 3: 先修文档并定义共同类型。** 去除固定 12 表限制；明确新培训考试不强制阅读、三类客观题由服务端自动评分、双端仍延期。将总计划字段/状态/API 命名纳入 03—06 册，旧业务盘点文档保持证据性质；不扩展设计默认业务范围。
 - [x] **Step 4: 实现保护器、升级器与测试上下文。** 只改 SQL 中已识别的 CREATE DATABASE/USE，发现额外库切换即拒绝；种子和 API 共用验证后的目标。测试存储/日志/AI 配置用 `mkdtemp` 独立目录，Redis 前缀隔离（含 Lua/扫描）；禁止 FLUSHDB。支持 API 重启且保留同一测试数据、密钥与上传目录。suite 名称白名单映射独立文件，不能拼任意命令。schema 升级元数据检查与可续跑规则按总计划 §2.2。
 - [x] **Step 5: 绿灯。** `node --test tests/test-target.test.mjs`；隔离确认后 `DB_DATABASE=ruleexam_test_training node --test tests/migration-contract.test.mjs` 和 `DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite smoke`。预期全部通过，开发库及其存储未被访问/修改；另运行 `cd server && npm run build && npm test`。应用 API 基线已有失败则记录并解决本任务造成的失败，不吞掉失败继续。
 - [x] **Step 6: 本地提交。** 审核 A1 明确文件/改动块后 `git commit -m "test: isolate training integration database and define contracts"`。
@@ -66,8 +66,8 @@
   assert.equal(deleteReferencedCategory.status, 409);
   ```
 - [x] **Step 2: 红灯。** `cd server && npm test -- test/training-identity.spec.ts`；预期 trainingProfile/批次契约不存在或来源校验失败。
-- [x] **Step 3: 实现身份 CRUD 和批次事务。** `/admin/training-categories` 与 `/admin/students` 查询/新增/更新/停用/重置密码；原 `/users` 保留。新增学员 category/source 必填；模板列与预检查一致；表单支持来源、类别筛选及整批默认值。批次以 owner+id 校验，确认时固定所选合法行，重试同批返回原结果，换行集合冲突返回 409；题库导入 B4 复用此事实。保留密码校验/停用吊销，不回显口令；类别被引用不能硬删除。
-- [x] **Step 4: 接通 PC 和本人资料契约。** Users 页面支持学员 CRUD、模板下载、预览确认/失败行重导；增加 `/me/profile` GET/PATCH，只允许姓名、联系方式、A4 之后的头像 ID；提交 source/category/role 返回 400，不静默接受。头像待 A4 接入，不阻断本任务非媒体 CRUD。分页空态、失败恢复与表单校验均落地。
+- [x] **Step 3: 实现身份 CRUD 和批次事务。** `/admin/training-categories` 与 `/admin/students` 查询/新增/更新/停用/重置密码；旧 `/users` 管理接口已在瘦身后删除。新增和导入学员的 category/source 必填且 `department_id=NULL`；更新既有学员不接受部门字段，但保留其历史 department_id。模板列与预检查一致；表单支持来源、类别筛选及整批默认值。批次以 owner+id 校验，确认时固定所选合法行，重试同批返回原结果，换行集合冲突返回 409；题库导入 B4 复用此事实。保留密码校验/停用吊销，不回显口令；类别被引用不能硬删除。
+- [x] **Step 4: 接通 PC 和本人资料契约。** Users 页面支持学员增改查、启停、重置及模板下载、预览确认/失败行重导，不提供删除；增加 `/me/profile` GET/PATCH，只允许姓名、联系方式、A4 之后的头像 ID；提交 source/category/role 返回 400，不静默接受。头像待 A4 接入，不阻断本任务非媒体管理。分页空态、失败恢复与表单校验均落地。
 - [x] **Step 5: 绿灯。** 同单测命令及 `DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite training-identity`；`cd web && npx vue-tsc --noEmit && npm run build`。PC 验收：新建两类学员、来源筛选、错误行预览、重复确认、禁用后旧 token 被拒。记录结果。
 - [x] **Step 6: 本地提交。** `git commit -m "feat: manage training categories and learner provenance"`，仅暂存 A2 明确文件/共享集成块。
 
@@ -75,7 +75,7 @@
 
 **Files:** Modify `server/src/modules/auth/auth.service.ts`、`auth.controller.ts`、`server/src/common/guards/jwt-auth.guard.ts`、`roles.guard.ts`、`server/src/common/redis.service.ts`、`server/src/entities/sys-user.entity.ts`、`server/src/seed.ts`、`database/seed.mjs`、`web/src/views/Login.vue`、`web/src/stores/auth.ts`。Create `server/src/modules/auth/captcha.service.ts`、`session.service.ts`、`server/src/modules/access/access.service.ts`、`access.controller.ts`、`permission-catalog.ts`、`server/src/common/guards/permissions.guard.ts`、`server/src/common/decorators/permissions.decorator.ts`、`web/src/views/admin/Administrators.vue`、`Roles.vue`、`OnlineSessions.vue`（同页面目录）；`002_access.sql` 及实体。Test `server/test/access.spec.ts`、`tests/training-access.mjs`。
 
-**Interfaces:** Consumes A1、现有 AuthUser/Redis 吊销。Produces `AccessService.assertAllowed(userId:Id,code:string):Promise<void>`、`permissions(userId:Id):Promise<string[]>`、`SessionService.revoke(sessionId:Id,actorId:Id):Promise<void>`；新增 `/auth/captcha`，沿用 `/auth/login|refresh|profile|password|logout`；`/admin/roles`、`/admin/administrators`、`/admin/sessions`。权限目录是服务端注册的 `<resource>:read|write|publish|review|export` 白名单，不允许配置任意代码授予新能力。
+**Interfaces:** Consumes A1、现有 AuthUser/Redis 吊销。Produces `AccessService.assertAllowed(userId:Id,code:string):Promise<void>`、`permissions(userId:Id):Promise<string[]>`、`SessionService.revoke(sessionId:Id,actorId:Id):Promise<void>`；新增 `/auth/captcha`，沿用 `/auth/login|refresh|profile|password|logout`；`POST /admin/administrators` 创建管理员时必须提交非空 `role_ids`，另有 `/admin/roles`、`/admin/sessions`。权限目录是服务端注册的白名单，不允许配置任意代码授予新能力；已取消的 monitor/review 权限不保留。
 
 - [x] **Step 1: 写越权/吊销测试。** suite `training-access`；用临时管理员、学员和受限管理员，测试正常与伪造入口、同秒吊销、refresh 轮换与重复使用。
   ```js
@@ -98,19 +98,19 @@
 
 **Files:** Create `server/src/modules/media/media.service.ts`、`media.controller.ts`、`media-probe.service.ts`、`media-policy.ts`、`web/src/components/MediaUpload.vue`；`003_media.sql` 与实体；Test `server/test/media-policy.spec.ts`、`tests/training-media.mjs`。Modify `server/src/config/configuration.ts`、`deploy/.env.example`、`deploy/nginx/default.conf`、`server/src/modules/users/users.controller.ts`、`web/src/views/admin/Users.vue`。
 
-**Interfaces:** Consumes A3 权限、A2 本人资料。Produces `MediaService.upload(actorId:Id,purpose:'avatar'|'course_cover'|'video'|'question'|'answer'|'branding',file:Express.Multer.File,ownerId?:Id):Promise<{assetId:Id;status:'processing'|'ready'|'failed';durationMs:number|null}>`、`assertUsable(actorId:Id,assetId:Id,purpose:string,ownerId?:Id):Promise<void>`、`bind(tx:EntityManager,assetId:Id,ownerType:string,ownerId:Id):Promise<void>`；`GET /media/:id/content` 受控流式读取/Range，`GET /media/limits` 返回非敏感限制；答案上传特定路由由 C3 包装，不开放通用 purpose=answer 绕过截止检查。HTTP 返回将 assetId/durationMs 转为 asset_id/duration_ms；未就绪媒体由 `GET /media/:id` 查状态。
+**Interfaces:** Consumes A3 权限、A2 本人资料。Produces `MediaService.upload(actorId:Id,purpose:'avatar'|'course_cover'|'video'|'question'|'branding',file:Express.Multer.File,ownerId?:Id):Promise<{assetId:Id;status:'processing'|'ready'|'failed';durationMs:number|null}>`、`assertUsable(actorId:Id,assetId:Id,purpose:string,ownerId?:Id):Promise<void>`、`bind(tx:EntityManager,assetId:Id,ownerType:string,ownerId:Id):Promise<void>`；`GET /media/:id/content` 受控流式读取/Range，`GET /media/limits` 返回非敏感限制。HTTP 返回将 assetId/durationMs 转为 asset_id/duration_ms；未就绪媒体由 `GET /media/:id` 查状态。`answer` purpose 与答案专用上传路由已取消，`question` purpose 继续承载题干/选项/解析题图。
 
 - [ ] **Step 1: 写媒体边界测试。** 测试文件生成最小合法 MP4、PNG 夹具，并创建其他用户附件及被引用视频。
   ```js
   assert.equal(fakeMp4.status, 400);
-  assert.equal(otherUsersAnswer.status, 403);
+  assert.equal(otherUsersQuestionAsset.status, 403);
   assert.equal(deleteReferenced.status, 409);
   assert.equal(videoRange.status, 206);
   assert.equal(video.data.duration_ms > 0, true);
-  assert.equal(await countAnswerReferences(uploadedOnly.data.asset_id), 0);
+  assert.equal(await countQuestionReferences(uploadedOnly.data.asset_id), 0);
   ```
 - [ ] **Step 2: 红灯。** `cd server && npm test -- test/media-policy.spec.ts`，预期缺少媒体策略/授权实现。
-- [ ] **Step 3: 实现媒体状态、保护读取和元数据。** 本地服务端生成 storage key，不接受客户端路径；图片 JPEG/PNG/WebP 按内容验证且不接收 SVG；视频 ffprobe 无 shell 调用并设置超时，只接 MP4 H.264/AAC。状态就绪前不可被发布引用；媒体层按 owner_type 注册授权检查器，未注册的业务类型默认拒绝学员读取，B1 接课程可见性、C3/C4 接答案归属/阅卷权限，避免媒体层反向导入所有业务服务。品牌展示仅公开白名单资源。未知资源和越权都不能泄露文件路径；孤儿文件按延迟清理任务处理，已引用文件不得回收。
+- [ ] **Step 3: 实现媒体状态、保护读取和元数据。** 本地服务端生成 storage key，不接受客户端路径；图片 JPEG/PNG/WebP 按内容验证且不接收 SVG；视频 ffprobe 无 shell 调用并设置超时，只接 MP4 H.264/AAC。状态就绪前不可被发布引用；媒体层按 owner_type 注册授权检查器，未注册的业务类型默认拒绝读取，B1 接课程可见性，题库/答卷读取接 `question` 题图归属，避免媒体层反向导入所有业务服务。品牌展示仅公开白名单资源。未知资源和越权都不能泄露文件路径；孤儿文件按延迟清理任务处理，已引用文件不得回收。
 - [ ] **Step 4: 配置与 PC 上传接入。** 新增 `MEDIA_VIDEO_MAX_BYTES`、`MEDIA_IMAGE_MAX_BYTES`、`FFPROBE_PATH`、`MEDIA_PROBE_TIMEOUT_MS`，精确默认值在部署说明和 limits 响应同步；视频默认 512 MiB、图片默认 10 MiB、探测超时 30 秒。nginx 请求上限含 multipart 余量 1 MiB；修改限额时三端同改并有启动/部署检查。MediaUpload 展示大小/类型限制、上传进度、处理中、错误重试；接通本人/学员头像，禁用用户不能上传。
 - [ ] **Step 5: 绿灯。** 单测及 `DB_DATABASE=ruleexam_test_training node tests/run-e2e.mjs --suite training-media`；前端类型/构建。PC 验证真实视频探测、假格式、超限、断网重试、头像修改。无 ffprobe 时明确部署缺失，不记视频处理通过。
 - [ ] **Step 6: 本地提交。** `git commit -m "feat: add protected media storage and validated uploads"`。

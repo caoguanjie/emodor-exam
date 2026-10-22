@@ -1,19 +1,13 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
-import { DataSource, EntityManager, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Errors, ExamStatus } from '../../common/errors';
 import type { AnswerInput, DraftAck, DraftInput, Id } from '../../common/training-contracts';
-import { TRAINING_DEFAULTS } from '../../common/training-contracts';
 import { ExamAnswer } from '../../entities/exam-answer.entity';
 import { ExamRecord } from '../../entities/exam-record.entity';
 import { ExamRecordQuestion } from '../../entities/exam-record-question.entity';
-import { MediaReference } from '../../entities/media-reference.entity';
 import { SysUser } from '../../entities/sys-user.entity';
-import { AccessService } from '../access/access.service';
-import { MediaService, type MediaUploadResult } from '../media/media.service';
-
-export const ANSWER_MEDIA_OWNER = 'exam_answer_item';
 
 type DraftRecord = ExamRecord & {
   draftRevision: number;
@@ -41,14 +35,13 @@ function canonicalAnswers(input: DraftInput): AnswerInput[] {
     if (!/^[1-9]\d*$/.test(itemId)) throw Errors.param('作答题号不合法');
     if (seen.has(itemId)) throw Errors.param('同一题目不能重复提交');
     seen.add(itemId);
+    const unknown = Object.keys(answer || {}).filter((key) => key !== 'item_id' && key !== 'selected');
+    if (unknown.length) throw Errors.param(`作答包含不支持的字段：${unknown.join(',')}`);
     const selected = answer.selected === undefined ? [] : answer.selected;
-    const assetIds = answer.asset_ids === undefined ? [] : answer.asset_ids.map(String);
     if (!Array.isArray(selected) || !selected.every(Number.isInteger)) throw Errors.param('选项下标不合法');
-    if (!Array.isArray(assetIds) || assetIds.some((id) => !/^[1-9]\d*$/.test(id))) throw Errors.param('附件编号不合法');
     return {
       item_id: itemId,
       ...(selected.length ? { selected: [...selected].sort((a, b) => a - b) } : {}),
-      ...(assetIds.length ? { asset_ids: [...assetIds].sort(compareIds) } : {}),
     };
   });
   return answers.sort((left, right) => compareIds(left.item_id, right.item_id));
@@ -64,122 +57,30 @@ function rowAnswer(row: ExamAnswer, item: ExamRecordQuestion | undefined): Answe
     ? row.selected.map(Number).map((original) => item.displayToOriginal.indexOf(original))
       .filter((display) => display >= 0).sort((left, right) => left - right)
     : [];
-  const assetIds = Array.isArray(row.assetIds) ? row.assetIds.map(String) : [];
-  if (!selected.length && !assetIds.length) return null;
+  if (!selected.length) return null;
   return {
     item_id: String(row.recordQuestionId),
     ...(selected.length ? { selected } : {}),
-    ...(assetIds.length ? { asset_ids: assetIds } : {}),
   };
 }
 
 @Injectable()
-export class AnswerDraftService implements OnModuleInit {
+export class AnswerDraftService {
   constructor(
     @InjectRepository(ExamRecord) private readonly recordRepo: Repository<ExamRecord>,
     @InjectRepository(ExamAnswer) private readonly answerRepo: Repository<ExamAnswer>,
     @InjectRepository(ExamRecordQuestion) private readonly itemRepo: Repository<ExamRecordQuestion>,
-    @InjectRepository(MediaReference) private readonly referenceRepo: Repository<MediaReference>,
     @InjectRepository(SysUser) private readonly userRepo: Repository<SysUser>,
     private readonly dataSource: DataSource,
-    private readonly media: MediaService,
-    private readonly access: AccessService,
   ) {}
-
-  onModuleInit(): void {
-    this.media.registerOwnerPolicy(ANSWER_MEDIA_OWNER, {
-      allowedPurposes: ['answer'],
-      authorizeRead: (actorId, itemId, assetId) => this.canReadAnswer(actorId, itemId, assetId),
-      validateBinding: (manager, asset, itemId) => this.validateAnswerBinding(manager, asset, itemId),
-    });
-  }
 
   private repositories(manager?: EntityManager) {
     return {
       records: manager?.getRepository(ExamRecord) || this.recordRepo,
       answers: manager?.getRepository(ExamAnswer) || this.answerRepo,
       items: manager?.getRepository(ExamRecordQuestion) || this.itemRepo,
-      references: manager?.getRepository(MediaReference) || this.referenceRepo,
       users: manager?.getRepository(SysUser) || this.userRepo,
     };
-  }
-
-  private async itemAndRecord(itemId: Id, manager?: EntityManager) {
-    const repos = this.repositories(manager);
-    const item = await repos.items.findOne({ where: { id: String(itemId) } });
-    if (!item) return null;
-    const record = await repos.records.findOne({ where: { id: String(item.recordId) } });
-    return record ? { item, record } : null;
-  }
-
-  private async canReadAnswer(actorId: Id, itemId: Id, assetId?: Id): Promise<boolean> {
-    if (!assetId) return false;
-    const resolved = await this.itemAndRecord(String(itemId));
-    if (!resolved) return false;
-    if (String(resolved.record.userId) === String(actorId)) return true;
-    if (resolved.record.status === ExamStatus.IN_PROGRESS) return false;
-    const permissions = await this.access.permissions(String(actorId));
-    if (!permissions.includes('exam_records:review')) return false;
-    const answer = await this.answerRepo.findOne({
-      where: { examRecordId: String(resolved.record.id), recordQuestionId: String(resolved.item.id) },
-    });
-    return Boolean(Array.isArray(answer?.assetIds) && answer.assetIds.map(String).includes(String(assetId)));
-  }
-
-  private async validateAnswerBinding(manager: EntityManager, asset: any, itemId: Id): Promise<void> {
-    const resolved = await this.itemAndRecord(String(itemId), manager);
-    if (!resolved || resolved.item.type !== 'image') throw Errors.dataForbidden('附件不属于图片作答题');
-    const ownerId = String(resolved.record.userId);
-    if (asset.purpose !== 'answer' || asset.mediaKind !== 'image'
-      || String(asset.ownerId) !== ownerId || String(asset.uploadedBy) !== ownerId) {
-      throw Errors.dataForbidden('答案附件上传身份不匹配');
-    }
-    if (resolved.record.status !== ExamStatus.IN_PROGRESS || new Date(resolved.record.deadlineAt).getTime() <= Date.now()) {
-      throw Errors.submitConflict('考试已结束，不能绑定答案附件');
-    }
-    const references = await manager.getRepository(MediaReference).find({
-      where: { assetId: String(asset.id), ownerType: ANSWER_MEDIA_OWNER },
-    });
-    if (references.some((reference) => String(reference.ownerId) !== String(itemId))) {
-      throw Errors.dataForbidden('答案附件已属于另一道题');
-    }
-  }
-
-  private async requireActiveTarget(userId: Id, recordId: Id, itemId: Id, manager?: EntityManager, lock = false) {
-    const repos = this.repositories(manager);
-    const record = await repos.records.findOne({
-      where: { id: String(recordId) },
-      ...(lock ? { lock: { mode: 'pessimistic_write' as const } } : {}),
-    });
-    if (!record) throw Errors.notFound('考试记录不存在');
-    if (String(record.userId) !== String(userId)) throw Errors.dataForbidden();
-    if (record.status !== ExamStatus.IN_PROGRESS || new Date(record.deadlineAt).getTime() <= Date.now()) {
-      throw Errors.submitConflict('考试已结束');
-    }
-    const item = await repos.items.findOne({ where: { id: String(itemId) } });
-    if (!item || String(item.recordId) !== String(record.id)) throw Errors.dataForbidden('题目不属于本次考试');
-    if (item.type !== 'image') throw Errors.param('只有图片题可上传答案图片');
-    return { record, item };
-  }
-
-  async uploadImage(userId: Id, recordId: Id, itemId: Id, file: Express.Multer.File): Promise<MediaUploadResult> {
-    await this.requireActiveTarget(userId, recordId, itemId);
-    const uploaded = await this.media.uploadAnswer(String(userId), file);
-    try {
-      await this.dataSource.transaction(async (manager) => {
-        const user = await manager.getRepository(SysUser).findOne({
-          where: { id: String(userId) }, lock: { mode: 'pessimistic_write' },
-        });
-        if (!user) throw Errors.notFound('用户不存在');
-        if (Number(user.status) !== 1) throw Errors.accountDisabled();
-        await this.requireActiveTarget(userId, recordId, itemId, manager, true);
-        await this.media.bind(manager, uploaded.assetId, ANSWER_MEDIA_OWNER, String(itemId));
-      });
-      return uploaded;
-    } catch (error) {
-      await this.media.remove(String(userId), uploaded.assetId).catch(() => undefined);
-      throw error;
-    }
   }
 
   async confirmedAnswers(recordId: Id, manager?: EntityManager): Promise<AnswerInput[]> {
@@ -192,26 +93,6 @@ export class AnswerDraftService implements OnModuleInit {
     return rows.map((row) => rowAnswer(row, row.recordQuestionId ? itemMap.get(String(row.recordQuestionId)) : undefined))
       .filter((answer): answer is AnswerInput => Boolean(answer))
       .sort((left, right) => compareIds(left.item_id, right.item_id));
-  }
-
-  /**
-   * Upload references establish attempt/item context, not confirmation. Once an
-   * attempt ends, release every answer reference not present in the committed
-   * draft so A4's existing orphan sweeper can reclaim the physical asset.
-   */
-  async releaseUnconfirmedReferences(manager: EntityManager, recordId: Id, confirmedAssetIds: Id[]): Promise<void> {
-    const itemRows = await manager.getRepository(ExamRecordQuestion).find({ where: { recordId: String(recordId) } });
-    const itemIds = itemRows.map((item) => String(item.id));
-    if (!itemIds.length) return;
-    const references = await manager.getRepository(MediaReference).find({
-      where: { ownerType: ANSWER_MEDIA_OWNER, ownerId: In(itemIds) },
-    });
-    const keep = new Set(confirmedAssetIds.map(String));
-    for (const reference of references) {
-      if (!keep.has(String(reference.assetId))) {
-        await this.media.unbind(manager, String(reference.assetId), ANSWER_MEDIA_OWNER, String(reference.ownerId));
-      }
-    }
   }
 
   private async assertUser(manager: EntityManager, userId: Id): Promise<void> {
@@ -274,31 +155,14 @@ export class AnswerDraftService implements OnModuleInit {
       const item = itemMap.get(String(answer.item_id));
       if (!item) throw Errors.param('作答题目不属于本次考试');
       const selected = answer.selected || [];
-      const assetIds = answer.asset_ids || [];
       if (new Set(selected).size !== selected.length || selected.some((value) => value < 0 || value >= item.displayToOriginal.length)) {
         throw Errors.param('选项下标不合法或重复');
       }
-      if (new Set(assetIds).size !== assetIds.length) throw Errors.param('答案附件不能重复');
-      if (item.type === 'image') {
-        if (selected.length) throw Errors.param('图片题不能提交选项答案');
-        if (assetIds.length > TRAINING_DEFAULTS.imageAssetsPerItem) {
-          throw Errors.param(`图片作答最多 ${TRAINING_DEFAULTS.imageAssetsPerItem} 张`);
-        }
-        for (const assetId of assetIds) {
-          await this.media.assertUsable(userId, assetId, 'answer', userId, manager);
-          const reference = await repos.references.findOne({
-            where: { assetId: String(assetId), ownerType: ANSWER_MEDIA_OWNER, ownerId: String(item.id) },
-          });
-          if (!reference) throw Errors.dataForbidden('答案附件不属于本次作答题目');
-        }
-      } else {
-        if (assetIds.length) throw Errors.param('客观题不能提交答案附件');
-        if ((item.type === 'single' || item.type === 'judgment') && selected.length > 1) {
-          throw Errors.param('单选或判断题只能选择一个选项');
-        }
-        if (!['single', 'multiple', 'judgment'].includes(item.type)) throw Errors.param('题型不支持');
+      if ((item.type === 'single' || item.type === 'judgment') && selected.length > 1) {
+        throw Errors.param('单选或判断题只能选择一个选项');
       }
-      if (selected.length || assetIds.length) toPersist.push({ input: answer, item });
+      if (!['single', 'multiple', 'judgment'].includes(item.type)) throw Errors.param('题型不支持');
+      if (selected.length) toPersist.push({ input: answer, item });
     }
 
     const existingRows = await repos.answers.find({ where: { examRecordId: String(record.id) } });
@@ -318,11 +182,8 @@ export class AnswerDraftService implements OnModuleInit {
         selected: answer.selected?.length
           ? answer.selected.map((display) => item.displayToOriginal[display]).sort((left, right) => left - right)
           : null,
-        assetIds: answer.asset_ids?.length ? answer.asset_ids.map(String) : null,
         isCorrect: null,
         gainedScore: null,
-        comment: null,
-        gradingVersion: 0,
       });
     });
     if (rows.length) await repos.answers.save(rows);
@@ -350,7 +211,7 @@ export class AnswerDraftService implements OnModuleInit {
     const current = new Map((await this.confirmedAnswers(record.id, manager)).map((answer) => [String(answer.item_id), answer]));
     for (const answer of patch) {
       const normalized = canonicalAnswers({ revision: 0, answers: [answer] })[0];
-      if (normalized.selected?.length || normalized.asset_ids?.length) current.set(String(normalized.item_id), normalized);
+      if (normalized.selected?.length) current.set(String(normalized.item_id), normalized);
       else current.delete(String(normalized.item_id));
     }
     return this.saveInTransaction(manager, userId, record.id, {

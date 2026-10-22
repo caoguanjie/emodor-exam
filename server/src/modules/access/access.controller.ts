@@ -1,5 +1,7 @@
 import { Body, Controller, Get, Param, Post, Put, Query, Req } from '@nestjs/common';
-import { IsArray, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import {
+  ArrayMinSize, ArrayUnique, IsArray, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength,
+} from 'class-validator';
 import { Transform } from 'class-transformer';
 import { DtoValidationPipe, StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { CurrentUser, AuthUser } from '../../common/decorators/current-user.decorator';
@@ -23,6 +25,19 @@ class UpdateRoleDto {
 
 class AssignRoleDto {
   @IsArray() @IsString({ each: true }) role_ids!: string[];
+}
+
+class CreateAdministratorDto {
+  @IsString() @MinLength(1) @MaxLength(64) username!: string;
+  @IsString() @MinLength(8) @MaxLength(128)
+  @Matches(/^(?=.*[A-Za-z])(?=.*\d)\S{8,128}$/, { message: 'password 至少 8 位，且同时包含字母与数字' })
+  password!: string;
+  @IsString() @MinLength(1) @MaxLength(64) real_name!: string;
+  @IsOptional() @IsString() @MaxLength(20) phone?: string;
+  @IsOptional() @IsString() @MaxLength(128) email?: string;
+  @IsArray() @ArrayMinSize(1) @ArrayUnique() @IsString({ each: true })
+  @Matches(/^[1-9]\d*$/, { each: true, message: 'role_ids 必须是十进制 ID 字符串' })
+  role_ids!: string[];
 }
 
 const QueryNumber = () => Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)));
@@ -67,6 +82,16 @@ export class AccessController {
   @Permissions('administrators:read')
   administrators() {
     return this.access.listAdministrators();
+  }
+
+  @Post('administrators')
+  @Permissions('administrators:write')
+  createAdministrator(
+    @Body(new DtoValidationPipe()) body: CreateAdministratorDto,
+    @CurrentUser() user: AuthUser,
+    @Req() request: Request,
+  ) {
+    return this.access.createAdministrator(body, { id: user.id, name: user.username }, request.ip || null);
   }
 
   @Get('administrators/candidates')

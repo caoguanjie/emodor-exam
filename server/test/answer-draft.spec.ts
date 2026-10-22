@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DtoValidationPipe } from '../src/common/dto-validation.pipe';
 import { ExamAnswer } from '../src/entities/exam-answer.entity';
 import { ExamRecord } from '../src/entities/exam-record.entity';
 import { ExamRecordQuestion } from '../src/entities/exam-record-question.entity';
-import { MediaReference } from '../src/entities/media-reference.entity';
 import { SysUser } from '../src/entities/sys-user.entity';
 import { AnswerDraftService } from '../src/modules/exams/answer-draft.service';
 import { AttemptReaderService } from '../src/modules/exams/attempt-reader.service';
-import { DtoValidationPipe } from '../src/common/dto-validation.pipe';
 import { DraftInputDto } from '../src/modules/exams/attempt.dto';
 
 function draftFixture(overrides: Record<string, unknown> = {}) {
@@ -19,25 +18,28 @@ function draftFixture(overrides: Record<string, unknown> = {}) {
   const items: any[] = [
     {
       id: '501', recordId: '41', questionId: '101', type: 'single', position: 0,
-      displayToOriginal: [1, 0], snapshotJson: { options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }] },
+      displayToOriginal: [1, 0], snapshotJson: {
+        type: 'single', stem: '<p>单选题</p>', options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }],
+        answer: [1], analysis: '<p>解析</p>', scoreCents: 3000,
+      },
     },
     {
       id: '502', recordId: '41', questionId: '102', type: 'multiple', position: 1,
-      displayToOriginal: [0, 1, 2], snapshotJson: { options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }, { key: 'C', text: '丙' }] },
+      displayToOriginal: [0, 1, 2], snapshotJson: {
+        type: 'multiple', stem: '<p>多选题</p>', options: [
+          { key: 'A', text: '甲' }, { key: 'B', text: '乙' }, { key: 'C', text: '丙' },
+        ], answer: [0, 1], analysis: null, scoreCents: 4000,
+      },
     },
     {
       id: '503', recordId: '41', questionId: '103', type: 'judgment', position: 2,
-      displayToOriginal: [0, 1], snapshotJson: { options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }] },
-    },
-    {
-      id: '504', recordId: '41', questionId: '104', type: 'image', position: 3,
-      displayToOriginal: [], snapshotJson: { options: [] },
+      displayToOriginal: [0, 1], snapshotJson: {
+        type: 'judgment', stem: '<p>判断题</p>', options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }],
+        answer: [0], analysis: null, scoreCents: 3000,
+      },
     },
   ];
   const answers: any[] = [];
-  const references: any[] = Array.from({ length: 10 }, (_, index) => ({
-    assetId: String(701 + index), ownerType: 'exam_answer_item', ownerId: '504',
-  }));
   let nextAnswerId = 1;
   const recordRepo: any = {
     findOne: vi.fn(async () => record),
@@ -48,15 +50,10 @@ function draftFixture(overrides: Record<string, unknown> = {}) {
     findOne: vi.fn(async ({ where }: any) => items.find((item) => String(item.id) === String(where.id)) || null),
   };
   const answerRepo: any = {
-    findOne: vi.fn(async ({ where }: any) => answers.find((answer) => (
-      String(answer.examRecordId) === String(where.examRecordId)
-      && String(answer.recordQuestionId) === String(where.recordQuestionId)
-    )) || null),
     find: vi.fn(async ({ where }: any) => answers.filter((answer) => String(answer.examRecordId) === String(where.examRecordId))),
     create: vi.fn((value: any) => ({ ...value })),
     save: vi.fn(async (values: any | any[]) => {
-      const list = Array.isArray(values) ? values : [values];
-      for (const value of list) {
+      for (const value of Array.isArray(values) ? values : [values]) {
         const existing = answers.find((answer) => String(answer.recordQuestionId) === String(value.recordQuestionId));
         if (existing) Object.assign(existing, value);
         else answers.push({ id: String(nextAnswerId++), ...value });
@@ -68,61 +65,50 @@ function draftFixture(overrides: Record<string, unknown> = {}) {
       if (index >= 0) answers.splice(index, 1);
     }),
   };
-  const referenceRepo: any = {
-    findOne: vi.fn(async ({ where }: any) => references.find((reference) => (
-      String(reference.assetId) === String(where.assetId)
-      && String(reference.ownerType) === String(where.ownerType)
-      && String(reference.ownerId) === String(where.ownerId)
-    )) || null),
-    find: vi.fn(async ({ where }: any) => references.filter((reference) => String(reference.assetId) === String(where.assetId))),
-  };
+  const userRepo: any = { findOne: vi.fn(async () => ({ id: '9', status: 1 })) };
   const repositories = new Map<any, any>([
-    [ExamRecord, recordRepo], [ExamRecordQuestion, itemRepo], [ExamAnswer, answerRepo], [MediaReference, referenceRepo],
-    [SysUser, { findOne: vi.fn(async () => ({ id: '9', status: 1 })) }],
+    [ExamRecord, recordRepo], [ExamRecordQuestion, itemRepo], [ExamAnswer, answerRepo], [SysUser, userRepo],
   ]);
   const manager: any = { getRepository: (entity: any) => repositories.get(entity) };
   const dataSource: any = { transaction: vi.fn(async (work: any) => work(manager)) };
-  const media: any = {
-    registerOwnerPolicy: vi.fn(),
-    assertUsable: vi.fn(async () => undefined),
-    bind: vi.fn(async () => undefined),
-    uploadAnswer: vi.fn(async () => ({ assetId: '799', status: 'ready', durationMs: null })),
-    remove: vi.fn(async () => undefined),
-  };
-  const access: any = { permissions: vi.fn(async (actorId: string) => (
-    actorId === '8' ? ['exam_records:review'] : actorId === '10' ? ['exam_records:read'] : []
-  )) };
-  const service = new AnswerDraftService(recordRepo, answerRepo, itemRepo, referenceRepo, {} as any, dataSource, media, access);
-  return { service, record, items, answers, references, manager, media, access };
+  const media: any = { registerOwnerPolicy: vi.fn(), bind: vi.fn(async () => undefined) };
+  const access: any = { permissions: vi.fn(async (actorId: string) => actorId === '8' ? ['exam_records:read'] : []) };
+  const service = new AnswerDraftService(recordRepo, answerRepo, itemRepo, userRepo, dataSource);
+  return { service, record, items, answers, manager, media, access, recordRepo, itemRepo, answerRepo };
 }
 
-describe('AnswerDraftService persistent full drafts', () => {
+describe('AnswerDraftService persistent objective drafts', () => {
+  it('rejects the removed image-answer attachment shape before persisting a draft', async () => {
+    const { service, answers } = draftFixture();
+
+    await expect(service.save('9', '41', {
+      revision: 1,
+      answers: [{ item_id: '501', asset_ids: ['701'] } as any],
+    })).rejects.toMatchObject({ code: 40001 });
+    expect(answers).toEqual([]);
+  });
+
   it('commits a full replacement, replays the same acknowledgement, and rejects a conflicting revision', async () => {
     const { service, record, answers } = draftFixture();
     const first = {
       revision: 1,
-      answers: [
-        { item_id: '501', selected: [0] },
-        { item_id: '504', asset_ids: ['701'] },
-      ],
+      answers: [{ item_id: '501', selected: [0] }, { item_id: '502', selected: [0, 2] }],
     };
 
     const acknowledged = await service.save('9', '41', first);
     expect(acknowledged).toMatchObject({ revision: 1, answered_count: 2 });
     expect(record.draftRevision).toBe(1);
-    expect(answers.map((answer) => ({ item: answer.recordQuestionId, selected: answer.selected, assets: answer.assetIds })))
-      .toEqual([
-        { item: '501', selected: [1], assets: null },
-        { item: '504', selected: null, assets: ['701'] },
-      ]);
+    expect(answers.map((answer) => ({ item: answer.recordQuestionId, selected: answer.selected }))).toEqual([
+      { item: '501', selected: [1] }, { item: '502', selected: [0, 2] },
+    ]);
 
     await expect(service.save('9', '41', first)).resolves.toEqual(acknowledged);
     await expect(service.save('9', '41', { ...first, answers: [{ item_id: '501', selected: [1] }] }))
       .rejects.toMatchObject({ code: 40905, httpStatus: 409 });
 
-    const replaced = await service.save('9', '41', { revision: 2, answers: [{ item_id: '502', selected: [0, 2] }] });
+    const replaced = await service.save('9', '41', { revision: 2, answers: [{ item_id: '503', selected: [1] }] });
     expect(replaced).toMatchObject({ revision: 2, answered_count: 1 });
-    expect(answers.map((answer) => answer.recordQuestionId)).toEqual(['502']);
+    expect(answers.map((answer) => answer.recordQuestionId)).toEqual(['503']);
   });
 
   it('allows an acknowledged retry after deadline but never writes a new late draft', async () => {
@@ -136,95 +122,51 @@ describe('AnswerDraftService persistent full drafts', () => {
       .rejects.toMatchObject({ code: 40905, httpStatus: 409 });
   });
 
-  it('validates item type, option indexes, exact answer references, and the nine-image limit', async () => {
-    const { service, references } = draftFixture();
-    await expect(service.save('9', '41', { revision: 1, answers: [{ item_id: '501', asset_ids: ['701'] }] }))
-      .rejects.toMatchObject({ code: 40001 });
-    await expect(service.save('9', '41', { revision: 1, answers: [{ item_id: '504', selected: [0] }] }))
-      .rejects.toMatchObject({ code: 40001 });
+  it('validates objective option indexes and refuses a historical unsupported item type', async () => {
+    const { service, items } = draftFixture();
     await expect(service.save('9', '41', { revision: 1, answers: [{ item_id: '502', selected: [0, 0] }] }))
       .rejects.toMatchObject({ code: 40001 });
     await expect(service.save('9', '41', { revision: 1, answers: [{ item_id: '503', selected: [2] }] }))
       .rejects.toMatchObject({ code: 40001 });
-    await expect(service.save('9', '41', {
-      revision: 1, answers: [{ item_id: '504', asset_ids: Array.from({ length: 10 }, (_, index) => String(701 + index)) }],
-    })).rejects.toMatchObject({ code: 40001 });
-
-    references.splice(0, references.length, { assetId: '701', ownerType: 'exam_answer_item', ownerId: '999' });
-    await expect(service.save('9', '41', { revision: 1, answers: [{ item_id: '504', asset_ids: ['701'] }] }))
-      .rejects.toMatchObject({ code: 40302 });
+    items.push({ id: '504', recordId: '41', questionId: '104', type: 'image', position: 3, displayToOriginal: [] });
+    await expect(service.save('9', '41', { revision: 1, answers: [{ item_id: '504', selected: [] }] }))
+      .rejects.toMatchObject({ code: 40001 });
   });
 
   it('merges a legacy partial heartbeat into the committed full draft instead of clearing omitted answers', async () => {
     const { service, answers, record } = draftFixture();
     await service.save('9', '41', {
       revision: 1,
-      answers: [{ item_id: '501', selected: [0] }, { item_id: '504', asset_ids: ['701'] }],
+      answers: [{ item_id: '501', selected: [0] }, { item_id: '502', selected: [1] }],
     });
 
-    const ack = await service.patchLegacy('9', '41', [{ item_id: '502', selected: [1] }]);
+    const ack = await service.patchLegacy('9', '41', [{ item_id: '503', selected: [1] }]);
 
     expect(ack).toMatchObject({ revision: 2, answered_count: 3 });
     expect(record.draftRevision).toBe(2);
-    expect(answers.map((answer) => answer.recordQuestionId).sort()).toEqual(['501', '502', '504']);
-  });
-
-  it('registers a distinct answer policy and rejects owner or attempt mismatches while binding', async () => {
-    const fixture = draftFixture();
-    const { service, media, manager, references } = fixture;
-    service.onModuleInit();
-    expect(media.registerOwnerPolicy).toHaveBeenCalledTimes(1);
-    expect(media.registerOwnerPolicy.mock.calls[0][0]).toBe('exam_answer_item');
-    const policy = media.registerOwnerPolicy.mock.calls[0][1];
-    expect(policy.allowedPurposes).toEqual(['answer']);
-    await expect(policy.authorizeRead('9', '504', '701')).resolves.toBe(true);
-    await expect(policy.authorizeRead('8', '504', '701')).resolves.toBe(false);
-    fixture.answers.push({
-      id: '1', examRecordId: '41', recordQuestionId: '504', questionId: '104',
-      selected: null, assetIds: ['701'], gainedScore: null, gradingVersion: 0,
-    });
-    fixture.record.status = 'submitted';
-    await expect(policy.authorizeRead('8', '504', '701')).resolves.toBe(true);
-    await expect(policy.authorizeRead('10', '504', '701')).resolves.toBe(false);
-    await expect(policy.validateBinding(manager, {
-      id: '701', purpose: 'answer', ownerId: '9', uploadedBy: '8', mediaKind: 'image', status: 'ready',
-    }, '504')).rejects.toMatchObject({ code: 40302 });
-
-    fixture.record.status = 'in_progress';
-    references.push({ assetId: '799', ownerType: 'exam_answer_item', ownerId: 'other-attempt-item' });
-    await expect(policy.validateBinding(manager, {
-      id: '799', purpose: 'answer', ownerId: '9', uploadedBy: '9', mediaKind: 'image', status: 'ready',
-    }, '504')).rejects.toMatchObject({ code: 40302 });
+    expect(answers.map((answer) => answer.recordQuestionId).sort()).toEqual(['501', '502', '503']);
   });
 });
 
 describe('AttemptReaderService persistent recovery', () => {
-  it('returns revision, items and answers from one consistent transaction snapshot', async () => {
+  it('returns revision, items and selected answers from one consistent transaction snapshot', async () => {
     const fixture = draftFixture({ draftRevision: 4 });
     fixture.answers.push({
       id: '1', examRecordId: '41', recordQuestionId: '501', questionId: '101',
-      selected: [1], assetIds: null, isCorrect: null, gainedScore: null, comment: null, gradingVersion: 0,
+      selected: [1], isCorrect: null, gainedScore: null,
     });
-    const recordRepo: any = { findOne: vi.fn(async () => { throw new Error('outside transaction record read'); }) };
-    const itemRepo: any = { find: vi.fn(async () => { throw new Error('outside transaction item read'); }) };
-    const answerRepo: any = { find: vi.fn(async () => { throw new Error('outside transaction answer read'); }) };
-    const txRecordRepo: any = { findOne: vi.fn(async () => fixture.record) };
-    const txItemRepo: any = { find: vi.fn(async () => fixture.items) };
-    const txAnswerRepo: any = { find: vi.fn(async () => fixture.answers) };
-    const txManager: any = { getRepository: (entity: any) => new Map<any, any>([
-      [ExamRecord, txRecordRepo], [ExamRecordQuestion, txItemRepo], [ExamAnswer, txAnswerRepo],
-    ]).get(entity) };
-    const dataSource: any = { transaction: vi.fn(async (_isolation: string, work: any) => work(txManager)) };
-    const reader = new (AttemptReaderService as any)(recordRepo, itemRepo, answerRepo, fixture.media, dataSource, fixture.access) as AttemptReaderService;
+    const outsideRepo: any = { findOne: vi.fn(async () => { throw new Error('outside transaction read'); }), find: vi.fn() };
+    const dataSource: any = { transaction: vi.fn(async (_isolation: string, work: any) => work(fixture.manager)) };
+    const reader = new AttemptReaderService(
+      outsideRepo, outsideRepo, outsideRepo, fixture.media, dataSource, fixture.access,
+    );
 
     const recovered = await reader.forStudent('9', '41');
 
     expect(recovered.draft_revision).toBe(4);
     expect(recovered.answers).toEqual([{ item_id: '501', selected: [0] }]);
     expect(dataSource.transaction).toHaveBeenCalledWith('REPEATABLE READ', expect.any(Function));
-    expect(recordRepo.findOne).not.toHaveBeenCalled();
-    expect(itemRepo.find).not.toHaveBeenCalled();
-    expect(answerRepo.find).not.toHaveBeenCalled();
+    expect(outsideRepo.findOne).not.toHaveBeenCalled();
   });
 
   it('keeps prompt and result-only question media separated by terminal state and record permissions', async () => {
@@ -232,42 +174,39 @@ describe('AttemptReaderService persistent recovery', () => {
     fixture.items[0].snapshotJson = {
       type: 'single', stem: '<p>题干<img data-media-id="801"></p>',
       options: [{ key: 'A', text: '甲' }], answer: [0],
-      analysis: '<p>解析<img data-media-id="802"></p>', rubric: null,
+      analysis: '<p>解析<img data-media-id="802"></p>', scoreCents: 3000,
     };
-    const reader = new (AttemptReaderService as any)(
-      fixture.manager.getRepository(ExamRecord), fixture.manager.getRepository(ExamRecordQuestion),
-      fixture.manager.getRepository(ExamAnswer), fixture.media, { transaction: vi.fn() }, fixture.access,
-    ) as AttemptReaderService;
+    const reader = new AttemptReaderService(
+      fixture.recordRepo, fixture.itemRepo, fixture.answerRepo, fixture.media, { transaction: vi.fn() } as any, fixture.access,
+    );
     reader.onModuleInit();
-    const policy = fixture.media.registerOwnerPolicy.mock.calls.at(-1)[1];
+    const policy = fixture.media.registerOwnerPolicy.mock.calls[0][1];
 
     await expect(policy.authorizeRead('9', '501', '801')).resolves.toBe(true);
     await expect(policy.authorizeRead('9', '501', '802')).resolves.toBe(false);
     await expect(policy.authorizeRead('8', '501', '801')).resolves.toBe(true);
     await expect(policy.authorizeRead('8', '501', '802')).resolves.toBe(false);
-    await expect(policy.validateBinding(fixture.manager, { id: '802' }, '501')).rejects.toMatchObject({ code: 40302 });
 
-    fixture.record.status = 'submitted';
+    fixture.record.status = 'passed';
     fixture.record.submittedAt = new Date();
     await expect(policy.authorizeRead('9', '501', '802')).resolves.toBe(true);
     await expect(policy.authorizeRead('8', '501', '802')).resolves.toBe(true);
-    await expect(policy.authorizeRead('10', '501', '802')).resolves.toBe(true);
-    await expect(policy.authorizeRead('11', '501', '802')).resolves.toBe(false);
-    await expect(policy.validateBinding(fixture.manager, { id: '802' }, '501')).resolves.toBeUndefined();
+    await expect(policy.authorizeRead('10', '501', '802')).resolves.toBe(false);
   });
 });
 
 describe('training attempt DTO', () => {
-  it('rejects a tenth image id and accepts a bounded full draft', async () => {
+  it('rejects removed image attachments and accepts selected objective answers', async () => {
     const pipe = new DtoValidationPipe();
     const metadata: any = { type: 'body', metatype: DraftInputDto };
+
     await expect(pipe.transform({
       revision: 1,
-      answers: [{ item_id: '504', asset_ids: Array.from({ length: 10 }, (_, index) => String(index + 1)) }],
+      answers: [{ item_id: '501', asset_ids: ['1'] }],
     }, metadata)).rejects.toMatchObject({ status: 400 });
     await expect(pipe.transform({
       revision: 1,
-      answers: [{ item_id: '504', asset_ids: ['1', '2'] }],
-    }, metadata)).resolves.toMatchObject({ revision: 1, answers: [{ item_id: '504', asset_ids: ['1', '2'] }] });
+      answers: [{ item_id: '501', selected: [0] }],
+    }, metadata)).resolves.toMatchObject({ revision: 1, answers: [{ item_id: '501', selected: [0] }] });
   });
 });

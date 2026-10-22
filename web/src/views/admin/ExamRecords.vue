@@ -32,7 +32,7 @@
           <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </el-form-item>
-      <el-form-item label="批改状态">
+      <el-form-item label="结果状态">
         <el-select v-model="query.grading_state" clearable style="width: 140px">
           <el-option v-for="item in gradingOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
@@ -58,7 +58,7 @@
       <el-table-column label="状态" width="125">
         <template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template>
       </el-table-column>
-      <el-table-column label="批改" width="115">
+      <el-table-column label="结果" width="115">
         <template #default="{ row }">{{ gradingLabel(row.grading_state) }}</template>
       </el-table-column>
       <el-table-column label="成绩" width="90">
@@ -95,8 +95,7 @@ const statusOptions = [
   { value: 'passed', label: '已通过' }, { value: 'failed', label: '未通过' }, { value: 'timeout', label: '超时交卷' },
 ];
 const gradingOptions = [
-  { value: 'not_submitted', label: '未交卷' }, { value: 'pending_manual', label: '待人工批改' },
-  { value: 'finalized', label: '已完成批改' },
+  { value: 'not_submitted', label: '未交卷' }, { value: 'finalized', label: '已出分' },
 ];
 const sourceLabels: Record<string, string> = { institution: '本机构', external: '外来' };
 const difficultyLabels: Record<string, string> = { easy: '初级', medium: '中级', hard: '高级', mixed: '混合', unknown: '历史未知' };

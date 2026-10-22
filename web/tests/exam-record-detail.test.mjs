@@ -162,10 +162,8 @@ function record(status) {
     source: 'institution', category_id: '3', difficulty: 'easy', release_id: '5', attempt_no: 1,
     started_at: '2026-10-22T01:00:00.000Z', deadline_at: '2026-10-22T01:30:00.000Z',
     submitted_at: status === 'in_progress' ? null : '2026-10-22T01:20:00.000Z', answered_count: 2, total_count: 2,
-    switch_count: 0, status, grading_state: status === 'in_progress' ? 'not_submitted' : 'finalized',
+    status, grading_state: status === 'in_progress' ? 'not_submitted' : 'finalized',
     submission_method: status === 'in_progress' ? null : 'manual', score: status === 'in_progress' ? null : 90,
-    server_now: '2026-10-22T01:10:00.000Z', remaining_seconds: 1200, last_heartbeat_at: null,
-    connection_state: status === 'in_progress' ? 'uncertain' : 'ended', device_summary: null,
   };
 }
 
@@ -208,28 +206,27 @@ test('keeps an in-progress record metadata-only and does not request result', as
   mounted.unmount();
 });
 
-test('loads terminal result read-only without requesting uploaded answer images', async () => {
+test('loads an objective terminal result without monitoring or manual-grading residue', async () => {
   testContext.record = record('passed');
   testContext.result = {
-    record_id: '42', grading_state: 'finalized', grading_revision: 1, submission_method: 'manual', legacy: false,
+    record_id: '42', grading_state: 'finalized', submission_method: 'manual', legacy: false,
     submitted_at: '2026-10-22T01:20:00.000Z', graded_at: '2026-10-22T01:21:00.000Z', score: 90,
-    passed: true, correct_rate: 0.5,
+    passed: true, correct_rate: 1,
     items: [
       { item_id: '101', type: 'single', stem: '<p>单选题</p>', options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }], score: 50,
-        answer: { item_id: '101', selected: [1] }, correct_answer: [0], analysis: '<p>解析</p>', rubric: null,
-        gained_score: 40, comment: '需复习', grading_version: 1 },
-      { item_id: '102', type: 'image', stem: '<p>图片题</p>', options: [], score: 50,
-        answer: { item_id: '102', asset_ids: ['9001'] }, correct_answer: null, analysis: null, rubric: '<p>评分参考</p>',
-        gained_score: 50, comment: '完整', grading_version: 1 },
+        answer: { item_id: '101', selected: [1] }, correct_answer: [0], analysis: '<p>解析</p>', gained_score: 40 },
+      { item_id: '102', type: 'judgment', stem: '<p>判断题</p>', options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], score: 50,
+        answer: { item_id: '102', selected: [0] }, correct_answer: [0], analysis: null, gained_score: 50 },
     ],
   };
 
   const mounted = await mountDetail();
   assert.deepEqual(testContext.calls, ['/admin/exam-records/42', '/admin/exam-records/42/result']);
-  assert.equal(testContext.calls.some((path) => path.includes('/media/9001')), false);
   assert.equal(testContext.previews.length, 2);
   assert.match(textContent(mounted.root), /学员作答.*B/s);
-  assert.match(textContent(mounted.root), /需复习/);
-  assert(findNodes(mounted.root, 'alert').some((node) => String(node.props.title).includes('exam_records:review')));
+  const text = textContent(mounted.root);
+  for (const retired of ['批改状态', '连接提示', '切屏次数', '剩余时间', '最后心跳', '设备摘要', '待批改', '评分版本', '评语', '人工阅卷']) {
+    assert.doesNotMatch(text, new RegExp(retired));
+  }
   mounted.unmount();
 });

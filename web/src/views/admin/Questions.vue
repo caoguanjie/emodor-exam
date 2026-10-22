@@ -4,7 +4,7 @@
       <div class="page-head__main">
         <div class="eyebrow">内容生产 · ADMIN</div>
         <h2>统一题库与 AI 出题</h2>
-        <p class="desc">四题型按类别、难度和版本管理；核心内容修改后回到待审核，不覆盖旧版本。</p>
+        <p class="desc">三类客观题按类别、难度和版本管理；核心内容修改后回到待审核，不覆盖旧版本。</p>
       </div>
       <div class="page-head__actions">
         <span class="head-note"><i />题目版本、来源与审核状态全程留痕</span>
@@ -15,7 +15,7 @@
     <div class="question-stat-strip">
       <div class="question-stat"><span>题库题目</span><strong>{{ total }}</strong><em>条</em><small>当前筛选结果</small></div>
       <div class="question-stat"><span>培训类别</span><strong>{{ categories.length }}</strong><em>个</em><small>可用出题范围</small></div>
-      <div class="question-stat"><span>关联制度</span><strong>{{ regulations.length }}</strong><em>份</em><small>可用于 AI 出题</small></div>
+      <div class="question-stat"><span>出题资料</span><strong>{{ materials.length }}</strong><em>份</em><small>已收进题库工作区</small></div>
     </div>
 
     <div class="notice-stack">
@@ -57,7 +57,7 @@
       <div class="question-toolbar__actions">
         <el-button v-if="auth.can('questions:write')" plain @click="router.push('/admin/questions/import')">Excel / TXT 导题</el-button>
         <el-button v-if="auth.can('questions:write')" plain @click="openCreate">人工录题</el-button>
-        <el-button v-if="canGenerate" type="primary" :disabled="!categories.length || !regulations.length" @click="openGenerate">AI 出题</el-button>
+        <el-button v-if="canGenerate" type="primary" :disabled="!categories.length" @click="openGenerate">AI 出题</el-button>
       </div>
       </div>
     </section>
@@ -109,7 +109,7 @@
     </section>
     <el-pagination class="question-pagination" layout="total, prev, pager, next" :total="total" :page-size="query.page_size" v-model:current-page="query.page" @current-change="load" />
 
-    <el-dialog v-model="editorVisible" :title="editorMode === 'create' ? '人工录入题目' : '修订题目'" width="860px" destroy-on-close :before-close="beforeEditorClose">
+    <el-dialog v-model="editorVisible" :title="editorMode === 'create' ? '人工录入题目' : '修订题目'" width="860px" append-to-body destroy-on-close :before-close="beforeEditorClose">
       <div class="editor-tools">
         <el-button v-if="auth.can('questions:write') && editorForm.category_id" size="small" @click="createConcept">新建当前题型考点组</el-button>
         <span v-if="editorMode === 'edit'" class="editor-hint">保存会生成待审核新版本；旧版本保持不变。</span>
@@ -127,7 +127,6 @@
         :categories="categories"
         :concepts="editorConcepts"
         :concept-loading="editorConceptLoading"
-        :regulations="regulations"
         :can-upload-media="auth.can('media:write')"
         @scope-change="loadEditorConcepts"
         @concept-search="searchEditorConcepts"
@@ -150,7 +149,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="previewVisible" title="题目预览" width="760px" destroy-on-close>
+    <el-dialog v-model="previewVisible" title="题目预览" width="760px" append-to-body destroy-on-close>
       <QuestionPreview v-if="selectedQuestion" :question="selectedQuestion" />
       <el-timeline v-if="versionHistory.length" class="version-history">
         <el-timeline-item v-for="item in versionHistory" :key="item.id" :timestamp="formatDateTime(item.created_at)" placement="top">
@@ -170,11 +169,25 @@
       />
     </el-dialog>
 
-    <el-dialog v-model="genVisible" title="发起 AI 出题" width="600px">
+    <el-dialog v-model="genVisible" title="发起 AI 出题" width="600px" append-to-body>
       <el-form label-width="140px">
-        <el-form-item label="目标制度" required>
-          <el-select v-model="genForm.regulation_id" filterable style="width:100%" @change="onGenerationRegulation">
-            <el-option v-for="item in regulations" :key="item.id" :label="item.title" :value="String(item.id)" />
+        <el-form-item label="出题资料" required>
+          <div class="material-source-row">
+            <el-select v-model="genForm.material_id" filterable placeholder="选择出题资料" style="width:100%" @change="onGenerationMaterial">
+              <el-option v-for="item in materials" :key="item.id" :label="item.title" :value="item.id" />
+            </el-select>
+            <el-button v-if="auth.can('ai:write')" @click="openMaterialManager">管理资料</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="资料版本" required>
+          <el-select v-model="genForm.material_version_id" placeholder="选择已解析版本" style="width:100%">
+            <el-option
+              v-for="version in materialVersions"
+              :key="version.id"
+              :label="versionLabel(version)"
+              :value="version.id"
+              :disabled="version.parse_status !== 'parsed'"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="培训类别" required>
@@ -192,18 +205,48 @@
         <el-form-item label="分值合计"><el-tag :type="sumScore === 100 ? 'success' : 'danger'">{{ sumScore }} / 100 分</el-tag></el-form-item>
         <el-alert type="info" :closable="false" title="类别和难度由本次请求固定，模型输出不会覆盖；AI 仍只生成单选/多选。" />
       </el-form>
-      <template #footer><el-button @click="genVisible = false">取消</el-button><el-button type="primary" :disabled="sumScore !== 100 || !genForm.regulation_id || !genForm.category_id" @click="startGenerate">发起</el-button></template>
+      <template #footer><el-button @click="genVisible = false">取消</el-button><el-button type="primary" :disabled="sumScore !== 100 || !genForm.material_id || !genForm.material_version_id || !genForm.category_id" @click="startGenerate">发起</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="taskVisible" title="AI 出题任务" width="640px" :close-on-click-modal="false">
+    <el-dialog v-model="materialVisible" title="出题资料管理" width="780px" append-to-body @closed="onMaterialManagerClosed">
+      <div class="material-create">
+        <el-input v-model="materialForm.title" maxlength="128" placeholder="资料标题" />
+        <el-input v-model="materialForm.description" maxlength="512" placeholder="资料说明（可选）" />
+        <el-button type="primary" :loading="materialSaving" :disabled="materialSaving" @click="createMaterial">创建资料</el-button>
+      </div>
+      <div class="material-source-row">
+        <el-select v-model="genForm.material_id" filterable placeholder="选择要维护的资料" style="width:100%" @change="onGenerationMaterial">
+          <el-option v-for="item in materials" :key="item.id" :label="item.title" :value="item.id" />
+        </el-select>
+        <el-upload
+          :show-file-list="false"
+          accept=".pdf,.docx"
+          :auto-upload="false"
+          :disabled="!genForm.material_id || materialUploading"
+          :on-change="onMaterialUpload"
+        >
+          <el-button type="success" :loading="materialUploading" :disabled="!genForm.material_id || materialUploading">上传新版本</el-button>
+        </el-upload>
+      </div>
+      <el-table :data="materialVersions" style="margin-top:14px">
+        <el-table-column prop="version_no" label="版本" width="90"><template #default="{ row }">v{{ row.version_no }}</template></el-table-column>
+        <el-table-column prop="file_type" label="类型" width="90" />
+        <el-table-column label="解析状态" width="120"><template #default="{ row }"><el-tag :type="parseStatusType(row.parse_status)">{{ parseStatusLabel(row.parse_status) }}</el-tag></template></el-table-column>
+        <el-table-column prop="failure_reason" label="失败说明" min-width="220"><template #default="{ row }">{{ row.failure_reason || '—' }}</template></el-table-column>
+        <el-table-column label="操作" width="110"><template #default="{ row }"><el-button v-if="row.parse_status === 'failed'" text type="warning" @click="retryMaterialVersion(row)">重新解析</el-button></template></el-table-column>
+      </el-table>
+      <template #footer><el-button @click="closeMaterialManager">返回 AI 出题</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="taskVisible" title="AI 出题任务" width="640px" append-to-body :close-on-click-modal="false">
       <el-result :icon="taskStatus === 'completed' ? 'success' : taskStatus === 'failed' ? 'error' : 'info'" :title="taskTitle">
         <template #sub-title>
           <div v-if="taskStatus === 'completed'">生成 {{ taskData?.question_ids?.length || 0 }} 道待审核题目</div>
           <div v-else-if="taskStatus === 'failed'" class="task-error">{{ taskData?.error }}</div>
-          <div v-else>正在解析制度内容并生成题目，请勿重复提交。</div>
+          <div v-else>正在根据已解析的出题资料生成题目，请勿重复提交。</div>
         </template>
       </el-result>
-      <template #footer><el-button @click="taskVisible = false">关闭</el-button><el-button v-if="taskStatus === 'completed'" type="primary" @click="taskVisible = false; load()">查看题库</el-button></template>
+      <template #footer><el-button @click="taskVisible = false">关闭</el-button><el-button v-if="taskStatus === 'completed'" type="primary" @click="showQuestionList">查看题库</el-button></template>
     </el-dialog>
   </div>
 </template>
@@ -212,7 +255,8 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import http from '../../api/http';
+import type { UploadFile } from 'element-plus';
+import http, { upload } from '../../api/http';
 import { useAuthStore } from '../../stores/auth';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { formatDateTime } from '../../utils/format';
@@ -227,7 +271,16 @@ import {
 
 type CategoryOption = { id: Id; name: string };
 type ConceptOption = { id: Id; name: string };
-type RegulationOption = { id: Id | number; title: string; current_version_id?: Id | number | null; category_id?: Id | null };
+type MaterialParseStatus = 'pending' | 'parsed' | 'failed';
+type QuestionMaterial = { id: Id; title: string; description: string | null };
+type QuestionMaterialVersion = {
+  id: Id;
+  version_no: number;
+  file_type: string;
+  parse_status: MaterialParseStatus;
+  failure_reason: string | null;
+};
+type QuestionMaterialDetail = QuestionMaterial & { versions: QuestionMaterialVersion[] };
 type QuestionVersionHistory = {
   id: Id;
   revision: number;
@@ -249,7 +302,7 @@ function pageState(): PageState {
 
 const typeOptions: Array<{ value: QuestionType; label: string }> = [
   { value: 'single', label: '单选题' }, { value: 'multiple', label: '多选题' },
-  { value: 'judgment', label: '判断题' }, { value: 'image', label: '图片作答题' },
+  { value: 'judgment', label: '判断题' },
 ];
 const auth = useAuthStore();
 const router = useRouter();
@@ -257,7 +310,8 @@ const list = ref<QuestionView[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const categories = ref<CategoryOption[]>([]);
-const regulations = ref<RegulationOption[]>([]);
+const materials = ref<QuestionMaterial[]>([]);
+const materialVersions = ref<QuestionMaterialVersion[]>([]);
 const filterConcepts = ref<QuestionConcept[]>([]);
 const editorConcepts = ref<ConceptOption[]>([]);
 const filterConceptPage = reactive(pageState());
@@ -267,7 +321,7 @@ const editorConceptLoading = ref(false);
 const editorConceptScope = reactive<{ category_id: Id; type: QuestionType }>({ category_id: '', type: 'single' });
 let filterConceptRequest = 0;
 let editorConceptRequest = 0;
-const query = reactive({ page: 1, page_size: 20, regulation_id: '', category_id: '', concept_id: '', status: '', type: '', difficulty: '', keyword: '' });
+const query = reactive({ page: 1, page_size: 20, category_id: '', concept_id: '', status: '', type: '', difficulty: '', keyword: '' });
 
 const editorVisible = ref(false);
 const editorMode = ref<'create' | 'edit'>('create');
@@ -284,29 +338,32 @@ const versionHistory = ref<QuestionVersionHistory[]>([]);
 const versionHistoryPage = reactive(pageState());
 
 const genVisible = ref(false);
-const genForm = reactive({ regulation_id: '', category_id: '', difficulty: 'easy' as Difficulty, question_count_single: 20, score_single: 3, question_count_multiple: 5, score_multiple: 8 });
+const genForm = reactive({ material_id: '', material_version_id: '', category_id: '', difficulty: 'easy' as Difficulty, question_count_single: 20, score_single: 3, question_count_multiple: 5, score_multiple: 8 });
+const materialVisible = ref(false);
+const materialSaving = ref(false);
+const materialUploading = ref(false);
+const materialForm = reactive({ title: '', description: '' });
 const taskVisible = ref(false);
 const taskStatus = ref('');
 const taskData = ref<any>(null);
-let pollTimer: number | null = null;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let materialPollTimer: ReturnType<typeof setInterval> | null = null;
+let reopenGenerationAfterMaterial = false;
 
 const sumScore = computed(() => Math.round((genForm.question_count_single * genForm.score_single + genForm.question_count_multiple * genForm.score_multiple) * 100) / 100);
 const taskTitle = computed(() => ({ completed: '生成完成', failed: '生成失败', running: '生成中…', queued: '排队中…' } as Record<string, string>)[taskStatus.value] || taskStatus.value);
-const canGenerate = computed(() => auth.can('ai:write') && auth.can('ai:read') && auth.can('regulations:read'));
+const canGenerate = computed(() => auth.can('ai:write') && auth.can('ai:read'));
 const hasEditorDifficulty = computed(() => ['easy', 'medium', 'hard'].includes(editorForm.value.difficulty));
 const missingAiPermissions = computed(() => {
   if (!auth.can('ai:write')) return '';
-  const missing = [
-    !auth.can('ai:read') ? 'AI 任务查看' : '',
-    !auth.can('regulations:read') ? '制度读取' : '',
-  ].filter(Boolean);
+  const missing = [!auth.can('ai:read') ? 'AI 任务查看与出题资料读取' : ''].filter(Boolean);
   return missing.length ? `AI 出题入口已隐藏：还需${missing.join('、')}权限。人工录题不受影响。` : '';
 });
 
 function emptyDraft(): QuestionDraftPayload {
   return {
     category_id: categories.value[0]?.id || '', difficulty: 'easy', type: 'single', stem: '',
-    options: [{ key: 'A', text: '' }, { key: 'B', text: '' }], answer: [0], analysis: '', rubric: null, score: 5,
+    options: [{ key: 'A', text: '' }, { key: 'B', text: '' }], answer: [0], analysis: '', score: 5,
   };
 }
 
@@ -375,6 +432,9 @@ function difficultyLabel(value: string | null) { return ({ easy: '初级', mediu
 function sourceLabel(value: string) { return ({ ai: 'AI', manual: '人工', import: '导入' } as Record<string, string>)[value] || value; }
 function statusLabel(value: string) { return ({ approved: '已通过', pending: '待审核', rejected: '已驳回' } as Record<string, string>)[value] || value; }
 function statusTag(value: string) { return (value === 'approved' ? 'success' : value === 'rejected' ? 'danger' : 'info') as any; }
+function parseStatusLabel(value: MaterialParseStatus) { return ({ pending: '解析中', parsed: '已解析', failed: '解析失败' } as const)[value]; }
+function parseStatusType(value: MaterialParseStatus) { return value === 'parsed' ? 'success' : value === 'failed' ? 'danger' : 'info'; }
+function versionLabel(value: QuestionMaterialVersion) { return 'v' + value.version_no + ' · ' + parseStatusLabel(value.parse_status); }
 function expectedVersionId(value: Id | null | undefined): Id | null { return value ?? null; }
 function savedVersionReceipt(value: unknown): Id | null {
   return typeof value === 'string' && /^[1-9]\d*$/.test(value) ? value : null;
@@ -386,6 +446,123 @@ async function loadCategories() {
     : auth.can('questions:read') ? '/ai/question-category-filters' : '/ai/generation-category-options';
   const result: any = await http.get(endpoint, { params: { page: 1, page_size: 100 } });
   categories.value = result.items || [];
+}
+
+async function loadMaterials() {
+  if (!auth.can('ai:read')) {
+    materials.value = [];
+    return;
+  }
+  const result = await http.get('/admin/question-materials', { params: { page: 1, page_size: 100 } }) as Page<QuestionMaterial>;
+  materials.value = Array.isArray(result.items) ? result.items : [];
+}
+
+let materialDetailRequest = 0;
+async function onGenerationMaterial(value: string) {
+  const request = ++materialDetailRequest;
+  genForm.material_version_id = '';
+  materialVersions.value = [];
+  if (!value) return;
+  const detail = await http.get('/admin/question-materials/' + encodeURIComponent(value)) as QuestionMaterialDetail;
+  if (request !== materialDetailRequest || genForm.material_id !== value) return;
+  materialVersions.value = Array.isArray(detail.versions) ? detail.versions : [];
+}
+
+function openMaterialManager() {
+  reopenGenerationAfterMaterial = true;
+  genVisible.value = false;
+  materialVisible.value = true;
+}
+
+function closeMaterialManager() {
+  materialVisible.value = false;
+}
+
+function onMaterialManagerClosed() {
+  if (reopenGenerationAfterMaterial && !taskVisible.value) genVisible.value = true;
+  reopenGenerationAfterMaterial = false;
+}
+
+async function createMaterial() {
+  const title = materialForm.title.trim();
+  if (!title) {
+    ElMessage.warning('请填写资料标题');
+    return;
+  }
+  materialSaving.value = true;
+  try {
+    const created = await http.post('/admin/question-materials', {
+      title,
+      description: materialForm.description.trim() || undefined,
+    }) as QuestionMaterial;
+    await loadMaterials();
+    genForm.material_id = String(created.id);
+    materialForm.title = '';
+    materialForm.description = '';
+    await onGenerationMaterial(genForm.material_id);
+    ElMessage.success('出题资料已创建，可继续上传 PDF 或 DOCX 版本');
+  } finally {
+    materialSaving.value = false;
+  }
+}
+
+function clearMaterialPoll() {
+  if (materialPollTimer) globalThis.clearInterval(materialPollTimer);
+  materialPollTimer = null;
+}
+
+function replaceMaterialVersion(next: QuestionMaterialVersion) {
+  const index = materialVersions.value.findIndex((item) => item.id === next.id);
+  if (index >= 0) materialVersions.value.splice(index, 1, next);
+  else materialVersions.value.unshift(next);
+}
+
+async function pollMaterialVersion(materialId: string, versionId: string) {
+  clearMaterialPoll();
+  const check = async () => {
+    try {
+      const version = await http.get(
+        '/admin/question-materials/' + encodeURIComponent(materialId) + '/versions/' + encodeURIComponent(versionId) + '/status',
+      ) as QuestionMaterialVersion;
+      if (genForm.material_id === materialId) replaceMaterialVersion(version);
+      if (version.parse_status === 'parsed' || version.parse_status === 'failed') {
+        clearMaterialPoll();
+        if (version.parse_status === 'parsed') ElMessage.success('资料解析完成');
+        else ElMessage.error(version.failure_reason || '资料解析失败');
+      }
+      return version.parse_status;
+    } catch {
+      return 'pending' as const;
+    }
+  };
+  if (await check() !== 'pending') return;
+  materialPollTimer = globalThis.setInterval(() => { void check(); }, 2000);
+}
+
+async function onMaterialUpload(file: UploadFile) {
+  if (!file.raw || !genForm.material_id) return false;
+  const materialId = genForm.material_id;
+  materialUploading.value = true;
+  try {
+    const created = await upload('/admin/question-materials/' + encodeURIComponent(materialId) + '/versions', file.raw, 'file') as any;
+    await onGenerationMaterial(materialId);
+    ElMessage.success('版本已上传，正在解析');
+    void pollMaterialVersion(materialId, String(created.version_id || created.id));
+  } finally {
+    materialUploading.value = false;
+  }
+  return false;
+}
+
+async function retryMaterialVersion(version: QuestionMaterialVersion) {
+  if (!genForm.material_id) return;
+  const materialId = genForm.material_id;
+  await http.post(
+    '/admin/question-materials/' + encodeURIComponent(materialId) + '/versions/' + encodeURIComponent(version.id) + '/retry',
+  );
+  replaceMaterialVersion({ ...version, parse_status: 'pending', failure_reason: null });
+  ElMessage.success('已重新提交解析');
+  void pollMaterialVersion(materialId, version.id);
 }
 
 async function load() {
@@ -538,10 +715,7 @@ function payload(value: QuestionDraftPayload) {
   return Object.fromEntries(Object.entries({
     ...value,
     concept_id: value.concept_id || null,
-    regulation_id: value.regulation_id || null,
-    regulation_version_id: value.regulation_id ? value.regulation_version_id || null : null,
     analysis: value.analysis ?? null,
-    rubric: value.rubric ?? null,
   }).filter(([, item]) => item !== undefined && item !== ''));
 }
 
@@ -619,7 +793,7 @@ async function reviewQuestion(row: QuestionView, status: 'approved' | 'rejected'
 }
 
 async function regenerate(row: QuestionView) {
-  await ElMessageBox.confirm('重新生成会保留旧版本，新内容固定沿用当前类别、难度和来源制度版本。继续？', '重新生成', { type: 'warning' });
+  await ElMessageBox.confirm('重新生成会保留旧版本，新内容固定沿用当前类别、难度和来源资料版本。继续？', '重新生成', { type: 'warning' });
   await http.post(`/ai/questions/${row.question_id}/regenerate`, { expected_version_id: expectedVersionId(row.current_version_id) });
   ElMessage.success('已生成待审核新版本');
   await load();
@@ -627,28 +801,31 @@ async function regenerate(row: QuestionView) {
 
 function openGenerate() {
   genForm.category_id ||= categories.value[0]?.id || '';
-  genForm.regulation_id ||= regulations.value[0] ? String(regulations.value[0].id) : '';
-  onGenerationRegulation(genForm.regulation_id);
+  if (!genForm.material_id && materials.value[0]) {
+    genForm.material_id = String(materials.value[0].id);
+    void onGenerationMaterial(genForm.material_id);
+  }
   genVisible.value = true;
 }
 
-function onGenerationRegulation(value: string) {
-  const regulation = regulations.value.find((item) => String(item.id) === String(value));
-  if (regulation?.category_id && categories.value.some((item) => item.id === regulation.category_id)) {
-    genForm.category_id = regulation.category_id;
-  }
-}
-
 async function startGenerate() {
-  const started: any = await http.post('/ai/generate-questions', { ...genForm, regulation_id: String(genForm.regulation_id), category_id: String(genForm.category_id) });
+  if (!genForm.material_id || !genForm.material_version_id || !genForm.category_id) return;
+  const started: any = await http.post('/ai/generate-questions', {
+    ...genForm,
+    material_id: String(genForm.material_id),
+    material_version_id: String(genForm.material_version_id),
+    category_id: String(genForm.category_id),
+  });
+  reopenGenerationAfterMaterial = false;
+  materialVisible.value = false;
   genVisible.value = false; taskVisible.value = true; taskStatus.value = started.status || 'running'; taskData.value = null;
-  if (pollTimer) window.clearInterval(pollTimer);
-  const timerId = window.setInterval(async () => {
+  if (pollTimer) globalThis.clearInterval(pollTimer);
+  const timerId = globalThis.setInterval(async () => {
     try {
       const status: any = await http.get(`/ai/generate-status/${started.task_id}`);
       taskStatus.value = status.status; taskData.value = status;
       if (status.status === 'completed' || status.status === 'failed') {
-        if (pollTimer === timerId) window.clearInterval(timerId);
+        if (pollTimer === timerId) globalThis.clearInterval(timerId);
         if (pollTimer === timerId) pollTimer = null;
       }
     } catch { /* transient status failure: preserve the same task and retry */ }
@@ -656,16 +833,25 @@ async function startGenerate() {
   pollTimer = timerId;
 }
 
+function showQuestionList() {
+  reopenGenerationAfterMaterial = false;
+  materialVisible.value = false;
+  genVisible.value = false;
+  taskVisible.value = false;
+  void load();
+}
+
 onMounted(async () => {
   await loadCategories();
-  if (auth.can('regulations:read')) {
-    const regulationPage: any = await http.get('/regulations', { params: { page_size: 100 } });
-    regulations.value = regulationPage.list || regulationPage.items || [];
-  }
+  await loadMaterials();
   await load();
 });
 
-onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer); pollTimer = null; });
+onBeforeUnmount(() => {
+  if (pollTimer) globalThis.clearInterval(pollTimer);
+  pollTimer = null;
+  clearMaterialPoll();
+});
 </script>
 
 <style scoped>
@@ -721,6 +907,8 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer); pollTime
 .stem-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-tools { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .editor-hint { color: #909399; font-size: 13px; }
+.material-source-row { display: flex; align-items: center; gap: 10px; width: 100%; }
+.material-create { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(220px, 1.5fr) auto; gap: 10px; margin-bottom: 14px; }
 .version-history { margin-top: 24px; border-top: 1px solid #ebeef5; padding-top: 18px; }
 .task-error { color: #f56c6c; }
 @media (max-width: 1100px) {

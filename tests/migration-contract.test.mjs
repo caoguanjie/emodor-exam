@@ -22,6 +22,9 @@ const require = createRequire(new URL('../server/package.json', import.meta.url)
 const mysql = require('mysql2/promise');
 const ROOT = join(import.meta.dirname, '..');
 const initSql = readFileSync(join(ROOT, 'database', 'init.sql'), 'utf8');
+// Historical 009/010 invariants must be tested against their historical shape,
+// not the current installation schema after cancellation of those columns.
+const preSlimInitSql = execFileSync('git', ['show', '09ddb1f:database/init.sql'], { cwd: ROOT, encoding: 'utf8' });
 const migrationTable = 'schema_migration';
 
 let services;
@@ -447,6 +450,7 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
       '004_system', '005_courses', '006_video_learning', '007_question_bank',
       '008_paper_release', '009_attempt_snapshot', '010_answers', '011_manual_grading',
       '012_course_navigation', '013_exam_monitor_navigation', '014_training_statistics_navigation',
+      '015_demo_slimming',
     ]);
 
     await conn.query("INSERT INTO sys_department (name, sort, status) VALUES ('完整升级保留数据', 917, 0)");
@@ -470,7 +474,7 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
     const [[columns]] = await conn.query(
       "SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'exam_record'",
     );
-    assert.equal(Number(columns.count), 30);
+    assert.equal(Number(columns.count), 26);
     const [[indexes]] = await conn.query(
       "SELECT COUNT(DISTINCT INDEX_NAME) AS count FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'exam_record'",
     );
@@ -482,7 +486,10 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
     const [[predecessorCompletion]] = await conn.execute(predecessorStep.checkSql);
     const [[successorCompletion]] = await conn.execute(successorStep.checkSql);
     assert.equal(Number(predecessorCompletion.complete), 0, '009 legacy shape is superseded after 010');
-    assert.equal(Number(successorCompletion.complete), 1, '010 must own the complete 30-column and 9-index shape');
+    assert.equal(Number(successorCompletion.complete), 0, '010 is superseded by the objective-only shape');
+    const slimStep = definitions.find((item) => item.id === '015_demo_slimming').steps.find((step) => step.id === 'objective_record_columns');
+    const [[slimCompletion]] = await conn.execute(slimStep.checkSql);
+    assert.equal(Number(slimCompletion.complete), 1, '015 owns the final retained columns and indexes');
     const [[preservedDepartment]] = await conn.query(
       "SELECT name, sort, status FROM sys_department WHERE name = '完整升级保留数据'",
     );
@@ -499,8 +506,7 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
       "SELECT id, route_path FROM sys_menu WHERE route_path IN ('/admin/courses','/admin/dashboard','/admin/grading','/admin/exam-records','/admin/exam-monitor','/admin/training-statistics') ORDER BY route_path",
     );
     assert.deepEqual(newNavigation.map((row) => row.route_path), [
-      '/admin/courses', '/admin/dashboard', '/admin/exam-monitor', '/admin/exam-records',
-      '/admin/grading', '/admin/training-statistics',
+      '/admin/courses', '/admin/dashboard', '/admin/exam-records', '/admin/training-statistics',
     ]);
     assert.equal(new Set(newNavigation.map((row) => String(row.id))).size, newNavigation.length);
     assert.equal(newNavigation.every((row) => Number(row.id) < 20 || Number(row.id) > 26), true);
@@ -650,7 +656,7 @@ test('confirmed 010 progress makes its full probe authoritative for old shape an
   for (const variant of variants) {
     await t.test(variant.name, async () => {
       const database = await createDatabase(`${variant.name}_${randomBytes(3).toString('hex')}`);
-      await admin.query(renderSchemaForDatabase(initSql, database));
+      await admin.query(renderSchemaForDatabase(preSlimInitSql, database));
       const conn = await connectionFor(database);
       try {
         const attempts = await migration('009_attempt_snapshot');
@@ -688,7 +694,7 @@ test('confirmed 010 progress makes its full probe authoritative for old shape an
 
 test('successor checksum conflicts reject before predecessor probes or registry writes', async () => {
   const database = await createDatabase('succession_checksum_' + randomBytes(3).toString('hex'));
-  await admin.query(renderSchemaForDatabase(initSql, database));
+  await admin.query(renderSchemaForDatabase(preSlimInitSql, database));
   const conn = await connectionFor(database);
   try {
     const attempts = await migration('009_attempt_snapshot');

@@ -26,12 +26,6 @@
         </el-form-item>
         <el-form-item label="课程简介"><el-input v-model="form.description" type="textarea" :rows="3" maxlength="10000" :disabled="!auth.can('courses:write')" /></el-form-item>
         <el-form-item label="课程封面"><MediaUpload v-model="form.cover_asset_id" purpose="course_cover" :disabled="!canUploadMedia" /></el-form-item>
-        <el-form-item label="制度关联">
-          <el-select v-if="auth.can('regulations:read')" v-model="form.regulation_ids" multiple filterable clearable style="width:100%" :disabled="!auth.can('courses:write')">
-            <el-option v-for="item in regulations" :key="item.id" :label="item.title" :value="item.id" />
-          </el-select>
-          <span v-else class="muted">{{ form.regulation_ids.length ? form.regulation_ids.join('、') : '未关联' }}</span>
-        </el-form-item>
         <el-form-item label="推荐 / 排序">
           <el-switch v-model="form.is_recommended" :disabled="!auth.can('courses:write')" />
           <el-input-number v-model="form.sort_order" :min="0" style="margin-left:16px" :disabled="!auth.can('courses:write')" />
@@ -116,10 +110,9 @@ import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 
 interface CategoryOption { id: Id; name: string }
-interface RegulationOption { id: Id; title: string }
 interface CourseDraft {
   title: string; category_id: Id | ''; description: string; cover_asset_id: Id | null;
-  regulation_ids: Id[]; is_recommended: boolean; sort_order: number;
+  is_recommended: boolean; sort_order: number;
 }
 interface ChapterDraft { title: string; sort_order: number }
 interface LessonDraft { chapter_id: Id | ''; title: string; required: boolean; sort_order: number; asset_id: Id | null }
@@ -134,7 +127,6 @@ const auth = useAuthStore();
 const courseId = String(route.params.id);
 const course = ref<CourseDetail | null>(null);
 const categories = ref<CategoryOption[]>([]);
-const regulations = ref<RegulationOption[]>([]);
 const expanded = ref<Id[]>([]);
 const saving = ref(false);
 const chapterSaving = ref(false);
@@ -151,7 +143,7 @@ const editingChapterId = ref<Id | null>(null);
 const editingLessonId = ref<Id | null>(null);
 const replacementLessonId = ref<Id | null>(null);
 const replacementAssetId = ref<Id | null>(null);
-const form = reactive<CourseDraft>({ title: '', category_id: '', description: '', cover_asset_id: null, regulation_ids: [], is_recommended: false, sort_order: 0 });
+const form = reactive<CourseDraft>({ title: '', category_id: '', description: '', cover_asset_id: null, is_recommended: false, sort_order: 0 });
 const chapterForm = reactive<ChapterDraft>({ title: '', sort_order: 0 });
 const lessonForm = reactive<LessonDraft>({ chapter_id: '', title: '', required: true, sort_order: 0, asset_id: null });
 const structureEditable = computed(() => auth.can('courses:write') && course.value?.status !== 'published');
@@ -181,7 +173,7 @@ const lessonUnsaved = useUnsavedChanges(lessonDirty, { onDiscard: discardLesson 
 const videoUnsaved = useUnsavedChanges(videoDirty, { onDiscard: discardVideo });
 
 function copyCourseDraft(value: CourseDraft): CourseDraft {
-  return { ...value, regulation_ids: [...value.regulation_ids] };
+  return { ...value };
 }
 function sameDraft(left: unknown, right: unknown) {
   return JSON.stringify(left) === JSON.stringify(right);
@@ -336,7 +328,7 @@ async function load(resetForm = true) {
   if (resetForm) {
     Object.assign(form, {
       title: data.title, category_id: data.category_id, description: data.description || '', cover_asset_id: data.cover_asset_id,
-      regulation_ids: [...(data.regulation_ids || [])], is_recommended: Boolean(data.is_recommended), sort_order: data.sort_order || 0,
+      is_recommended: Boolean(data.is_recommended), sort_order: data.sort_order || 0,
     });
     captureCourseBaseline();
   }
@@ -346,10 +338,6 @@ async function loadOptions() {
   if (auth.can('courses:write')) {
     const data = await http.get('/admin/courses/category-options', { params: { page: 1, page_size: 100 } }) as Page<CategoryOption>;
     categories.value = data.items;
-  }
-  if (auth.can('regulations:read')) {
-    const data = await http.get('/regulations', { params: { page: 1, page_size: 100 } }) as { list: { id: string | number; title: string }[] };
-    regulations.value = data.list.map((item) => ({ id: String(item.id), title: item.title }));
   }
 }
 async function saveCourse() {

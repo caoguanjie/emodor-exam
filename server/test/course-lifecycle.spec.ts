@@ -17,7 +17,6 @@ import { QuestionVersion } from '../src/entities/question-version.entity';
 import { ExamPaper } from '../src/entities/exam-paper.entity';
 import { PaperRelease } from '../src/entities/paper-release.entity';
 import { CategoryService } from '../src/modules/training/category.service';
-import { RegulationService } from '../src/modules/regulations/regulation.service';
 
 type RepoMap = Map<unknown, Record<string, unknown>>;
 
@@ -270,42 +269,6 @@ describe('course and regulation category references', () => {
       .toEqual(['categoryId']);
     expect(storage.indices.find((index) => index.target === LessonVersion && index.name === 'uk_lesson_version_number')?.unique)
       .toBe(true);
-  });
-
-  it('does not revalidate an unchanged regulation category when other metadata is edited', async () => {
-    const regulation = { id: '3', title: '旧标题', category: 'legacy', categoryId: '7', description: null };
-    const lockActive = vi.fn();
-    const repository = {
-      findOne: vi.fn().mockResolvedValue(regulation),
-      save: vi.fn(async (value) => value),
-    };
-    const service = Object.create(RegulationService.prototype) as any;
-    service.categories = { lockActive };
-    service.dataSource = { transaction: vi.fn((work: any) => work(managerWith(new Map([[Regulation, repository]])))) };
-    service.audit = { log: vi.fn() };
-
-    await expect(service.update('3', { title: '新标题', category_id: '7' }, { id: 9, name: 'admin' }, null))
-      .resolves.toMatchObject({ title: '新标题', category: 'legacy', category_id: '7' });
-    expect(lockActive).not.toHaveBeenCalled();
-  });
-
-  it('locks a changed active category and allows an explicit null to clear the relation', async () => {
-    const regulation = { id: '3', title: '标题', category: 'legacy', categoryId: '7', description: null };
-    const lockActive = vi.fn().mockResolvedValue({ id: '8', status: 1 });
-    const repository = {
-      findOne: vi.fn().mockResolvedValue(regulation),
-      save: vi.fn(async (value) => value),
-    };
-    const service = Object.create(RegulationService.prototype) as any;
-    service.categories = { lockActive };
-    service.dataSource = { transaction: (work: any) => work(managerWith(new Map([[Regulation, repository]]))) };
-    service.audit = { log: vi.fn() };
-
-    await expect(service.update('3', { category_id: '8' }, { id: 9, name: 'admin' }, null))
-      .resolves.toMatchObject({ category_id: '8', category: 'legacy' });
-    expect(lockActive).toHaveBeenCalledOnce();
-    await expect(service.update('3', { category_id: null }, { id: 9, name: 'admin' }, null))
-      .resolves.toMatchObject({ category_id: null, category: 'legacy' });
   });
 
   it.each(categoryReferenceCases)('prevents deleting a training category referenced by %s', async (_label, referencedEntity) => {

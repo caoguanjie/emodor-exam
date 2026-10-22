@@ -6,21 +6,16 @@
       <span>{{ Number(question.score || 0) }} 分</span>
     </div>
     <div class="question-preview__stem rich-content" v-html="rendered.stem" />
-    <div v-if="question.type !== 'image'" class="question-preview__options">
+    <div class="question-preview__options">
       <div v-for="(option, index) in rendered.options" :key="index" class="question-preview__option">
         <span class="question-preview__key">{{ option.key || String.fromCharCode(65 + index) }}</span>
         <div class="rich-content" v-html="option.text" />
         <el-tag v-if="revealAnswer && (question.answer || []).includes(index)" size="small" type="success">正确答案</el-tag>
       </div>
     </div>
-    <el-alert v-else type="info" :closable="false" title="图片作答题：考生提交受控图片，由管理员按评分参考逐题评分。" />
     <section v-if="revealAnswer && rendered.analysis" class="question-preview__explanation">
       <strong>解析</strong>
       <div class="rich-content" v-html="rendered.analysis" />
-    </section>
-    <section v-if="revealAnswer && question.type === 'image' && rendered.rubric" class="question-preview__explanation">
-      <strong>评分参考</strong>
-      <div class="rich-content" v-html="rendered.rubric" />
     </section>
   </div>
 </template>
@@ -38,20 +33,19 @@ const props = withDefaults(defineProps<{
     options?: QuestionOption[];
     answer?: number[];
     analysis?: string | null;
-    rubric?: string | null;
     score?: number;
   };
   revealAnswer?: boolean;
 }>(), { revealAnswer: true });
 const emit = defineEmits<{ ready: [result: { ok: boolean }] }>();
 
-const rendered = reactive<{ stem: string; options: QuestionOption[]; analysis: string; rubric: string }>({
-  stem: '', options: [], analysis: '', rubric: '',
+const rendered = reactive<{ stem: string; options: QuestionOption[]; analysis: string }>({
+  stem: '', options: [], analysis: '',
 });
 const objectUrls = new Set<string>();
 let renderSerial = 0;
 
-const typeLabel = computed(() => ({ single: '单选题', multiple: '多选题', judgment: '判断题', image: '图片作答题' } as Record<string, string>)[props.question.type || ''] || '题目');
+const typeLabel = computed(() => ({ single: '单选题', multiple: '多选题', judgment: '判断题' } as Record<string, string>)[props.question.type || ''] || '题目');
 const difficultyLabel = computed(() => ({ easy: '初级', medium: '中级', hard: '高级' } as Record<string, string>)[props.question.difficulty || ''] || '难度未知');
 
 function clearObjectUrls() {
@@ -129,20 +123,18 @@ async function hydrate(html: string | null | undefined, serial: number): Promise
 async function renderQuestion() {
   const serial = ++renderSerial;
   clearObjectUrls();
-  const [stem, options, analysis, rubric] = await Promise.all([
+  const [stem, options, analysis] = await Promise.all([
     hydrate(props.question.stem, serial),
     Promise.all((props.question.options || []).map(async (option, index) => ({
       key: option.key || String.fromCharCode(65 + index), text: await hydrate(option.text, serial),
     }))),
     hydrate(props.question.analysis, serial),
-    hydrate(props.question.rubric, serial),
   ]);
   if (serial !== renderSerial) return;
   rendered.stem = stem.html;
   rendered.options = options.map((option) => ({ key: option.key, text: option.text.html }));
   rendered.analysis = analysis.html;
-  rendered.rubric = rubric.html;
-  emit('ready', { ok: stem.ok && options.every((option) => option.text.ok) && analysis.ok && rubric.ok });
+  emit('ready', { ok: stem.ok && options.every((option) => option.text.ok) && analysis.ok });
 }
 
 watch(() => props.question, () => { void renderQuestion(); }, { deep: true, immediate: true });

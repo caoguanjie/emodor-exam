@@ -308,6 +308,18 @@ describe('A5 system configuration safety contracts', () => {
     })).not.toThrow();
   });
 
+  it('does not allow canceled management and monitoring routes to be recreated as menus', () => {
+    for (const route_path of [
+      '/admin/departments', '/admin/users', '/admin/regulations',
+      '/admin/exam-monitor', '/admin/grading', '/admin/statistics',
+    ]) {
+      expect(() => assertMenuDefinition({
+        name: '已取消入口', type: 'menu', route_path,
+        permission_code: null, sort: 1, status: 1,
+      })).toThrowError(expect.objectContaining({ code: 40001 }));
+    }
+  });
+
   it('normalizes a public site config to the exact two-key whitelist and at most three sorted banners', () => {
     expect(normalizeSiteConfig({
       logo_asset_id: '17',

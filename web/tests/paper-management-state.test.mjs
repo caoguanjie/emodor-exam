@@ -467,6 +467,7 @@ async function mountDetail(scope = 'training') {
 
 test('omits every blank list filter and ignores a stale create receipt after close and reopen', async () => {
   const mounted = await mountPapers();
+  assert.equal(context.calls.some((call) => call.method === 'GET' && call.path === '/regulations'), false);
   const firstList = context.calls.find((call) => call.method === 'GET' && call.path === '/admin/papers');
   assert.deepEqual(firstList.config.params, { page: 1, page_size: 20 });
 

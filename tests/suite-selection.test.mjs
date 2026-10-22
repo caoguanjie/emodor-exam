@@ -56,16 +56,17 @@ test('training submissions suite is registered once in aggregate selection', () 
   assert.equal(resolveSuitePaths('all').filter((path) => path === expected).length, 1);
 });
 
-test('training monitor suite is registered once in aggregate selection', () => {
-  const expected = fileURLToPath(new URL('./training-monitor.mjs', import.meta.url));
-  assert.deepEqual(resolveSuitePaths('training-monitor'), [expected]);
+test('training records suite is registered once in aggregate selection', () => {
+  const expected = fileURLToPath(new URL('./training-records.mjs', import.meta.url));
+  assert.deepEqual(resolveSuitePaths('training-records'), [expected]);
   assert.equal(resolveSuitePaths('all').filter((path) => path === expected).length, 1);
 });
 
-test('training grading suite is registered once in aggregate selection', () => {
-  const expected = fileURLToPath(new URL('./training-grading.mjs', import.meta.url));
-  assert.deepEqual(resolveSuitePaths('training-grading'), [expected]);
-  assert.equal(resolveSuitePaths('all').filter((path) => path === expected).length, 1);
+test('removed monitoring and manual-grading suites are not selectable', () => {
+  assert.equal(Object.hasOwn(SUITE_REGISTRY, 'training-monitor'), false);
+  assert.equal(Object.hasOwn(SUITE_REGISTRY, 'training-grading'), false);
+  assert.throws(() => resolveSuitePaths('training-monitor'), /未知测试套件/);
+  assert.throws(() => resolveSuitePaths('training-grading'), /未知测试套件/);
 });
 
 test('training statistics suite is registered once in aggregate selection', () => {

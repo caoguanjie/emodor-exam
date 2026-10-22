@@ -334,7 +334,6 @@ export class StatisticsService {
           attempt_no: r.attemptNo,
           status: r.status,
           score: r.score === null ? null : Number(r.score),
-          switch_count: r.switchCount,
           started_at: r.startedAt,
           submitted_at: r.submittedAt,
         })),
@@ -413,7 +412,6 @@ export class StatisticsService {
         attempts: papersOfUser.reduce((a, [, rows]) => a + rows.length, 0),
         best: best ?? '—',
         status: bestRow?.status || '未参考',
-        switchCount: bestRow?.switchCount ?? '—',
       };
     });
   }

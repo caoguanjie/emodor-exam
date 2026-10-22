@@ -1,17 +1,15 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize,
   ArrayUnique,
   IsArray,
+  IsEmpty,
   IsInt,
   IsOptional,
   IsString,
   Matches,
-  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
-import { TRAINING_DEFAULTS } from '../../common/training-contracts';
 
 export class AnswerInputDto {
   @IsString() @Matches(/^[1-9]\d*$/)
@@ -20,9 +18,8 @@ export class AnswerInputDto {
   @IsOptional() @IsArray() @ArrayUnique() @IsInt({ each: true }) @Min(0, { each: true })
   selected?: number[];
 
-  @IsOptional() @IsArray() @ArrayUnique() @ArrayMaxSize(TRAINING_DEFAULTS.imageAssetsPerItem)
-  @IsString({ each: true }) @Matches(/^[1-9]\d*$/, { each: true })
-  asset_ids?: string[];
+  @IsEmpty({ message: '图片作答已取消' })
+  asset_ids?: never;
 }
 
 export class DraftInputDto {
@@ -46,14 +43,4 @@ export class SubmitAttemptDto {
     if (hasRevision !== hasAnswers) return null;
     return hasRevision ? { revision: this.revision!, answers: this.answers! } : undefined;
   }
-}
-
-export class AttemptHeartbeatDto {
-  @IsOptional() @IsString() @MaxLength(255)
-  device_summary?: string;
-}
-
-export class AnswerImageDto {
-  @IsString() @Matches(/^[1-9]\d*$/)
-  item_id!: string;
 }

@@ -10,7 +10,6 @@ const webRoot = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const previewClientId = '\0question-preview-client-test';
 const editorClientId = '\0question-editor-client-test';
 const questionsClientId = '\0questions-client-test';
-const regulationClientId = '\0regulation-detail-client-test';
 const mediaStubId = '\0question-media-test';
 const httpStubId = '\0question-http-test';
 const authStubId = '\0question-auth-test';
@@ -48,7 +47,8 @@ const context = {
   historyTotal: 41,
   unsavedSources: [],
   confirmDecisions: [],
-  regulation: null,
+  materials: [],
+  materialDetail: null,
   http: null,
 };
 
@@ -92,7 +92,7 @@ const stubs = new Map([
     import { h } from 'vue';
     const context = globalThis.__questionBankUiTest;
     export default {
-      props: ['modelValue', 'categories', 'concepts', 'regulations', 'canUploadMedia', 'conceptLoading'],
+      props: ['modelValue', 'categories', 'concepts', 'canUploadMedia', 'conceptLoading'],
       emits: ['update:modelValue', 'scope-change', 'concept-search'],
       setup(props, { emit }) {
         return () => {
@@ -132,10 +132,10 @@ const stubs = new Map([
       return { markClean: source.markClean, confirmDiscard: source.confirmDiscard };
     }
   `],
-  [routeStubId, `export function useRoute() { return { fullPath: '/admin/regulations/99', params: { id: '99' } }; }`],
+  [routeStubId, `export function useRouter() { return { push() {} }; }`],
   [iconsStubId, `
     import { h } from 'vue';
-    export const ArrowLeft = { setup() { return () => h('arrow-left'); } };
+    export const Filter = { setup() { return () => h('filter-icon'); } };
   `],
 ]);
 
@@ -143,7 +143,6 @@ let vite;
 let QuestionPreview;
 let QuestionEditor;
 let Questions;
-let RegulationDetail;
 let trainingTypes;
 
 function plugin() {
@@ -154,6 +153,10 @@ function plugin() {
       if (virtualStubs.has(source)) return virtualStubs.get(source);
       if (clientCode.has(source) || stubs.has(source)) return source;
       const owner = String(importer || '');
+      if (owner.includes('/src/views/admin/Questions.vue')) {
+        if (source === 'vue-router') return routeStubId;
+        if (source === '@element-plus/icons-vue') return iconsStubId;
+      }
       if ((source === '../api/media' || source === '/src/api/media.ts') && owner.includes('question-preview')) return mediaStubId;
       if ((source === './MediaUpload.vue' || source === '/src/components/MediaUpload.vue') && owner.includes('question-editor-client-test')) return mediaUploadStubId;
       if (owner.includes('questions-client-test')) {
@@ -163,15 +166,6 @@ function plugin() {
         if (source === '../../utils/format' || source === '/src/utils/format.ts') return formatStubId;
         if (source === '../../components/QuestionEditor.vue' || source === '/src/components/QuestionEditor.vue') return editorStubId;
         if (source === '../../components/QuestionPreview.vue' || source === '/src/components/QuestionPreview.vue') return previewStubId;
-        if (source === '../../composables/useUnsavedChanges' || source === '/src/composables/useUnsavedChanges.ts') return unsavedStubId;
-      }
-      if (owner.includes('regulation-detail-client-test')) {
-        if (source === 'element-plus') return elementStubId;
-        if (source === '@element-plus/icons-vue') return iconsStubId;
-        if (source === '../../api/http' || source === '/src/api/http.ts') return httpStubId;
-        if (source === '../../stores/auth' || source === '/src/stores/auth.ts') return authStubId;
-        if (source === '../../utils/format' || source === '/src/utils/format.ts') return formatStubId;
-        if (source === 'vue-router' || source.includes('vue-router')) return routeStubId;
         if (source === '../../composables/useUnsavedChanges' || source === '/src/composables/useUnsavedChanges.ts') return unsavedStubId;
       }
       return undefined;
@@ -199,16 +193,9 @@ function stripViteClientGlue(code, path) {
       .replace(/from "\/src\/utils\/format\.ts"/g, 'from "virtual:question-format-test"')
       .replace(/from "\/src\/components\/QuestionEditor\.vue"/g, 'from "virtual:question-editor-child-test"')
       .replace(/from "\/src\/components\/QuestionPreview\.vue"/g, 'from "virtual:question-preview-child-test"')
-      .replace(/from "\/src\/composables\/useUnsavedChanges\.ts"/g, 'from "virtual:question-unsaved-test"');
-  } else if (path.endsWith('/RegulationDetail.vue')) {
-    output = output
-      .replace(/from "\/node_modules\/\.vite\/deps\/element-plus\.js[^"]*"/g, 'from "virtual:question-element-test"')
-      .replace(/from "\/node_modules\/\.vite\/deps\/@element-plus_icons-vue\.js[^"]*"/g, 'from "virtual:question-icons-test"')
+      .replace(/from "\/src\/composables\/useUnsavedChanges\.ts"/g, 'from "virtual:question-unsaved-test"')
       .replace(/from "\/node_modules\/\.vite\/deps\/vue-router\.js[^"]*"/g, 'from "virtual:question-route-test"')
-      .replace(/from "\/src\/api\/http\.ts"/g, 'from "virtual:question-http-test"')
-      .replace(/from "\/src\/stores\/auth\.ts"/g, 'from "virtual:question-auth-test"')
-      .replace(/from "\/src\/utils\/format\.ts"/g, 'from "virtual:question-format-test"')
-      .replace(/from "\/src\/composables\/useUnsavedChanges\.ts"/g, 'from "virtual:question-unsaved-test"');
+      .replace(/from "\/node_modules\/\.vite\/deps\/@element-plus_icons-vue\.js[^"]*"/g, 'from "virtual:question-icons-test"');
   }
   return output;
 }
@@ -568,14 +555,12 @@ function setHttp() {
   context.http = async (method, url, body, config) => {
     context.calls.push({ method, url, body, config });
     if (method === 'get' && url.includes('category-')) return { items: [{ id: '7', name: '安全培训' }], total: 1, page: 1, page_size: 20 };
-    if (method === 'get' && url === '/regulations/category-options') return { items: [{ id: '7', name: '安全培训' }, { id: '8', name: '管理培训' }], total: 2, page: 1, page_size: 100 };
-    if (method === 'get' && url === '/regulations/99') return JSON.parse(JSON.stringify(context.regulation));
-    if (method === 'get' && url === '/regulations/99/versions') return [{ id: '501', version_no: 1, parse_status: 'parsed', is_current: true }];
-    if (method === 'get' && url === '/departments/tree') return {
-      list: [{ id: 'P', name: '父部门', children: [{ id: 'A', name: '甲部门', children: [] }, { id: 'B', name: '乙部门', children: [] }] }],
-    };
-    if (method === 'get' && url.startsWith('/regulations/99/preview')) return { content_html: '<p>制度内容</p>', file_type: 'pdf', parse_status: 'parsed' };
-    if (method === 'get' && url === '/regulations') return { list: [] };
+    if (method === 'get' && url === '/admin/question-materials') return { items: JSON.parse(JSON.stringify(context.materials)), total: context.materials.length, page: 1, page_size: 100 };
+    if (method === 'get' && /^\/admin\/question-materials\/[^/]+$/.test(url)) return JSON.parse(JSON.stringify(context.materialDetail));
+    if (method === 'get' && /\/admin\/question-materials\/[^/]+\/versions\/[^/]+\/status$/.test(url)) {
+      const versionId = url.split('/').at(-2);
+      return JSON.parse(JSON.stringify(context.materialDetail.versions.find((item) => item.id === versionId)));
+    }
     if (method === 'get' && url === '/ai/questions') return { list: context.row ? [context.row] : [], total: context.row ? 1 : 0 };
     if (method === 'get' && url === '/ai/question-concepts') {
       const page = Number(config?.params?.page || 1);
@@ -590,9 +575,13 @@ function setHttp() {
       return { items: [{ id: `v${page}`, revision: page, status: 'pending', created_at: '2026-10-21T00:00:00Z' }], total: context.historyTotal, page, page_size: 20 };
     }
     if (method === 'get' && url.includes('/versions')) return { items: [], total: 0, page: 1, page_size: 20 };
+    if (method === 'post' && url === '/admin/question-materials') {
+      return { id: 'material-created', title: body.title, description: body.description || null };
+    }
     if (method === 'post' && url === '/ai/questions') {
       return { ...(context.row || {}), ...body, question_id: '7001', current_version_id: '7101', saved_version_id: '7101' };
     }
+    if (method === 'post' && url === '/ai/generate-questions') return { task_id: 'task-1', status: 'running' };
     if (method === 'put' && /^\/ai\/questions\/[^/]+$/.test(url)) {
       return { ...(context.row || {}), ...body, current_version_id: '7102', saved_version_id: '7102' };
     }
@@ -614,7 +603,6 @@ before(async () => {
   QuestionPreview = await loadClientSfc('/src/components/QuestionPreview.vue', previewClientId);
   QuestionEditor = await loadClientSfc('/src/components/QuestionEditor.vue', editorClientId);
   Questions = await loadClientSfc('/src/views/admin/Questions.vue', questionsClientId);
-  RegulationDetail = await loadClientSfc('/src/views/admin/RegulationDetail.vue', regulationClientId);
 });
 
 after(async () => {
@@ -633,9 +621,13 @@ beforeEach(() => {
   context.historyTotal = 41;
   context.unsavedSources = [];
   context.confirmDecisions = [];
-  context.regulation = {
-    id: '99', title: '安全制度', category: '旧分类', category_id: '7', status: 'draft',
-    required_minutes: 10, scroll_segments: 10, scope: { is_all: false, department_ids: ['A'] },
+  context.materials = [{ id: 'material-1', title: '安全资料', description: 'AI 出题依据' }];
+  context.materialDetail = {
+    id: 'material-1', title: '安全资料', description: 'AI 出题依据',
+    versions: [
+      { id: 'version-pending', version_no: 2, file_type: 'pdf', parse_status: 'pending', failure_reason: null },
+      { id: 'version-parsed', version_no: 1, file_type: 'pdf', parse_status: 'parsed', failure_reason: null },
+    ],
   };
   setHttp();
 });
@@ -657,11 +649,26 @@ test('preserves unknown legacy difficulty in the real QuestionEditor SFC', async
     modelValue: trainingTypes.questionDraftFromView(context.row),
     categories: [{ id: '7', name: '安全培训' }],
     concepts: [],
-    regulations: [],
   });
   await nextTick();
   const selects = walk(mounted.root, (node) => node.type === 'el-wrapper');
   assert.ok(selects.some((node) => node.props.modelValue === ''), 'difficulty select should stay blank for a legacy row');
+  mounted.unmount();
+});
+
+test('limits the real question editor to three objective types while retaining controlled stem images', async () => {
+  const mounted = mount(QuestionEditor, {
+    modelValue: trainingTypes.questionDraftFromView(legacyRow({ difficulty: 'easy' })),
+    categories: [{ id: '7', name: '安全培训' }],
+    concepts: [],
+    canUploadMedia: true,
+  });
+  await nextTick();
+  const typeValues = walk(mounted.root, (node) => (
+    node.type === 'el-wrapper' && ['single', 'multiple', 'judgment', 'image'].includes(node.props.value)
+  )).map((node) => node.props.value);
+  assert.deepEqual(typeValues, ['single', 'multiple', 'judgment']);
+  assert.equal(walk(mounted.root, (node) => node.type === 'media-upload-stub').length, 1);
   mounted.unmount();
 });
 
@@ -679,14 +686,13 @@ test('sanitizes malicious legacy and unsaved fields before the real preview SFC 
   assert.deepEqual(context.mediaCalls, [], 'uncontrolled images must never call authenticated media content');
   mounted.unmount();
 
-  const unsaved = mount(QuestionPreview, {
+  const legacyCanceled = mount(QuestionPreview, {
     question: { type: 'image', difficulty: 'easy', stem: '草稿', options: [], answer: [], analysis: null, rubric: '<img src="https://attacker.invalid/rubric"><script>alert(4)</script><b>评分参考</b>' },
   });
-  await waitFor(() => walk(unsaved.root, (node) => Object.hasOwn(node.props, 'innerHTML')).length >= 2, 'unsaved rubric preview');
-  const unsavedHtml = walk(unsaved.root, (node) => Object.hasOwn(node.props, 'innerHTML')).map((node) => String(node.props.innerHTML));
-  assert.ok(unsavedHtml.every((value) => !/<(?:script|img\b[^>]*\bsrc=)/i.test(value)));
+  await nextTick();
+  assert.doesNotMatch(nodeText(legacyCanceled.root), /图片作答题|评分参考/);
   assert.deepEqual(context.mediaCalls, []);
-  unsaved.unmount();
+  legacyCanceled.unmount();
 });
 
 test('hydrates only controlled media through the authenticated API and revokes its blob URL', async () => {
@@ -752,6 +758,90 @@ test('renders a malicious legacy stem as list text without an innerHTML sink', a
   assert.ok(summary);
   assert.match(nodeText(summary), /<img src="https:\/\/attacker\.invalid/);
   assert.equal(Object.hasOwn(summary.props, 'innerHTML'), false);
+  mounted.unmount();
+});
+
+test('AI generation selects a parsed question-material version and sends the new source contract', async () => {
+  context.permissions = new Set(['questions:read', 'questions:write', 'questions:review', 'ai:read', 'ai:write']);
+  context.row = null;
+  const mounted = mount(Questions);
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/admin/question-materials'), 'question materials');
+  await click(button(mounted.root, 'AI 出题'));
+
+  const materialSelect = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '选择出题资料')[0];
+  assert.ok(materialSelect);
+  materialSelect.props['onUpdate:modelValue']?.('material-1');
+  await materialSelect.props.onChange?.('material-1');
+  await nextTick();
+
+  const versionSelect = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '选择已解析版本')[0];
+  assert.ok(versionSelect);
+  const versionOptions = walk(mounted.root, (node) => node.type === 'el-wrapper' && String(node.props.value || '').startsWith('version-'));
+  assert.equal(versionOptions.find((node) => node.props.value === 'version-pending')?.props.disabled, true);
+  assert.notEqual(versionOptions.find((node) => node.props.value === 'version-parsed')?.props.disabled, true);
+  versionSelect.props['onUpdate:modelValue']?.('version-parsed');
+  await nextTick();
+  await click(button(mounted.root, '发起'));
+
+  const generation = context.calls.find((call) => call.method === 'post' && call.url === '/ai/generate-questions');
+  assert.equal(generation.body.material_id, 'material-1');
+  assert.equal(generation.body.material_version_id, 'version-parsed');
+  assert.equal(Object.hasOwn(generation.body, 'regulation_id'), false);
+  mounted.unmount();
+});
+
+test('question-material manager creates a source and uploads an immutable version through the frozen API', async () => {
+  context.permissions = new Set(['questions:read', 'questions:write', 'ai:read', 'ai:write']);
+  const mounted = mount(Questions);
+  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/admin/question-materials'), 'question materials');
+  await click(button(mounted.root, 'AI 出题'));
+  await click(button(mounted.root, '管理资料'));
+
+  const title = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '资料标题')[0];
+  const description = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '资料说明（可选）')[0];
+  title.props['onUpdate:modelValue']?.('新安全资料');
+  description.props['onUpdate:modelValue']?.('仅用于 AI 出题');
+  await nextTick();
+  await click(button(mounted.root, '创建资料'));
+  await waitFor(() => context.calls.some((call) => call.method === 'post' && call.url === '/admin/question-materials'), 'material create');
+
+  const created = context.calls.find((call) => call.method === 'post' && call.url === '/admin/question-materials');
+  assert.deepEqual(created.body, { title: '新安全资料', description: '仅用于 AI 出题' });
+  assert.equal(mounted.instance.$.setupState.genForm.material_id, 'material-created');
+
+  const uploader = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.accept === '.pdf,.docx')[0];
+  assert.ok(uploader);
+  await mounted.instance.$.setupState.onMaterialUpload({ raw: { name: 'source.pdf', type: 'application/pdf', size: 12 } });
+  await waitFor(() => context.calls.some((call) => call.method === 'upload'), 'material version upload');
+  const uploaded = context.calls.find((call) => call.method === 'upload');
+  assert.equal(uploaded.url, '/admin/question-materials/material-created/versions');
+  assert.equal(uploaded.body.field, 'file');
+  mounted.unmount();
+});
+
+test('question workflow teleports dialogs, avoids stacking the material manager, and closes the whole flow', async () => {
+  context.permissions = new Set(['questions:read', 'questions:write', 'ai:read', 'ai:write']);
+  const mounted = mount(Questions);
+  await waitFor(() => context.calls.some((call) => call.url === '/admin/question-materials'), 'question materials');
+  await click(button(mounted.root, 'AI 出题'));
+  const generationDialog = walk(mounted.root, (node) => node.type === 'dialog' && node.props.title === '发起 AI 出题')[0];
+  assert.equal(Object.hasOwn(generationDialog?.props || {}, 'appendToBody') || Object.hasOwn(generationDialog?.props || {}, 'append-to-body'), true);
+
+  await click(button(mounted.root, '管理资料'));
+  assert.equal(mounted.instance.$.setupState.genVisible, false);
+  assert.equal(mounted.instance.$.setupState.materialVisible, true);
+  const materialDialog = walk(mounted.root, (node) => node.type === 'dialog' && node.props.title === '出题资料管理')[0];
+  assert.equal(Object.hasOwn(materialDialog?.props || {}, 'appendToBody') || Object.hasOwn(materialDialog?.props || {}, 'append-to-body'), true);
+
+  mounted.instance.$.setupState.genVisible = true;
+  mounted.instance.$.setupState.materialVisible = true;
+  mounted.instance.$.setupState.taskStatus = 'completed';
+  mounted.instance.$.setupState.taskVisible = true;
+  await nextTick();
+  await click(button(mounted.root, '查看题库'));
+  assert.equal(mounted.instance.$.setupState.genVisible, false);
+  assert.equal(mounted.instance.$.setupState.materialVisible, false);
+  assert.equal(mounted.instance.$.setupState.taskVisible, false);
   mounted.unmount();
 });
 
@@ -923,116 +1013,6 @@ test('tracks a new manual question draft but not list filters or preview state',
   mounted.unmount();
 });
 
-test('keeps regulation draft sections independent and never reloads over sibling edits', async () => {
-  context.permissions = new Set(['regulations:read', 'regulations:write', 'regulations:publish']);
-  const mounted = mount(RegulationDetail);
-  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url.startsWith('/regulations/99/preview')), 'regulation detail');
-  await nextTick();
-  assert.equal(context.unsavedSources.length, 3, 'category, config, and scope need independent sources');
-  const [categorySource, configSource, scopeSource] = context.unsavedSources;
-  assert.deepEqual(context.unsavedSources.map((source) => source.dirty.value), [false, false, false]);
-
-  const setup = mounted.instance.$.setupState;
-  setup.categoryId = '8';
-  await nextTick();
-  assert.deepEqual(context.unsavedSources.map((source) => source.dirty.value), [true, false, false]);
-
-  setup.config.required_minutes = 20;
-  await nextTick();
-  assert.deepEqual(context.unsavedSources.map((source) => source.dirty.value), [true, true, false]);
-
-  const tree = walk(mounted.root, (node) => node.type === 'tree')[0];
-  assert.ok(tree);
-  tree.props.triggerCheck(['B']);
-  await nextTick();
-  assert.deepEqual(context.unsavedSources.map((source) => source.dirty.value), [true, true, true]);
-
-  const detailReads = context.calls.filter((call) => call.method === 'get' && call.url === '/regulations/99').length;
-  await setup.saveCategory();
-  await nextTick();
-  assert.equal(categorySource.dirty.value, false);
-  assert.equal(configSource.dirty.value, true);
-  assert.equal(scopeSource.dirty.value, true);
-  assert.equal(setup.config.required_minutes, 20, 'saving category must preserve the config draft');
-  assert.equal(context.calls.filter((call) => call.method === 'get' && call.url === '/regulations/99').length, detailReads, 'section save must not full reload');
-
-  const normalHttp = context.http;
-  context.http = async (method, url, body, config) => {
-    if (method === 'put' && url === '/regulations/99/learning-config') {
-      throw Object.assign(new Error('conflict'), { code: 40940 });
-    }
-    return normalHttp(method, url, body, config);
-  };
-  const originalDocument = globalThis.document;
-  globalThis.document = { activeElement: null };
-  try {
-    await assert.rejects(() => setup.saveConfig(), (error) => error?.code === 40940);
-    assert.equal(configSource.dirty.value, true);
-    assert.equal(setup.config.required_minutes, 20);
-    context.http = normalHttp;
-    await setup.saveConfig();
-  } finally {
-    context.http = normalHttp;
-    if (originalDocument === undefined) delete globalThis.document;
-    else globalThis.document = originalDocument;
-  }
-  await nextTick();
-  assert.equal(configSource.dirty.value, false);
-  assert.equal(scopeSource.dirty.value, true);
-
-  setup.config.required_minutes = 25;
-  await nextTick();
-  context.confirmDecisions.push(false);
-  assert.equal(await configSource.confirmDiscard(), false);
-  assert.equal(setup.config.required_minutes, 25, 'cancelled config discard must retain the draft');
-  context.confirmDecisions.push(true);
-  assert.equal(await configSource.confirmDiscard(), true);
-  await nextTick();
-  assert.equal(setup.config.required_minutes, 20, 'confirmed config discard restores its saved baseline');
-  assert.equal(configSource.dirty.value, false);
-
-  setup.categoryId = null;
-  await nextTick();
-  assert.equal(categorySource.dirty.value, true);
-  await setup.switchVersion({ id: '502', version_no: 2 });
-  await nextTick();
-  assert.equal(categorySource.dirty.value, true, 'immediate version switch must not clean metadata draft');
-  assert.equal(setup.categoryId, null);
-  await setup.onPublish();
-  assert.equal(categorySource.dirty.value, true, 'publishing must not clean an unrelated metadata draft');
-  assert.equal(setup.reg.status, 'published');
-  await setup.onArchive();
-  assert.equal(categorySource.dirty.value, true, 'archiving must not clean an unrelated metadata draft');
-  assert.equal(setup.reg.status, 'archived');
-  assert.equal(context.calls.filter((call) => call.method === 'get' && call.url === '/regulations/99').length, detailReads, 'immediate writes must not full reload over sibling drafts');
-
-  context.confirmDecisions.push(false);
-  assert.equal(await categorySource.confirmDiscard(), false);
-  assert.equal(setup.categoryId, null);
-  context.confirmDecisions.push(true);
-  assert.equal(await categorySource.confirmDiscard(), true);
-  await nextTick();
-  assert.equal(setup.categoryId, '8', 'confirmed discard restores the last saved category baseline');
-  assert.equal(categorySource.dirty.value, false);
-
-  context.confirmDecisions.push(false);
-  assert.equal(await scopeSource.confirmDiscard(), false);
-  assert.equal(scopeSource.dirty.value, true, 'cancelled scope discard must retain the tree draft');
-  context.confirmDecisions.push(true);
-  assert.equal(await scopeSource.confirmDiscard(), true);
-  await nextTick();
-  assert.deepEqual(setup.scope.departmentIds, ['A'], 'confirmed scope discard restores its server baseline');
-  assert.equal(scopeSource.dirty.value, false);
-
-  tree.props.triggerCheck(['B']);
-  await nextTick();
-  assert.equal(scopeSource.dirty.value, true);
-  await setup.saveScope();
-  await nextTick();
-  assert.equal(scopeSource.dirty.value, false);
-  assert.deepEqual(context.unsavedSources.map((source) => source.dirty.value), [false, false, false]);
-  mounted.unmount();
-});
 
 test('keeps edits made after a delayed question submit and ignores that response after opening another draft', async () => {
   context.row = legacyRow({ current_version_id: '900719925474099312345', revision: 3, difficulty: 'medium' });
@@ -1170,331 +1150,5 @@ test('keeps a question draft when a successful mutation response has no valid re
   assert.equal(mounted.instance.$.setupState.editingExpectedVersionId, '101');
   assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'hard');
   assert.equal(source.dirty.value, true);
-  mounted.unmount();
-});
-
-test('normalizes parent-only and all-children server scopes without creating an initial draft', async () => {
-  context.permissions = new Set(['regulations:read', 'regulations:write']);
-  for (const departmentIds of [['P'], ['A', 'B']]) {
-    context.calls = [];
-    context.unsavedSources = [];
-    context.regulation = {
-      id: '99', title: '安全制度', category: '旧分类', category_id: '7', status: 'draft',
-      required_minutes: 10, scroll_segments: 10, scope: { is_all: false, department_ids: departmentIds },
-    };
-    setHttp();
-    const mounted = mount(RegulationDetail);
-    try {
-      await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url.startsWith('/regulations/99/preview')), `scope initialization ${departmentIds.join(',')}`);
-      await nextTick();
-      assert.equal(context.unsavedSources[2].dirty.value, false, `server scope ${departmentIds.join(',')} must initialize clean`);
-      assert.deepEqual(mounted.instance.$.setupState.scope.departmentIds, ['A', 'B', 'P']);
-      const tree = walk(mounted.root, (node) => node.type === 'tree')[0];
-      assert.deepEqual(tree.props.getCheckedKeys(), ['P', 'A', 'B']);
-    } finally {
-      mounted.unmount();
-    }
-  }
-});
-
-test('rebases a delayed category save from its submitted value and serializes repeated submits', async () => {
-  context.permissions = new Set(['regulations:read', 'regulations:write']);
-  const mounted = mount(RegulationDetail);
-  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url.startsWith('/regulations/99/preview')), 'regulation detail');
-  const setup = mounted.instance.$.setupState;
-  const source = context.unsavedSources[0];
-  const normalHttp = context.http;
-  const gate = deferred();
-  context.http = async (method, url, body, config) => {
-    if (method === 'put' && url === '/regulations/99') {
-      context.calls.push({ method, url, body, config });
-      return gate.promise;
-    }
-    return normalHttp(method, url, body, config);
-  };
-  let savePromise;
-  try {
-    setup.categoryId = '8';
-    savePromise = setup.saveCategory();
-    await waitFor(() => context.calls.some((call) => call.method === 'put' && call.url === '/regulations/99'), 'delayed category save');
-    assert.equal(button(mounted.root, '保存培训类别').props.disabled, true, 'pending category save must disable repeat submission');
-    setup.categoryId = null;
-    await setup.saveCategory();
-    assert.equal(context.calls.filter((call) => call.method === 'put' && call.url === '/regulations/99').length, 1);
-    gate.resolve({});
-    await savePromise;
-    await nextTick();
-    assert.equal(setup.reg.category_id, '8');
-    assert.equal(setup.categoryId, null);
-    assert.equal(source.dirty.value, true);
-    context.confirmDecisions.push(true);
-    assert.equal(await source.confirmDiscard(), true);
-    assert.equal(setup.categoryId, '8', 'discard restores the confirmed request value, not later input');
-  } finally {
-    gate.resolve({});
-    await savePromise?.catch(() => undefined);
-    context.http = normalHttp;
-    mounted.unmount();
-  }
-});
-
-test('rebases a delayed learning-config save from its submitted value and serializes repeated submits', async () => {
-  context.permissions = new Set(['regulations:read', 'regulations:write']);
-  const mounted = mount(RegulationDetail);
-  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url.startsWith('/regulations/99/preview')), 'regulation detail');
-  const setup = mounted.instance.$.setupState;
-  const source = context.unsavedSources[1];
-  const normalHttp = context.http;
-  const gate = deferred();
-  context.http = async (method, url, body, config) => {
-    if (method === 'put' && url === '/regulations/99/learning-config') {
-      context.calls.push({ method, url, body, config });
-      return gate.promise;
-    }
-    return normalHttp(method, url, body, config);
-  };
-  const originalDocument = globalThis.document;
-  globalThis.document = { activeElement: null };
-  let savePromise;
-  try {
-    setup.config.required_minutes = 20;
-    savePromise = setup.saveConfig();
-    await waitFor(() => context.calls.some((call) => call.url === '/regulations/99/learning-config'), 'delayed config save');
-    assert.equal(button(mounted.root, '保存学习要求').props.disabled, true, 'pending config save must disable repeat submission');
-    setup.config.required_minutes = 25;
-    await setup.saveConfig();
-    assert.equal(context.calls.filter((call) => call.url === '/regulations/99/learning-config').length, 1);
-    gate.resolve({});
-    await savePromise;
-    await nextTick();
-    assert.equal(setup.reg.required_minutes, 20);
-    assert.equal(setup.config.required_minutes, 25);
-    assert.equal(source.dirty.value, true);
-    context.confirmDecisions.push(true);
-    assert.equal(await source.confirmDiscard(), true);
-    assert.equal(setup.config.required_minutes, 20, 'discard restores the confirmed config request');
-  } finally {
-    gate.resolve({});
-    await savePromise?.catch(() => undefined);
-    context.http = normalHttp;
-    if (originalDocument === undefined) delete globalThis.document;
-    else globalThis.document = originalDocument;
-    mounted.unmount();
-  }
-});
-
-test('rebases a delayed scope save from its submitted value and serializes repeated submits', async () => {
-  context.permissions = new Set(['regulations:read', 'regulations:write']);
-  const mounted = mount(RegulationDetail);
-  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url.startsWith('/regulations/99/preview')), 'regulation detail');
-  const setup = mounted.instance.$.setupState;
-  const source = context.unsavedSources[2];
-  const normalHttp = context.http;
-  const gate = deferred();
-  context.http = async (method, url, body, config) => {
-    if (method === 'put' && url === '/regulations/99/scope') {
-      context.calls.push({ method, url, body, config });
-      return gate.promise;
-    }
-    return normalHttp(method, url, body, config);
-  };
-  let savePromise;
-  try {
-    setup.scope.is_all = true;
-    savePromise = setup.saveScope();
-    await waitFor(() => context.calls.some((call) => call.url === '/regulations/99/scope'), 'delayed scope save');
-    assert.equal(button(mounted.root, '保存发布范围').props.disabled, true, 'pending scope save must disable repeat submission');
-    setup.scope.is_all = false;
-    await nextTick();
-    const tree = walk(mounted.root, (node) => node.type === 'tree')[0];
-    tree.props.triggerCheck(['B']);
-    await nextTick();
-    await setup.saveScope();
-    assert.equal(context.calls.filter((call) => call.url === '/regulations/99/scope').length, 1);
-    gate.resolve({});
-    await savePromise;
-    await nextTick();
-    assert.deepEqual(setup.reg.scope, { is_all: true, department_ids: [] });
-    assert.deepEqual({ is_all: setup.scope.is_all, departmentIds: setup.scope.departmentIds }, { is_all: false, departmentIds: ['B'] });
-    assert.equal(source.dirty.value, true);
-    context.confirmDecisions.push(true);
-    assert.equal(await source.confirmDiscard(), true);
-    assert.equal(setup.scope.is_all, true, 'discard restores the confirmed all-users request');
-  } finally {
-    gate.resolve({});
-    await savePromise?.catch(() => undefined);
-    context.http = normalHttp;
-    mounted.unmount();
-  }
-});
-
-test('blocks scope writes until initialization completes and then preserves the latest saved baseline', async () => {
-  context.permissions = new Set(['regulations:read', 'regulations:write']);
-  context.regulation.scope = { is_all: false, department_ids: ['P'] };
-  const normalHttp = context.http;
-  const departmentsGate = deferred();
-  context.http = async (method, url, body, config) => {
-    if (method === 'get' && url === '/departments/tree') {
-      context.calls.push({ method, url, body, config });
-      return departmentsGate.promise;
-    }
-    return normalHttp(method, url, body, config);
-  };
-  const mounted = mount(RegulationDetail);
-  try {
-    await waitFor(() => context.calls.some((call) => call.url === '/departments/tree'), 'pending initial department tree');
-    const setup = mounted.instance.$.setupState;
-    const source = context.unsavedSources[2];
-    setup.scope.is_all = true;
-    await nextTick();
-    assert.equal(source.dirty.value, true);
-    assert.equal(button(mounted.root, '保存发布范围').props.disabled, true, 'scope save must stay disabled before initialization is complete');
-    await setup.saveScope();
-    assert.equal(context.calls.some((call) => call.method === 'put' && call.url === '/regulations/99/scope'), false, 'direct calls must not bypass the readiness gate');
-    assert.ok(context.messages.some((item) => item.type === 'warning' && item.message.includes('尚未加载')));
-
-    departmentsGate.resolve({
-      list: [{ id: 'P', name: '父部门', children: [{ id: 'A', name: '甲部门', children: [] }, { id: 'B', name: '乙部门', children: [] }] }],
-    });
-    await waitFor(() => context.calls.some((call) => call.url.startsWith('/regulations/99/preview')), 'completed scope initialization');
-    await nextTick();
-    assert.equal(setup.scopeReady, true);
-    assert.equal(button(mounted.root, '保存发布范围').props.disabled, false);
-    assert.equal(setup.scope.is_all, true, 'initialization must retain the pending user input');
-    assert.equal(source.dirty.value, true);
-
-    await setup.saveScope();
-    await nextTick();
-    const scopeWrites = context.calls.filter((call) => call.method === 'put' && call.url === '/regulations/99/scope');
-    assert.equal(scopeWrites.length, 1);
-    assert.deepEqual(scopeWrites[0].body, { is_all: true, department_ids: [] });
-    assert.equal(source.dirty.value, false);
-
-    setup.scope.is_all = false;
-    await nextTick();
-    assert.equal(source.dirty.value, true);
-    context.confirmDecisions.push(true);
-    assert.equal(await source.confirmDiscard(), true);
-    assert.equal(setup.scope.is_all, true, 'discard must restore the latest explicitly saved all-users baseline');
-    assert.equal(source.dirty.value, false);
-  } finally {
-    departmentsGate.resolve({ list: [] });
-    context.http = normalHttp;
-    mounted.unmount();
-  }
-});
-
-test('keeps scope saving locked after an initialization failure', async () => {
-  context.permissions = new Set(['regulations:read', 'regulations:write']);
-  const mounted = mount(RegulationDetail);
-  await waitFor(() => context.calls.some((call) => call.url.startsWith('/regulations/99/preview')), 'initial regulation detail');
-  const setup = mounted.instance.$.setupState;
-  const normalHttp = context.http;
-  context.http = async (method, url, body, config) => {
-    if (method === 'get' && url === '/departments/tree') throw new Error('department tree unavailable');
-    return normalHttp(method, url, body, config);
-  };
-  try {
-    await assert.rejects(() => setup.load(), /department tree unavailable/);
-    await nextTick();
-    assert.equal(setup.scopeReady, false);
-    assert.equal(button(mounted.root, '保存发布范围').props.disabled, true);
-    const writesBefore = context.calls.filter((call) => call.method === 'put' && call.url === '/regulations/99/scope').length;
-    await setup.saveScope();
-    assert.equal(context.calls.filter((call) => call.method === 'put' && call.url === '/regulations/99/scope').length, writesBefore);
-  } finally {
-    context.http = normalHttp;
-    mounted.unmount();
-  }
-});
-
-test('keeps the server scope baseline when initialization requests resolve after a user change', async () => {
-  context.permissions = new Set(['regulations:read', 'regulations:write']);
-  const normalHttp = context.http;
-  const versionsGate = deferred();
-  const departmentsGate = deferred();
-  context.http = async (method, url, body, config) => {
-    if (method === 'get' && url === '/regulations/99/versions') {
-      context.calls.push({ method, url, body, config });
-      return versionsGate.promise;
-    }
-    if (method === 'get' && url === '/departments/tree') {
-      context.calls.push({ method, url, body, config });
-      return departmentsGate.promise;
-    }
-    return normalHttp(method, url, body, config);
-  };
-  const mounted = mount(RegulationDetail);
-  try {
-    await waitFor(() => context.calls.some((call) => call.url === '/regulations/99/versions'), 'delayed initial versions');
-    const setup = mounted.instance.$.setupState;
-    const source = context.unsavedSources[2];
-    setup.scope.is_all = true;
-    await nextTick();
-    assert.equal(source.dirty.value, true);
-    versionsGate.resolve([{ id: '501', version_no: 1, parse_status: 'parsed', is_current: true }]);
-    await waitFor(() => context.calls.some((call) => call.url === '/departments/tree'), 'delayed initial departments');
-    departmentsGate.resolve({
-      list: [{ id: 'P', name: '父部门', children: [{ id: 'A', name: '甲部门', children: [] }, { id: 'B', name: '乙部门', children: [] }] }],
-    });
-    await waitFor(() => context.calls.some((call) => call.url.startsWith('/regulations/99/preview')), 'completed delayed initialization');
-    await nextTick();
-    assert.equal(source.dirty.value, true, 'late initialization must not absorb the user change');
-    context.confirmDecisions.push(true);
-    assert.equal(await source.confirmDiscard(), true);
-    await nextTick();
-    assert.equal(setup.scope.is_all, false);
-    assert.deepEqual(setup.scope.departmentIds, ['A']);
-    const tree = walk(mounted.root, (node) => node.type === 'tree')[0];
-    assert.deepEqual(tree.props.getCheckedKeys(), ['A']);
-  } finally {
-    versionsGate.resolve([]);
-    departmentsGate.resolve({ list: [] });
-    context.http = normalHttp;
-    mounted.unmount();
-  }
-});
-
-test('restores and submits only truly checked department keys while preserving explicit parent selection', async () => {
-  context.permissions = new Set(['regulations:read', 'regulations:write']);
-  const mounted = mount(RegulationDetail);
-  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url.startsWith('/regulations/99/preview')), 'regulation detail');
-  const setup = mounted.instance.$.setupState;
-  const source = context.unsavedSources[2];
-  let tree = walk(mounted.root, (node) => node.type === 'tree')[0];
-
-  assert.deepEqual(tree.props.getCheckedKeys(), ['A']);
-  assert.deepEqual(tree.props.getHalfCheckedKeys(), ['P'], 'the installed TreeStore derives the half-selected parent');
-  assert.deepEqual(setup.scope.departmentIds, ['A'], 'half-selected parent must not enter the persisted draft');
-
-  tree.props.triggerCheck(['B']);
-  await nextTick();
-  assert.equal(source.dirty.value, true);
-  context.confirmDecisions.push(true);
-  assert.equal(await source.confirmDiscard(), true);
-  await nextTick();
-  tree = walk(mounted.root, (node) => node.type === 'tree')[0];
-  assert.deepEqual(tree.props.getCheckedKeys(), ['A']);
-  assert.deepEqual(tree.props.getHalfCheckedKeys(), ['P']);
-
-  setup.scope.is_all = true;
-  await nextTick();
-  setup.scope.is_all = false;
-  await waitFor(() => {
-    const currentTree = walk(mounted.root, (node) => node.type === 'tree')[0];
-    return currentTree?.props.getCheckedKeys().length === 1;
-  }, 'specified scope restoration after all-users toggle');
-  tree = walk(mounted.root, (node) => node.type === 'tree')[0];
-  assert.deepEqual(tree.props.getCheckedKeys(), ['A'], 'all/specified toggle must not promote half-selected P or select B');
-  await setup.saveScope();
-  const partialPayload = context.calls.findLast((call) => call.method === 'put' && call.url === '/regulations/99/scope').body;
-  assert.deepEqual(partialPayload, { is_all: false, department_ids: ['A'] });
-
-  tree.props.triggerCheck(['P']);
-  await nextTick();
-  assert.deepEqual(tree.props.getCheckedKeys(), ['P', 'A', 'B']);
-  await setup.saveScope();
-  const parentPayload = context.calls.findLast((call) => call.method === 'put' && call.url === '/regulations/99/scope').body;
-  assert.deepEqual(parentPayload, { is_all: false, department_ids: ['A', 'B', 'P'] });
   mounted.unmount();
 });

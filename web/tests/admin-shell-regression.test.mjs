@@ -14,7 +14,6 @@ const clientIds = {
   settings: '\0a5-site-settings-client-test',
   menus: '\0a5-menus-client-test',
   dictionaries: '\0a5-dictionaries-client-test',
-  departments: '\0a5-departments-client-test',
   users: '\0a5-users-client-test',
   trainingCategories: '\0a5-training-categories-client-test',
   administrators: '\0a5-administrators-client-test',
@@ -34,12 +33,15 @@ const clientCode = new Map();
 
 const testContext = {
   calls: [],
+  navigation: [],
+  isAdmin: true,
   confirmDecisions: [],
   confirmCalls: [],
   messages: [],
   learningStarts: 0,
   learningEnds: 0,
   examStarts: 0,
+  examQuestions: [],
   settingsReads: 0,
   aiConfigReads: 0,
   aiConfigGet: null,
@@ -98,7 +100,7 @@ const httpStubCode = `
   const http = {
     async get(path) {
       context.calls.push({ method: 'GET', path });
-      if (path === '/admin/menus/navigation') return [];
+      if (path === '/admin/menus/navigation') return clone(context.navigation);
       if (path === '/site-config') return clone(context.siteConfig);
       if (path === '/admin/site-settings') {
         context.settingsReads += 1;
@@ -107,8 +109,6 @@ const httpStubCode = `
       if (path === '/me/profile') return clone(context.profile);
       if (path === '/admin/menus') return [];
       if (path === '/admin/dictionaries') return { items: [], total: 0 };
-      if (path === '/departments/tree') return { list: clone(context.departments) };
-      if (path === '/users') return { list: clone(context.users), total: context.users.length };
       if (path === '/admin/students') return { items: clone(context.students), total: context.students.length };
       if (/^\\/admin\\/students\\/[^/]+$/.test(path)) {
         const id = decodeURIComponent(path.split('/').at(-1));
@@ -150,7 +150,15 @@ const httpStubCode = `
       }
       if (/^\\/exams\\/papers\\/[^/]+\\/start$/.test(path)) {
         context.examStarts += 1;
-        return { exam_record_id: 'exam-record-1', paper: { title: '考试', pass_score: 60 }, attempt_no: 1, questions: [], remaining_seconds: 1800, saved_answers: {} };
+        return { exam_record_id: 'exam-record-1', paper: { title: '考试', pass_score: 60 }, attempt_no: 1, questions: clone(context.examQuestions), remaining_seconds: 1800, saved_answers: {} };
+      }
+      if (path === '/admin/administrators') {
+        const created = {
+          id: 'admin-created', username: body.username, real_name: body.real_name, system_role: 'employee',
+          status: 1, last_login_at: null, role_ids: [...body.role_ids], permissions: [],
+        };
+        context.administrators.push(created);
+        return clone(created);
       }
       return {};
     },
@@ -181,7 +189,7 @@ const authStubCode = `
   const auth = {
     accessToken: 'test-token',
     user: { id: 7, real_name: '测试管理员', role: 'regulation_admin', permissions: [] },
-    get isAdmin() { return true; },
+    get isAdmin() { return context.isAdmin; },
     get isSuperAdmin() { return false; },
     can(code) { return context.permissions.has(code); },
     async logout() { context.logoutCalls += 1; },
@@ -298,7 +306,7 @@ const elementComponents = [
   'el-checkbox-group', 'el-container', 'el-date-picker', 'el-dialog', 'el-dropdown',
   'el-dropdown-item', 'el-dropdown-menu', 'el-empty', 'el-form', 'el-form-item',
   'el-header', 'el-icon', 'el-input', 'el-input-number', 'el-main', 'el-menu',
-  'el-menu-item', 'el-option', 'el-pagination', 'el-progress', 'el-radio',
+  'el-menu-item', 'el-sub-menu', 'el-option', 'el-pagination', 'el-progress', 'el-radio',
   'el-radio-button', 'el-radio-group', 'el-result', 'el-scrollbar', 'el-select',
   'el-switch', 'el-table', 'el-table-column', 'el-tag', 'el-tree', 'el-tree-select', 'el-upload',
 ];
@@ -374,6 +382,53 @@ function findHostNode(root, predicate) {
   return null;
 }
 
+function findHostNodes(root, predicate, output = []) {
+  if (!root) return output;
+  if (predicate(root)) output.push(root);
+  for (const child of Array.isArray(root.children) ? root.children : []) findHostNodes(child, predicate, output);
+  return output;
+}
+
+function hostText(node) {
+  return `${node?.text || ''}${(node?.children || []).map(hostText).join('')}`;
+}
+
+async function clickHost(node) {
+  assert.ok(node, 'expected clickable host node');
+  assert.notEqual(node.props.disabled, true, 'button should be enabled');
+  await node.props.onClick?.();
+  await flushUpdates();
+}
+
+function demoNavigation() {
+  const menu = (id, name, routePath) => ({ id, name, type: 'menu', route_path: routePath, permission_code: null, icon: null, status: 1, children: [] });
+  const directory = (id, name, children) => ({ id, name, type: 'directory', route_path: null, permission_code: null, icon: null, status: 1, children });
+  return [
+    menu('dashboard', '业务首页', '/admin/dashboard'),
+    directory('training', '培训管理', [
+      menu('categories', '培训类别', '/admin/training-categories'),
+      menu('students', '学员管理', '/admin/students'),
+      menu('courses', '课程管理', '/admin/courses'),
+    ]),
+    directory('exam', '考试管理', [
+      menu('questions', '题库管理', '/admin/questions'),
+      menu('papers', '试卷管理', '/admin/papers'),
+      menu('records', '考试记录', '/admin/exam-records'),
+    ]),
+    menu('statistics', '统计分析', '/admin/training-statistics'),
+    directory('system', '系统设置', [
+      menu('ai-config', 'AI 服务配置', '/admin/ai-config'),
+      menu('administrators', '管理员', '/admin/administrators'),
+      menu('roles', '角色权限', '/admin/roles'),
+      menu('site', '网站配置', '/admin/system/site-settings'),
+      menu('dictionaries', '字典配置', '/admin/system/dictionaries'),
+      menu('menus', '菜单配置', '/admin/system/menus'),
+      menu('sessions', '在线会话', '/admin/sessions'),
+      menu('audit', '审计日志', '/admin/system/audit-logs'),
+    ]),
+  ];
+}
+
 let vite;
 let MainLayout;
 let Reading;
@@ -381,7 +436,6 @@ let ExamRoom;
 let SiteSettings;
 let Menus;
 let Dictionaries;
-let Departments;
 let Users;
 let TrainingCategories;
 let Administrators;
@@ -491,13 +545,22 @@ async function mountShell(initialPath, extraChildren = []) {
         { path: 'settings', component: SiteSettings, meta: { title: '网站配置', admin: true, cache: true } },
         { path: 'menus', component: Menus, meta: { title: '菜单配置', admin: true, cache: true } },
         { path: 'dictionaries', component: Dictionaries, meta: { title: '字典配置', admin: true, cache: true } },
-        { path: 'admin/departments', component: Departments, meta: { title: '部门管理', admin: true, cache: true } },
-        { path: 'admin/users', component: Users, meta: { title: '员工管理', admin: true, cache: true } },
         { path: 'admin/students', component: Users, meta: { title: '学员管理', admin: true, cache: true } },
         { path: 'admin/training-categories', component: TrainingCategories, meta: { title: '培训类别', admin: true, cache: true } },
+        { path: 'admin/dashboard', component: OtherPage, meta: { title: '业务首页', admin: true, cache: true } },
+        { path: 'admin/courses', component: OtherPage, meta: { title: '课程管理', admin: true, cache: true } },
+        { path: 'admin/questions', component: OtherPage, meta: { title: '题库管理', admin: true } },
+        { path: 'admin/papers', component: OtherPage, meta: { title: '试卷管理', admin: true, cache: true } },
+        { path: 'admin/exam-records', component: OtherPage, meta: { title: '考试记录', admin: true } },
+        { path: 'admin/training-statistics', component: OtherPage, meta: { title: '统计分析', admin: true, cache: true } },
         { path: 'admin/administrators', component: Administrators, meta: { title: '管理员', admin: true, cache: true } },
         { path: 'admin/roles', component: Roles, meta: { title: '角色权限', admin: true, cache: true } },
         { path: 'admin/ai-config', component: AiConfig, meta: { title: 'AI 配置', admin: true, cache: true } },
+        { path: 'admin/system/site-settings', component: SiteSettings, meta: { title: '网站配置', admin: true, cache: true } },
+        { path: 'admin/system/dictionaries', component: Dictionaries, meta: { title: '字典配置', admin: true, cache: true } },
+        { path: 'admin/system/menus', component: Menus, meta: { title: '菜单配置', admin: true, cache: true } },
+        { path: 'admin/sessions', component: OtherPage, meta: { title: '在线会话', admin: true, cache: true } },
+        { path: 'admin/system/audit-logs', component: OtherPage, meta: { title: '审计日志', admin: true, cache: true } },
         { path: 'other', component: OtherPage, meta: { title: '其它管理页', admin: true, cache: true } },
         ...extraChildren,
       ],
@@ -551,7 +614,6 @@ before(async () => {
   SiteSettings = await loadClientSfc('/src/views/admin/SiteSettings.vue', clientIds.settings);
   Menus = await loadClientSfc('/src/views/admin/Menus.vue', clientIds.menus);
   Dictionaries = await loadClientSfc('/src/views/admin/Dictionaries.vue', clientIds.dictionaries);
-  Departments = await loadClientSfc('/src/views/admin/Departments.vue', clientIds.departments);
   Users = await loadClientSfc('/src/views/admin/Users.vue', clientIds.users);
   TrainingCategories = await loadClientSfc('/src/views/admin/TrainingCategories.vue', clientIds.trainingCategories);
   Administrators = await loadClientSfc('/src/views/admin/Administrators.vue', clientIds.administrators);
@@ -567,25 +629,26 @@ after(async () => {
 
 beforeEach(() => {
   testContext.calls = [];
+  testContext.navigation = demoNavigation();
+  testContext.isAdmin = true;
   testContext.confirmDecisions = [];
   testContext.confirmCalls = [];
   testContext.messages = [];
   testContext.learningStarts = 0;
   testContext.learningEnds = 0;
   testContext.examStarts = 0;
+  testContext.examQuestions = [];
   testContext.settingsReads = 0;
   testContext.aiConfigReads = 0;
   testContext.aiConfigGet = null;
   testContext.logoutCalls = 0;
   testContext.tabResetCalls = 0;
   testContext.permissions = new Set([
-    'system_settings:read', 'system_settings:write', 'departments:write', 'students:write',
+    'system_settings:read', 'system_settings:write', 'students:write',
     'training_categories:write', 'administrators:write', 'roles:write',
     'ai_config:read', 'ai_config:write',
   ]);
-  testContext.departments = [{ id: 'dept-1', parent_id: null, name: '部门基线', sort: 10, status: 1, children: [] }];
-  testContext.users = [{ id: 'user-1', username: 'employee', real_name: '员工基线', employee_no: 'E001', department_id: 'dept-1', role: 'employee', phone: '', email: '', status: 1, last_login_at: null }];
-  testContext.students = [{ id: 'student-1', username: 'student', real_name: '学员基线', employee_no: '', source: 'institution', category_id: 'category-1', department_id: '', phone: '', email: '', status: 1, avatar_id: 'avatar-old' }];
+  testContext.students = [{ id: 'student-1', username: 'student', real_name: '学员基线', employee_no: '', source: 'institution', category_id: 'category-1', phone: '', email: '', status: 1, avatar_id: 'avatar-old' }];
   testContext.trainingCategories = [{ id: 'category-1', name: '类别基线', description: '类别说明', status: 1 }];
   testContext.administrators = [{ id: 'admin-1', username: 'manager', real_name: '管理员', system_role: 'employee', status: 1, last_login_at: null, role_ids: ['role-1'], permissions: [] }];
   testContext.roles = [{ id: 'business-role-1', code: 'business_role', name: '角色基线', permissions: ['students:read'], status: 1, is_system: false }];
@@ -594,6 +657,7 @@ beforeEach(() => {
   fakeWindow.activeIntervals.clear();
   fakeWindow.clearedIntervals = [];
   fakeWindow.onbeforeunload = null;
+  fakeDocument.visibilityState = 'visible';
   for (const values of fakeWindow.listeners.values()) values.clear();
   for (const values of fakeDocument.listeners.values()) values.clear();
 });
@@ -639,6 +703,65 @@ test('exam route unmount clears heartbeat timers and browser listeners', async (
   assert.equal(fakeWindow.onbeforeunload, null);
   assert.equal(fakeWindow.listeners.get('blur')?.size || 0, 0);
   assert.equal(fakeWindow.listeners.get('pagehide')?.size || 0, 0);
+  mounted.unmount();
+});
+
+test('administrator navigation renders five planned roots with system settings closed and no learner menu', async () => {
+  const mounted = await mountShell('/other');
+  await waitFor(() => testContext.calls.some((call) => call.method === 'GET' && call.path === '/admin/menus/navigation'), 'navigation');
+  const menu = findHostNode(mounted.rootNode, (node) => node.type === 'el-menu');
+  assert.ok(menu);
+  assert.deepEqual(menu.props.defaultOpeneds ?? menu.props['default-openeds'], ['training', 'exam']);
+  assert.equal(findHostNodes(menu, (node) => node.type === 'el-sub-menu').length, 3);
+  assert.deepEqual(
+    findHostNodes(menu, (node) => node.type === 'el-menu-item').map((node) => node.props.index).filter((value) => String(value).startsWith('/admin/')).sort(),
+    [
+      '/admin/administrators', '/admin/ai-config', '/admin/courses', '/admin/dashboard', '/admin/exam-records',
+      '/admin/papers', '/admin/questions', '/admin/roles', '/admin/sessions', '/admin/students',
+      '/admin/system/audit-logs', '/admin/system/dictionaries', '/admin/system/menus', '/admin/system/site-settings',
+      '/admin/training-categories', '/admin/training-statistics',
+    ].sort(),
+  );
+  assert.equal(hostText(menu).includes('我的学习'), false);
+  mounted.unmount();
+});
+
+test('learner navigation keeps existing learning and exam entries without administrator roots', async () => {
+  testContext.isAdmin = false;
+  const mounted = await mountShell('/other');
+  const menu = findHostNode(mounted.rootNode, (node) => node.type === 'el-menu');
+  assert.ok(menu);
+  assert.match(hostText(menu), /我的学习/);
+  assert.match(hostText(menu), /我的考试/);
+  assert.equal(hostText(menu).includes('业务首页'), false);
+  mounted.unmount();
+});
+
+test('exam focus changes never call the cancelled switch endpoint', async () => {
+  const mounted = await mountShell('/exam/paper-1');
+  await waitFor(() => testContext.examStarts === 1, 'exam start');
+  fakeWindow.dispatch('blur', {});
+  fakeDocument.visibilityState = 'hidden';
+  fakeDocument.dispatch('visibilitychange', {});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 650));
+  assert.equal(testContext.calls.some((call) => call.path === '/exams/records/exam-record-1/switch'), false);
+  mounted.unmount();
+});
+
+test('exam room renders single and judgment as one-choice controls and multiple as checkboxes', async () => {
+  testContext.examQuestions = [
+    { question_id: 'single-1', type: 'single', stem: '单选', score: 10, options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }] },
+    { question_id: 'judgment-1', type: 'judgment', stem: '判断', score: 10, options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }] },
+    { question_id: 'multiple-1', type: 'multiple', stem: '多选', score: 10, options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }] },
+  ];
+  const mounted = await mountShell('/exam/paper-1');
+  await waitFor(() => testContext.examStarts === 1, 'exam start');
+  await flushUpdates();
+  const radioGroups = findHostNodes(mounted.rootNode, (node) => node.type === 'el-radio-group');
+  const checkboxGroups = findHostNodes(mounted.rootNode, (node) => node.type === 'el-checkbox-group');
+  assert.equal(radioGroups.length, 2);
+  assert.equal(checkboxGroups.length, 1);
+  assert.match(hostText(mounted.rootNode), /判断（10 分）/);
   mounted.unmount();
 });
 
@@ -803,80 +926,6 @@ test('dictionary dialog keeps a cancelled draft and restores its edit baseline a
   mounted.unmount();
 });
 
-test('department edit protects dialog and route exits, restores baseline, and clears dirty after save', async () => {
-  const mounted = await mountShell('/admin/departments');
-  const first = findInstance(mounted.app, 'moveTree');
-  await waitFor(() => first.setupState.tree.length === 1, 'department tree');
-  first.setupState.openEdit(first.setupState.tree[0]);
-  first.setupState.form.name = '未保存部门';
-  await nextTick();
-  assert.equal(first.setupState.dirty, true);
-
-  testContext.confirmDecisions.push(false);
-  await first.setupState.closeDialog();
-  assert.equal(first.setupState.dialog, true);
-  assert.equal(first.setupState.form.name, '未保存部门');
-
-  testContext.confirmDecisions.push(false);
-  await mounted.router.push('/other');
-  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/departments');
-  assert.equal(first.setupState.form.name, '未保存部门');
-
-  testContext.confirmDecisions.push(true);
-  await mounted.router.push('/other');
-  await mounted.router.push('/admin/departments');
-  const restored = findInstance(mounted.app, 'moveTree');
-  assert.equal(restored.uid, first.uid);
-  assert.equal(restored.setupState.form.name, '部门基线');
-  assert.equal(restored.setupState.dialog, false);
-  assert.equal(restored.setupState.dirty, false);
-
-  restored.setupState.openEdit(restored.setupState.tree[0]);
-  restored.setupState.form.name = '已保存部门';
-  await restored.setupState.onSave();
-  assert.equal(restored.setupState.dirty, false);
-  assert.equal(restored.setupState.dialog, false);
-  assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/departments/dept-1' && call.body.name === '已保存部门'));
-  mounted.unmount();
-});
-
-test('employee edit protects dialog and route exits, restores baseline, and clears dirty after save', async () => {
-  const mounted = await mountShell('/admin/users');
-  const first = findInstance(mounted.app, 'studentSaveInFlightKey');
-  await waitFor(() => first.setupState.list.length === 1, 'employee list');
-  first.setupState.openEdit(first.setupState.list[0]);
-  first.setupState.form.real_name = '未保存员工';
-  await nextTick();
-  assert.equal(first.setupState.employeeDirty, true);
-
-  testContext.confirmDecisions.push(false);
-  await first.setupState.closeEmployeeDialog();
-  assert.equal(first.setupState.dialog, true);
-  assert.equal(first.setupState.form.real_name, '未保存员工');
-
-  testContext.confirmDecisions.push(false);
-  await mounted.router.push('/other');
-  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/users');
-  assert.equal(first.setupState.form.real_name, '未保存员工');
-
-  testContext.confirmDecisions.push(true);
-  await mounted.router.push('/other');
-  await mounted.router.push('/admin/users');
-  const restored = findInstance(mounted.app, 'studentSaveInFlightKey');
-  assert.equal(restored.uid, first.uid);
-  assert.equal(restored.setupState.form.real_name, '员工基线');
-  assert.equal(restored.setupState.dialog, false);
-  assert.equal(restored.setupState.employeeDirty, false);
-
-  restored.setupState.openEdit(restored.setupState.list[0]);
-  restored.setupState.form.real_name = '已保存员工';
-  await restored.setupState.onSave();
-  assert.equal(restored.setupState.employeeDirty, false);
-  assert.equal(restored.setupState.dialog, false);
-  assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/users/user-1' && call.body.real_name === '已保存员工'));
-  mounted.unmount();
-});
-
 test('student edit restores form and avatar state on discard while preserving the guarded save workflow', async () => {
   const mounted = await mountShell('/admin/students');
   const first = findInstance(mounted.app, 'studentSaveInFlightKey');
@@ -925,6 +974,14 @@ test('student edit restores form and avatar state on discard while preserving th
   assert.equal(restored.setupState.studentDialog, false);
   assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/admin/students/student-1' && call.body.real_name === '已保存学员'));
   assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/admin/students/student-1/avatar' && call.body.avatar_id === 'avatar-saved'));
+  mounted.unmount();
+});
+
+test('student administration no longer loads or renders department management fields', async () => {
+  const mounted = await mountShell('/admin/students');
+  await waitFor(() => testContext.calls.some((call) => call.method === 'GET' && call.path === '/admin/students'), 'student list');
+  assert.equal(testContext.calls.some((call) => call.method === 'GET' && call.path === '/departments/tree'), false);
+  assert.equal(hostText(mounted.rootNode).includes('部门'), false);
   mounted.unmount();
 });
 
@@ -996,6 +1053,28 @@ test('administrator role draft protects dialog and route exits, restores baselin
   await restored.setupState.saveRoles();
   assert.equal(restored.setupState.dirty, false);
   assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/admin/administrators/admin-1/roles' && call.body.role_ids.join(',') === 'role-1,role-2'));
+  mounted.unmount();
+});
+
+test('administrator creation posts the account and business roles atomically', async () => {
+  const mounted = await mountShell('/admin/administrators');
+  await waitFor(() => testContext.calls.some((call) => call.method === 'GET' && call.path === '/admin/administrators'), 'administrator list');
+  const open = findHostNode(mounted.rootNode, (node) => node.type === 'el-button' && hostText(node).trim() === '新建管理员');
+  assert.ok(open);
+  await clickHost(open);
+  const administrator = findInstance(mounted.app, 'createForm');
+  Object.assign(administrator.setupState.createForm, {
+    username: 'new.manager', password: 'Secure123', real_name: '新管理员',
+    phone: '13800000000', email: 'manager@example.test', role_ids: ['role-1'],
+  });
+  const save = findHostNode(mounted.rootNode, (node) => node.type === 'el-button' && hostText(node).trim() === '创建管理员');
+  assert.ok(save);
+  await clickHost(save);
+  const write = testContext.calls.find((call) => call.method === 'POST' && call.path === '/admin/administrators');
+  assert.deepEqual(write.body, {
+    username: 'new.manager', password: 'Secure123', real_name: '新管理员',
+    phone: '13800000000', email: 'manager@example.test', role_ids: ['role-1'],
+  });
   mounted.unmount();
 });
 

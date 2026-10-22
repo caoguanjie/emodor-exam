@@ -3,10 +3,10 @@
     <div class="page-head">
       <div class="eyebrow">我的学习</div>
       <h2>我的考试</h2>
-      <p class="desc">完成有效学习后即可参加考试；切屏行为将被记录并计入风控复核</p>
+      <p class="desc">完成有效学习后即可参加考试；倒计时由服务端校准，交卷后自动评分</p>
     </div>
     <el-alert v-if="isMobile" type="warning" :closable="false" style="margin-bottom:16px"
-      title="建议使用桌面端 Chrome / Edge 参加考试（切屏风控在移动端误伤率高，见页面提示）" />
+      title="建议使用桌面端 Chrome / Edge 参加考试；离开页面不会暂停服务端计时。" />
     <el-table v-loading="loading" :data="list">
       <el-table-column prop="paper_title" label="试卷" min-width="200" />
       <el-table-column prop="regulation_title" label="所属制度" min-width="180" />

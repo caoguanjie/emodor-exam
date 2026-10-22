@@ -14,7 +14,7 @@
       <el-form-item label="题型" required>
         <el-select v-model="local.type" style="width:100%" :disabled="disabled" @change="onTypeChange">
           <el-option label="单选题" value="single" /><el-option label="多选题" value="multiple" />
-          <el-option label="判断题" value="judgment" /><el-option label="图片作答题" value="image" />
+          <el-option label="判断题" value="judgment" />
         </el-select>
       </el-form-item>
       <el-form-item label="建议分值" required>
@@ -33,11 +33,6 @@
           :disabled="disabled"
         >
           <el-option v-for="item in concepts" :key="item.id" :label="item.name" :value="item.id" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="制度来源">
-        <el-select v-model="local.regulation_id" clearable filterable style="width:100%" :disabled="disabled" @change="onRegulationChange">
-          <el-option v-for="item in regulations" :key="item.id" :label="item.title" :value="String(item.id)" />
         </el-select>
       </el-form-item>
     </div>
@@ -74,11 +69,8 @@
       </el-form-item>
     </template>
 
-    <el-form-item v-if="local.type !== 'image'" label="答案解析">
+    <el-form-item label="答案解析">
       <el-input v-model="local.analysis" type="textarea" :rows="3" :disabled="disabled" />
-    </el-form-item>
-    <el-form-item v-else label="评分参考" required>
-      <el-input v-model="local.rubric" type="textarea" :rows="4" :disabled="disabled" placeholder="写明评分点、每项分值与封顶规则" />
     </el-form-item>
   </el-form>
 </template>
@@ -90,17 +82,14 @@ import type { Id, QuestionDraftPayload, QuestionOption, QuestionType } from '../
 
 type CategoryOption = { id: Id; name: string };
 type ConceptOption = { id: Id; name: string };
-type RegulationOption = { id: Id | number; title: string; current_version_id?: Id | number | null };
-
 const props = withDefaults(defineProps<{
   modelValue: QuestionDraftPayload;
   categories?: CategoryOption[];
   concepts?: ConceptOption[];
-  regulations?: RegulationOption[];
   disabled?: boolean;
   canUploadMedia?: boolean;
   conceptLoading?: boolean;
-}>(), { categories: () => [], concepts: () => [], regulations: () => [], disabled: false, canUploadMedia: false, conceptLoading: false });
+}>(), { categories: () => [], concepts: () => [], disabled: false, canUploadMedia: false, conceptLoading: false });
 const emit = defineEmits<{
   (event: 'update:modelValue', value: QuestionDraftPayload): void;
   (event: 'scope-change', value: { category_id: Id; type: QuestionType }): void;
@@ -123,17 +112,10 @@ function normalizeType(type: QuestionType) {
   if (type === 'judgment') {
     local.options = fixedJudgmentOptions();
     local.answer = local.answer[0] === 1 ? [1] : [0];
-    local.rubric = null;
-  } else if (type === 'image') {
-    local.options = [];
-    local.answer = [];
-    local.analysis = null;
-    local.rubric ||= '';
   } else {
     if (local.options.length < 2) local.options = [{ key: 'A', text: '' }, { key: 'B', text: '' }];
     local.options = local.options.map((option, index) => ({ key: String.fromCharCode(65 + index), text: option.text }));
     local.answer = type === 'single' ? [local.answer[0] ?? 0] : [...new Set(local.answer)].filter((index) => index < local.options.length);
-    local.rubric = null;
   }
 }
 
@@ -155,11 +137,6 @@ function onScopeChange() {
 
 function searchConcepts(keyword: string) {
   emit('concept-search', keyword);
-}
-
-function onRegulationChange(value: string) {
-  const regulation = props.regulations.find((item) => String(item.id) === String(value));
-  local.regulation_version_id = regulation?.current_version_id ? String(regulation.current_version_id) : undefined;
 }
 
 function toggleAnswer(index: number, checked: unknown) {

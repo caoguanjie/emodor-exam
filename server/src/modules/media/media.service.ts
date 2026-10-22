@@ -114,7 +114,7 @@ export class MediaService {
 
   registerOwnerType(ownerType: string, policy: MediaOwnerPolicy | MediaOwnerAuthorizer): void {
     if (typeof policy === 'function') {
-      this.registerOwnerPolicy(ownerType, { allowedPurposes: ['avatar', 'course_cover', 'video', 'question', 'answer', 'branding'], authorizeRead: policy });
+      this.registerOwnerPolicy(ownerType, { allowedPurposes: ['avatar', 'course_cover', 'video', 'question', 'branding'], authorizeRead: policy });
       return;
     }
     this.registerOwnerPolicy(ownerType, policy);
@@ -315,11 +315,6 @@ export class MediaService {
     ownerId?: string | number,
   ): Promise<MediaUploadResult> {
     return this.uploadForPurpose(actorId, purpose, file, ownerId);
-  }
-
-  /** Dedicated internal answer upload; the generic HTTP purpose remains closed. */
-  async uploadAnswer(actorId: string | number, file: Express.Multer.File): Promise<MediaUploadResult> {
-    return this.uploadForPurpose(actorId, 'answer', file, actorId);
   }
 
   private async findAsset(assetId: MediaId, manager?: EntityManager): Promise<MediaAsset> {

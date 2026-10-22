@@ -10,25 +10,11 @@ function requestPath(req: any): string {
   return String(req.originalUrl || req.url || '').split('?')[0].replace(/^\/api\/v1/, '') || '/';
 }
 
-/** 旧管理接口的集中映射，避免只隐藏按钮而遗漏服务端权限校验。 */
+/** Retained legacy API mappings. Removed management routes intentionally have no mapping. */
 export function legacyPermissionForRequest(req: any): PermissionCode | undefined {
   const path = requestPath(req);
   const method = String(req.method || 'GET').toUpperCase();
-  if (path === '/users' || path.startsWith('/users/')) {
-    if (path === '/users/import-template') return 'students:write';
-    return method === 'GET' ? 'students:read' : 'students:write';
-  }
-  // The department tree is the legacy authenticated lookup used by learner
-  // administration.  Keep its afe5a68 contract (ordinary/delegated users may
-  // read it) while all other department routes retain their explicit policy.
-  if (path === '/departments/tree' && method === 'GET') return undefined;
-  if (path === '/departments' || path.startsWith('/departments/')) return method === 'GET' ? 'departments:read' : 'departments:write';
-
-  if (path === '/regulations' || path.startsWith('/regulations/')) {
-    if (path.includes('/content')) return undefined; // 员工内容阅读接口仍由发布范围收口
-    if (path.endsWith('/publish')) return 'regulations:publish';
-    return method === 'GET' ? 'regulations:read' : 'regulations:write';
-  }
+  if ((path === '/regulations' || path.startsWith('/regulations/')) && path.includes('/content')) return undefined;
 
   if (path === '/ai' || path.startsWith('/ai/')) {
     if (path === '/ai/config' && method === 'GET') return 'ai_config:read';

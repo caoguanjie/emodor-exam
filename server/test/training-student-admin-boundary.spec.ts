@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { UsersService } from '../src/modules/users/users.service';
+import { StudentsController } from '../src/modules/users/users.controller';
 import { SysUser } from '../src/entities/sys-user.entity';
 import { SysUserRole } from '../src/entities/sys-user-role.entity';
 import { RoleEnum } from '../src/common/errors';
@@ -174,10 +175,39 @@ describe('training student/admin boundary', () => {
 
     await expect(service.updateStudent('2', { real_name: 'updated-student' }, actor, null))
       .resolves.toMatchObject({ id: '2', real_name: 'updated-student' });
-    await expect(service.setStudentStatus('2', 0, actor, null)).resolves.toMatchObject({ id: 2, status: 0 });
+    await expect(service.setStudentStatus('2', 0, actor, null)).resolves.toMatchObject({ id: '2', status: 0 });
     await expect(service.resetStudentPassword('2', 'SafePassword9', actor, null)).resolves.toBeUndefined();
 
     expect(saves).toHaveLength(3);
     expect(users.get('2')).toMatchObject({ status: 0, authVersion: 5, forcePasswordChange: 1 });
+  });
+
+  it('does not expose the legacy department field in managed student responses', async () => {
+    const { service } = makeService();
+
+    const detail = await service.studentDetail('1');
+    const page = await service.listStudents({});
+
+    expect(detail).not.toHaveProperty('department_id');
+    expect(page.items[0]).not.toHaveProperty('department_id');
+  });
+
+  it('rejects the removed department field from student create and update requests', () => {
+    const controller = new StudentsController({
+      createStudent: vi.fn(), updateStudent: vi.fn(),
+    } as any, {} as any);
+    const user = { id: 1, username: 'root' } as any;
+
+    expect(() => controller.create({
+      username: 'student', password: 'SafePassword9', real_name: '学员', category_id: '7',
+      source: 'institution', department_id: '2',
+    } as any, user, { body: {
+      username: 'student', password: 'SafePassword9', real_name: '学员', category_id: '7',
+      source: 'institution', department_id: '2',
+    }, ip: '127.0.0.1' } as any)).toThrow('学员请求 包含不支持的字段：department_id');
+
+    expect(() => controller.update('1', { department_id: '2' } as any, user, {
+      body: { department_id: '2' }, ip: '127.0.0.1',
+    } as any)).toThrow('学员请求 包含不支持的字段：department_id');
   });
 });

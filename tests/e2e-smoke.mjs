@@ -1,11 +1,13 @@
 // EmodorRuleExam 端到端冒烟测试：覆盖 README 1.1 全闭环
-// 制度上传 → 在线学习 → AI 出题 → 考试评分 → 统计跟进
+// 资料上传 → AI 出题 → 自动评分；兼容既有只读学习和历史固定卷。
 // 运行前提：API 服务已启动（见 tests/run-e2e.sh）；管理员初始口令经环境变量注入（不落源码）。
 //
 // 用法：BASE_URL=http://127.0.0.1:3000/api/v1 ADMIN_INITIAL_PASSWORD=... \
-//       DB_HOST=127.0.0.1 DB_PORT=3306 DB_USERNAME=root DB_PASSWORD=... DB_DATABASE=ruleexam \
+//       DB_HOST=127.0.0.1 DB_PORT=3306 DB_USERNAME=root DB_PASSWORD=... DB_DATABASE=ruleexam_test_smoke \
 //       node tests/e2e-smoke.mjs
 import http from 'node:http';
+import { isSafeTestDatabase } from './support/test-target.mjs';
+import { randomStrongPassword } from './support/password-fixture.mjs';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -19,7 +21,7 @@ const Redis = require('ioredis');
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:3000/api/v1';
 // 测试夹具口令运行期生成（安全约束：测试代码不落可用凭据字面量）
-const TEST_INIT_PW = 'Ip' + randomBytes(6).toString('hex');
+const TEST_INIT_PW = randomStrongPassword('regadmin', '王管理员', 'emp001', '李学员');
 
 const ADMIN_INITIAL = process.env.ADMIN_INITIAL_PASSWORD;
 if (IS_MAIN && !ADMIN_INITIAL) {
@@ -261,6 +263,7 @@ function buildPdf(lines) {
 const state = { tokens: {} };
 
 async function main() {
+  if (!isSafeTestDatabase(process.env.DB_DATABASE)) throw new Error('冒烟仅允许 ruleexam_test_* 隔离数据库');
   const mockServer = await startMockAi();
   const db = await mysql.createConnection({
     host: process.env.DB_HOST || '127.0.0.1',
@@ -283,7 +286,7 @@ async function main() {
     const r = await adminCaptchaLogin('admin', ADMIN_INITIAL);
     check('首登成功且 force_change_password=true', r.status === 200 && r.json?.data?.force_change_password === true, JSON.stringify(r.json?.code));
     const restrictedToken = r.json?.data?.access_token;
-    const blocked = await api('GET', '/regulations', { token: restrictedToken });
+    const blocked = await api('GET', '/admin/question-materials', { token: restrictedToken });
     check('受限令牌访问业务接口被拒（40301）', blocked.status === 403 && blocked.json?.code === 40301);
     // iat 为秒级精度：等待 >=1 秒确保改密封禁时刻严格晚于受限令牌 iat（07 册 2.1.4 判定语义）
     await sleep(1100);
@@ -299,123 +302,70 @@ async function main() {
     check('改密后旧令牌被吊销（40107）', oldTokenCheck.status === 401 && oldTokenCheck.json?.code === 40107, JSON.stringify(oldTokenCheck.json));
   }
 
-  console.log('\n== 2. 组织基座（FR-ORG-02/03 + UC-09 口径） ==');
+  console.log('\n== 2. 学员与管理员账号、历史只读范围夹具 ==');
   let deptA, deptB, admin2Id, empId;
   {
-    const tree = await api('GET', '/departments/tree', { token: state.tokens.admin });
-    check('部门树含根部门「集团总部」', tree.json?.data?.list?.[0]?.name === '集团总部');
-    const rootId = tree.json.data.list[0].id;
-    const c1 = await api('POST', '/departments', { token: state.tokens.admin, body: { parent_id: String(rootId), name: '生产中心' } });
-    const c2 = await api('POST', '/departments', { token: state.tokens.admin, body: { parent_id: String(rootId), name: '职能中心' } });
-    check('创建两个二级部门', c1.status === 200 && c2.status === 200, JSON.stringify([c1.json, c2.json]));
-    deptA = String(c1.json.data.id);
-    deptB = String(c2.json.data.id);
-    const c3 = await api('POST', '/departments', { token: state.tokens.admin, body: { parent_id: String(rootId), name: '外部单位' } });
-    check('创建范围外部门（导入用户归属，不影响应学口径）', c3.status === 200);
-    const dup = await api('POST', '/departments', { token: state.tokens.admin, body: { parent_id: String(rootId), name: '生产中心' } });
-    check('同父部门重名被拒（40001）', dup.json?.code === 40001);
-    const delRoot = await api('DELETE', '/departments/1', { token: state.tokens.admin });
-    check('根部门不可删除', delRoot.json?.code === 40001);
-    // 部门停用/启用（05 册 2.4.3：删除被拒场景的承载路径，PUT /departments/:id/status）
-    const c4 = await api('POST', '/departments', { token: state.tokens.admin, body: { parent_id: String(rootId), name: '停用演练' } });
-    const c4Id = String(c4.json?.data?.id || '');
-    const stopC4 = await api('PUT', `/departments/${c4Id}/status`, { token: state.tokens.admin, body: { status: 0 } });
-    const treeStopped = await api('GET', '/departments/tree', { token: state.tokens.admin });
-    const stoppedNode = treeStopped.json?.data?.list?.[0]?.children?.find((n) => String(n.id) === c4Id);
-    const startC4 = await api('PUT', `/departments/${c4Id}/status`, { token: state.tokens.admin, body: { status: 1 } });
-    const delC4 = await api('DELETE', `/departments/${c4Id}`, { token: state.tokens.admin });
-    check('部门停用生效且树上呈停用态', stopC4.status === 200 && stoppedNode?.status === 0, JSON.stringify(stopC4.json));
-    check('部门重新启用后可正常删除', startC4.status === 200 && delC4.status === 200);
-
-    const mkAdmin = await api('POST', '/users', {
-      token: state.tokens.admin,
-      body: { username: 'regadmin', password: TEST_INIT_PW, real_name: '王制度', employee_no: 'E9001', department_id: deptB, role: 'regulation_admin' },
+    for (const path of ['/departments/tree', '/users', '/regulations']) {
+      const gone = await api('GET', path, { token: state.tokens.admin });
+      check(`取消管理接口不可调用：${path}`, gone.status === 404);
+    }
+    // 管理 CRUD 已删除；只为仍保留的旧学习/固定卷创建历史范围夹具。
+    const [d1] = await db.query("INSERT INTO sys_department(parent_id,name,status) VALUES(1,'生产中心',1)");
+    const [d2] = await db.query("INSERT INTO sys_department(parent_id,name,status) VALUES(1,'职能中心',1)");
+    deptA = String(d1.insertId); deptB = String(d2.insertId);
+    const [permissions] = await db.query("SELECT p.code FROM sys_permission p JOIN sys_role_permission rp ON rp.permission_id=p.id JOIN sys_role r ON r.id=rp.role_id WHERE r.code='regulation_admin'");
+    const role = await api('POST', '/admin/roles', { token: state.tokens.admin, body: {
+      code: 'smoke_operator', name: '冒烟业务管理', permissions: [...new Set([...permissions.map(p => p.code), 'exam_records:read'])],
+    } });
+    check('创建业务角色', role.status === 200);
+    const mkAdmin = await api('POST', '/admin/administrators', { token: state.tokens.admin, body: {
+      username: 'regadmin', password: TEST_INIT_PW, real_name: '王管理员', role_ids: [String(role.json.data.id)],
+    } });
+    const category = await api('POST', '/admin/training-categories', { token: state.tokens.admin, body: {name:'冒烟培训'} });
+    check('创建冒烟学员类别', category.status === 200, JSON.stringify({status:category.status,code:category.json?.code,message:category.json?.message}));
+    const student = (username, real_name, password = TEST_INIT_PW) => ({
+      username, password, real_name, category_id:String(category.json.data.id), source:'institution',
     });
-    const mkEmp = await api('POST', '/users', {
-      token: state.tokens.admin,
-      body: { username: 'emp001', password: TEST_INIT_PW, real_name: '李员工', employee_no: 'E9002', department_id: deptA, role: 'employee' },
-    });
-    const dupUser = await api('POST', '/users', {
-      token: state.tokens.admin,
-      body: { username: 'emp001', password: TEST_INIT_PW, real_name: '重复', employee_no: 'E9999', department_id: deptA, role: 'employee' },
-    });
-    check('创建制度管理员与员工', mkAdmin.status === 200 && mkEmp.status === 200);
-    check('用户名重复被拒（40001）', dupUser.json?.code === 40001);
-    // F11 三层统一回归：初始密码与改密同策略（弱口令黑名单 + 字母数字组成）
-    const weakPw = await api('POST', '/users', {
-      token: state.tokens.admin,
-      body: { username: 'weakpw1', password: 'admin123', real_name: '弱口令', employee_no: 'E9011', department_id: deptA, role: 'employee' },
-    });
-    check('黑名单弱口令初始密码被拒（40001）', weakPw.json?.code === 40001, JSON.stringify(weakPw.json?.code));
-    const digitsPw = await api('POST', '/users', {
-      token: state.tokens.admin,
-      body: { username: 'weakpw2', password: '12345678', real_name: '纯数字', employee_no: 'E9012', department_id: deptA, role: 'employee' },
-    });
-    check('纯数字初始密码被拒（40001）', digitsPw.json?.code === 40001, JSON.stringify(digitsPw.json?.code));
-    admin2Id = mkAdmin.json?.data?.id;
-    empId = mkEmp.json?.data?.id;
-
-    // 员工登录（首登强制改密）
-    let er = await api('POST', '/auth/login', { body: { username: 'emp001', password: TEST_INIT_PW } });
-    const empNewPw = 'Wq7' + Math.random().toString(16).slice(2, 12);
-    const ech = await api('PUT', '/auth/password', { token: er.json?.data?.access_token, body: { old_password: TEST_INIT_PW, new_password: empNewPw } });
-    er = await api('POST', '/auth/login', { body: { username: 'emp001', password: empNewPw } });
-    state.tokens.emp = er.json?.data?.access_token;
-    check('员工首登改密后可正常登录', !!state.tokens.emp);
-    // RBAC：employee 调管理接口 → 40301（FR-ORG-05 验收①）
-    const rbac = await api('POST', '/regulations', { token: state.tokens.emp, body: { title: 'x', category: 'x' } });
-    check('employee 创建制度被拒（40301）', rbac.status === 403 && rbac.json?.code === 40301);
-    // regulation_admin 调员工管理接口 → 40301（FR-ORG-05 验收②）
-    let ar = await adminCaptchaLogin('regadmin', TEST_INIT_PW);
-    const adminNewPw = 'Vb5' + Math.random().toString(16).slice(2, 12);
-    await api('PUT', '/auth/password', { token: ar.json?.data?.access_token, body: { old_password: TEST_INIT_PW, new_password: adminNewPw } });
-    ar = await adminCaptchaLogin('regadmin', adminNewPw);
-    state.tokens.regadmin = ar.json?.data?.access_token;
-    const denied = await api('GET', '/users', { token: state.tokens.regadmin });
-    check('regulation_admin 调员工管理被拒（40301）', denied.status === 403 && denied.json?.code === 40301);
+    const mkEmp = await api('POST', '/admin/students', { token: state.tokens.admin, body:student('emp001','李学员') });
+    check('独立创建管理员与学员', mkAdmin.status === 200 && mkEmp.status === 200, JSON.stringify({
+      admin: {status:mkAdmin.status,code:mkAdmin.json?.code,message:mkAdmin.json?.message},
+      student: {status:mkEmp.status,code:mkEmp.json?.code,message:mkEmp.json?.message},
+    }));
+    if (mkAdmin.status !== 200 || mkEmp.status !== 200) throw new Error('账号夹具创建失败；停止连锁断言');
+    admin2Id = mkAdmin.json?.data?.id; empId = mkEmp.json?.data?.id;
+    const duplicate = await api('POST', '/admin/students', {token:state.tokens.admin,body:student('emp001','重复')});
+    check('用户名重复被拒', duplicate.json?.code === 40001);
+    for (const [username,password] of [['weakpw1','admin123'],['weakpw2','12345678']]) {
+      const rejected = await api('POST','/admin/students',{token:state.tokens.admin,body:student(username,'口令校验',password)});
+      check(`弱口令被拒：${username}`,rejected.json?.code===40001);
+    }
+    await db.query('UPDATE sys_user SET department_id=? WHERE id=?',[deptA,empId]);
+    await db.query('UPDATE sys_user SET department_id=? WHERE id=?',[deptB,admin2Id]);
+    let er = await api('POST','/auth/login',{body:{username:'emp001',password:TEST_INIT_PW}});
+    const empNewPw = 'Wq7'+randomBytes(8).toString('hex');
+    await api('PUT','/auth/password',{token:er.json?.data?.access_token,body:{old_password:TEST_INIT_PW,new_password:empNewPw}});
+    er=await api('POST','/auth/login',{body:{username:'emp001',password:empNewPw}});
+    state.tokens.emp=er.json?.data?.access_token;
+    check('学员首登改密后可登录',!!state.tokens.emp);
+    const denied = await api('POST','/admin/question-materials',{token:state.tokens.emp,body:{title:'越权资料'}});
+    check('学员无资料写权限',denied.status===403);
+    let ar = await adminCaptchaLogin('regadmin',TEST_INIT_PW);
+    const adminNewPw='Vb5'+randomBytes(8).toString('hex');
+    await api('PUT','/auth/password',{token:ar.json?.data?.access_token,body:{old_password:TEST_INIT_PW,new_password:adminNewPw}});
+    ar=await adminCaptchaLogin('regadmin',adminNewPw);
+    state.tokens.regadmin=ar.json?.data?.access_token;
+    const adminsDenied=await api('GET','/admin/administrators',{token:state.tokens.regadmin});
+    check('业务管理员无管理员管理权限',adminsDenied.status===403);
   }
 
-  console.log('\n== 2.5 Excel 批量导入（FR-ORG-04 / UC-09：部分成功语义） ==');
+  console.log('\n== 3. 出题资料上传与解析 ==');
+  let regId, versionId;
   {
-    const tpl = await fetch(`${BASE}/users/import-template`, { headers: { Authorization: `Bearer ${state.tokens.admin}` } });
-    const tplBuf = Buffer.from(await tpl.arrayBuffer());
-    check('导入模板下载（xlsx 魔数 PK）', tpl.status === 200 && tplBuf[0] === 0x50 && tplBuf[1] === 0x4b);
-    const ExcelJS = require('exceljs');
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('员工导入模板');
-    ws.addRow(['用户名', '姓名', '工号', '部门', '角色', '初始密码']);
-    ws.addRow(['impuser1', '导入一', 'E9101', '集团总部/外部单位', 'employee', TEST_INIT_PW]);
-    ws.addRow(['impuser2', '导入二', 'E9102', '集团总部/外部单位', 'regulation_admin', TEST_INIT_PW]);
-    ws.addRow(['impuser3', '导入三', 'E9101', '集团总部/外部单位', 'employee', TEST_INIT_PW]); // 工号重复 → 整行失败
-    const importBuf = Buffer.from(await wb.xlsx.writeBuffer());
-    const boundary = '----ruleexam-imp' + Date.now();
-    const part = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="import.xlsx"\r\nContent-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n`),
-      importBuf,
-      Buffer.from(`\r\n--${boundary}--\r\n`),
-    ]);
-    const imp = await fetch(`${BASE}/users/import`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${state.tokens.admin}`, 'Content-Type': `multipart/form-data; boundary=${boundary}` },
-      body: part,
-    });
-    const impJson = await imp.json();
-    check('批量导入：成功 2 条、失败 1 条（部分成功语义，文件内重复在预校验拦截）',
-      impJson?.data?.success_count === 2 && impJson?.data?.fail_count === 1 && impJson.data.failures[0].reason.includes('工号在文件内重复'),
-      JSON.stringify(impJson?.data));
-    // 导入成功的员工可登录（首登强制改密）
-    const impLogin = await adminCaptchaLogin('impuser1', TEST_INIT_PW);
-    check('导入成功的员工可直接登录（进入强制改密流程）', impLogin.json?.data?.force_change_password === true, JSON.stringify(impLogin.json?.code));
-  }
-
-  console.log('\n== 3. 制度上传与解析（FR-REG-01~04） ==');
-  let regId;
-  {
-    const c = await api('POST', '/regulations', {
+    const c = await api('POST', '/admin/question-materials', {
       token: state.tokens.regadmin,
-      body: { title: '安全生产管理制度 V1', category: '安全类', description: '冒烟测试制度' },
+      body: { title: '安全生产管理制度 V1', description: '冒烟测试出题资料' },
     });
-    check('创建制度 → draft', c.status === 200 && c.json?.data?.status === 'draft');
+    check('创建出题资料', c.status === 200 && !!c.json?.data?.id);
     regId = String(c.json.data.id);
 
     const docx = await buildDocx([
@@ -432,14 +382,14 @@ async function main() {
       docx,
       Buffer.from(`\r\n--${boundary}--\r\n`),
     ]);
-    const res = await fetch(`${BASE}/regulations/${regId}/versions`, {
+    const res = await fetch(`${BASE}/admin/question-materials/${regId}/versions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${state.tokens.regadmin}`, 'Content-Type': `multipart/form-data; boundary=${boundary}` },
       body: part,
     });
     const upJson = await res.json();
     check('上传 docx → 版本创建 parse_status=pending', res.status === 200 && upJson?.data?.parse_status === 'pending', JSON.stringify(upJson));
-    const versionId = String(upJson.data.version_id);
+    versionId = String(upJson.data.id);
     check('版本号 version_no = 1', upJson.data.version_no === 1);
 
     // 伪装扩展名文件被拒（魔数校验，07 册 4.3.1）
@@ -449,7 +399,7 @@ async function main() {
       Buffer.from('this is not a zip file at all........'),
       Buffer.from(`\r\n--${boundary2}--\r\n`),
     ]);
-    const fake = await fetch(`${BASE}/regulations/${regId}/versions`, {
+    const fake = await fetch(`${BASE}/admin/question-materials/${regId}/versions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${state.tokens.regadmin}`, 'Content-Type': `multipart/form-data; boundary=${boundary2}` },
       body: fakePart,
@@ -461,14 +411,15 @@ async function main() {
     let parsed = null;
     for (let i = 0; i < 30; i++) {
       await sleep(1000);
-      const d = await api('GET', `/regulations/${regId}/versions/${versionId}`, { token: state.tokens.regadmin });
+      const d = await api('GET', `/admin/question-materials/${regId}/versions/${versionId}/status`, { token: state.tokens.regadmin });
       if (d.json?.data?.parse_status === 'parsed') {
         parsed = d.json.data;
         break;
       }
       if (d.json?.data?.parse_status === 'failed') break;
     }
-    check('docx 异步解析成功（parsed，含 content_html）', !!parsed && typeof parsed.content_html === 'string' && parsed.content_html.includes('第三章'), JSON.stringify(parsed?.parse_status));
+    const [parsedRows] = await db.query('SELECT content_html FROM regulation_version WHERE id=?',[versionId]);
+    check('docx 异步解析成功，API不暴露正文', !!parsed && !('content_html' in parsed) && parsedRows[0]?.content_html?.includes('第三章'), JSON.stringify(parsed?.parse_status));
 
     // PDF 版本（双路径：pdf → text_content，content_html 为空）
     const pdf = buildPdf([
@@ -481,17 +432,17 @@ async function main() {
       pdf,
       Buffer.from(`\r\n--${boundary3}--\r\n`),
     ]);
-    const res2 = await fetch(`${BASE}/regulations/${regId}/versions`, {
+    const res2 = await fetch(`${BASE}/admin/question-materials/${regId}/versions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${state.tokens.regadmin}`, 'Content-Type': `multipart/form-data; boundary=${boundary3}` },
       body: pdfPart,
     });
     const up2 = await res2.json();
     let pdfParsed = false;
-    if (up2?.data?.version_id) {
+    if (up2?.data?.id) {
       for (let i = 0; i < 30; i++) {
         await sleep(1000);
-        const d = await api('GET', `/regulations/${regId}/versions/${up2.data.version_id}`, { token: state.tokens.regadmin });
+        const d = await api('GET', `/admin/question-materials/${regId}/versions/${up2.data.id}/status`, { token: state.tokens.regadmin });
         if (d.json?.data?.parse_status === 'parsed') {
           pdfParsed = true;
           break;
@@ -501,32 +452,9 @@ async function main() {
     }
     check('pdf 版本解析成功（第二版本，append-only）', pdfParsed && up2?.data?.version_no === 2, JSON.stringify(up2));
 
-    // 切换生效版本 + 学习要求 + 发布范围
-    const cfg = await api('PUT', `/regulations/${regId}/learning-config`, {
-      token: state.tokens.regadmin,
-      body: { required_minutes: 1, scroll_segments: 10 }, // 1 分钟便于冒烟（≥1 合法）
-    });
-    check('学习要求配置成功（required_minutes=1）', cfg.status === 200);
-    const badCfg = await api('PUT', `/regulations/${regId}/learning-config`, {
-      token: state.tokens.regadmin,
-      body: { required_minutes: 0, scroll_segments: 10 },
-    });
-    check('required_minutes ≤ 0 被拦截（40001）', badCfg.json?.code === 40001);
-    const sc = await api('PUT', `/regulations/${regId}/scope`, { token: state.tokens.regadmin, body: { department_ids: [String(deptA), String(deptB)] } });
-    check('发布范围按部门圈定', sc.status === 200);
-    // F5 snake_case 契约回归：详情出参 scope.is_all / department_ids 恒为字符串数组（与 GET 对称）
-    const scScope = sc.json?.data?.scope;
-    check(
-      'scope 出参契约（is_all=false 且 department_ids 为字符串数组）',
-      scScope?.is_all === false && Array.isArray(scScope?.department_ids)
-        && scScope.department_ids.length === 2 && scScope.department_ids.every((v) => typeof v === 'string'),
-      JSON.stringify(scScope),
-    );
-    // 先切换生效版本再发布（发布前置：current_version_id 指向 parsed 版本，C-04）
-    const sw = await api('PUT', `/regulations/${regId}/current-version`, { token: state.tokens.regadmin, body: { version_id: versionId } });
-    check('切换生效版本至 docx v1', sw.status === 200 && sw.json?.data?.current_version_id === Number(versionId));
-    const pub = await api('POST', `/regulations/${regId}/publish`, { token: state.tokens.regadmin });
-    check('制度发布 → published', pub.json?.data?.status === 'published', JSON.stringify(pub.json));
+    // 只读兼容功能的历史夹具，不恢复已删除的管理操作。
+    await db.query("UPDATE regulation SET required_minutes=1,scroll_segments=10,current_version_id=?,status='published',published_at=NOW(3) WHERE id=?",[versionId,regId]);
+    await db.query('INSERT INTO regulation_scope(regulation_id,department_id) VALUES(?,?),(?,?)',[regId,deptA,regId,deptB]);
     // F8 回归（发布试卷前）：我的制度列表 has_published_paper=false
     const lrPre = await api('GET', '/learning/regulations', { token: state.tokens.emp });
     const lrPreItem = lrPre.json?.data?.list?.find((x) => Number(x.id) === Number(regId));
@@ -562,7 +490,7 @@ async function main() {
     const badSum = await api('POST', '/ai/generate-questions', {
       token: state.tokens.regadmin,
       body: {
-        regulation_id: regId, category_id: trainingCategoryId, difficulty: 'medium',
+        material_id: regId, material_version_id: versionId, category_id: trainingCategoryId, difficulty: 'medium',
         question_count_single: 10, question_count_multiple: 5, score_single: 5, score_multiple: 8,
       },
     });
@@ -570,7 +498,7 @@ async function main() {
     const gen = await api('POST', '/ai/generate-questions', {
       token: state.tokens.regadmin,
       body: {
-        regulation_id: regId, category_id: trainingCategoryId, difficulty: 'medium',
+        material_id: regId, material_version_id: versionId, category_id: trainingCategoryId, difficulty: 'medium',
         question_count_single: 10, question_count_multiple: 5, score_single: 6, score_multiple: 8,
       },
     });
@@ -685,7 +613,7 @@ async function main() {
     check('进度查询确认有效学习达标', prog.json?.data?.is_valid === true);
   }
 
-  console.log('\n== 8. 考试全流程（FR-EXM-01~07：乱序/计时/切屏/幂等交卷/自动评分） ==');
+  console.log('\n== 8. 考试全流程（FR-EXM-01~07：乱序/计时/幂等交卷/自动评分） ==');
   let examRecordId;
   {
     const start = await api('POST', `/exams/papers/${paperId}/start`, { token: state.tokens.emp });
@@ -704,10 +632,8 @@ async function main() {
     const inProgressResult = await api('GET', `/exams/records/${examRecordId}/result`, { token: state.tokens.emp });
     check('在考拉取成绩明细被拒（40905）', inProgressResult.json?.code === 40905, JSON.stringify(inProgressResult.json?.code));
 
-    // 切屏上报（1 秒去抖）
-    const sw1 = await api('POST', `/exams/records/${examRecordId}/switch`, { token: state.tokens.emp });
-    const sw2 = await api('POST', `/exams/records/${examRecordId}/switch`, { token: state.tokens.emp });
-    check('切屏计数 + 1 秒去抖（两次上报计 1 次）', sw1.json?.data?.switch_count === 1 && sw2.json?.data?.switch_count === 1, JSON.stringify([sw1.json?.data, sw2.json?.data]));
+    const removedSwitch = await api('POST', `/exams/records/${examRecordId}/switch`, {token:state.tokens.emp});
+    check('切屏接口已删除', removedSwitch.status === 404);
 
     // 从库读取正确答案，按呈现位置提交（白盒冒烟：判分规则已由单元测试覆盖）
     const [answerRows] = await db.query('SELECT id, answer FROM question WHERE id IN (?)', [qs.map((q) => String(q.question_id))]);
@@ -724,7 +650,6 @@ async function main() {
     const sub = await api('POST', `/exams/records/${examRecordId}/submit`, { token: state.tokens.emp, body: { answers } });
     check('交卷评分：全对 100 分 → passed', sub.json?.data?.status === 'passed' && Number(sub.json?.data?.score) === 100, JSON.stringify({ s: sub.json?.data?.status, score: sub.json?.data?.score }));
     check('交卷响应含逐题对错摘要（15 题）', sub.json?.data?.answer_summary?.length === 15);
-    check('切屏次数回写（switch_count=1）', sub.json?.data?.switch_count === 1, JSON.stringify(sub.json?.data?.switch_count));
 
     // 幂等：重复交卷返回首次结果
     const sub2 = await api('POST', `/exams/records/${examRecordId}/submit`, { token: state.tokens.emp, body: { answers } });
@@ -739,8 +664,8 @@ async function main() {
     check('成绩明细含 answer 与 analysis（交卷后可见）', result.json?.data?.questions?.every((q) => 'answer' in q && 'analysis' in q));
 
     // 数据范围：他人成绩不可见（40302）
-    const other = await api('GET', `/exams/records/${examRecordId}/result`, { token: state.tokens.regadmin });
-    check('管理员可查全员成绩（权限矩阵）', other.status === 200);
+    const other = await api('GET', `/admin/exam-records/${examRecordId}/result`, { token: state.tokens.regadmin });
+    check('有记录读取权限的管理员可查成绩', other.status === 200, JSON.stringify(other.json?.code));
   }
 
   console.log('\n== 9. 统计报表（FR-STT-01~05） ==');
@@ -776,8 +701,8 @@ async function main() {
 
   console.log('\n== 10. 审计与管理端预览 ==');
   {
-    const preview = await api('GET', `/regulations/${regId}/preview`, { token: state.tokens.regadmin });
-    check('管理端预览（docx content_html，跳过发布态校验）', preview.json?.data?.file_type === 'docx' && !!preview.json?.data?.content_html);
+    const preview = await api('GET', `/regulations/${regId}/content`, { token: state.tokens.emp });
+    check('历史学习内容仍受控可读', preview.status === 200 && preview.json?.data?.file_type === 'docx');
     const fs = await import('node:fs');
     const logDir = process.env.LOG_DIR ? join(process.env.LOG_DIR, 'audit') : new URL('../server/data/logs/audit/', import.meta.url).pathname;
     const files = fs.existsSync(logDir) ? fs.readdirSync(logDir) : [];

@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { AuditService } from '../../common/audit.service';
 import { Errors, ExamStatus } from '../../common/errors';
-import { RedisService } from '../../common/redis.service';
 import type { DraftInput, FinalResult, Id, SubmissionMethod } from '../../common/training-contracts';
 import { ExamAnswer } from '../../entities/exam-answer.entity';
 import { ExamRecord } from '../../entities/exam-record.entity';
@@ -16,13 +15,11 @@ export interface SubmissionGradeDetail {
   itemId: string;
   selected: number[] | null;
   isCorrect: number | null;
-  gainedCents: number | null;
-  pendingManual: boolean;
+  gainedCents: number;
 }
 
 export interface SubmissionGrade {
   totalCents: number;
-  pendingManual: boolean;
   fullScoreCount: number;
   details: SubmissionGradeDetail[];
 }
@@ -31,19 +28,15 @@ export function gradeSubmissionSnapshot(snapshot: GradingSnapshot, rows: ExamAns
   const byItem = new Map(rows.filter((row) => row.recordQuestionId).map((row) => [String(row.recordQuestionId), row]));
   const details = snapshot.items.map((item): SubmissionGradeDetail => {
     const row = byItem.get(String(item.itemId));
-    if (item.type === 'image') {
-      const hasAssets = Array.isArray(row?.assetIds) && row!.assetIds!.length > 0;
-      return {
-        itemId: String(item.itemId), selected: null, isCorrect: null,
-        gainedCents: hasAssets ? null : 0, pendingManual: hasAssets,
-      };
+    if (!['single', 'multiple', 'judgment'].includes(item.type)) {
+      throw Errors.submitConflict('题型不支持自动评分');
     }
     const selected = Array.isArray(row?.selected)
       ? [...new Set(row!.selected!.map(Number))].sort((left, right) => left - right)
       : [];
     const expected = [...new Set(item.answer.map(Number))].sort((left, right) => left - right);
     if (!selected.length) {
-      return { itemId: String(item.itemId), selected: null, isCorrect: null, gainedCents: 0, pendingManual: false };
+      return { itemId: String(item.itemId), selected: null, isCorrect: null, gainedCents: 0 };
     }
     const fullyCorrect = selected.length === expected.length && selected.every((value, index) => value === expected[index]);
     let gainedCents = 0;
@@ -59,20 +52,18 @@ export function gradeSubmissionSnapshot(snapshot: GradingSnapshot, rows: ExamAns
       }
     }
     return {
-      itemId: String(item.itemId), selected, isCorrect, gainedCents, pendingManual: false,
+      itemId: String(item.itemId), selected, isCorrect, gainedCents,
     };
   });
   return {
-    totalCents: details.reduce((sum, detail) => sum + (detail.gainedCents || 0), 0),
-    pendingManual: details.some((detail) => detail.pendingManual),
+    totalCents: details.reduce((sum, detail) => sum + detail.gainedCents, 0),
     fullScoreCount: details.filter((detail, index) => detail.gainedCents === Number(snapshot.items[index].scoreCents)).length,
     details,
   };
 }
 
 type ResultRecord = ExamRecord & {
-  gradingState: 'not_submitted' | 'pending_manual' | 'finalized';
-  gradingRevision: number;
+  gradingState: 'not_submitted' | 'finalized';
   submissionMethod: SubmissionMethod | null;
   gradedAt: Date | null;
 };
@@ -100,7 +91,6 @@ export class SubmissionService {
     private readonly history: ExamHistoryService,
     private readonly statistics: StatisticsService,
     private readonly audit: AuditService,
-    private readonly redis: RedisService,
   ) {}
 
   private async publishFinalization(outcome: FinalizationOutcome, actorName: string): Promise<FinalResult> {
@@ -171,7 +161,7 @@ export class SubmissionService {
     return this.publishFinalization(completed.outcome, completed.actorName);
   }
 
-  async heartbeat(userId: Id, recordId: Id, deviceSummary?: string) {
+  async heartbeat(userId: Id, recordId: Id) {
     const outcome = await this.dataSource.transaction(async (manager) => {
       const user = await manager.getRepository(SysUser).findOne({
         where: { id: String(userId) }, lock: { mode: 'pessimistic_write' },
@@ -195,11 +185,6 @@ export class SubmissionService {
           actorName: user.username,
         };
       }
-      if (!record.lastHeartbeatAt || now.getTime() - new Date(record.lastHeartbeatAt).getTime() >= 5_000) {
-        record.lastHeartbeatAt = now;
-      }
-      if (deviceSummary !== undefined) record.deviceSummary = deviceSummary;
-      await recordRepo.save(record);
       return {
         expired: false as const,
         value: {
@@ -209,44 +194,6 @@ export class SubmissionService {
           draft_revision: Number(record.draftRevision || 0),
         },
       };
-    });
-    if (outcome.expired) {
-      await this.publishFinalization(outcome.outcome, outcome.actorName);
-      throw Errors.submitConflict('考试已超时，系统已自动交卷');
-    }
-    return outcome.value;
-  }
-
-  async reportSwitch(userId: Id, recordId: Id) {
-    const outcome = await this.dataSource.transaction(async (manager) => {
-      const user = await manager.getRepository(SysUser).findOne({
-        where: { id: String(userId) }, lock: { mode: 'pessimistic_write' },
-      });
-      if (!user) throw Errors.notFound('用户不存在');
-      if (Number(user.status) !== 1) throw Errors.accountDisabled();
-      const recordRepo = manager.getRepository(ExamRecord);
-      const record = await recordRepo.findOne({
-        where: { id: String(recordId) }, lock: { mode: 'pessimistic_write' },
-      }) as ResultRecord | null;
-      if (!record) throw Errors.notFound('考试记录不存在');
-      if (String(record.userId) !== String(userId)) throw Errors.dataForbidden();
-      if (record.status !== ExamStatus.IN_PROGRESS || record.gradingState !== 'not_submitted') {
-        return { expired: false as const, value: { switch_count: Number(record.switchCount || 0) } };
-      }
-      if (new Date(record.deadlineAt).getTime() <= Date.now()) {
-        return {
-          expired: true as const,
-          outcome: await this.finalize(manager, recordId, 'timeout', record),
-          actorName: user.username,
-        };
-      }
-      const accepted = await this.redis.setNx(`exam:switch:deb:${recordId}`, '1', 1);
-      if (!accepted) {
-        return { expired: false as const, value: { switch_count: Number(record.switchCount || 0) } };
-      }
-      record.switchCount = Number(record.switchCount || 0) + 1;
-      await recordRepo.save(record);
-      return { expired: false as const, value: { switch_count: record.switchCount } };
     });
     if (outcome.expired) {
       await this.publishFinalization(outcome.outcome, outcome.actorName);
@@ -302,28 +249,20 @@ export class SubmissionService {
         recordQuestionId: String(item.itemId),
         questionId: String(item.questionId),
         selected: existing?.selected || null,
-        assetIds: existing?.assetIds || null,
         isCorrect: detail.isCorrect,
-        gainedScore: detail.gainedCents === null ? null : (detail.gainedCents / 100).toFixed(2),
-        comment: existing?.comment || null,
-        gradingVersion: Number(existing?.gradingVersion || 0),
+        gainedScore: (detail.gainedCents / 100).toFixed(2),
       });
     });
     if (persisted.length) await answerRepo.save(persisted);
-    const confirmedAssets = rows.flatMap((row) => Array.isArray(row.assetIds) ? row.assetIds.map(String) : []);
-    await this.drafts.releaseUnconfirmedReferences(manager, String(record.id), confirmedAssets);
 
     const submittedAt = new Date();
     record.submissionMethod = method;
     record.submittedAt = submittedAt;
     record.activeAssignmentId = null;
-    record.gradingState = grade.pendingManual ? 'pending_manual' : 'finalized';
-    record.gradingRevision = Number(record.gradingRevision || 0);
-    record.gradedAt = grade.pendingManual ? null : submittedAt;
-    record.score = grade.pendingManual ? null : (grade.totalCents / 100).toFixed(2);
-    record.status = grade.pendingManual
-      ? ExamStatus.SUBMITTED
-      : grade.totalCents >= Number(snapshot.rule.passCents) ? ExamStatus.PASSED : ExamStatus.FAILED;
+    record.gradingState = 'finalized';
+    record.gradedAt = submittedAt;
+    record.score = (grade.totalCents / 100).toFixed(2);
+    record.status = grade.totalCents >= Number(snapshot.rule.passCents) ? ExamStatus.PASSED : ExamStatus.FAILED;
     const saved = await recordRepo.save(record) as ResultRecord;
     return {
       result: await this.history.resultInTransaction(manager, saved, snapshot, persisted),

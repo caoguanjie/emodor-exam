@@ -1,15 +1,14 @@
-// GUI 测试环境准备：以 admin 身份经 API 预置一条制度（docx+pdf 两版本，等解析完成）。
-// 用法：ADMIN_PASSWORD=<当前 admin 口令> NEW_ADMIN_PASSWORD=<改密后的新口令> node tests/gui-test-env/seed-regulation.mjs
-// 仅做「使后续 GUI 流程可达」的最小准备；学习配置/范围/发布等业务动作留给 GUI 测试执行。
+// GUI 验收资料夹具：使用运行期注入的管理员访问令牌上传 DOCX/PDF，不创建制度管理记录。
+// 用法：ADMIN_ACCESS_TOKEN=... BASE_URL=... node tests/gui-test-env/seed-material.mjs
 import { createRequire } from 'node:module';
 
 const require = createRequire(new URL('../../server/package.json', import.meta.url));
 const JSZip = require('jszip');
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:3000/api/v1';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-if (!ADMIN_PASSWORD) {
-  console.error('缺少 ADMIN_PASSWORD 环境变量');
+const ADMIN_ACCESS_TOKEN = process.env.ADMIN_ACCESS_TOKEN;
+if (!ADMIN_ACCESS_TOKEN) {
+  console.error('缺少 ADMIN_ACCESS_TOKEN 环境变量');
   process.exit(1);
 }
 
@@ -92,7 +91,7 @@ async function uploadVersion(token, regId, filename, mime, buf, tag) {
     buf,
     Buffer.from(`\r\n--${boundary}--\r\n`),
   ]);
-  const res = await fetch(`${BASE}/regulations/${regId}/versions`, {
+  const res = await fetch(`${BASE}/admin/question-materials/${regId}/versions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': `multipart/form-data; boundary=${boundary}` },
     body,
@@ -103,50 +102,18 @@ async function uploadVersion(token, regId, filename, mime, buf, tag) {
 }
 
 async function main() {
-  const login = await api('POST', '/auth/login', { body: { username: 'admin', password: ADMIN_PASSWORD } });
-  if (login.status !== 200 || !login.json?.data?.access_token) {
-    console.error('admin 登录失败：', login.status, login.text.slice(0, 300));
-    process.exit(1);
-  }
-  const token = login.json.data.access_token;
-  console.log('admin 登录成功');
+  const adminToken = ADMIN_ACCESS_TOKEN;
 
-  // 环境准备：先经 API 完成「首次登录强制改密」，使业务接口可用（GUI 的强制改密流程改由员工账号覆盖）
-  // 口令一律环境变量注入，仓库不得含可用凭据字面量（AGENTS.md 红线）
-  const NEW_ADMIN_PASSWORD = process.env.NEW_ADMIN_PASSWORD;
-  if (!NEW_ADMIN_PASSWORD) {
-    console.error('缺少 NEW_ADMIN_PASSWORD 环境变量');
-    process.exit(1);
-  }
-  const ch = await api('PUT', '/auth/password', {
-    token,
-    body: { old_password: ADMIN_PASSWORD, new_password: NEW_ADMIN_PASSWORD },
-  });
-  if (ch.status !== 200) {
-    // 已改过则用新口令重登
-    const relogin = await api('POST', '/auth/login', { body: { username: 'admin', password: NEW_ADMIN_PASSWORD } });
-    if (relogin.status !== 200) {
-      console.error('改密失败且重登失败：', ch.status, ch.text.slice(0, 200));
-      process.exit(1);
-    }
-    console.log('admin 口令已是新值，重登成功');
-  } else {
-    console.log('admin 已完成首次改密');
-  }
-  const relogin2 = await api('POST', '/auth/login', { body: { username: 'admin', password: NEW_ADMIN_PASSWORD } });
-  if (relogin2.status !== 200) { console.error('重登失败', relogin2.text.slice(0, 200)); process.exit(1); }
-  const adminToken = relogin2.json.data.access_token;
-
-  const c = await api('POST', '/regulations', {
+  const c = await api('POST', '/admin/question-materials', {
     token: adminToken,
-    body: { title: '安全生产管理制度 V1', category: '安全类', description: 'GUI 测试预置制度' },
+    body: { title: '安全生产出题资料', description: 'GUI 测试预置资料' },
   });
   if (c.status !== 200 || !c.json?.data?.id) {
-    console.error('创建制度失败：', c.status, c.text.slice(0, 300));
+    console.error('创建资料失败：', c.status, c.text.slice(0, 300));
     process.exit(1);
   }
   const regId = String(c.json.data.id);
-  console.log('制度已创建 id=', regId, 'status=', c.json.data.status);
+  console.log('资料已创建 id=', regId);
 
   const docx = await buildDocx([
     '第一章 总则：为加强安全生产管理，制定本制度。本制度适用于公司全体员工及所有生产场所。',
@@ -164,19 +131,19 @@ async function main() {
   ]);
   const v2 = await uploadVersion(adminToken, regId, 'regulation.pdf', 'application/pdf', pdf, 'pdf');
 
-  for (const [tag, vid] of [['docx', v1?.version_id], ['pdf', v2?.version_id]]) {
+  for (const [tag, vid] of [['docx', v1?.id], ['pdf', v2?.id]]) {
     if (!vid) { console.error(`${tag} 版本上传失败`); process.exit(1); }
     let status = '';
     for (let i = 0; i < 30; i++) {
       await sleep(1000);
-      const d = await api('GET', `/regulations/${regId}/versions/${vid}`, { token: adminToken });
+      const d = await api('GET', `/admin/question-materials/${regId}/versions/${vid}/status`, { token: adminToken });
       status = d.json?.data?.parse_status || '';
       if (status === 'parsed' || status === 'failed') break;
     }
     console.log(`[${tag}] version ${vid} parse_status=${status}`);
     if (status !== 'parsed') { console.error(`${tag} 解析未成功`); process.exit(1); }
   }
-  console.log(`SEED_OK regulation_id=${regId}`);
+  console.log(`SEED_OK material_id=${regId}`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

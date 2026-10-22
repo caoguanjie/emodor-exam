@@ -26,8 +26,6 @@ const summary = {
   historical_only_started_count: 0,
   submitted_attempts: 2,
   submitted_users: 2,
-  pending_attempts: 0,
-  pending_users: 0,
   course_completion: { completed_users: 2, eligible_users: 2, required_lessons: 1, completion_rate: 1 },
   uncompleted_reasons: [],
   difficulty_composition: [{ difficulty: 'easy', users: 2 }],
@@ -147,6 +145,11 @@ function findNodes(root, predicate, found = []) {
   return found;
 }
 
+function textContent(root) {
+  if (!root) return '';
+  return `${root.text || ''}${(root.children || []).map(textContent).join('')}`;
+}
+
 function waitFor(predicate, timeoutMs = 1800, label = 'component state') {
   const started = Date.now();
   return new Promise((resolvePromise, reject) => {
@@ -210,6 +213,7 @@ test('uses the emitted pagination page only through v-model and applies the page
   await state.reload();
   await nextTick();
   assert.equal(state.ranking.items[0].record_id, 'record-1');
+  assert.doesNotMatch(textContent(root), /待批改|旧制度报表/);
 
   const pagination = findNodes(root, (node) => node.type === 'pagination')[0];
   assert.ok(pagination, 'ranking pagination should be rendered');

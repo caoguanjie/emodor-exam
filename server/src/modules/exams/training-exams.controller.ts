@@ -2,11 +2,11 @@ import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, Max, Min } from 'class-validator';
 import { AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
-import { DtoValidationPipe } from '../../common/dto-validation.pipe';
+import { DtoValidationPipe, StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { TRAINING_DEFAULTS } from '../../common/training-contracts';
 import { Errors } from '../../common/errors';
 import { AnswerDraftService } from './answer-draft.service';
-import { AttemptHeartbeatDto, DraftInputDto, SubmitAttemptDto } from './attempt.dto';
+import { DraftInputDto, SubmitAttemptDto } from './attempt.dto';
 import { AttemptService } from './attempt.service';
 import { SubmissionService } from './submission.service';
 import { ExamHistoryService } from './exam-history.service';
@@ -78,15 +78,10 @@ export class TrainingExamsController {
   @Post('exam-records/:id/heartbeat')
   heartbeat(
     @Param('id') id: string,
-    @Body(new DtoValidationPipe()) dto: AttemptHeartbeatDto,
+    @Body(new StrictDtoValidationPipe([])) _body: object,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.submissions.heartbeat(String(user.id), String(id), dto.device_summary);
-  }
-
-  @Post('exam-records/:id/switch')
-  switchReport(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.submissions.reportSwitch(String(user.id), String(id));
+    return this.submissions.heartbeat(String(user.id), String(id));
   }
 
   @Post('exam-records/:id/submit')

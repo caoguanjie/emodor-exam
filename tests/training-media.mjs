@@ -404,17 +404,13 @@ export async function run(ctx) {
   assert(role.status === 200 && role.data?.id, `media business role create failed: ${role.status}`);
   const businessUsername = `media_business_${randomBytes(4).toString('hex')}`;
   const businessPassword = randomStrongPassword(businessUsername, 'business-role');
-  const business = await ctx.request(admin, 'POST', '/users', {
+  const business = await ctx.request(admin, 'POST', '/admin/administrators', {
     username: businessUsername,
     password: businessPassword,
     real_name: '媒体业务账号',
-    role: 'employee',
-  });
-  assert(business.status === 200 && business.data?.id, `media business account create failed: ${business.status}`);
-  const assigned = await ctx.request(admin, 'PUT', `/admin/administrators/${business.data.id}/roles`, {
     role_ids: [String(role.data.id)],
   });
-  assert(assigned.status === 200, `media business role assignment failed: ${assigned.status}`);
+  assert(business.status === 200 && business.data?.id, `media business account create failed: ${business.status}`);
   const businessAsset = await upload(ctx, admin, { purpose: 'avatar', owner_id: String(business.data.id) }, png, 'business-avatar.png', 'image/png');
   assert(businessAsset.status === 200, `business-role avatar upload failed: ${businessAsset.status}`);
   await ctx.queryTestDb(

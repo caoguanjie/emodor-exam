@@ -51,11 +51,6 @@ export class ExamsController {
     return this.exams.heartbeat(id, user.id, dto.answers || []);
   }
 
-  @Post('records/:id/switch')
-  switchReport(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.exams.reportSwitch(id, user.id);
-  }
-
   @Post('records/:id/submit')
   submit(@Param('id') id: string, @Body(new DtoValidationPipe()) dto: SubmitDto, @CurrentUser() user: AuthUser) {
     return this.exams.submit(id, user.id, dto.answers);

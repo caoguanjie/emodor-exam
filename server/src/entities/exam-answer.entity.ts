@@ -20,21 +20,12 @@ export class ExamAnswer {
   @Column({ type: 'json', nullable: true })
   selected: number[] | null;
 
-  @Column({ name: 'asset_ids', type: 'json', nullable: true })
-  assetIds: string[] | null;
-
   /** 1=全对，0=非全对（含漏选得部分分），NULL=未作答 */
   @Column({ name: 'is_correct', type: 'tinyint', width: 1, nullable: true })
   isCorrect: number | null;
 
   @Column({ name: 'gained_score', type: 'decimal', precision: 5, scale: 2, nullable: true, default: null })
   gainedScore: string | null;
-
-  @Column({ type: 'text', nullable: true })
-  comment: string | null;
-
-  @Column({ name: 'grading_version', type: 'int', unsigned: true, default: 0 })
-  gradingVersion: number;
 
   @CreateDateColumn({ name: 'created_at', precision: 3 })
   createdAt: Date;

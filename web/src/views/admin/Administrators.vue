@@ -6,6 +6,7 @@
       <p class="desc">查看管理员登录状态与业务角色，角色权限由服务端实时校验。</p>
     </div>
     <div class="toolbar">
+      <el-button v-if="auth.can('administrators:write')" type="primary" @click="openCreate">新建管理员</el-button>
       <el-button v-if="auth.can('administrators:write')" type="primary" @click="openAssignment">为账号配置角色</el-button>
       <div style="flex:1" />
       <el-button @click="load">刷新</el-button>
@@ -23,6 +24,25 @@
       <el-table-column prop="last_login_at" label="最后登录" min-width="170" />
       <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }"><el-button v-if="auth.can('administrators:write')" text type="primary" :disabled="row.system_role === 'super_admin'" @click="openRoles(row)">配置角色</el-button></template></el-table-column>
     </el-table>
+
+    <el-dialog v-model="createDialog" title="新建管理员" width="520px">
+      <el-form label-width="96px" :disabled="createSaving">
+        <el-form-item label="账号" required><el-input v-model="createForm.username" maxlength="64" /></el-form-item>
+        <el-form-item label="初始密码" required><el-input v-model="createForm.password" show-password placeholder="至少 8 位，且包含字母和数字" /></el-form-item>
+        <el-form-item label="姓名" required><el-input v-model="createForm.real_name" maxlength="64" /></el-form-item>
+        <el-form-item label="手机号"><el-input v-model="createForm.phone" maxlength="20" /></el-form-item>
+        <el-form-item label="邮箱"><el-input v-model="createForm.email" maxlength="128" /></el-form-item>
+        <el-form-item label="业务角色" required>
+          <el-checkbox-group v-model="createForm.role_ids" class="role-list">
+            <el-checkbox v-for="role in editableRoles" :key="role.id" :label="role.id">{{ role.name }}（{{ role.code }}）</el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="createSaving" @click="createDialog = false">取消</el-button>
+        <el-button type="primary" :loading="createSaving" :disabled="createSaving" @click="createAdministrator">创建管理员</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="candidateDialog" title="选择账号" width="760px">
       <div class="candidate-search">
@@ -105,6 +125,11 @@ const candidateRows = ref<CandidateAccount[]>([]);
 const candidateTotal = ref(0);
 const candidateQuery = reactive({ page: 1, page_size: 20, keyword: '' });
 const editableRoles = computed(() => roles.value.filter((role) => !role.is_system && role.status === 1));
+const createDialog = ref(false);
+const createSaving = ref(false);
+const createForm = reactive({
+  username: '', password: '', real_name: '', phone: '', email: '', role_ids: [] as string[],
+});
 const dirty = ref(false);
 const roleBaseline = ref<{ selected: AdministratorRow | CandidateAccount | null; roleIds: string[] }>({ selected: null, roleIds: [] });
 
@@ -141,7 +166,7 @@ async function beforeRoleDialogClose(done: () => void) {
 }
 
 function roleName(code: string) {
-  return ({ super_admin: '超级管理员', regulation_admin: '制度管理员', employee: '员工' } as Record<string, string>)[code] || code;
+  return ({ super_admin: '超级管理员', regulation_admin: '业务管理员', employee: '业务管理员' } as Record<string, string>)[code] || code;
 }
 
 async function load() {
@@ -153,6 +178,35 @@ async function load() {
 
 async function loadAssignableRoles() {
   roles.value = await http.get('/admin/administrators/assignable-roles');
+}
+
+async function openCreate() {
+  await loadAssignableRoles();
+  Object.assign(createForm, { username: '', password: '', real_name: '', phone: '', email: '', role_ids: [] });
+  createDialog.value = true;
+}
+
+async function createAdministrator() {
+  if (!createForm.username.trim() || !createForm.password || !createForm.real_name.trim() || !createForm.role_ids.length) {
+    ElMessage.warning('请填写账号、初始密码、姓名并至少选择一个业务角色');
+    return;
+  }
+  createSaving.value = true;
+  try {
+    await http.post('/admin/administrators', {
+      username: createForm.username.trim(),
+      password: createForm.password,
+      real_name: createForm.real_name.trim(),
+      phone: createForm.phone.trim(),
+      email: createForm.email.trim(),
+      role_ids: [...createForm.role_ids],
+    });
+    ElMessage.success('管理员已创建');
+    createDialog.value = false;
+    await load();
+  } finally {
+    createSaving.value = false;
+  }
 }
 
 async function openRoles(row: AdministratorRow) {

@@ -9,7 +9,7 @@ const ID_PATTERN = /^[1-9]\d*$/;
 const QueryNumber = () => Transform(({ value }) => value === undefined || value === null || value === '' ? undefined : Number(value));
 
 export class PaperRuleDto {
-  @IsIn(['single', 'multiple', 'judgment', 'image']) type!: QuestionType;
+  @IsIn(['single', 'multiple', 'judgment']) type!: QuestionType;
   @IsInt() @Min(1) @Max(500) count!: number;
   @IsInt() @Min(1) @Max(10000) score_cents!: number;
 }
@@ -62,7 +62,7 @@ export class TrainingPaperListQueryDto {
 }
 
 export class PaperCandidateQueryDto {
-  @IsOptional() @IsIn(['single', 'multiple', 'judgment', 'image']) type?: QuestionType;
+  @IsOptional() @IsIn(['single', 'multiple', 'judgment']) type?: QuestionType;
   @IsOptional() @IsIn(['easy', 'medium', 'hard']) difficulty?: Difficulty;
   @IsOptional() @QueryNumber() @IsInt() @Min(1) page?: number;
   @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;

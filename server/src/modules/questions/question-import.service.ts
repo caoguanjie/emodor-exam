@@ -34,11 +34,11 @@ interface CandidateRow extends NormalizedQuestionImportRow {
   normalizedDraft: QuestionDraft;
 }
 
-const TYPES = new Set<QuestionType>(['single', 'multiple', 'judgment', 'image']);
+const TYPES = new Set<QuestionType>(['single', 'multiple', 'judgment']);
 const DIFFICULTIES = new Set<Difficulty>(['easy', 'medium', 'hard']);
 const RAW_KEYS = new Set([
   'row', 'format_errors', 'category', 'type', 'difficulty', 'concept', 'stem',
-  'options', 'answer', 'analysis', 'rubric', 'score',
+  'options', 'answer', 'analysis', 'score',
 ]);
 
 function normalizeContent(value: unknown): string {
@@ -46,7 +46,7 @@ function normalizeContent(value: unknown): string {
 }
 
 function fingerprint(draft: Pick<QuestionDraft,
-  'categoryId' | 'type' | 'difficulty' | 'stem' | 'options' | 'answer' | 'analysis' | 'rubric'>): string {
+  'categoryId' | 'type' | 'difficulty' | 'stem' | 'options' | 'answer' | 'analysis'>): string {
   const canonical = {
     category_id: String(draft.categoryId),
     type: draft.type,
@@ -58,7 +58,6 @@ function fingerprint(draft: Pick<QuestionDraft,
         text: normalizeContent(option.text),
       })),
       analysis: normalizeContent(draft.analysis),
-      rubric: normalizeContent(draft.rubric),
     },
     answer: [...(draft.answer || [])].map(Number).sort((a, b) => a - b),
   };
@@ -170,7 +169,7 @@ export class QuestionImportService implements OnModuleInit {
       return {
         row: index + 2,
         category: '', type: '', difficulty: '', concept: '', stem: '', options: '', answer: '',
-        analysis: '', rubric: '', score: '', format_errors: ['导入行必须是对象'],
+        analysis: '', score: '', format_errors: ['导入行必须是对象'],
       };
     }
     const record = value as Record<string, unknown>;
@@ -186,7 +185,6 @@ export class QuestionImportService implements OnModuleInit {
       options: String(record.options ?? '').trim(),
       answer: String(record.answer ?? '').trim(),
       analysis: String(record.analysis ?? '').trim(),
-      rubric: String(record.rubric ?? '').trim(),
       score: String(record.score ?? '').trim(),
       format_errors: [
         ...(Array.isArray(record.format_errors) ? record.format_errors.map(String) : []),
@@ -237,10 +235,10 @@ export class QuestionImportService implements OnModuleInit {
     conceptCache: Map<string, QuestionConcept | null>,
   ): Promise<CandidateRow> {
     if (row.format_errors?.length) throw Errors.param(row.format_errors.join('；'));
-    if (!TYPES.has(row.type as QuestionType)) throw Errors.param('题型 type 必须是 single / multiple / judgment / image');
+    if (!TYPES.has(row.type as QuestionType)) throw Errors.param('题型 type 必须是 single / multiple / judgment');
     if (!DIFFICULTIES.has(row.difficulty as Difficulty)) throw Errors.param('difficulty 必须是 easy / medium / hard');
-    if (row.stem.length > 100_000 || row.analysis.length > 100_000 || row.rubric.length > 100_000) {
-      throw Errors.param('stem / analysis / rubric 单元格不得超过 100000 字符');
+    if (row.stem.length > 100_000 || row.analysis.length > 100_000) {
+      throw Errors.param('stem / analysis 单元格不得超过 100000 字符');
     }
     const category = await this.resolveCategory(row.category, categoryCache);
     const type = row.type as QuestionType;
@@ -253,7 +251,6 @@ export class QuestionImportService implements OnModuleInit {
       options: questionOptions(parseJsonArray(row.options, 'options')),
       answer: answerIndexes(parseJsonArray(row.answer, 'answer')),
       analysis: row.analysis || null,
-      rubric: row.rubric || null,
       scoreCents: scoreCents(row.score),
       conceptId: concept ? String(concept.id) : undefined,
       source: 'import',
@@ -297,7 +294,6 @@ export class QuestionImportService implements OnModuleInit {
         options: row.options,
         answer: row.answer,
         analysis: row.analysis,
-        rubric: row.rubric,
       }));
     }
     return result;

@@ -80,15 +80,15 @@ async function createQuestionVersion(ctx, input) {
   const options = input.options || [{ key: 'A', text: '正确项' }, { key: 'B', text: '错误项' }];
   const answer = input.answer || [0];
   const question = await ctx.queryTestDb(
-    'INSERT INTO question (regulation_id, version_id, category_id, difficulty, concept_id, current_version_id, type, stem, options, answer, analysis, rubric, score, status, source, created_by) VALUES (NULL, NULL, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO question (regulation_id, version_id, category_id, difficulty, concept_id, current_version_id, type, stem, options, answer, analysis, score, status, source, created_by) VALUES (NULL, NULL, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [input.categoryId, input.difficulty, input.type || 'single', input.stem, JSON.stringify(options), JSON.stringify(answer),
-      input.analysis ?? '<p>冻结解析</p>', input.rubric ?? null, ((input.scoreCents || 10000) / 100).toFixed(2), 'approved', 'manual', input.actorId],
+      input.analysis ?? '<p>冻结解析</p>', ((input.scoreCents || 10000) / 100).toFixed(2), 'approved', 'manual', input.actorId],
   );
   const questionId = String(question.insertId);
   const version = await ctx.queryTestDb(
-    'INSERT INTO question_version (question_id, revision, category_id, difficulty, type, stem, options, answer, analysis, rubric, score_cents, concept_id, regulation_id, regulation_version_id, source_page_group, source_page_start, source_page_end, source, status, approved_by, approved_at, reviewed_by, reviewed_at, review_reason, created_by, legacy_captured_at) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, NOW(3), ?, NOW(3), NULL, ?, NULL)',
+    'INSERT INTO question_version (question_id, revision, category_id, difficulty, type, stem, options, answer, analysis, score_cents, concept_id, regulation_id, regulation_version_id, source_page_group, source_page_start, source_page_end, source, status, approved_by, approved_at, reviewed_by, reviewed_at, review_reason, created_by, legacy_captured_at) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, NOW(3), ?, NOW(3), NULL, ?, NULL)',
     [questionId, input.categoryId, input.difficulty, input.type || 'single', input.stem, JSON.stringify(options), JSON.stringify(answer),
-      input.analysis ?? '<p>冻结解析</p>', input.rubric ?? null, input.scoreCents || 10000, 'manual', 'approved', input.actorId, input.actorId, input.actorId],
+      input.analysis ?? '<p>冻结解析</p>', input.scoreCents || 10000, 'manual', 'approved', input.actorId, input.actorId, input.actorId],
   );
   const versionId = String(version.insertId);
   await ctx.queryTestDb('UPDATE question SET current_version_id = ? WHERE id = ?', [versionId, questionId]);
@@ -103,7 +103,6 @@ async function createQuestionVersion(ctx, input) {
     options,
     answer,
     analysis: input.analysis ?? '<p>冻结解析</p>',
-    rubric: input.rubric ?? null,
     scoreCents: input.scoreCents || 10000,
     source: 'manual',
     approvedBy: String(input.actorId),
@@ -286,7 +285,7 @@ async function runAttempts(ctx) {
     });
     const legacyCountActor = await login(ctx, `c2_count_${runSuffix}`, legacyCountPassword, 'legacy count learner');
     await ctx.queryTestDb(
-      "INSERT INTO exam_record (paper_id, regulation_id, user_id, attempt_no, status, score, started_at, deadline_at, submitted_at, switch_count) VALUES (?, NULL, ?, 1, 'failed', 0.00, NOW(3), NOW(3), NOW(3), 0), (?, NULL, ?, 2, 'failed', 0.00, NOW(3), NOW(3), NOW(3), 0)",
+      "INSERT INTO exam_record (paper_id, regulation_id, user_id, attempt_no, status, score, started_at, deadline_at, submitted_at) VALUES (?, NULL, ?, 1, 'failed', 0.00, NOW(3), NOW(3), NOW(3)), (?, NULL, ?, 2, 'failed', 0.00, NOW(3), NOW(3), NOW(3))",
       [paper.paperId, legacyCountId, paper.paperId, legacyCountId],
     );
     const third = await ctx.request(legacyCountActor, 'POST', `/me/exams/${paper.paperId}/start`);
@@ -410,7 +409,7 @@ async function runAttempts(ctx) {
       [legacyUserId, regulationId, JSON.stringify([1, 1, 1, 1, 1, 1, 1, 1, 1, 1])],
     );
     const legacyQuestion = await ctx.queryTestDb(
-      'INSERT INTO question (regulation_id, version_id, category_id, difficulty, concept_id, current_version_id, type, stem, options, answer, analysis, rubric, score, status, source, created_by) VALUES (?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, NULL, 100.00, ?, ?, ?)',
+      'INSERT INTO question (regulation_id, version_id, category_id, difficulty, concept_id, current_version_id, type, stem, options, answer, analysis, score, status, source, created_by) VALUES (?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, 100.00, ?, ?, ?)',
       [regulationId, 'single', '<p>旧卷冻结题干</p>', JSON.stringify([{ key: 'A', text: '正确项' }, { key: 'B', text: '错误项' }]),
         JSON.stringify([0]), '<p>旧卷冻结解析</p>', 'approved', 'manual', adminId],
     );
@@ -551,7 +550,7 @@ async function runAttempts(ctx) {
 
     stage = 'unsupported genuinely new legacy_start rolls back';
     const unsupportedQuestion = await ctx.queryTestDb(
-      'INSERT INTO question (regulation_id, version_id, category_id, difficulty, concept_id, current_version_id, type, stem, options, answer, analysis, rubric, score, status, source, created_by) VALUES (?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, NULL, 100.00, ?, ?, ?)',
+      'INSERT INTO question (regulation_id, version_id, category_id, difficulty, concept_id, current_version_id, type, stem, options, answer, analysis, score, status, source, created_by) VALUES (?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, 100.00, ?, ?, ?)',
       [regulationId, 'judgment', '<p>未冻结判断题</p>', JSON.stringify([{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]),
         JSON.stringify([0]), '<p>未冻结解析</p>', 'approved', 'manual', adminId],
     );

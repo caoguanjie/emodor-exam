@@ -3,7 +3,7 @@ export type Id = string;
 export type LearnerSource = 'institution' | 'external';
 export type Difficulty = 'easy' | 'medium' | 'hard';
 export type ExamDifficulty = Difficulty | 'mixed' | 'unknown';
-export type QuestionType = 'single' | 'multiple' | 'judgment' | 'image';
+export type QuestionType = 'single' | 'multiple' | 'judgment';
 
 export interface Page<T> {
   items: T[];
@@ -72,7 +72,6 @@ export interface RuleSnapshot {
 export interface AnswerInput {
   item_id: Id;
   selected?: number[];
-  asset_ids?: Id[];
 }
 
 export interface DraftInput {
@@ -86,31 +85,9 @@ export interface DraftAck {
   answered_count: number;
 }
 
-export type GradeState = 'not_submitted' | 'pending_manual' | 'finalized';
+export type GradeState = 'not_submitted' | 'finalized';
 export type SubmissionMethod = 'manual' | 'timeout';
 export type ExamRecordStatus = 'in_progress' | 'submitted' | 'passed' | 'failed' | 'timeout';
-export type MonitorConnectionState = 'connected' | 'uncertain' | 'ended';
-
-export interface ExamMonitorRow {
-  record_id: Id;
-  user_id: Id;
-  name: string;
-  source: LearnerSource | null;
-  difficulty: ExamDifficulty | null;
-  started_at: string;
-  deadline_at: string;
-  server_now: string;
-  remaining_seconds: number;
-  answered_count: number;
-  total_count: number;
-  last_heartbeat_at: string | null;
-  connection_state: MonitorConnectionState;
-  switch_count: number;
-  device_summary: string | null;
-  status: ExamRecordStatus;
-  grading_state: GradeState;
-  submission_method: SubmissionMethod | null;
-}
 
 export interface ExamRecordSummary {
   record_id: Id;
@@ -129,27 +106,13 @@ export interface ExamRecordSummary {
   submitted_at: string | null;
   answered_count: number;
   total_count: number;
-  switch_count: number;
   status: ExamRecordStatus;
   grading_state: GradeState;
   submission_method: SubmissionMethod | null;
   score: number | null;
 }
 
-export interface ExamRecordDetail extends ExamRecordSummary {
-  server_now: string;
-  remaining_seconds: number;
-  last_heartbeat_at: string | null;
-  connection_state: MonitorConnectionState;
-  device_summary: string | null;
-}
-
-export interface MonitorPaperOption {
-  id: Id;
-  title: string;
-  status: string;
-  business_scope: string;
-}
+export type ExamRecordDetail = ExamRecordSummary;
 
 export interface ScoreDistributionBucket {
   lower: number;
@@ -172,7 +135,7 @@ export interface TrainingCourseCompletion {
   completion_rate: number | null;
 }
 
-export type TrainingUncompletedReason = 'learning_incomplete' | 'not_started' | 'pending_manual' | 'not_passed';
+export type TrainingUncompletedReason = 'learning_incomplete' | 'not_started' | 'not_passed';
 
 export interface TrainingExamSummary {
   release_id: Id | null;
@@ -182,8 +145,6 @@ export interface TrainingExamSummary {
   historical_only_started_count: number;
   submitted_attempts: number;
   submitted_users: number;
-  pending_attempts: number;
-  pending_users: number;
   finalized_users: number;
   participation_rate: number | null;
   score_groups: ScoreGroup[];
@@ -216,7 +177,6 @@ export interface AdminDashboard {
     learner_count?: number;
     question_count?: number;
     paper_count?: number;
-    pending_grading_count?: number;
   };
   exam_trend?: Array<{ date: string; count: number }>;
 }
@@ -259,11 +219,8 @@ export interface QuestionDraftPayload {
   options: QuestionOption[];
   answer: number[];
   analysis: string | null;
-  rubric: string | null;
   score: number;
   concept_id?: Id | null;
-  regulation_id?: Id | null;
-  regulation_version_id?: Id | null;
 }
 
 export interface QuestionView extends Omit<QuestionDraftPayload, 'category_id' | 'difficulty'> {
@@ -281,11 +238,12 @@ export interface QuestionView extends Omit<QuestionDraftPayload, 'category_id' |
   reviewed_at: string | null;
   review_reason: string | null;
   legacy_captured_at: string | null;
+  regulation_id?: Id | null;
+  regulation_version_id?: Id | null;
 }
 
 export function questionDraftFromView(row: Pick<QuestionView,
-  'category_id' | 'difficulty' | 'type' | 'stem' | 'options' | 'answer' | 'analysis' | 'rubric' | 'score'
-  | 'concept_id' | 'regulation_id' | 'regulation_version_id'>): QuestionDraftPayload {
+  'category_id' | 'difficulty' | 'type' | 'stem' | 'options' | 'answer' | 'analysis' | 'score' | 'concept_id'>): QuestionDraftPayload {
   return {
     category_id: row.category_id || '',
     difficulty: row.difficulty || '',
@@ -294,11 +252,8 @@ export function questionDraftFromView(row: Pick<QuestionView,
     options: JSON.parse(JSON.stringify(row.options || [])),
     answer: [...(row.answer || [])],
     analysis: row.analysis ?? null,
-    rubric: row.rubric ?? null,
     score: Number(row.score),
     concept_id: row.concept_id || undefined,
-    regulation_id: row.regulation_id === null || row.regulation_id === undefined ? undefined : String(row.regulation_id),
-    regulation_version_id: row.regulation_version_id || undefined,
   };
 }
 
@@ -490,7 +445,6 @@ export interface PaperPreviewQuestion {
   score: number;
   answer?: number[];
   analysis?: string | null;
-  rubric?: string | null;
 }
 
 export interface PaperPreview {
@@ -560,16 +514,12 @@ export interface FinalResultItem extends AttemptQuestion {
   answer: AnswerInput | null;
   correct_answer: number[] | null;
   analysis: string | null;
-  rubric: string | null;
   gained_score: number | null;
-  comment: string | null;
-  grading_version: number;
 }
 
 export interface FinalResult {
   record_id: Id;
   grading_state: GradeState;
-  grading_revision: number;
   submission_method: SubmissionMethod | null;
   legacy: boolean;
   submitted_at: string;
@@ -600,20 +550,4 @@ export interface ExamHistoryItem {
 export interface WrongItem extends FinalResultItem {
   record_id: Id;
   submitted_at: string;
-}
-
-export interface GradingQueueItem {
-  record_id: Id;
-  paper_id: Id;
-  paper_title: string;
-  user_id: Id;
-  user_name: string;
-  source: LearnerSource | null;
-  grading_state: GradeState;
-  submitted_at: string;
-  graded_at: string | null;
-  score: number | null;
-  pending_items: number;
-  graded_items: number;
-  image_items: number;
 }

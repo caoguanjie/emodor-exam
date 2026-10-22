@@ -78,7 +78,7 @@ async function seedParsedRegulation(ctx, actorId) {
   const title = `B3 AI 制度 ${randomBytes(4).toString('hex')}`;
   const inserted = await ctx.queryTestDb(
     'INSERT INTO regulation (title, category, description, status, current_version_id, required_minutes, scroll_segments, created_by) VALUES (?, ?, NULL, ?, NULL, 10, 10, ?)',
-    [title, 'B3旧分类', 'draft', actorId],
+    [title, 'question_material', 'draft', actorId],
   );
   const regulationId = String(inserted.insertId);
   const version = await ctx.queryTestDb(
@@ -143,18 +143,15 @@ async function runBody(ctx, mockPort) {
   const writerUsername = `b3_writer_${suffix}`;
   const writerRealName = `B3录题员${suffix}`;
   const writerPassword = randomStrongPassword(writerUsername, writerRealName);
-  const writerUser = await ctx.request(admin.actor, 'POST', '/users', {
-    username: writerUsername, password: writerPassword, real_name: writerRealName, role: 'employee',
-  });
-  assert.equal(writerUser.status, 200, `writer user: ${JSON.stringify(writerUser)}`);
   const writerRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
     code: `b3_writer_${suffix}`, name: `B3 录题角色 ${suffix}`, permissions: ['questions:write'],
   });
   assert.equal(writerRole.status, 200, `writer role: ${JSON.stringify(writerRole)}`);
-  const writerAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${writerUser.data.id}/roles`, {
+  const writerUser = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
+    username: writerUsername, password: writerPassword, real_name: writerRealName,
     role_ids: [String(writerRole.data.id)],
   });
-  assert.equal(writerAssigned.status, 200, `writer assignment: ${JSON.stringify(writerAssigned)}`);
+  assert.equal(writerUser.status, 200, `writer user: ${JSON.stringify(writerUser)}`);
   const writer = await accountLogin(ctx, writerUsername, writerPassword, writerRealName);
   const writerReadDenied = await ctx.request(writer.actor, 'GET', '/ai/questions?page=1&page_size=20');
   assert.equal(writerReadDenied.status, 403, 'questions:write-only 不得读取题库列表');
@@ -196,7 +193,7 @@ async function runBody(ctx, mockPort) {
 
   const manualWithoutRegulation = await ctx.request(admin.actor, 'POST', '/ai/questions', singleDraft(categoryId));
   assert.equal(manualWithoutRegulation.status, 200, JSON.stringify(manualWithoutRegulation));
-  assert.equal(manualWithoutRegulation.data.regulation_id, null);
+  assert.equal(manualWithoutRegulation.data.material_id, null);
   assert.equal(manualWithoutRegulation.data.status, 'approved');
   assert.equal(manualWithoutRegulation.data.category_id, categoryId);
   assert.match(manualWithoutRegulation.data.question_id, /^\d+$/);
@@ -223,15 +220,12 @@ async function runBody(ctx, mockPort) {
   assert.equal(judgment.status, 200);
   assert.deepEqual(judgment.data.options.map((item) => item.text), ['正确', '错误']);
 
-  const image = await ctx.request(admin.actor, 'POST', '/ai/questions', {
+  const removedImageType = await ctx.request(admin.actor, 'POST', '/ai/questions', {
     ...singleDraft(categoryId, '<p>请上传现场隐患照片并说明。</p>'),
     type: 'image', options: [], answer: [], analysis: null,
     rubric: '<p>识别三项隐患，每项 2 分。</p>', score: 6,
   });
-  assert.equal(image.status, 200);
-  assert.equal(image.data.type, 'image');
-  assert.deepEqual(image.data.options, []);
-  assert.deepEqual(image.data.answer, []);
+  assert.equal(removedImageType.status, 400, '已取消的图片作答题不得再录入');
 
   const unknownType = await ctx.request(admin.actor, 'POST', '/ai/questions', { ...singleDraft(categoryId), type: 'essay' });
   assert.equal(unknownType.status, 400);
@@ -387,21 +381,27 @@ async function runBody(ctx, mockPort) {
   const { regulationId, versionId } = await seedParsedRegulation(ctx, admin.id);
   const fixedSingle = await ctx.request(admin.actor, 'POST', '/ai/questions', {
     ...singleDraft(categoryId, '<p>固定卷单选题。</p>'),
-    regulation_id: regulationId,
-    regulation_version_id: versionId,
     score: 100,
   });
   assert.equal(fixedSingle.status, 200, JSON.stringify(fixedSingle));
   const fixedJudgment = await ctx.request(admin.actor, 'POST', '/ai/questions', {
     ...singleDraft(categoryId, '<p>固定卷不支持判断题。</p>'),
-    regulation_id: regulationId,
-    regulation_version_id: versionId,
     type: 'judgment',
     options: [{ text: '正确' }, { text: '错误' }],
     answer: [1],
     score: 100,
   });
   assert.equal(fixedJudgment.status, 200, JSON.stringify(fixedJudgment));
+  for (const question of [fixedSingle.data, fixedJudgment.data]) {
+    await ctx.queryTestDb(
+      'UPDATE question SET regulation_id = ?, version_id = ? WHERE id = ?',
+      [regulationId, versionId, String(question.question_id)],
+    );
+    await ctx.queryTestDb(
+      'UPDATE question_version SET regulation_id = ?, regulation_version_id = ? WHERE id = ?',
+      [regulationId, versionId, String(question.current_version_id)],
+    );
+  }
   const legacyPaper = await ctx.request(admin.actor, 'POST', '/ai/papers', {
     regulation_id: regulationId, title: `B3 legacy 能力边界 ${suffix}`, pass_score: 60,
   });
@@ -432,12 +432,12 @@ async function runBody(ctx, mockPort) {
   const unsupportedPublish = await ctx.request(admin.actor, 'POST', `/ai/papers/${corruptedPaper.data.id}/publish`);
   assert.equal(unsupportedPublish.status, 400, 'legacy 固定卷发布必须重新拒绝判断题');
 
-  const missingVersionRegulation = await ctx.request(admin.actor, 'POST', '/regulations', {
-    title: `B3 无版本 ${suffix}`, category: '旧类别',
+  const missingVersionMaterial = await ctx.request(admin.actor, 'POST', '/admin/question-materials', {
+    title: `B3 无版本 ${suffix}`, description: '尚未上传版本',
   });
-  assert.equal(missingVersionRegulation.status, 200);
+  assert.equal(missingVersionMaterial.status, 200);
   const missingVersionGenerate = await ctx.request(admin.actor, 'POST', '/ai/generate-questions', {
-    regulation_id: String(missingVersionRegulation.data.id), category_id: categoryId, difficulty: 'hard',
+    material_id: String(missingVersionMaterial.data.id), category_id: categoryId, difficulty: 'hard',
     question_count_single: 10, score_single: 6, question_count_multiple: 5, score_multiple: 8,
   });
   assert.equal(missingVersionGenerate.status, 400);
@@ -447,7 +447,7 @@ async function runBody(ctx, mockPort) {
   });
   assert.equal(config.status, 200, JSON.stringify(config));
   const generated = await ctx.request(admin.actor, 'POST', '/ai/generate-questions', {
-    regulation_id: regulationId, category_id: categoryId, difficulty: 'hard',
+    material_id: regulationId, material_version_id: versionId, category_id: categoryId, difficulty: 'hard',
     question_count_single: 10, score_single: 6, question_count_multiple: 5, score_multiple: 8,
   });
   assert.equal(generated.status, 200, JSON.stringify(generated));
