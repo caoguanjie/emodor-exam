@@ -1,14 +1,33 @@
 <template>
-  <div class="page-card">
-    <div class="page-head">
-      <div class="eyebrow">管理台</div>
-      <h2>统一题库与 AI 出题</h2>
-      <p class="desc">四题型按类别、难度和版本管理；核心内容修改后回到待审核，不覆盖旧版本。</p>
+  <div class="page-card question-page">
+    <div class="page-head page-head--hero">
+      <div class="page-head__main">
+        <div class="eyebrow">内容生产 · ADMIN</div>
+        <h2>统一题库与 AI 出题</h2>
+        <p class="desc">四题型按类别、难度和版本管理；核心内容修改后回到待审核，不覆盖旧版本。</p>
+      </div>
+      <div class="page-head__actions">
+        <span class="head-note"><i />题目版本、来源与审核状态全程留痕</span>
+        <span class="head-badge">QUESTION WORKSPACE</span>
+      </div>
     </div>
 
-    <el-alert v-if="missingAiPermissions" type="info" show-icon :closable="false" :title="missingAiPermissions" style="margin-bottom:16px" />
-    <el-alert v-if="!categories.length" type="warning" show-icon :closable="false" title="暂无启用的培训类别，请先创建类别。" style="margin-bottom:16px" />
-    <div class="toolbar question-toolbar">
+    <div class="question-stat-strip">
+      <div class="question-stat"><span>题库题目</span><strong>{{ total }}</strong><em>条</em><small>当前筛选结果</small></div>
+      <div class="question-stat"><span>培训类别</span><strong>{{ categories.length }}</strong><em>个</em><small>可用出题范围</small></div>
+      <div class="question-stat"><span>关联制度</span><strong>{{ regulations.length }}</strong><em>份</em><small>可用于 AI 出题</small></div>
+    </div>
+
+    <div class="notice-stack">
+      <el-alert v-if="missingAiPermissions" type="info" show-icon :closable="false" :title="missingAiPermissions" />
+      <el-alert v-if="!categories.length" type="warning" show-icon :closable="false" title="暂无启用的培训类别，请先创建类别。" />
+    </div>
+    <section class="filter-panel question-filter-panel">
+      <div class="filter-panel__heading">
+        <span class="filter-panel__icon"><el-icon><Filter /></el-icon></span>
+        <div><strong>筛选题目</strong><span>按范围、难度、题型和审核状态缩小结果</span></div>
+      </div>
+      <div class="question-filter-grid">
       <el-select v-model="query.category_id" placeholder="培训类别" clearable filterable @change="onFilterScopeChange">
         <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
       </el-select>
@@ -36,11 +55,12 @@
       </el-select>
       <el-input v-model="query.keyword" clearable placeholder="搜索题干" @keyup.enter="load" />
       <div class="question-toolbar__actions">
-        <el-button v-if="auth.can('questions:write')" @click="router.push('/admin/questions/import')">Excel / TXT 导题</el-button>
-        <el-button v-if="auth.can('questions:write')" @click="openCreate">人工录题</el-button>
+        <el-button v-if="auth.can('questions:write')" plain @click="router.push('/admin/questions/import')">Excel / TXT 导题</el-button>
+        <el-button v-if="auth.can('questions:write')" plain @click="openCreate">人工录题</el-button>
         <el-button v-if="canGenerate" type="primary" :disabled="!categories.length || !regulations.length" @click="openGenerate">AI 出题</el-button>
       </div>
-    </div>
+      </div>
+    </section>
     <div v-if="filterConceptPage.total > filterConceptPage.page_size" class="concept-pagination">
       <span>考点筛选</span>
       <el-pagination
@@ -53,17 +73,25 @@
       />
     </div>
 
-    <el-table v-loading="loading" :data="list">
-      <template #empty><el-empty description="暂无符合条件的题目" :image-size="96" /></template>
+    <section class="table-section">
+      <div class="table-section__head">
+        <div><span class="section-kicker">QUESTION INDEX</span><strong>题目清单</strong></div>
+        <span class="table-total">共 {{ total }} 条结果</span>
+      </div>
+      <div class="table-shell">
+        <el-table class="question-table" v-loading="loading" :data="list">
+          <template #empty>
+            <div class="question-empty"><span class="empty-glyph">Q</span><strong>暂无符合条件的题目</strong><small>调整筛选条件，或使用上方入口创建第一道题目</small></div>
+          </template>
       <el-table-column prop="question_id" label="ID" width="70" />
       <el-table-column label="题干" min-width="300">
         <template #default="{ row }"><div class="stem-summary">{{ plainText(row.stem) }}</div></template>
       </el-table-column>
-      <el-table-column label="题型" width="100"><template #default="{ row }">{{ typeLabel(row.type) }}</template></el-table-column>
-      <el-table-column label="难度" width="80"><template #default="{ row }">{{ difficultyLabel(row.difficulty) }}</template></el-table-column>
+      <el-table-column label="题型" width="100"><template #default="{ row }"><el-tag size="small" effect="plain">{{ typeLabel(row.type) }}</el-tag></template></el-table-column>
+      <el-table-column label="难度" width="80"><template #default="{ row }"><span class="difficulty-text" :class="`difficulty-text--${row.difficulty || 'unknown'}`">{{ difficultyLabel(row.difficulty) }}</span></template></el-table-column>
       <el-table-column prop="score" label="建议分" width="80" />
       <el-table-column label="版本" width="90"><template #default="{ row }">{{ row.revision ? `v${row.revision}` : '旧题' }}</template></el-table-column>
-      <el-table-column label="来源" width="80"><template #default="{ row }">{{ sourceLabel(row.source) }}</template></el-table-column>
+      <el-table-column label="来源" width="80"><template #default="{ row }"><span class="source-text">{{ sourceLabel(row.source) }}</span></template></el-table-column>
       <el-table-column label="状态" width="100">
         <template #default="{ row }"><el-tag :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag></template>
       </el-table-column>
@@ -76,7 +104,9 @@
           <el-button v-if="row.source === 'ai' && ['single', 'multiple'].includes(row.type) && auth.can('questions:write')" text size="small" @click="regenerate(row)">重生成</el-button>
         </template>
       </el-table-column>
-    </el-table>
+        </el-table>
+      </div>
+    </section>
     <el-pagination class="question-pagination" layout="total, prev, pager, next" :total="total" :page-size="query.page_size" v-model:current-page="query.page" @current-change="load" />
 
     <el-dialog v-model="editorVisible" :title="editorMode === 'create' ? '人工录入题目' : '修订题目'" width="860px" destroy-on-close :before-close="beforeEditorClose">
@@ -188,6 +218,7 @@ import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { formatDateTime } from '../../utils/format';
 import QuestionEditor from '../../components/QuestionEditor.vue';
 import QuestionPreview from '../../components/QuestionPreview.vue';
+import { Filter } from '@element-plus/icons-vue';
 import {
   questionDraftFromView,
   questionRichTextToPlainText,
@@ -638,14 +669,71 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer); pollTime
 </script>
 
 <style scoped>
-.question-toolbar { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)) minmax(160px, 1.4fr); gap: 10px; align-items: center; }
-.question-toolbar__actions { display: flex; justify-content: flex-end; gap: 8px; grid-column: 1 / -1; }
+.question-page { padding: 30px; }
+.page-head--hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+.page-head__main { min-width: 0; }
+.page-head__actions { display: flex; align-items: flex-end; flex-direction: column; gap: 12px; flex: none; }
+.head-note { color: var(--re-text-3); font-size: 12px; white-space: nowrap; }
+.head-note i { display: inline-block; width: 6px; height: 6px; margin-right: 7px; vertical-align: 1px; border-radius: 50%; background: var(--re-primary); box-shadow: 0 0 0 4px rgba(48,86,211,.1); }
+.head-badge { padding: 5px 9px; border: 1px solid #dfe5f4; border-radius: 6px; color: var(--re-primary-deep); background: #f4f6fd; font-size: 10px; font-weight: 700; letter-spacing: 1.2px; }
+.question-stat-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+.question-stat { display: grid; grid-template-columns: auto auto auto; align-items: baseline; column-gap: 7px; row-gap: 2px; padding: 14px 16px; border: 1px solid var(--re-border); border-radius: 12px; background: #fbfcff; }
+.question-stat span, .question-stat small { color: var(--re-text-3); font-size: 12px; }
+.question-stat strong { color: var(--re-text); font-size: 24px; letter-spacing: -.7px; }
+.question-stat em { color: var(--re-text-2); font-size: 12px; font-style: normal; }
+.question-stat small { grid-column: 1 / -1; }
+.notice-stack { display: grid; gap: 8px; margin-bottom: 18px; }
+.notice-stack :deep(.el-alert) { margin: 0; border-radius: 10px; }
+.filter-panel { display: flex; align-items: flex-start; gap: 22px; margin-bottom: 24px; padding: 14px 16px 16px; border: 1px solid var(--re-border); border-radius: 12px; background: #f8faff; }
+.filter-panel__heading { display: flex; align-items: center; gap: 10px; flex: none; padding-top: 7px; }
+.filter-panel__heading > div { display: flex; flex-direction: column; gap: 3px; }
+.filter-panel__heading strong { color: var(--re-text); font-size: 13px; }
+.filter-panel__heading span { color: var(--re-text-3); font-size: 11px; white-space: nowrap; }
+.filter-panel__icon { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 9px; background: var(--el-color-primary-light-9); color: var(--re-primary); }
+.question-filter-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; flex: 1; min-width: 0; }
+.question-filter-grid > .el-input { grid-column: span 2; }
+.question-filter-grid :deep(.el-select), .question-filter-grid :deep(.el-input) { width: 100%; }
+.question-toolbar__actions { display: flex; justify-content: flex-end; gap: 8px; grid-column: 1 / -1; padding-top: 2px; }
+.question-toolbar__actions .el-button { border-radius: 8px; }
 .concept-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin: 10px 0; color: #909399; font-size: 13px; }
+.table-section__head { display: flex; align-items: center; justify-content: space-between; margin: 0 2px 10px; }
+.table-section__head > div { display: flex; align-items: baseline; gap: 10px; }
+.section-kicker { color: var(--re-text-3); font-size: 10px; font-weight: 700; letter-spacing: 1.8px; }
+.table-section__head strong { color: var(--re-text); font-size: 15px; }
+.table-total { color: var(--re-text-3); font-size: 12px; }
+.table-shell { overflow: hidden; border: 1px solid var(--re-border); border-radius: 12px; }
+.question-table { border: 0; }
+.question-table :deep(.el-table__inner-wrapper::before) { display: none; }
+.question-table :deep(.el-table__header-wrapper th) { height: 44px; background: #f7f9fc; }
+.question-table :deep(.el-table__body-wrapper td) { height: 64px; }
+.question-table :deep(.el-table__empty-text) { width: 100%; }
+.question-empty { display: flex; align-items: center; flex-direction: column; gap: 7px; padding: 46px 20px 50px; }
+.empty-glyph { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border: 1px solid #dce4f8; border-radius: 14px; color: var(--re-primary); background: #f2f5ff; font-family: var(--re-mono); font-size: 17px; font-weight: 700; }
+.question-empty strong { color: var(--re-text-2); font-size: 14px; }
+.question-empty small { color: var(--re-text-3); font-size: 12px; }
+.difficulty-text { font-size: 13px; font-weight: 600; }
+.difficulty-text--easy { color: var(--re-success); }
+.difficulty-text--medium { color: var(--re-warning); }
+.difficulty-text--hard { color: var(--re-danger); }
+.difficulty-text--unknown { color: var(--re-text-3); }
+.source-text { color: var(--re-text-2); font-size: 13px; }
 .question-pagination { margin-top: 16px; justify-content: flex-end; }
 .stem-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-tools { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .editor-hint { color: #909399; font-size: 13px; }
 .version-history { margin-top: 24px; border-top: 1px solid #ebeef5; padding-top: 18px; }
 .task-error { color: #f56c6c; }
-@media (max-width: 1100px) { .question-toolbar { grid-template-columns: repeat(3, minmax(140px, 1fr)); } }
+@media (max-width: 1100px) {
+  .page-head--hero, .filter-panel { align-items: stretch; flex-direction: column; }
+  .page-head__actions { align-items: flex-start; }
+  .question-filter-grid { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
+  .question-filter-grid > .el-input { grid-column: span 2; }
+}
+@media (max-width: 680px) {
+  .question-page { padding: 20px; }
+  .question-stat-strip { grid-template-columns: 1fr; }
+  .question-filter-grid { grid-template-columns: 1fr; }
+  .question-filter-grid > .el-input { grid-column: auto; }
+  .question-toolbar__actions { justify-content: flex-start; flex-wrap: wrap; }
+}
 </style>
