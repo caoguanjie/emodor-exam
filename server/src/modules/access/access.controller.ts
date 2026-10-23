@@ -25,6 +25,9 @@ class UpdateRoleDto {
 
 class AssignRoleDto {
   @IsArray() @IsString({ each: true }) role_ids!: string[];
+  @IsOptional() @IsString() @MinLength(8) @MaxLength(128)
+  @Matches(/^(?=.*[A-Za-z])(?=.*\d)\S{8,128}$/)
+  initial_password?: string;
 }
 
 class CreateAdministratorDto {
@@ -117,7 +120,7 @@ export class AccessController {
   @Put('administrators/:id/roles')
   @Permissions('administrators:write')
   async assignRoles(@Param('id') id: string, @Body(new DtoValidationPipe()) dto: AssignRoleDto, @CurrentUser() user: AuthUser) {
-    await this.access.assignRoles(id, dto.role_ids, user.id);
+    await this.access.assignRoles(id, dto.role_ids, user.id, dto.initial_password);
     return null;
   }
 

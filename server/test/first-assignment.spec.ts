@@ -5,6 +5,33 @@ import { RoleEnum } from '../src/common/errors';
 import { SysRole } from '../src/entities/sys-role.entity';
 import { SysUser } from '../src/entities/sys-user.entity';
 import { SysUserRole } from '../src/entities/sys-user-role.entity';
+import { SysRolePermission } from '../src/entities/sys-role-permission.entity';
+import { SysPermission } from '../src/entities/sys-permission.entity';
+import * as bcrypt from 'bcryptjs';
+
+function assignmentFixture(existingAdmin = false, effectiveTarget = true) {
+  const user = { id: '17', username: 'learner', realName: '学员', employeeNo: null, role: RoleEnum.EMPLOYEE, status: 1, authVersion: 2, passwordHash: 'old-hash', forcePasswordChange: 0 };
+  const links = existingAdmin ? [{ userId: '17', roleId: '7' }] : [];
+  const role = { id: '7', status: 1, isSystem: 0 };
+  const repositories = {
+    user: { createQueryBuilder: () => queryBuilder([user]), findOne: async () => user, save: vi.fn(async (value) => value) },
+    role: { createQueryBuilder: () => queryBuilder([role]), find: async () => [role] },
+    userRole: { find: async () => links, delete: vi.fn(), create: (value: any) => value, save: vi.fn() },
+    rolePermission: { find: async () => effectiveTarget ? [{ roleId: '7', permissionId: '1' }] : [] },
+    permission: { find: async () => [{ id: '1', code: 'courses:write' }] },
+    sessions: { invalidateUser: vi.fn(async () => ['old']), markRevoked: vi.fn() },
+  };
+  const manager = { getRepository: (entity: any) => {
+    if (entity === SysUser) return repositories.user;
+    if (entity === SysRole) return repositories.role;
+    if (entity === SysUserRole) return repositories.userRole;
+    if (entity === SysRolePermission) return repositories.rolePermission;
+    if (entity === SysPermission) return repositories.permission;
+    throw new Error('unexpected repository');
+  } };
+  const service = serviceWith(repositories, { transaction: async (callback: any) => callback(manager) });
+  return { service, user, repositories };
+}
 
 function queryBuilder<T>(rows: T[]) {
   return {
@@ -36,6 +63,44 @@ function serviceWith(repositories: Record<string, any>, dataSource: any = {}) {
 }
 
 describe('first business-role assignment contracts', () => {
+  it('requires a supplied administrator password before promoting an SMS learner', async () => {
+    const { service, repositories, user } = assignmentFixture();
+    await expect(service.assignRoles('17', ['7'], '9')).rejects.toMatchObject({ code: 40001 });
+    expect(repositories.userRole.delete).not.toHaveBeenCalled();
+    expect(repositories.sessions.invalidateUser).not.toHaveBeenCalled();
+    expect(user.passwordHash).toBe('old-hash');
+  });
+
+  it('promotes with a verifiable initial password, forced change and revoked old sessions', async () => {
+    const { service, user, repositories } = assignmentFixture();
+    await service.assignRoles('17', ['7'], '9', 'SafePassword9');
+    expect(await bcrypt.compare('SafePassword9', user.passwordHash)).toBe(true);
+    expect(user).toMatchObject({ forcePasswordChange: 1, authVersion: 3, rolesConfigured: 1 });
+    expect(repositories.userRole.save).toHaveBeenCalledWith([{ userId: '17', roleId: '7' }]);
+    expect(repositories.sessions.markRevoked).toHaveBeenCalledWith(['old']);
+  });
+
+  it('leaves existing administrator credentials unchanged during role edits', async () => {
+    const { service, user } = assignmentFixture(true);
+    await service.assignRoles('17', ['7'], '9');
+    expect(user).toMatchObject({ passwordHash: 'old-hash', forcePasswordChange: 0 });
+    await expect(service.assignRoles('17', ['7'], '9', 'SafePassword9')).rejects.toMatchObject({ code: 40001 });
+    expect(user.passwordHash).toBe('old-hash');
+  });
+
+  it('does not hide a learner behind a zero-permission business role', async () => {
+    const { service, repositories } = assignmentFixture(false, false);
+    await expect(service.assignRoles('17', ['7'], '9', 'SafePassword9')).rejects.toMatchObject({ code: 40001 });
+    expect(repositories.userRole.delete).not.toHaveBeenCalled();
+  });
+
+  it('does not reset a disabled administrator password during a role edit', async () => {
+    const { service, user } = assignmentFixture(true);
+    user.status = 0;
+    await service.assignRoles('17', ['7'], '9');
+    expect(user).toMatchObject({ passwordHash: 'old-hash', forcePasswordChange: 0 });
+  });
+
   it('returns a bounded page with only safe candidate account fields', async () => {
     const qb = queryBuilder([{
       id: '17', username: 'pc_manager', realName: 'PC 管理员', status: 1, role: RoleEnum.EMPLOYEE,
@@ -46,12 +111,12 @@ describe('first business-role assignment contracts', () => {
     const result = await service.listAssignableUsers({ page: 2, page_size: 10, keyword: 'pc' });
 
     expect(result).toEqual({
-      items: [{ id: '17', username: 'pc_manager', real_name: 'PC 管理员', status: 1, system_role: RoleEnum.EMPLOYEE }],
+      items: [{ id: '17', username: 'pc_manager', real_name: 'PC 管理员', status: 1, system_role: RoleEnum.EMPLOYEE, requires_initial_password: true }],
       total: 1,
       page: 2,
       page_size: 10,
     });
-    expect(Object.keys(result.items[0])).toEqual(['id', 'username', 'real_name', 'status', 'system_role']);
+    expect(Object.keys(result.items[0])).toEqual(['id', 'username', 'real_name', 'status', 'system_role', 'requires_initial_password']);
     expect(qb.select).toHaveBeenCalledWith(['u.id', 'u.username', 'u.realName', 'u.status', 'u.role']);
     expect(qb.where).toHaveBeenCalledWith('u.role <> :superAdmin', { superAdmin: RoleEnum.SUPER_ADMIN });
     expect(qb.andWhere).toHaveBeenCalledWith('NOT EXISTS (SELECT 1 FROM sys_user_role ur WHERE ur.user_id = u.id)');

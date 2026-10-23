@@ -42,7 +42,6 @@
           <template #default="{ row }">
             <el-button text type="primary" @click="openStudentEdit(row)">编辑</el-button>
             <el-button text :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStudentStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
-            <el-button text type="danger" @click="resetStudentPassword(row)">重置密码</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -51,22 +50,14 @@
       </template>
     </FitsTable>
 
-      <el-dialog v-model="studentDialog" :title="studentForm.id ? '编辑学员' : '新增学员'" width="500px" class="re-form-dialog" destroy-on-close :before-close="beforeStudentDialogClose">
-        <el-form label-width="88px" :disabled="studentSaveBusy">
-          <el-form-item label="用户名"><el-input v-model="studentForm.username" :disabled="!!studentForm.id" maxlength="64" /></el-form-item>
-          <el-form-item label="姓名"><el-input v-model="studentForm.real_name" maxlength="64" /></el-form-item>
-          <el-form-item label="工号"><el-input v-model="studentForm.employee_no" maxlength="32" /></el-form-item>
-          <el-form-item label="来源"><el-select v-model="studentForm.source" style="width:100%"><el-option label="本机构" value="institution" /><el-option label="外来" value="external" /></el-select></el-form-item>
-          <el-form-item label="培训类别"><el-select v-model="studentForm.category_id" style="width:100%"><el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" /></el-select></el-form-item>
-          <el-form-item v-if="!studentForm.id" label="初始密码"><el-input v-model="studentForm.password" show-password placeholder="≥8 位（字母+数字）" /></el-form-item>
-          <el-form-item label="手机号"><el-input v-model="studentForm.phone" maxlength="20" /></el-form-item>
-          <el-form-item label="邮箱"><el-input v-model="studentForm.email" maxlength="128" /></el-form-item>
-          <el-form-item v-if="studentForm.id && auth.can('students:write')" label="头像">
-            <MediaUpload v-model="studentForm.avatar_id" purpose="avatar" :owner-id="String(studentForm.id)" :disabled="studentForm.status === 0 || studentSaveBusy" @update:model-value="onStudentAvatarChange" />
+      <el-dialog v-model="studentDialog" :title="studentForm.id ? '修改学员' : '新增学员'" width="min(1000px, 94vw)" class="re-form-dialog" destroy-on-close :before-close="beforeStudentDialogClose">
+        <el-form label-width="92px" class="student-edit-form" :disabled="studentSaveBusy">
+          <el-form-item v-if="studentForm.id && auth.can('students:write')" label="学员照片" class="student-photo-field">
+            <MediaUpload v-model="studentForm.avatar_id" purpose="avatar" list-type="picture-card" compact :owner-id="String(studentForm.id)" :disabled="studentBaseline.form.status === 0 || studentSaveBusy" @update:model-value="onStudentAvatarChange" />
             <el-alert
-              v-if="studentAvatarSync.message"
+              v-if="studentAvatarSync.status === 'unknown'"
               :title="studentAvatarSync.message"
-              :type="studentAvatarSync.status === 'confirmed' ? 'success' : studentAvatarSync.status === 'unknown' ? 'warning' : 'info'"
+              type="warning"
               :closable="false"
               show-icon
             >
@@ -75,8 +66,19 @@
               </template>
             </el-alert>
           </el-form-item>
+          <div class="student-fields">
+            <el-form-item label="姓名" required><el-input v-model="studentForm.real_name" maxlength="64" /></el-form-item>
+            <el-form-item v-if="studentForm.id" label="是否禁用"><el-radio-group v-model="studentForm.status"><el-radio :value="1">正常</el-radio><el-radio :value="0">禁用</el-radio></el-radio-group></el-form-item>
+            <el-form-item v-else label="来源" required><el-select v-model="studentForm.source" style="width:100%"><el-option label="本机构" value="institution" /><el-option label="外来" value="external" /></el-select></el-form-item>
+            <el-form-item label="手机号" required><el-input v-model="studentForm.phone" maxlength="11" inputmode="tel" placeholder="请输入手机号码" /></el-form-item>
+            <el-form-item label="性别"><el-radio-group v-model="studentForm.gender"><el-radio value="male">男</el-radio><el-radio value="female">女</el-radio></el-radio-group></el-form-item>
+            <el-form-item label="年龄">
+              <el-input-number v-model="studentForm.age" :min="0" :max="150" :precision="0" controls-position="right" placeholder="请输入年龄" style="width:100%" />
+            </el-form-item>
+            <el-form-item label="培训类别" required><el-select v-model="studentForm.category_id" style="width:100%"><el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" /></el-select></el-form-item>
+          </div>
         </el-form>
-        <template #footer><el-button @click="cancelStudentDialog">取消</el-button><el-button v-if="auth.can('students:write')" type="primary" :loading="studentSaveBusy" :disabled="studentSaveBusy" @click="saveStudent">保存</el-button></template>
+        <template #footer><el-button @click="cancelStudentDialog">取消</el-button><el-button v-if="auth.can('students:write')" type="primary" :loading="studentSaveBusy" :disabled="studentSaveBusy" @click="saveStudent">确定</el-button></template>
       </el-dialog>
 
       <el-dialog v-model="previewVisible" title="导入预览" width="650px">
@@ -113,6 +115,14 @@ const studentLoading = ref(false);
 const categories = ref<any[]>([]);
 const studentDialog = ref(false);
 const studentForm = reactive<any>({});
+function businessToday() {
+  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+function ageFromBirthday(birthday: string | null | undefined) {
+  if (!birthday) return undefined;
+  const today = businessToday();
+  return Number(today.slice(0, 4)) - Number(birthday.slice(0, 4)) - (today.slice(5) < birthday.slice(5) ? 1 : 0);
+}
 const studentAvatarOriginalId = ref<string | null>(null);
 const studentAvatarWritePending = ref(false);
 const studentAvatarSync = reactive<{ status: AvatarSyncStatus; message: string }>({ status: 'idle', message: '' });
@@ -252,13 +262,16 @@ function currentStudentSaveContext(): StudentSaveContext | null {
     desiredId: studentForm.id ? normalizeAvatarId(studentForm.avatar_id) : null,
     ordinary: {
       username: studentForm.username,
-      password: studentForm.password,
       real_name: studentForm.real_name,
       employee_no: studentForm.employee_no,
       source: studentForm.source,
       category_id: studentForm.category_id,
       phone: studentForm.phone,
       email: studentForm.email,
+      gender: studentForm.gender,
+      birthday: studentForm.birthday,
+      age: studentForm.age ?? null,
+      ...(studentForm.id ? { status: studentForm.status } : {}),
     },
   };
 }
@@ -300,6 +313,7 @@ function openStudentEdit(row: any) {
   studentAvatarDialogVersion.value += 1;
   Object.keys(studentForm).forEach((key) => delete studentForm[key]);
   Object.assign(studentForm, row, { category_id: row.category_id || '', employee_no: row.employee_no || '' });
+  studentForm.age = row.age ?? ageFromBirthday(row.birthday);
   studentAvatarOriginalId.value = row.avatar_id ? String(row.avatar_id) : null;
   resetStudentAvatarState();
   captureStudentBaseline();
@@ -323,9 +337,12 @@ async function queryStudentAvatarState() {
 }
 
 async function saveStudent() {
-  if (!studentForm.username || !studentForm.real_name || !studentForm.source || !studentForm.category_id || (!studentForm.id && !studentForm.password)) {
-    ElMessage.warning('请填写用户名、姓名、来源、培训类别和密码'); return;
+  if (!studentForm.real_name?.trim() || !studentForm.category_id || (!studentForm.id && !studentForm.source)) {
+    ElMessage.warning('请填写姓名、培训类别；新增学员还需填写来源'); return;
   }
+  studentForm.phone = studentForm.phone?.trim();
+  if (!/^1[3-9]\d{9}$/.test(studentForm.phone || '')) { ElMessage.warning('请输入有效的 11 位手机号码'); return; }
+  if (!studentForm.id) studentForm.username = studentForm.phone;
   const context = currentStudentSaveContext();
   if (!context) return;
   const operationKey = `${context.dialogVersion}:${context.studentId || 'new'}`;
@@ -348,11 +365,11 @@ async function saveStudent() {
           if (context.studentId) {
             await http.put(`/admin/students/${context.studentId}`, {
               real_name: draft.real_name,
-              employee_no: draft.employee_no,
-              source: draft.source,
               category_id: draft.category_id,
               phone: draft.phone,
-              email: draft.email,
+              gender: draft.gender,
+              birthday: draft.birthday,
+              age: draft.age,
             });
           } else {
             await http.post('/admin/students', draft);
@@ -371,6 +388,14 @@ async function saveStudent() {
       return;
     }
     if (context.studentId) studentAvatarOriginalId.value = context.desiredId;
+    if (context.studentId && context.ordinary.status !== studentBaseline.value.form.status) {
+      try {
+        await http.put(`/admin/students/${context.studentId}/status`, { status: context.ordinary.status });
+      } catch (error) {
+        const current: any = await http.get(`/admin/students/${context.studentId}`);
+        if (current.status !== context.ordinary.status) throw error;
+      }
+    }
     ElMessage.success('已保存');
     studentUnsaved.markClean();
     studentAvatarDialogVersion.value += 1;
@@ -385,10 +410,6 @@ async function saveStudent() {
 async function toggleStudentStatus(row: any) {
   await ElMessageBox.confirm(row.status === 1 ? '停用后该学员旧令牌立即失效，确认停用？' : '确认启用该学员？', '确认', { type: 'warning' });
   await http.put(`/admin/students/${row.id}/status`, { status: row.status === 1 ? 0 : 1 }); await loadStudents();
-}
-async function resetStudentPassword(row: any) {
-  const { value } = await ElMessageBox.prompt(`为「${row.real_name}」设置新的初始密码`, '重置密码', { inputType: 'password', inputPattern: /^(?=.*[A-Za-z])(?=.*\d).{8,}$/, inputErrorMessage: '至少 8 位，且同时包含字母与数字' });
-  await http.put(`/admin/students/${row.id}/password`, { password: value }); ElMessage.success('已重置');
 }
 function downloadStudentTemplate() { download('/admin/students/import-template', '学员导入模板.xlsx'); }
 async function onStudentImport(file: UploadFile | File) {
@@ -411,3 +432,14 @@ onMounted(async () => {
   await loadStudents();
 });
 </script>
+
+<style scoped>
+.student-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }
+.student-edit-form :deep(.el-form-item) { margin-bottom: 20px; }
+.student-edit-form :deep(.el-input-number .el-input__inner) { text-align: left; }
+.student-photo-field :deep(.media-upload__picture) { --el-upload-picture-card-size: 100px; }
+.student-photo-field :deep(.el-alert) { margin-top: 8px; }
+@media (max-width: 680px) {
+  .student-fields { grid-template-columns: minmax(0, 1fr); }
+}
+</style>

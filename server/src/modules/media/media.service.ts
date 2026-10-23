@@ -453,6 +453,12 @@ export class MediaService {
   private async canRead(actorId: string, asset: MediaAsset): Promise<boolean> {
     if (asset.purpose !== 'video' && asset.ownerId === actorId) return true;
     const refs = await this.referenceRepo.find({ where: { assetId: String(asset.id) } });
+    // A delegated avatar upload is owned by the student before the form is
+    // saved. Only its uploader may preview it, with current business access.
+    if (!refs.length && asset.purpose === 'avatar' && asset.mediaKind === 'image' && asset.uploadedBy === actorId) {
+      const policy = this.ownerPolicies.get('user_avatar');
+      if (policy?.allowedPurposes.includes('avatar') && await policy.authorizeRead(actorId, asset.ownerId, String(asset.id))) return true;
+    }
     for (const ref of refs) {
       if (asset.purpose === 'video' && ref.ownerType !== 'lesson_version_video') continue;
       const policy = this.ownerPolicies.get(ref.ownerType);

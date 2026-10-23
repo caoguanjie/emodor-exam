@@ -17,36 +17,33 @@ import type { LearnerSource } from '../../common/training-contracts';
 
 const QueryNumber = () => Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)));
 
-// 初始/重置口令与首次改密策略对齐（07 册 2.2.3）：≥8 位且同时包含字母与数字，
-// 避免出现「初始口令可登录却永远通不过强制改密校验」的口径裂缝
-const INITIAL_PASSWORD = () => Matches(/^(?=.*[A-Za-z])(?=.*\d)\S{8,128}$/, { message: 'password 至少 8 位，且同时包含字母与数字' });
-
 class CreateStudentDto {
-  @IsString() @MinLength(1) @MaxLength(64) username!: string;
-  @IsString() @MinLength(8) @MaxLength(128) @INITIAL_PASSWORD() password!: string;
+  @IsOptional() @IsInt() @Min(0) @Max(150) age?: number | null;
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(64) username?: string;
   @IsString() @MinLength(1) @MaxLength(64) real_name!: string;
   @IsString() @MinLength(1) @MaxLength(32) category_id!: string;
   @IsIn(['institution', 'external']) source!: 'institution' | 'external';
   @IsOptional() @IsString() @MaxLength(32) employee_no?: string;
-  @IsOptional() @IsString() @MaxLength(20) phone?: string;
+  @IsString() @MinLength(1) @MaxLength(20) phone!: string;
   @IsOptional() @IsString() @MaxLength(128) email?: string;
+  @IsOptional() @IsIn(['male', 'female']) gender?: 'male' | 'female' | null;
+  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) birthday?: string | null;
 }
 
 class UpdateStudentDto {
+  @IsOptional() @IsInt() @Min(0) @Max(150) age?: number | null;
   @IsOptional() @IsString() @MaxLength(64) real_name?: string;
   @IsOptional() @IsString() @MaxLength(32) employee_no?: string;
   @IsOptional() @IsString() @MaxLength(32) category_id?: string;
   @IsOptional() @IsIn(['institution', 'external']) source?: 'institution' | 'external';
   @IsOptional() @IsString() @MaxLength(20) phone?: string;
   @IsOptional() @IsString() @MaxLength(128) email?: string;
+  @IsOptional() @IsIn(['male', 'female']) gender?: 'male' | 'female' | null;
+  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) birthday?: string | null;
 }
 
 class StudentStatusDto {
   @IsInt() status!: number;
-}
-
-class StudentResetPasswordDto {
-  @IsString() @MinLength(8) @MaxLength(128) @INITIAL_PASSWORD() password!: string;
 }
 
 class SelfProfileDto {
@@ -89,8 +86,8 @@ interface StudentImportPreviewBody {
 
 const STUDENT_IMPORT_ROW_KEYS = [
   'row', 'username', 'real_name', 'realName', 'employee_no', 'employeeNo', 'phone', 'email',
-  'source', 'category_id', 'categoryId', 'category', 'password', 'initial_password',
-  '用户名', '姓名', '工号', '手机号', '邮箱', '来源', '培训类别ID', '初始密码',
+  'source', 'category_id', 'categoryId', 'category',
+  '用户名', '姓名', '工号', '手机号', '邮箱', '来源', '培训类别ID',
 ] as const;
 
 function assertImportObject(value: unknown, allowed: readonly string[], label: string): Record<string, unknown> {
@@ -208,15 +205,15 @@ export class StudentsController {
 
   @Post()
   @Permissions('students:write')
-  create(@Body(new StrictDtoValidationPipe(['username', 'password', 'real_name', 'category_id', 'source', 'employee_no', 'phone', 'email'])) dto: CreateStudentDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    assertImportObject(req.body, ['username', 'password', 'real_name', 'category_id', 'source', 'employee_no', 'phone', 'email'], '学员请求');
+  create(@Body(new StrictDtoValidationPipe(['username', 'real_name', 'category_id', 'source', 'employee_no', 'phone', 'email', 'gender', 'birthday', 'age'])) dto: CreateStudentDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertImportObject(req.body, ['username', 'real_name', 'category_id', 'source', 'employee_no', 'phone', 'email', 'gender', 'birthday', 'age'], '学员请求');
     return this.users.createStudent(dto, this.actor(user), req.ip || null);
   }
 
   @Put(':id')
   @Permissions('students:write')
-  update(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['real_name', 'employee_no', 'category_id', 'source', 'phone', 'email'])) dto: UpdateStudentDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    assertImportObject(req.body, ['real_name', 'employee_no', 'category_id', 'source', 'phone', 'email'], '学员请求');
+  update(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['real_name', 'employee_no', 'category_id', 'source', 'phone', 'email', 'gender', 'birthday', 'age'])) dto: UpdateStudentDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertImportObject(req.body, ['real_name', 'employee_no', 'category_id', 'source', 'phone', 'email', 'gender', 'birthday', 'age'], '学员请求');
     return this.users.updateStudent(id, dto, this.actor(user), req.ip || null);
   }
 
@@ -235,13 +232,6 @@ export class StudentsController {
     return this.users.updateStudentAvatar(id, dto.avatar_id || null, this.actor(user), req.ip || null);
   }
 
-  @Put(':id/password')
-  @Permissions('students:write')
-  async resetPassword(@Param('id') id: string, @Body(new StrictDtoValidationPipe(['password'])) dto: StudentResetPasswordDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    assertImportObject(req.body, ['password'], '学员密码请求');
-    await this.users.resetStudentPassword(id, dto.password, this.actor(user), req.ip || null);
-    return null;
-  }
 }
 
 /** 学员与管理员共用的本人资料；source/category/role 永远不由本人接口接受。 */

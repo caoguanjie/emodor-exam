@@ -173,6 +173,7 @@ export class AccessService {
       items: rows.map((user) => ({
         id: String(user.id), username: user.username, real_name: user.realName,
         status: Number(user.status), system_role: user.role,
+        requires_initial_password: user.role === RoleEnum.EMPLOYEE,
       })),
       total, page, page_size: pageSize,
     };
@@ -284,6 +285,7 @@ export class AccessService {
         id: String(user.id), username: user.username, real_name: user.realName,
         system_role: user.role, status: user.status, last_login_at: user.lastLoginAt,
         role_ids: links.map((link) => String(link.roleId)), permissions: await this.permissions(user.id),
+        requires_initial_password: await this.requiresInitialPassword(user),
       };
     }));
   }
@@ -373,7 +375,22 @@ export class AccessService {
     };
   }
 
-  async assignRoles(userId: string, roleIds: string[], actorId: string | number) {
+  private async requiresInitialPassword(user: SysUser, manager?: EntityManager): Promise<boolean> {
+    if (user.role !== RoleEnum.EMPLOYEE) return false;
+    // Account disablement hides runtime permissions, but does not erase an
+    // existing administrator's password. Classify from active role grants.
+    const links = await (manager?.getRepository(SysUserRole) || this.userRoleRepo).find({ where: { userId: String(user.id) } });
+    const roles = links.length
+      ? await (manager?.getRepository(SysRole) || this.roleRepo).find({ where: { id: In(links.map((link) => link.roleId)), status: 1 } }) : [];
+    const grants = roles.length
+      ? await (manager?.getRepository(SysRolePermission) || this.rolePermissionRepo).find({ where: { roleId: In(roles.map((role) => role.id)) } }) : [];
+    const ids = [...new Set(grants.map((row) => String(row.permissionId)))];
+    const permissions = ids.length
+      ? await (manager?.getRepository(SysPermission) || this.permissionRepo).find({ where: { id: In(ids) } }) : [];
+    return !permissions.some((permission) => isRegisteredPermission(permission.code));
+  }
+
+  async assignRoles(userId: string, roleIds: string[], actorId: string | number, initialPassword?: string) {
     const uniqueRoleIds = [...new Set(roleIds.map(String))];
     if (uniqueRoleIds.length !== roleIds.length) throw Errors.param('角色不可重复选择');
     const oldSids: string[] = [];
@@ -400,6 +417,24 @@ export class AccessService {
       if (!current) throw Errors.notFound('管理员不存在');
       if (current.role === RoleEnum.SUPER_ADMIN && Number(current.id) === 1 && uniqueRoleIds.length === 0) throw Errors.lastSuperAdmin();
       if (current.role === RoleEnum.SUPER_ADMIN) throw Errors.param('超级管理员不可配置业务角色');
+      const learner = await this.requiresInitialPassword(current, manager);
+      if (learner && currentRoles.length) {
+        const rolePermissionRows = await manager.getRepository(SysRolePermission).find({ where: { roleId: In(uniqueRoleIds) } });
+        const permissionIds = [...new Set(rolePermissionRows.map((row) => String(row.permissionId)))];
+        const permissions = permissionIds.length
+          ? await manager.getRepository(SysPermission).find({ where: { id: In(permissionIds) } }) : [];
+        if (!permissions.some((permission) => isRegisteredPermission(permission.code))) {
+          throw Errors.param('学员提升为管理员须选择含有效管理权限的业务角色');
+        }
+        if (typeof initialPassword !== 'string' || !/^(?=.*[A-Za-z])(?=.*\d)\S{8,128}$/.test(initialPassword)) {
+          throw Errors.param('学员提升为管理员须设置初始密码（8—128 位，含字母和数字）');
+        }
+        validatePasswordStrength(initialPassword, { username: current.username, employeeNo: current.employeeNo, realName: current.realName }, '管理员初始密码');
+        current.passwordHash = await bcrypt.hash(initialPassword, 12);
+        current.forcePasswordChange = 1;
+      } else if (initialPassword !== undefined) {
+        throw Errors.param('仅学员提升为管理员时可设置初始密码');
+      }
       current.rolesConfigured = 1;
       current.authVersion = this.authVersion(current) + 1;
       await userRepo.save(current);

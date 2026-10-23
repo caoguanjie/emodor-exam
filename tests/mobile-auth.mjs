@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { captchaLogin } from './training-access.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const bcrypt = require('bcryptjs');
@@ -57,8 +58,11 @@ export async function run(ctx) {
   const stillPending = await ctx.queryTestDb('SELECT force_password_change FROM sys_user WHERE id=?', [userId]);
   assert.equal(Number(stillPending[0].force_password_change), 1);
 
-  const pc = {};
-  const pcLogin = await ctx.request(pc, 'POST', '/auth/login', { username, password });
+  const refusedLearner = await ctx.request(null, 'POST', '/auth/login', { username, password });
+  assert.equal(refusedLearner.status, 401, 'pure learner must not use its historical password for PC login');
+  assert.equal(refusedLearner.code, 40104);
+  assert.equal(refusedLearner.data?.access_token, undefined);
+  const { actor: pc, result: pcLogin } = await captchaLogin(ctx, 'admin', ctx.adminPassword);
   assert.equal(pcLogin.status, 200);
   assert.equal(pcLogin.data.force_change_password, true);
   pc.accessToken = pcLogin.data.access_token;
@@ -112,7 +116,7 @@ export async function run(ctx) {
   assert.equal((await ctx.request({ cookie: nextCookie }, 'POST', '/mobile/auth/refresh')).status, 401);
   assert.equal((await ctx.request({ accessToken: logged.data.access_token }, 'GET', '/me/profile')).status, 401);
   const pcRefresh = await ctx.request(pc, 'POST', '/auth/refresh');
-  assert.equal(pcRefresh.status, 200, 'mobile logout must preserve the PC session');
+  assert.equal(pcRefresh.status, 200, 'mobile logout must preserve the independent administrator PC session');
   assert.equal(pcRefresh.data.force_change_password, true);
 
   const newPhone = `139${String(randomBytes(4).readUInt32BE() % 100_000_000).padStart(8, '0')}`;

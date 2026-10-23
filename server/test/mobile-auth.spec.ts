@@ -174,7 +174,7 @@ function authFixture() {
     findOne: async ({ where }: any) => users.find((user) => Object.entries(where).every(([key, value]) => (user as any)[key] === value)) || null,
     createQueryBuilder: () => {
       let where: Record<string, unknown>;
-      const query: any = { setLock: () => query, where: (_sql: string, params: any) => { where = params; return query; }, getOne: () => userRepo.findOne({ where }) };
+      const query: any = { setLock: () => query, where: (_sql: string, params: any) => { where = params.userId ? { id: params.userId } : params; return query; }, getOne: () => userRepo.findOne({ where }) };
       return query;
     },
   };
@@ -246,15 +246,65 @@ describe('mobile sessions', () => {
     expect(f.rows).toHaveLength(1);
   });
 
-  it('keeps PC password login on the same issuer with a pending-change token and PC cookie', async () => {
+  it.each(['employee', 'super_admin', 'regulation_admin'])('keeps %s administrator password login on the shared issuer with forced change', async (role) => {
     const f = authFixture();
     const password = randomBytes(24).toString('hex');
-    f.seed({ passwordHash: await bcrypt.hash(password, 4) });
-    const auth = new AuthService(f.userRepo as any, f.jwt, f.redis, { log: () => undefined } as any, f.settings, f.dataSource as any, {} as any, f.sessions, f.access as any, f.issuer);
-    const result = await auth.login('learner', password, null, { get: () => 'test-agent' } as any, f.response);
+    const user = f.seed({ role: role as SysUser['role'], passwordHash: await bcrypt.hash(password, 4) });
+    if (role === 'employee') f.permissions.set(user.id, ['students:read']);
+    const auth = new AuthService(f.userRepo as any, f.jwt, f.redis, { log: () => undefined } as any, f.settings, f.dataSource as any, { verify: async () => true } as any, f.sessions, f.access as any, f.issuer);
+    const result = await auth.login('learner', password, null, { get: () => 'test-agent' } as any, f.response, 'fixture', 'fixture');
     expect(result.force_change_password).toBe(true);
     expect(f.jwt.verify(result.access_token)).toMatchObject({ client: 'pc', auth_method: 'password', pwd_pending: true, sid: f.rows[0].sid });
     expect(f.cookies[0].name).toBe('ruleexam_refresh');
+  });
+
+  it('rejects learner password login even with a valid historical password without creating a session', async () => {
+    const f = authFixture();
+    const password = randomBytes(24).toString('hex');
+    const user = f.seed({ passwordHash: await bcrypt.hash(password, 4), loginCount: 0 });
+    const auth = new AuthService(f.userRepo as any, f.jwt, f.redis, { log: () => undefined } as any, f.settings, f.dataSource as any, {} as any, f.sessions, f.access as any, f.issuer);
+    await expect(auth.login(user.username, password, null, { get: () => null } as any, f.response)).rejects.toMatchObject({ code: 40104 });
+    expect(f.rows).toHaveLength(0);
+    expect(f.cookies).toHaveLength(0);
+    expect(user.loginCount).toBe(0);
+  });
+
+  it('allows a business administrator to change password but rejects a learner before mutating credentials', async () => {
+    const f = authFixture();
+    const password = randomBytes(24).toString('hex');
+    const user = f.seed({ passwordHash: await bcrypt.hash(password, 4) });
+    const originalHash = user.passwordHash;
+    const auth = new AuthService(f.userRepo as any, f.jwt, f.redis, { log: () => undefined } as any, f.settings, f.dataSource as any, {} as any, f.sessions, f.access as any, f.issuer);
+    const replacement = `Z9${randomBytes(24).toString('hex')}`;
+    await expect(auth.changePassword(1, password, replacement, null, f.response)).rejects.toMatchObject({ code: 40301 });
+    expect(user.passwordHash).toBe(originalHash);
+    expect(f.rows).toHaveLength(0);
+    f.permissions.set(user.id, ['students:write']);
+    await expect(auth.changePassword(1, password, replacement, null, f.response)).resolves.toHaveProperty('access_token');
+    expect(await bcrypt.compare(replacement, user.passwordHash)).toBe(true);
+    expect(user.authVersion).toBe(1);
+  });
+
+  it.each([true, false])('rejects old learner PC access and refresh (durable session: %s)', async (durable) => {
+    const f = authFixture(); const user = f.seed({ forcePasswordChange: 0 });
+    const pair = await f.issuer.issue(user, { client: 'pc', authMethod: 'password', ip: null, userAgent: null }, f.response);
+    const legacy = (token: string) => {
+      if (durable) return token;
+      const payload = f.jwt.verify(token);
+      delete payload.sid; delete payload.client; delete payload.auth_method;
+      return f.jwt.sign(payload);
+    };
+    const accessToken = legacy(pair.access_token);
+    const refreshToken = legacy(f.cookies[0].token);
+    const guard = new JwtAuthGuard(f.jwt, { getAllAndOverride: () => false } as any, f.redis, f.settings, f.sessions, f.userRepo as any, f.access as any);
+    const ctx = { getHandler: () => ({}), getClass: () => ({}), switchToHttp: () => ({ getRequest: () => ({ headers: { authorization: `Bearer ${accessToken}` }, originalUrl: '/api/v1/auth/profile', method: 'GET' }) }) } as any;
+    await expect(guard.canActivate(ctx)).rejects.toMatchObject({ code: 40301 });
+    await expect(f.issuer.refresh(refreshToken, 'pc', null, f.response)).rejects.toMatchObject({ code: 40301 });
+    f.permissions.set(user.id, ['students:read']);
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    await expect(f.issuer.refresh(refreshToken, 'pc', null, f.response)).resolves.toHaveProperty('access_token');
+    f.permissions.set(user.id, []);
+    await expect(guard.canActivate(ctx)).rejects.toMatchObject({ code: 40301 });
   });
 
   it('issues isolated cookies and durable client/method claims while keeping PC forced change', async () => {
@@ -335,7 +385,7 @@ describe('phone writes outside mobile login', () => {
   it('normalizes managed-student creation and rejects self-service phone replacement', async () => {
     const f = authFixture();
     const users = new UsersService(f.userRepo as any, f.dataSource as any, f.redis, { log: () => undefined } as any, f.settings, { lockActive: async () => undefined } as any, f.sessions, f.access as any, { registerOwnerPolicy: () => undefined } as any);
-    const result = await users.createStudent({ username: 'phone_fixture', password: randomBytes(18).toString('hex'), real_name: '合成学员', category_id: '1', source: 'institution', phone: '138 0013-8000' }, { id: 9, name: 'fixture' }, null);
+    const result = await users.createStudent({ username: 'phone_fixture', real_name: '合成学员', category_id: '1', source: 'institution', phone: '138 0013-8000' }, { id: 9, name: 'fixture' }, null);
     expect(result.phone).toBe('13800138000');
     await expect(users.updateSelfProfile(result.id, { phone: '13900138000' } as any)).rejects.toMatchObject({ code: 40001 });
     expect(f.users[0].phone).toBe('13800138000');
@@ -355,7 +405,7 @@ describe('phone writes outside mobile login', () => {
     const saved: any[] = [];
     const batches = { create: (row: any) => ({ id: '1', ...row }), save: async (row: any) => { saved.push(row); return row; } };
     const service = new ImportBatchService(batches as any, { findOne: async () => null } as any, { findOne: async () => ({ id: '1', status: 1 }) } as any, { query: async () => [] } as any, { log: () => undefined } as any, {} as any);
-    const result = await service.preview('1', 'students', [{ username: 'import-fixture', real_name: '合成学员', source: 'external', category_id: '1', password: randomBytes(18).toString('hex'), phone: '123' }]);
+    const result = await service.preview('1', 'students', [{ username: 'import-fixture', real_name: '合成学员', source: 'external', category_id: '1', phone: '123' }]);
     expect(result.valid_rows).toEqual([]);
     expect(result.errors[0]).toMatchObject({ row: 2, message: expect.stringContaining('手机号') });
     expect(saved[0].normalizedRows).toEqual([]);

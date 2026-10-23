@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { deepStrictEqual } from 'node:assert/strict';
 import { randomStrongPassword } from './training-access.mjs';
+import { learnerSession, randomLearnerPhone } from './support/learner-session-fixture.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
@@ -126,18 +127,17 @@ async function createCategory(ctx, admin, name) {
 async function createStudent(ctx, admin, categoryId, source, label) {
   const username = `course_${label}_${randomBytes(4).toString('hex')}`;
   const employeeNo = `C${randomBytes(5).toString('hex')}`;
-  const password = randomStrongPassword(username, employeeNo, label);
+  const phone = randomLearnerPhone();
   const response = await ctx.request(admin, 'POST', '/admin/students', {
-    username, password, real_name: label, employee_no: employeeNo,
+    username, phone, real_name: label, employee_no: employeeNo,
     category_id: String(categoryId), source,
   });
   assert(response.status === 200 && response.data?.id, `${label} create failed: ${response.status}`);
-  return { id: String(response.data.id), username, password, employeeNo, realName: label };
+  return { id: String(response.data.id), username, phone, employeeNo, realName: label };
 }
 
 async function mobileLogin(ctx, learner) {
-  const phone = `138${String(randomBytes(4).readUInt32BE() % 100_000_000).padStart(8, '0')}`;
-  await ctx.queryTestDb('UPDATE sys_user SET phone = ? WHERE id = ?', [phone, learner.id]);
+  const phone = learner.phone;
   const actor = {};
   const response = await ctx.request(actor, 'POST', '/mobile/auth/debug-login', { phone });
   assert(response.status === 200 && response.data?.access_token
@@ -160,23 +160,25 @@ async function runBody(ctx) {
   const external = await createStudent(ctx, admin, categoryA, 'external', '外来学员');
   const otherCategory = await createStudent(ctx, admin, categoryB, 'institution', '其他类别学员');
   const unclassified = await createStudent(ctx, admin, categoryA, 'external', '资料未补齐学员');
-  institution.actor = await login(ctx, institution.username, institution.password, institution.employeeNo, institution.realName);
-  external.actor = await login(ctx, external.username, external.password, external.employeeNo, external.realName);
-  otherCategory.actor = await login(ctx, otherCategory.username, otherCategory.password, otherCategory.employeeNo, otherCategory.realName);
-  unclassified.actor = await login(ctx, unclassified.username, unclassified.password, unclassified.employeeNo, unclassified.realName);
+  for (const learner of [institution, external, otherCategory, unclassified]) {
+    learner.actor = await learnerSession(ctx, learner.id);
+  }
   // Model the valid SMS-created learner before source/category have been assigned.
   await ctx.queryTestDb('UPDATE sys_user SET source = NULL, category_id = NULL WHERE id = ?', [unclassified.id]);
 
-  const permissionUser = await createStudent(ctx, admin, categoryA, 'institution', '窄权限管理员');
   const role = await ctx.request(admin, 'POST', '/admin/roles', {
     code: `course_writer_${randomBytes(4).toString('hex')}`,
     name: 'B1 课程编辑',
     permissions: ['courses:write'],
   });
   assert(role.status === 200 && role.data?.id, `role create failed: ${role.status}`);
-  const assigned = await ctx.request(admin, 'PUT', `/admin/administrators/${permissionUser.id}/roles`, { role_ids: [String(role.data.id)] });
-  assert(assigned.status === 200, `role assign failed: ${assigned.status}`);
-  permissionUser.actor = await login(ctx, permissionUser.username, permissionUser.password, permissionUser.employeeNo, permissionUser.realName);
+  const permissionUsername = `course_admin_${randomBytes(4).toString('hex')}`;
+  const permissionPassword = randomStrongPassword(permissionUsername, '窄权限管理员');
+  const permissionCreated = await ctx.request(admin, 'POST', '/admin/administrators', {
+    username: permissionUsername, password: permissionPassword, real_name: '窄权限管理员', role_ids: [String(role.data.id)],
+  });
+  assert(permissionCreated.status === 200, `course administrator create failed: ${permissionCreated.status}`);
+  const permissionUser = { actor: await login(ctx, permissionUsername, permissionPassword, '窄权限管理员') };
   const regulationOptions = await ctx.request(permissionUser.actor, 'GET', '/regulations/category-options?page=1&page_size=100');
   assert(regulationOptions.status === 404, `removed regulation category options remained reachable: ${regulationOptions.status}`);
   const courseOptions = await ctx.request(permissionUser.actor, 'GET', '/admin/courses/category-options?page=1&page_size=100');
@@ -307,7 +309,7 @@ async function runBody(ctx) {
   assert(otherCategoryCourse.status === 200, `other category course was not browsable: ${otherCategoryCourse.status}`);
   const unclassifiedDetail = await ctx.request(unclassified.actor, 'GET', `/me/courses/${courseId}`);
   assert(unclassifiedDetail.status === 200, `unclassified learner course detail failed: ${unclassifiedDetail.status}`);
-  const pcProgress = await ctx.request(external.actor, 'GET', `/me/courses/${courseId}/progress`);
+  const pcProgress = await ctx.request(admin, 'GET', `/me/courses/${courseId}/progress`);
   assert(pcProgress.status === 403 && pcProgress.code === 40301,
     `PC session reached mobile video progress: ${pcProgress.status}/${pcProgress.code}`);
   for (const learner of browsingLearners) {

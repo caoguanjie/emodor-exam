@@ -85,6 +85,7 @@
 | refresh token | 7 天（`JWT_REFRESH_EXPIRES_DAYS` 可配） | 同上，type=refresh | 经所属客户端的 HttpOnly Cookie 刷新，同时轮换新 refresh |
 
 - `client=pc` 只接受 `auth_method=password`；`client=mobile` 只接受 `sms/debug`。新令牌均绑定持久 sid；仅历史 PC 缺失 client/auth_method/sid 的令牌按 pc/password 兼容。令牌不携带完整手机号、密码哈希或邮箱。
+- PC 登录、受保护 access 请求和 refresh 都按数据库当前角色/有效管理权限重新判定管理员；纯学员即刻拒绝，包括历史无 sid 的 PC 令牌。历史令牌形状兼容不保留学员 PC 登录或改密权限；管理员密码入口保持有效。
 - PC Cookie 为 `ruleexam_refresh`、Path `/api/v1/auth`；mobile Cookie 为 `ruleexam_mobile_refresh`、Path `/api/v1/mobile/auth`。两者均为 HttpOnly、SameSite=Strict，生产环境 Secure；不在 JSON body 返回 refresh token，刷新接口也不从 body 读取它。
 - 刷新策略：PC 调用 `POST /auth/refresh`，mobile 调用 `POST /mobile/auth/refresh`；服务端检查客户端/认证方式/会话身份后一次性消费旧 refresh jti，轮换成功后旧 refresh 不可重放，持久会话到期时间顺延完整 TTL。
 - 登出走 **Redis 黑名单与会话吊销**（07 册 2.1.4）：PC `POST /auth/logout` 校验 access 后吊销对应 jti/sid 并清理 PC Cookie；mobile `POST /mobile/auth/logout` 是公开、Cookie 驱动的幂等入口，不要求 access 有效，只撤销自身 mobile Cookie 对应的 jti/sid 并始终清理该 Cookie。两端都只清理本端前端认证状态。
@@ -136,7 +137,7 @@
 | /me/identity-verification | 学员实名 | Gate G自动化与独立代码审查已通过 | 本人三图上传/释放、持久核验会话与权威状态，见3.2.8；真实供应商/真机另验 |
 | /media/{assetId}/tickets、/media/tickets/{ticket}/content | 媒体票据 | Gate G已通过；视频增量见Task 12冻结契约 | mobile签发短期票据；内容二次检查精确引用/当前授权，支持单段Range |
 | /admin/training-categories | 学习管理 | 现行 | 培训类别分页、详情、增改、启停、引用保护删除 |
-| /admin/students | 学习管理 | 现行 | 无部门学员增改查、头像、启停、重置密码、xlsx 模板/预检/确认；不提供删除 |
+| /admin/students | 学习管理 | 现行 | 无部门学员增改查、头像、启停、无密码 xlsx 模板/预检/确认；手机号必填，不提供密码设置/重置或删除 |
 | /admin/administrators、/admin/roles 等 | 系统设置 | 现行 | 管理员创建必须提交非空 `role_ids`；另含权限、会话与公共配置治理 |
 | /admin/question-materials | 题库资料 | 现行 | 资料创建、列表/详情、版本上传、解析状态和重试；版本 `id` 为字符串 |
 | /admin/questions | 题库导入 | 现行 | 9 列 Excel/TXT 模板、预检、批次状态与幂等确认 |
@@ -162,7 +163,7 @@
 | # | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|---|
 | 1 | POST | /auth/captcha | 公开 | 生成管理员登录验证码（120 秒、一次消费）；可用 `previous_captcha_id` 只废弃当前已展示验证码 |
-| 2 | POST | /auth/login | 公开 | 员工兼容 username/password；管理员额外提交 captcha_id/captcha_code，签发带 sid 的双令牌 |
+| 2 | POST | /auth/login | 公开 | 仅管理员 username/password 并提交 captcha_id/captcha_code；纯学员使用 H5 手机验证码 |
 | 3 | POST | /auth/refresh | 公开（需 refresh token） | 刷新令牌（轮换并废弃前一枚；refresh token 经 HttpOnly Cookie 读取，不走 body） |
 | 4 | GET | /auth/profile | 登录 | 当前用户信息（含角色、部门、有效权限） |
 | 5 | PUT | /auth/password | 登录 | 修改本人密码（body 固定 old_password/new_password） |
@@ -243,27 +244,26 @@ mobile access 仅保存在 Pinia 内存；refresh 仅保存在 HttpOnly Cookie�
 
 ### 3.2.2 培训学员 /admin/students（A2）
 
-`/admin/students` 以 `students:read`（GET）和 `students:write`（POST/PUT/批次确认/启停/重置）为权限边界。新学员固定 role=`employee`，`category_id` 与 `source` 必填；`source` 只影响后续抽题策略，不等于权限。旧 `/users` 管理路由已删除，既有用户的未知来源/类别和历史部门值不回填。
+`/admin/students` 以 `students:read`（GET）和 `students:write`（POST/PUT/批次确认/启停）为权限边界。新学员固定 role=`employee`，`phone`、`category_id` 与 `source` 必填；`source` 只影响后续抽题策略，不等于权限。纯学员使用 H5 手机验证码登录，无密码设置/重置接口。旧 `/users` 管理路由已删除，既有用户的未知来源/类别和历史部门值不回填。
 
-A3 学员管理边界：列表、详情、资料更新、启停和重置密码仅作用于 `sys_user.role=employee` 且不存在任何 `sys_user_role` 记录的账号。只要存在业务角色链接，即使角色无权限或已停用，也按管理员账号从上述学员接口范围排除；详情与上述写操作统一返回 40401，避免泄露受保护账号。更新、启停、重置在同一事务内先以用户行悲观锁完成最终分类检查，再执行原有保存、认证世代递增和会话吊销；角色赋值仍按角色行后用户行加锁，保证赋值与学员 mutation 串行。本人资料接口不受该管理边界改变。
+A3 学员管理边界：列表、详情、资料更新和启停仅作用于 `sys_user.role=employee` 且不存在任何 `sys_user_role` 记录的账号。只要存在业务角色链接，即使角色无权限或已停用，也按管理员账号从上述学员接口范围排除；详情与上述写操作统一返回 40401，避免泄露受保护账号。更新、启停在同一事务内先以用户行悲观锁完成最终分类检查，再执行原有保存、认证世代递增和会话吊销；角色赋值仍按角色行后用户行加锁，保证赋值与学员 mutation 串行。本人资料接口不受该管理边界改变。
 
 | # | 方法 | 路径 | 请求与约束 | 成功 data |
 |---|---|---|---|---|
 | 1 | GET | /admin/students | query：`page`、`page_size`、`keyword`、`category_id`、`source`（institution/external）、`status`（0/1） | `Page<Student>`；ID 均为字符串 |
 | 2 | GET | /admin/students/{id} | — | `Student`，不含 password_hash |
-| 3 | POST | /admin/students | body：`username`、`password`、`real_name`、`category_id`、`source` 必填；可选 `employee_no/phone/email`；不接受部门字段 | `Student`，role 固定 employee，`department_id=NULL` |
-| 4 | PUT | /admin/students/{id} | body：`real_name/employee_no/category_id/source/phone/email` 可选；不接受 department/username/password/role | `Student` |
+| 3 | POST | /admin/students | body：`phone`、`real_name`、`category_id`、`source` 必填；可选 `username/employee_no/email/gender/birthday/age`；不接受部门及密码字段 | `Student`，role 固定 employee，`department_id=NULL`，`force_password_change=0` |
+| 4 | PUT | /admin/students/{id} | body：`real_name/employee_no/category_id/source/phone/email/gender/birthday/age` 可选；不接受 department/username/password/role | `Student` |
 | 5 | PUT | /admin/students/{id}/status | body：`status`（0/1） | `Student`；停用同时吊销既有令牌 |
 | 6 | PUT | /admin/students/{id}/avatar | body：`avatar_id`（ready 的 avatar 图片资源 ID）或 null | `Student`；同一用户行锁事务内重查 managed-student 边界并更新引用 |
-| 7 | PUT | /admin/students/{id}/password | body：`password`（≥8 位，含字母与数字） | `null`；旧令牌吊销并回到首登改密 |
-| 8 | GET | /admin/students/import-template | — | `.xlsx` 二进制；表头为 `用户名/姓名/工号/手机号/邮箱/来源/培训类别ID/初始密码` |
-| 9 | POST | /admin/students/import-preview | JSON `rows` 数组，或 multipart `file`；可选 `defaults:{source?,category_id?}` | `ImportPreview` |
-| 10 | GET | /admin/students/import-batches/{id} | —；仅批次 owner 可读 | 未提交批次为 `ImportPreview`，已提交批次为 `ImportResult` |
-| 11 | POST | /admin/students/import-batches/{id}/commit | body：`row_numbers` 为非空整数数组；仅批次 owner | `ImportResult` |
+| 7 | GET | /admin/students/import-template | — | `.xlsx` 二进制；七列表头为 `用户名/姓名/工号/手机号/邮箱/来源/培训类别ID`；用户名可空，手机号必填 |
+| 8 | POST | /admin/students/import-preview | JSON `rows` 数组，或 multipart `file`；可选 `defaults:{source?,category_id?}` | `ImportPreview`；密码字段/旧密码列整包返回 40001 |
+| 9 | GET | /admin/students/import-batches/{id} | —；仅批次 owner 可读 | 未提交批次为 `ImportPreview`，已提交批次为 `ImportResult` |
+| 10 | POST | /admin/students/import-batches/{id}/commit | body：`row_numbers` 为非空整数数组；仅批次 owner | `ImportResult` |
 
-`Student` 字段为 `{ id, username, real_name, employee_no, category_id, source, role, phone, email, avatar_id, status, last_login_at, created_at }`，其中 `avatar_id` 可为 null。新建和导入不接受部门字段并写入 `department_id=NULL`；更新既有学员同样不接受部门字段，但保留数据库中的历史 `department_id`。列表默认 page=1/page_size=20，page_size 范围 1—100；未知 query/body 字段、非整数分页、非法枚举均返回 40001。本人资料接口见 3.2.3，不允许通过学员接口修改 role。
+`Student` 字段为 `{ id, username, real_name, employee_no, category_id, source, role, phone, email, gender, birthday, age, avatar_id, status, last_login_at, created_at }`，其中 `avatar_id/gender/birthday/age` 可为 null。管理员创建或更新资料可维护 `gender`（male/female/null）、`birthday`（真实 YYYY-MM-DD/null，不晚于服务端 Asia/Shanghai 业务当前日期），复用本人资料校验；`age` 为独立的 0—150 整数或 null，不接受数字字符串，不反推或改写 birthday。管理端数字输入保存 age，旧账号 age 为空时可按生日计算展示；这些字段是普通展示资料，不改变实名事实。新建和导入不接受部门字段并写入 `department_id=NULL`；更新既有学员同样不接受部门字段，但保留数据库中的历史 `department_id`。列表默认 page=1/page_size=20，page_size 范围 1—100；未知 query/body 字段、非整数分页、非法枚举均返回 40001。本人资料接口见 3.2.3，不允许通过学员接口修改 role，亦不开放 age 自维护。
 
-导入预检逐行返回 `ImportPreview = { batch_id, valid_rows, errors:[{row,message}], duplicates }`；模板行号从 2 开始。预检会按数据库 `utf8mb4_0900_ai_ci` 规则识别大小写/重音重复，并检查现存 username/employee_no、启用类别、来源和口令策略。确认只消费服务端规范化行，批次按 owner+id 隔离；首次确认固定合法行集合，同集合重试返回原 `created_ids`，更换集合返回 40911。确认事务按类别 ID 加锁并重新检查类别存在且启用；类别在预检后被停用或删除时返回 40910，不创建悬挂学员。任何响应、错误明细和审计记录不得包含导入明文口令或 `password_hash`；`import_batch.normalized_rows` 只保存不可逆的 `password_hash`，不保存明文口令。
+导入预检逐行返回 `ImportPreview = { batch_id, valid_rows, errors:[{row,message}], duplicates }`；模板行号从 2 开始。预检按数据库 `utf8mb4_0900_ai_ci` 规则识别用户名/工号大小写与重音重复，并检查规范化手机号必填且唯一、启用类别与来源。username 仅是内部兼容标识；创建和导入省略时生成随机 `m_` 标识，提供时沿用唯一约束，不作为学员登录凭据。确认只消费服务端规范化行，批次按 owner+id 隔离；首次确认固定合法行集合，同集合重试返回原 `created_ids`，更换集合返回 40911。确认事务按类别 ID 加锁并重新检查类别存在且启用；类别在预检后被停用或删除时返回 40910，不创建悬挂学员。新批次 `normalized_rows` 不保存密码或哈希；确认时为兼容非空存储生成不可知随机值的 bcrypt 哈希，`force_password_change=0`。旧未确认批次如含 password/initial_password/初始密码/password_hash/passwordHash，返回 40911 并要求重新预检，不沿用旧凭据；已确认回执保持幂等。任何响应、错误明细和审计记录不得包含明文口令或哈希。
 
 ### 3.2.3 本人资料 /me/profile（A2）
 
@@ -293,6 +293,8 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 管理端头像绑定 `PUT /admin/students/{id}/avatar` 只接受 `avatar_id`，在同一用户行锁事务内重复 `lockManagedStudent` 最终检查并 bind；拥有任何 `sys_user_role` 链接的员工仍不属于学员管理范围。PC 选择新头像时只把上传结果暂存在当前表单，点击“保存”后才调用既有资料更新与独立头像绑定接口；取消不绑定该上传，任一保存请求失败后以详情 GET 对账并保留重试入口，不能把上传成功误当成资料已保存。
 
+尚未绑定的代传头像仅允许实际代传者在当前学员管理权限仍有效时预览 metadata/content；该临时预览不授予短期媒体票据，也不扩展到其他用途。
+
 ### 3.2.5 A2 导入错误与恢复语义
 
 | code | HTTP | message（示例） | 触发场景 |
@@ -310,11 +312,13 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | POST / PUT | /admin/roles[/{id}] | roles:write | 新建/修改业务角色；只接受白名单权限 |
 | GET | /admin/administrators | administrators:read | 管理员及当前有效权限 |
 | POST | /admin/administrators | administrators:write | 创建管理员；body 必须包含非空 `role_ids:string[]` |
-| GET | /admin/administrators/candidates | administrators:write | 分页搜索可配置账号；仅返回 `id/username/real_name/status/system_role`，排除超级管理员 |
+| GET | /admin/administrators/candidates | administrators:write | 分页搜索可配置账号；仅返回 `id/username/real_name/status/system_role/requires_initial_password`，排除超级管理员 |
 | GET | /admin/administrators/assignable-roles | administrators:write | 仅返回启用的非系统角色 `id/code/name/status/is_system`，不返回权限矩阵 |
-| PUT | /admin/administrators/{id}/roles | administrators:write | 多选业务角色；最高管理员保护 |
+| PUT | /admin/administrators/{id}/roles | administrators:write | `role_ids` 多选业务角色；学员取得有效管理权限时必填 `initial_password`，最高管理员保护 |
 | GET | /admin/sessions | sessions:read | 分页查看在线/已吊销会话（返回 `created_at`、`last_seen_at`、持久化 `expires_at` 与 `status`；新会话的创建/更新时间与最后活动时间由同一服务端时刻写入） |
 | POST | /admin/sessions/{id}/revoke | sessions:write | 强制下线并立即吊销该 sid 的双令牌 |
+
+管理员列表和可配置账号列表返回 `requires_initial_password`，前端据此在提升账号时显示管理员初始密码输入。服务端在角色→用户行锁事务中重新判定：employee 当前无启用角色的有效注册管理权限、且本次授予有效权限时，必须提交符合管理员密码策略的 `initial_password`，写 bcrypt 哈希并置 `force_password_change=1`，同时沿用认证世代递增和会话吊销。纯学员不得仅赋零权限角色；已有有效管理角色的管理员（包括停用账号）改角色不重设密码，携带该字段时拒绝。状态停用不作为需要新密码的依据。密码不进入响应或审计；角色清空不设置新密码。
 
 ### 3.2.7 菜单、字典、站点配置与审计（A5）
 
@@ -1265,7 +1269,7 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | /auth | login、refresh | profile、password、logout | 同左 | 同左 |
 | /mobile/auth | sms/send、sms/login；refresh/logout 由独立 mobile Cookie 驱动；debug-login 仅显式开启的 test/development | 登录/刷新后仅允许启用、无有效管理权限的 employee | 不签发 mobile 会话 | 不签发 mobile 会话 |
 | /admin/training-categories | — | — | — | A2 候选实现全部 6 个；A3 映射 training_categories:read/write |
-| /admin/students | — | — | — | A2/A4 实现全部 11 个；A3 映射 students:read/write |
+| /admin/students | — | — | — | 现行 10 个接口；A3 映射 students:read/write；学员密码接口已移除 |
 | /admin/question-materials | — | — | `ai:read/write` | 资料创建、上传、状态与重试；不绑定类别 |
 | /admin/questions | — | — | questions:write | B4 模板、预检、状态和确认均使用同一写权限；owner/kind 由服务端收口 |
 | /me | — | GET/PATCH 本人资料；GET `/me/home` 按本人身份返回公开配置与可见课程 | — | 同左 |

@@ -26,6 +26,7 @@ function makeUser(id: string, username: string): UserFixture {
     occupation: null,
     gender: null,
     birthday: null,
+    age: null,
     status: 1,
     authVersion: 3,
     forcePasswordChange: 0,
@@ -97,6 +98,7 @@ function makeService(roleIdsByUser: Record<string, string[]> = {}) {
     findOne: async ({ where }: { where: Record<string, unknown> }) => findByWhere(where),
   };
   const txUserRepo: any = {
+    create: (input: Partial<SysUser>) => ({ ...makeUser('4', input.username!), ...input }),
     createQueryBuilder: queryBuilder,
     findOne: async ({ where, lock }: { where: Record<string, unknown>; lock?: unknown }) => {
       if (lock) events.push('user-lock:findOne');
@@ -130,7 +132,10 @@ function makeService(roleIdsByUser: Record<string, string[]> = {}) {
   const service = Object.create(UsersService.prototype) as UsersService & Record<string, any>;
   service.userRepo = userRepo;
   service.dataSource = { transaction: async (callback: (tx: any) => Promise<unknown>) => callback(manager) };
-  service.categories = { lockActive: vi.fn(async () => undefined) };
+  service.categories = {
+    lockActive: vi.fn(async () => undefined),
+    findById: vi.fn(async (id: string) => ({ id, name: '测试培训类别', status: 1 })),
+  };
   service.sessions = {
     invalidateUser: vi.fn(async () => []),
     markRevoked: vi.fn(async () => undefined),
@@ -148,6 +153,73 @@ const actor = { id: 1, name: 'admin' };
 afterEach(() => vi.useRealTimers());
 
 describe('training student/admin boundary', () => {
+  it('creates SMS-only learners without a chosen password or pending password change', async () => {
+    const { service, users } = makeService();
+    const input = { real_name: '学员', category_id: '7', source: 'institution' as const, phone: '138 0013-8000' };
+    const created = await service.createStudent(input, actor, null);
+    expect(created).toMatchObject({ phone: '13800138000', username: expect.stringMatching(/^m_/u) });
+    expect(created).not.toHaveProperty('password_hash');
+    expect(users.get(created.id)).toMatchObject({ forcePasswordChange: 0, passwordHash: expect.stringMatching(/^\$2[aby]\$/u) });
+    for (const field of ['password', 'initial_password', 'password_hash']) {
+      await expect(service.createStudent({ ...input, [field]: 'supplied' } as any, actor, null)).rejects.toMatchObject({ code: 40001 });
+    }
+    for (const phone of ['', null, undefined, 'bad']) {
+      await expect(service.createStudent({ ...input, phone } as any, actor, null)).rejects.toMatchObject({ code: 40001 });
+    }
+    await expect(service.updateStudent(created.id, { phone: null }, actor, null)).rejects.toMatchObject({ code: 40001 });
+    expect(users.get(created.id)?.phone).toBe('13800138000');
+  });
+
+  it('stores explicit age without deriving or overwriting birthday', async () => {
+    const { service } = makeService();
+    const controller = new StudentsController(service, {} as any);
+    const input = { username: 'age-student', phone: '13800138000', real_name: '学员', category_id: '7', source: 'institution', age: 0 };
+    await expect(controller.create(input as any, { id: 1 } as any, { body: input } as any))
+      .resolves.toMatchObject({ age: 0, birthday: null });
+    await service.updateStudent('4', { birthday: '2000-02-29' }, actor, null);
+    await expect(controller.update('4', { age: 150 } as any, { id: 1 } as any, { body: { age: 150 } } as any))
+      .resolves.toMatchObject({ age: 150, birthday: '2000-02-29' });
+    await expect(service.studentDetail('4')).resolves.toMatchObject({ age: 150 });
+    await expect(service.updateStudent('4', { age: null } as any, actor, null))
+      .resolves.toMatchObject({ age: null, birthday: '2000-02-29' });
+  });
+
+  it.each([-1, 151, 1.5, '18', NaN])('rejects invalid managed age %j before writing', async (age) => {
+    const { service, saves } = makeService();
+    await expect(service.updateStudent('1', { age } as any, actor, null)).rejects.toMatchObject({ code: 40001 });
+    await expect(service.createStudent({ username: 'age-student', phone: '13800138000', real_name: '学员', category_id: '7', source: 'institution', age } as any, actor, null))
+      .rejects.toMatchObject({ code: 40001 });
+    expect(saves).toHaveLength(0);
+  });
+
+  it('creates and updates optional learner demographics through the managed student API', async () => {
+    const { service } = makeService();
+    const controller = new StudentsController(service, {} as any);
+    const input = {
+      username: 'new-student', phone: '13800138000', real_name: '学员',
+      category_id: '7', source: 'institution', gender: 'female', birthday: '2000-02-29',
+    };
+    await expect(controller.create(input as any, { id: 1, username: 'admin' } as any, { body: input } as any))
+      .resolves.toMatchObject({ id: '4', gender: 'female', birthday: '2000-02-29' });
+    const patch = { gender: 'male', birthday: '2001-01-01' };
+    await expect(controller.update('4', patch as any, { id: 1, username: 'admin' } as any, { body: patch } as any))
+      .resolves.toMatchObject(patch);
+    await expect(service.studentDetail('4')).resolves.toMatchObject(patch);
+    await expect(service.updateStudent('4', { gender: null, birthday: null } as any, actor, null))
+      .resolves.toMatchObject({ gender: null, birthday: null });
+  });
+
+  it.each([{ gender: 'other' }, { birthday: '2023-02-29' }, { birthday: '9999-01-01' }])
+  ('rejects invalid managed demographics before saving: %j', async (patch) => {
+    const { service, saves } = makeService();
+    await expect(service.updateStudent('1', patch as any, actor, null)).rejects.toMatchObject({ code: 40001 });
+    await expect(service.createStudent({
+      username: 'new-student', phone: '13800138000', real_name: '学员',
+      category_id: '7', source: 'institution', ...patch,
+    } as any, actor, null)).rejects.toMatchObject({ code: 40001 });
+    expect(saves).toHaveLength(0);
+  });
+
   it('persists optional self-profile fields while retaining authoritative account fields', async () => {
     const { service, users } = makeService();
     await expect(service.selfProfile('1')).resolves.toMatchObject({ occupation: null, gender: null, birthday: null });
@@ -231,15 +303,13 @@ describe('training student/admin boundary', () => {
     await expect(service.studentDetail('3')).rejects.toMatchObject({ httpStatus: 404 });
   });
 
-  it('rejects linked employees in update, status, and password reset without mutation', async () => {
+  it('rejects linked employees in update and status without mutation', async () => {
     const { service, users, saves, events } = makeService({ '2': ['business-role'] });
     const before = { ...users.get('2')! };
 
     await expect(service.updateStudent('2', { real_name: 'must-not-change' }, actor, null))
       .rejects.toMatchObject({ httpStatus: 404 });
     await expect(service.setStudentStatus('2', 0, actor, null)).rejects.toMatchObject({ httpStatus: 404 });
-    await expect(service.resetStudentPassword('2', 'SafePassword9', actor, null))
-      .rejects.toMatchObject({ httpStatus: 404 });
 
     expect(saves).toHaveLength(0);
     expect(users.get('2')).toMatchObject({
@@ -248,8 +318,8 @@ describe('training student/admin boundary', () => {
       authVersion: before.authVersion,
       realName: before.realName,
     });
-    expect(events.filter((event) => event.startsWith('user-lock'))).toHaveLength(3);
-    expect(events.filter((event) => event === 'role-link-check')).toHaveLength(3);
+    expect(events.filter((event) => event.startsWith('user-lock'))).toHaveLength(2);
+    expect(events.filter((event) => event === 'role-link-check')).toHaveLength(2);
   });
 
   it('keeps ordinary unlinked student mutations working', async () => {
@@ -259,10 +329,8 @@ describe('training student/admin boundary', () => {
     await expect(service.updateStudent('2', { real_name: 'updated-student' }, actor, null))
       .resolves.toMatchObject({ id: '2', real_name: 'updated-student' });
     await expect(service.setStudentStatus('2', 0, actor, null)).resolves.toMatchObject({ id: '2', status: 0 });
-    await expect(service.resetStudentPassword('2', 'SafePassword9', actor, null)).resolves.toBeUndefined();
-
-    expect(saves).toHaveLength(3);
-    expect(users.get('2')).toMatchObject({ status: 0, authVersion: 5, forcePasswordChange: 1 });
+    expect(saves).toHaveLength(2);
+    expect(users.get('2')).toMatchObject({ status: 0, authVersion: 4, forcePasswordChange: 0 });
   });
 
   it('does not expose the legacy department field in managed student responses', async () => {
@@ -282,10 +350,10 @@ describe('training student/admin boundary', () => {
     const user = { id: 1, username: 'root' } as any;
 
     expect(() => controller.create({
-      username: 'student', password: 'SafePassword9', real_name: '学员', category_id: '7',
+      username: 'student', phone: '13800138000', real_name: '学员', category_id: '7',
       source: 'institution', department_id: '2',
     } as any, user, { body: {
-      username: 'student', password: 'SafePassword9', real_name: '学员', category_id: '7',
+      username: 'student', phone: '13800138000', real_name: '学员', category_id: '7',
       source: 'institution', department_id: '2',
     }, ip: '127.0.0.1' } as any)).toThrow('学员请求 包含不支持的字段：department_id');
 

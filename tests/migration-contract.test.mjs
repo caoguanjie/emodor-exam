@@ -500,6 +500,7 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
       '015_demo_slimming', '016_learning_navigation', '017_exam_question_navigation',
       '018_mobile_auth', '019_learner_profile', '020_identity_verification', '021_exam_stable_option_ids',
       '022_question_designer_storage',
+      '024_student_age',
     ]);
 
     await conn.query("INSERT INTO sys_department (name, sort, status) VALUES ('完整升级保留数据', 917, 0)");

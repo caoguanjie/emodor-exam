@@ -47,16 +47,16 @@
           </el-form-item>
           <el-form-item>
             <div class="captcha-row">
-              <el-input v-model="captchaCode" placeholder="验证码（管理员必填）" size="large" maxlength="4" @keyup.enter="onLogin">
+              <el-input v-model="captchaCode" placeholder="验证码（管理员必填）" size="large" maxlength="4">
                 <template #prefix><el-icon><Key /></el-icon></template>
               </el-input>
-              <button class="captcha-image" type="button" title="刷新验证码" @click="loadCaptcha">
+              <button class="captcha-image" type="button" title="刷新验证码" :disabled="loading || captchaLoading" @click="loadCaptcha().catch(() => undefined)">
                 <img v-if="captchaImage" :src="captchaImage" alt="验证码" />
                 <span v-else>加载中</span>
               </button>
             </div>
           </el-form-item>
-          <el-button type="primary" size="large" class="submit-btn" :loading="loading" native-type="submit">登 录</el-button>
+          <el-button type="primary" size="large" class="submit-btn" :loading="loading" :disabled="captchaLoading || !captchaId" native-type="submit">登 录</el-button>
         </el-form>
         <p class="form-foot">首次登录将要求修改初始密码</p>
       </div>
@@ -82,26 +82,40 @@ const captchaId = ref('');
 const captchaImage = ref('');
 const captchaCode = ref('');
 const loading = ref(false);
+const captchaLoading = ref(false);
 
 async function loadCaptcha() {
-  const issued: any = await http.post(
-    '/auth/captcha',
-    captchaId.value ? { previous_captcha_id: captchaId.value } : undefined,
-  );
-  captchaId.value = issued.captcha_id;
-  captchaImage.value = issued.image;
+  if (captchaLoading.value) return;
+  captchaLoading.value = true;
+  const previousCaptchaId = captchaId.value;
+  captchaId.value = '';
+  captchaImage.value = '';
   captchaCode.value = '';
+  try {
+    const issued: any = await http.post(
+      '/auth/captcha',
+      previousCaptchaId ? { previous_captcha_id: previousCaptchaId } : undefined,
+    );
+    captchaId.value = issued.captcha_id;
+    captchaImage.value = issued.image;
+  } finally {
+    captchaLoading.value = false;
+  }
 }
 
 async function onLogin() {
-  if (!username.value || !password.value) return;
+  if (loading.value || captchaLoading.value || !captchaId.value || !username.value || !password.value) return;
   loading.value = true;
   try {
     await auth.login(username.value, password.value, captchaId.value || undefined, captchaCode.value || undefined);
     const redirect = validPostAuthRedirect(route.query.redirect);
-    router.push(auth.needChangePassword
+    await router.push(auth.needChangePassword
       ? { path: '/change-password', query: redirect ? { redirect } : {} }
       : redirect || defaultHomePath(auth.isAdmin));
+  } catch {
+    // HTTP errors are already displayed by the interceptor. The server consumes
+    // a captcha on verification, including when the password is incorrect.
+    await loadCaptcha().catch(() => undefined);
   } finally {
     loading.value = false;
   }

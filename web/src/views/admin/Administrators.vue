@@ -68,6 +68,12 @@
       <el-checkbox-group v-model="selectedRoleIds" class="role-list">
         <el-checkbox v-for="role in editableRoles" :key="role.id" :label="role.id">{{ role.name }}（{{ role.code }}）</el-checkbox>
       </el-checkbox-group>
+      <el-form v-if="needsInitialPassword" label-width="120px" style="margin-top: 20px">
+        <el-form-item label="管理员初始密码" required>
+          <el-input v-model="initialPassword" type="password" show-password maxlength="128" autocomplete="new-password" placeholder="至少 8 位，含字母和数字" />
+        </el-form-item>
+        <div class="dialog-note">该账号将使用 PC 密码登录，首次登录须修改密码。</div>
+      </el-form>
       <template #footer><el-button @click="closeRoleDialog">取消</el-button><el-button v-if="auth.can('administrators:write')" type="primary" :loading="saving" @click="saveRoles">保存</el-button></template>
     </el-dialog>
   </div>
@@ -90,6 +96,7 @@ interface AdministratorRow {
   last_login_at: string | null;
   role_ids: string[];
   permissions: string[];
+  requires_initial_password: boolean;
 }
 
 interface CandidateAccount {
@@ -98,6 +105,7 @@ interface CandidateAccount {
   real_name: string;
   status: number;
   system_role: string;
+  requires_initial_password: boolean;
 }
 
 interface AssignableRole {
@@ -118,6 +126,9 @@ const candidateDialog = ref(false);
 const candidateLoading = ref(false);
 const selected = ref<AdministratorRow | CandidateAccount | null>(null);
 const selectedRoleIds = ref<string[]>([]);
+const initialPassword = ref('');
+const needsInitialPassword = computed(() => selected.value?.requires_initial_password === true
+  && selectedRoleIds.value.length > 0);
 const candidateRows = ref<CandidateAccount[]>([]);
 const candidateTotal = ref(0);
 const candidateQuery = reactive({ page: 1, page_size: 20, keyword: '' });
@@ -136,6 +147,7 @@ function cloneAccount(value: AdministratorRow | CandidateAccount | null) {
 function beginRoleDraft(account: AdministratorRow | CandidateAccount, roleIds: string[]) {
   selected.value = account;
   selectedRoleIds.value = [...roleIds];
+  initialPassword.value = '';
   roleBaseline.value = { selected: cloneAccount(account), roleIds: [...roleIds] };
   dirty.value = false;
   dialog.value = true;
@@ -143,13 +155,14 @@ function beginRoleDraft(account: AdministratorRow | CandidateAccount, roleIds: s
 function discardRoleDraft() {
   selected.value = cloneAccount(roleBaseline.value.selected);
   selectedRoleIds.value = [...roleBaseline.value.roleIds];
+  initialPassword.value = '';
   dirty.value = false;
   dialog.value = false;
 }
 
 const unsaved = useUnsavedChanges(dirty, { onDiscard: discardRoleDraft });
-watch(selectedRoleIds, (value) => {
-  dirty.value = dialog.value && JSON.stringify(value) !== JSON.stringify(roleBaseline.value.roleIds);
+watch([selectedRoleIds, initialPassword], () => {
+  dirty.value = dialog.value && (JSON.stringify(selectedRoleIds.value) !== JSON.stringify(roleBaseline.value.roleIds) || initialPassword.value !== '');
 }, { deep: true, flush: 'sync' });
 
 async function closeRoleDialog() {
@@ -237,13 +250,21 @@ async function chooseCandidate(row: CandidateAccount) {
 
 async function saveRoles() {
   if (!selected.value) return;
+  if (needsInitialPassword.value && !/^(?=.*[A-Za-z])(?=.*\d)\S{8,128}$/.test(initialPassword.value)) {
+    ElMessage.warning('请设置管理员初始密码：8—128 位，含字母和数字');
+    return;
+  }
   saving.value = true;
   try {
-    await http.put(`/admin/administrators/${selected.value.id}/roles`, { role_ids: selectedRoleIds.value });
+    await http.put(`/admin/administrators/${selected.value.id}/roles`, {
+      role_ids: selectedRoleIds.value,
+      ...(needsInitialPassword.value ? { initial_password: initialPassword.value } : {}),
+    });
     ElMessage.success('角色权限已更新');
     roleBaseline.value = { selected: cloneAccount(selected.value), roleIds: [...selectedRoleIds.value] };
     unsaved.markClean();
     dialog.value = false;
+    initialPassword.value = '';
     await load();
   } finally { saving.value = false; }
 }

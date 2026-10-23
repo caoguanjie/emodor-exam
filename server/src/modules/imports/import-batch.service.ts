@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { normalizeOptionalChinaMobile } from '../auth/phone';
+import { normalizeChinaMobile } from '../auth/phone';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import * as bcrypt from 'bcryptjs';
 import ExcelJS from 'exceljs';
 import { ImportBatch } from '../../entities/import-batch.entity';
@@ -10,7 +10,6 @@ import { SysUser } from '../../entities/sys-user.entity';
 import { TrainingCategory } from '../../entities/training-category.entity';
 import { ImportPreview, ImportResult, Id, LearnerSource } from '../../common/training-contracts';
 import { Errors } from '../../common/errors';
-import { validatePasswordStrength } from '../../common/password-policy';
 import { AuditService } from '../../common/audit.service';
 import { CategoryService } from '../training/category.service';
 
@@ -26,18 +25,15 @@ interface StudentRow {
   username: string;
   real_name: string;
   employee_no: string | null;
-  phone: string | null;
+  phone: string;
   email: string | null;
   source: LearnerSource;
   category_id: Id;
-  password: string;
 }
 
-interface NormalizedStudentRow extends Omit<StudentRow, 'password'> {
-  password_hash: string;
-}
-
-const STUDENT_HEADERS = ['用户名', '姓名', '工号', '手机号', '邮箱', '来源', '培训类别ID', '初始密码'];
+const STUDENT_HEADERS = ['用户名', '姓名', '工号', '手机号', '邮箱', '来源', '培训类别ID'];
+const STUDENT_FIELDS = new Set(['row', 'username', 'real_name', 'realName', 'employee_no', 'employeeNo', 'phone', 'email', 'source', 'category_id', 'categoryId', 'category', ...STUDENT_HEADERS]);
+const LEGACY_CREDENTIAL_FIELDS = ['password', 'initial_password', '初始密码', 'password_hash', 'passwordHash'];
 const SOURCES = new Set<LearnerSource>(['institution', 'external']);
 
 function safeText(value: unknown): string {
@@ -174,9 +170,15 @@ export class ImportBatchService {
     STUDENT_HEADERS.forEach((expected, index) => {
       if (safeText(header[index + 1]) !== expected) throw Errors.param('模板表头不符，请下载最新导入模板填写');
     });
+    if (header.slice(STUDENT_HEADERS.length + 1).some((value) => safeText(value))) {
+      throw Errors.param('模板表头不符，请下载最新导入模板填写；学员导入不接受密码列');
+    }
     const rows: unknown[] = [];
     worksheet.eachRow((row, rowNumber) => {
       if (rowNumber === 1) return;
+      if ((row.values as unknown[]).slice(STUDENT_HEADERS.length + 1).some((value) => safeText(value))) {
+        throw Errors.param('导入行含模板外数据，请下载最新导入模板填写');
+      }
       rows.push({
         row: rowNumber,
         username: safeText(row.getCell(1).value),
@@ -186,7 +188,6 @@ export class ImportBatchService {
         email: safeText(row.getCell(5).value),
         source: safeText(row.getCell(6).value),
         category_id: safeText(row.getCell(7).value),
-        password: safeText(row.getCell(8).value),
       });
     });
     return rows;
@@ -202,14 +203,13 @@ export class ImportBatchService {
     const row = raw && typeof raw === 'object' ? (raw as any).row : undefined;
     return {
       row: Number.isInteger(Number(row)) && Number(row) > 0 ? Number(row) : index + 2,
-      username: safeText(raw && typeof raw === 'object' ? (raw as any).username ?? (raw as any)['用户名'] : ''),
+      username: safeText(raw && typeof raw === 'object' ? (raw as any).username ?? (raw as any)['用户名'] : '') || `m_${randomBytes(20).toString('hex')}`,
       real_name: safeText(raw && typeof raw === 'object' ? (raw as any).real_name ?? (raw as any).realName ?? (raw as any)['姓名'] : ''),
       employee_no: safeText(raw && typeof raw === 'object' ? (raw as any).employee_no ?? (raw as any).employeeNo ?? (raw as any)['工号'] : '') || null,
-      phone: safeText(raw && typeof raw === 'object' ? (raw as any).phone ?? (raw as any)['手机号'] : '') || null,
+      phone: safeText(raw && typeof raw === 'object' ? (raw as any).phone ?? (raw as any)['手机号'] : ''),
       email: safeText(raw && typeof raw === 'object' ? (raw as any).email ?? (raw as any)['邮箱'] : '') || null,
       source: safeText(source) as LearnerSource,
       category_id: safeText(category),
-      password: safeText(raw && typeof raw === 'object' ? (raw as any).password ?? (raw as any).initial_password ?? (raw as any)['初始密码'] : ''),
     };
   }
 
@@ -234,6 +234,10 @@ export class ImportBatchService {
   }
 
   private async previewStudents(ownerId: Id, rows: unknown[]): Promise<ImportPreview> {
+    for (const raw of rows) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Errors.param('学员导入行必须是对象');
+      if (Object.keys(raw).some((key) => !STUDENT_FIELDS.has(key))) throw Errors.param('学员导入包含不支持的字段；请使用最新模板，不接受密码字段');
+    }
     const errors: Array<{ row: number; message: string }> = [];
     const duplicates: number[] = [];
     const validRows: number[] = [];
@@ -241,7 +245,7 @@ export class ImportBatchService {
     const studentRows = rows.map((raw, index) => this.toStudentRow(raw, index));
     const invalidPhones = new Set<number>();
     for (const row of studentRows) {
-      try { row.phone = normalizeOptionalChinaMobile(row.phone); }
+      try { row.phone = normalizeChinaMobile(row.phone); }
       catch { invalidPhones.add(row.row); }
     }
     const duplicateUsernames = await this.duplicateRowsByDbCollation(studentRows, 'username');
@@ -258,18 +262,6 @@ export class ImportBatchService {
       if (invalidPhones.has(row.row)) reasons.push('手机号格式不正确');
       if (!SOURCES.has(row.source)) reasons.push('来源必须是 institution 或 external');
       if (!row.category_id) reasons.push('培训类别必填');
-      if (!row.password) reasons.push('初始密码必填');
-      else {
-        try {
-          validatePasswordStrength(row.password, {
-            username: row.username,
-            employeeNo: row.employee_no,
-            realName: row.real_name,
-          }, '初始密码');
-        } catch (error: any) {
-          reasons.push(error?.message || '初始密码不符合要求');
-        }
-      }
       if (duplicateUsernames.has(row.row)) reasons.push('用户名在文件内重复');
       if (duplicateEmployeeNos.has(row.row)) reasons.push('工号在文件内重复');
       if (duplicatePhones.has(row.row)) reasons.push('手机号在文件内重复');
@@ -297,7 +289,6 @@ export class ImportBatchService {
         continue;
       }
 
-      const hash = await bcrypt.hash(row.password, 12);
       normalizedRows.push({
         row: row.row,
         username: row.username,
@@ -307,7 +298,6 @@ export class ImportBatchService {
         email: row.email,
         source: row.source,
         category_id: row.category_id,
-        password_hash: hash,
       });
       validRows.push(row.row);
     }
@@ -335,6 +325,10 @@ export class ImportBatchService {
 
   private async commitStudents(ownerId: Id, batch: ImportBatch, rowNumbers: number[]): Promise<ImportResult> {
     const requested = [...new Set((rowNumbers || []).map((row) => Number(row)))].sort((a, b) => a - b);
+    // SMS-only accounts cannot authenticate with this undisclosed placeholder.
+    // Hash once per batch before taking locks; administrator promotion sets a
+    // separate explicit password. Never run per-row bcrypt work under row locks.
+    const placeholderHash = await bcrypt.hash(randomBytes(48).toString('base64'), 12);
     try {
       const result = await this.dataSource.transaction(async (manager) => {
         // The owner+id row lock serializes first confirmation and retry. A
@@ -357,6 +351,9 @@ export class ImportBatchService {
           };
         }
         if (locked.status === 'committing') throw Errors.importBatchConflict('导入批次正在确认，请稍后查询状态');
+        if ((locked.normalizedRows || []).some((row) => LEGACY_CREDENTIAL_FIELDS.some((key) => key in row))) {
+          throw Errors.importBatchConflict('旧版学员导入批次已失效，请使用无密码模板重新预检查');
+        }
         const rows = (locked.normalizedRows || []).filter((row) => requested.includes(Number(row.row)));
         if (rows.length !== requested.length) throw Errors.importBatchConflict('导入批次数据已不完整');
         const categoryIds = [...new Set(rows.map((row) => String(row.category_id)))].sort((left, right) => left.localeCompare(right));
@@ -366,17 +363,17 @@ export class ImportBatchService {
         const repo = manager.getRepository(SysUser);
         const entities = rows.map((row) => repo.create({
           username: String(row.username),
-          passwordHash: String(row.password_hash),
+          passwordHash: placeholderHash,
           realName: String(row.real_name),
           employeeNo: row.employee_no ? String(row.employee_no) : null,
           departmentId: null,
           categoryId: String(row.category_id),
           source: String(row.source) as LearnerSource,
           role: 'employee',
-          phone: normalizeOptionalChinaMobile(row.phone ? String(row.phone) : null),
+          phone: normalizeChinaMobile(typeof row.phone === 'string' ? row.phone : ''),
           email: row.email ? String(row.email) : null,
           status: 1,
-          forcePasswordChange: 1,
+          forcePasswordChange: 0,
           loginCount: 0,
           lastLoginAt: null,
           lastLoginIp: null,

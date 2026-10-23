@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { randomStrongPassword } from './training-access.mjs';
+import { randomLearnerPhone } from './support/learner-session-fixture.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
@@ -315,7 +316,7 @@ async function runBody(ctx) {
       real_name: `B4学员${suffix}`,
       source: 'institution',
       category_id: categoryId,
-      password: randomStrongPassword(`b4_student_${suffix}`, `B4学员${suffix}`),
+      phone: randomLearnerPhone(),
     }],
   });
   assert.equal(studentPreview.status, 200, JSON.stringify(studentPreview));
@@ -377,7 +378,7 @@ async function runBody(ctx) {
       real_name: `B4学员入口${suffix}`,
       source: 'institution',
       category_id: categoryId,
-      password: randomStrongPassword(normalStudentUsername, `B4学员入口${suffix}`),
+      phone: randomLearnerPhone(),
     }],
   });
   assert.equal(normalStudentPreview.status, 200, JSON.stringify(normalStudentPreview));

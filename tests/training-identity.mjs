@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { randomStrongPassword } from './training-access.mjs';
+import { learnerSession, randomLearnerPhone } from './support/learner-session-fixture.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const ExcelJS = require('exceljs');
@@ -56,12 +57,10 @@ export async function run(ctx) {
   const externalCategoryId = String(externalCategory.data.id);
 
   const institutionUsername = `a2_inst_${randomBytes(3).toString('hex')}`;
-  const institutionPassword = randomStrongPassword(institutionUsername, '本机构学员');
   const externalUsername = `a2_ext_${randomBytes(3).toString('hex')}`;
-  const externalPassword = randomStrongPassword(externalUsername, '外来学员');
   const institution = await ctx.request(admin, 'POST', '/admin/students', {
     username: institutionUsername,
-    password: institutionPassword,
+    phone: randomLearnerPhone(),
     real_name: '本机构学员',
     source: 'institution',
     category_id: categoryId,
@@ -69,7 +68,7 @@ export async function run(ctx) {
   assert.equal(institution.status, 200);
   const external = await ctx.request(admin, 'POST', '/admin/students', {
     username: externalUsername,
-    password: externalPassword,
+    phone: randomLearnerPhone(),
     real_name: '外来学员',
     source: 'external',
     category_id: externalCategoryId,
@@ -104,26 +103,26 @@ export async function run(ctx) {
   const phoneProfilePatch = await ctx.request(admin, 'PATCH', '/me/profile', { phone: '13800138000' });
   assert.equal(phoneProfilePatch.status, 400, `phoneProfilePatch ${JSON.stringify(phoneProfilePatch)}`);
 
-  const importPasswords = [];
+  const importPasswords = [randomStrongPassword('forbidden-import')];
+  const rejectedPassword = await ctx.request(admin, 'POST', '/admin/students/import-preview', {
+    rows: [{ username: `a2_password_${randomBytes(3).toString('hex')}`, phone: randomLearnerPhone(),
+      real_name: '禁止导入口令', source: 'institution', category_id: categoryId, password: importPasswords[0] }],
+  });
+  assert.equal(rejectedPassword.status, 400, 'student import must reject client passwords');
   const importUsername = `a2_import_${randomBytes(3).toString('hex')}`;
   const importRealNameA = '导入学员甲';
-  const importPasswordA = randomStrongPassword(importUsername, importRealNameA, 'A2-IMPORT-1');
   const importUsernameB = `a2_import_${randomBytes(3).toString('hex')}`;
   const importRealNameB = '导入学员乙';
-  const importPasswordB = randomStrongPassword(importUsernameB, importRealNameB);
   const invalidImportUsername = `a2_invalid_${randomBytes(3).toString('hex')}`;
-  const invalidImportPassword = randomStrongPassword(invalidImportUsername, '导入失败');
-  const duplicateImportPassword = randomStrongPassword(invalidImportUsername.toUpperCase(), '大小写重复');
-  importPasswords.push(importPasswordA, importPasswordB, invalidImportPassword, duplicateImportPassword);
-  const importRowA = { row: 2, username: importUsername, real_name: importRealNameA, source: 'institution', category_id: categoryId, employee_no: 'A2-IMPORT-1', password: importPasswordA };
-  const importRowB = { row: 4, username: importUsernameB, real_name: importRealNameB, source: 'external', category_id: externalCategoryId, password: importPasswordB };
+  const importRowA = { row: 2, username: importUsername, real_name: importRealNameA, source: 'institution', category_id: categoryId, employee_no: 'A2-IMPORT-1', phone: randomLearnerPhone() };
+  const importRowB = { row: 4, username: importUsernameB, real_name: importRealNameB, source: 'external', category_id: externalCategoryId, phone: randomLearnerPhone() };
 
   const importPreview = await ctx.request(admin, 'POST', '/admin/students/import-preview', {
     rows: [
       importRowA,
-      { row: 3, username: invalidImportUsername, real_name: '导入失败', source: 'invalid', category_id: categoryId, password: invalidImportPassword },
+      { row: 3, username: invalidImportUsername, real_name: '导入失败', source: 'invalid', category_id: categoryId, phone: randomLearnerPhone() },
       importRowB,
-      { row: 5, username: invalidImportUsername.toUpperCase(), real_name: '大小写重复', source: 'institution', category_id: categoryId, password: duplicateImportPassword },
+      { row: 5, username: invalidImportUsername.toUpperCase(), real_name: '大小写重复', source: 'institution', category_id: categoryId, phone: randomLearnerPhone() },
     ],
   });
   assert.equal(importPreview.status, 200);
@@ -146,7 +145,7 @@ export async function run(ctx) {
   const changedRows = await ctx.request(admin, 'POST', `/admin/students/import-batches/${importPreview.data.batch_id}/commit`, { row_numbers: [2] });
   assert.equal(changedRows.status, 409);
   const storedBatch = await ctx.queryTestDb('SELECT normalized_rows, errors FROM import_batch WHERE id = ?', [importPreview.data.batch_id]);
-  assert.equal(JSON.stringify(storedBatch).includes('password_hash'), true);
+  assert.equal(JSON.stringify(storedBatch).includes('password_hash'), false, 'password-free import batch should not retain credentials');
   for (const actualPassword of importPasswords) assert.equal(JSON.stringify(storedBatch).includes(actualPassword), false);
   for (const actualPassword of importPasswords) {
     assert.equal(JSON.stringify(first).includes(actualPassword), false);
@@ -178,18 +177,12 @@ export async function run(ctx) {
   const owner2Commit = await ctx.request(owner2, 'POST', `/admin/students/import-batches/${importPreview.data.batch_id}/commit`, { row_numbers: [2, 4] });
   assert.equal(owner2Commit.status, 404, `owner2Commit ${JSON.stringify(owner2Commit)}`);
 
-  const disabledLogin = await login(ctx, institution.data.username, institutionPassword, { captcha: false });
-  const disabledReadyPassword = randomStrongPassword(institution.data.username, '本机构学员');
-  const disabledChanged = await ctx.request(disabledLogin.actor, 'PUT', '/auth/password', {
-    old_password: institutionPassword, new_password: disabledReadyPassword,
-  });
-  assert.equal(disabledChanged.status, 200, `disabled fixture password change ${JSON.stringify(disabledChanged)}`);
-  disabledLogin.actor.accessToken = disabledChanged.data.access_token;
-  const beforeDisabled = await ctx.request(disabledLogin.actor, 'GET', '/auth/profile');
+  const disabledLogin = { actor: await learnerSession(ctx, institution.data.id) };
+  const beforeDisabled = await ctx.request(disabledLogin.actor, 'GET', '/me/profile');
   assert.equal(beforeDisabled.status, 200, `disabled fixture profile before status change ${JSON.stringify(beforeDisabled)}`);
   const disabled = await ctx.request(admin, 'PUT', `/admin/students/${institution.data.id}/status`, { status: 0 });
   assert.equal(disabled.status, 200);
-  const revoked = await ctx.request(disabledLogin.actor, 'GET', '/auth/profile');
+  const revoked = await ctx.request(disabledLogin.actor, 'GET', '/me/profile');
   assert.equal(revoked.status, 403);
   assert.equal(revoked.code, 40105);
 
@@ -201,7 +194,7 @@ export async function run(ctx) {
   const inactiveStudentUsername = `a2_inactive_${randomBytes(3).toString('hex')}`;
   const inactiveStudent = await ctx.request(admin, 'POST', '/admin/students', {
     username: inactiveStudentUsername,
-    password: randomStrongPassword(inactiveStudentUsername, '停用类别学员'),
+    phone: randomLearnerPhone(),
     real_name: '停用类别学员', source: 'institution', category_id: String(inactive.data.id),
   });
   assert.equal(inactiveStudent.status, 409);
@@ -209,9 +202,8 @@ export async function run(ctx) {
   const staleDisabled = await ctx.request(admin, 'POST', '/admin/training-categories', { name: `${categoryName} stale-disabled` });
   assert.equal(staleDisabled.status, 200);
   const staleDisabledUsername = `a2_stale_disabled_${randomBytes(3).toString('hex')}`;
-  const staleDisabledPassword = randomStrongPassword(staleDisabledUsername, '陈旧停用批次');
   const staleDisabledPreview = await ctx.request(admin, 'POST', '/admin/students/import-preview', {
-    rows: [{ row: 2, username: staleDisabledUsername, real_name: '陈旧停用批次', source: 'institution', category_id: String(staleDisabled.data.id), password: staleDisabledPassword }],
+    rows: [{ row: 2, username: staleDisabledUsername, real_name: '陈旧停用批次', source: 'institution', category_id: String(staleDisabled.data.id), phone: randomLearnerPhone() }],
   });
   assert.equal(staleDisabledPreview.status, 200);
   await ctx.request(admin, 'PUT', `/admin/training-categories/${staleDisabled.data.id}/status`, { status: 0 });
@@ -223,9 +215,8 @@ export async function run(ctx) {
   const staleDeleted = await ctx.request(admin, 'POST', '/admin/training-categories', { name: `${categoryName} stale-deleted` });
   assert.equal(staleDeleted.status, 200);
   const staleDeletedUsername = `a2_stale_deleted_${randomBytes(3).toString('hex')}`;
-  const staleDeletedPassword = randomStrongPassword(staleDeletedUsername, '陈旧删除批次');
   const staleDeletedPreview = await ctx.request(admin, 'POST', '/admin/students/import-preview', {
-    rows: [{ row: 2, username: staleDeletedUsername, real_name: '陈旧删除批次', source: 'institution', category_id: String(staleDeleted.data.id), password: staleDeletedPassword }],
+    rows: [{ row: 2, username: staleDeletedUsername, real_name: '陈旧删除批次', source: 'institution', category_id: String(staleDeleted.data.id), phone: randomLearnerPhone() }],
   });
   assert.equal(staleDeletedPreview.status, 200);
   const staleDeletedRemove = await ctx.request(admin, 'DELETE', `/admin/training-categories/${staleDeleted.data.id}`);
@@ -238,9 +229,8 @@ export async function run(ctx) {
   const raceCategory = await ctx.request(admin, 'POST', '/admin/training-categories', { name: `${categoryName} race` });
   assert.equal(raceCategory.status, 200);
   const raceUsername = `a2_race_${randomBytes(3).toString('hex')}`;
-  const racePassword = randomStrongPassword(raceUsername, '并发学员');
   const [raceStudent, raceDelete] = await Promise.all([
-    ctx.request(admin, 'POST', '/admin/students', { username: raceUsername, password: racePassword, real_name: '并发学员', source: 'institution', category_id: String(raceCategory.data.id) }),
+    ctx.request(admin, 'POST', '/admin/students', { username: raceUsername, phone: randomLearnerPhone(), real_name: '并发学员', source: 'institution', category_id: String(raceCategory.data.id) }),
     ctx.request(admin, 'DELETE', `/admin/training-categories/${raceCategory.data.id}`),
   ]);
   assert.ok((raceStudent.status === 200 && raceDelete.status === 409) || (raceStudent.status === 409 && raceDelete.status === 200), `${raceStudent.status}/${raceDelete.status}`);
@@ -253,27 +243,24 @@ export async function run(ctx) {
   const worksheet = workbook.worksheets[0];
   const xlsxUsername = `a2_xlsx_${randomBytes(3).toString('hex')}`;
   const xlsxUniqueUsername = `a2_xlsx_unique_${randomBytes(3).toString('hex')}`;
-  const xlsxPassword = randomStrongPassword(xlsxUsername, 'XLSX 学员', 'A2-XLSX-1');
-  const xlsxDuplicatePassword = randomStrongPassword(xlsxUsername.toUpperCase(), 'XLSX 重复', 'A2-XLSX-2');
-  const xlsxUniquePassword = randomStrongPassword(xlsxUniqueUsername, 'XLSX 唯一', 'A2-XLSX-3');
-  importPasswords.push(xlsxPassword, xlsxDuplicatePassword, xlsxUniquePassword);
-  worksheet.addRow([xlsxUsername, 'XLSX 学员', 'A2-XLSX-1', '', '', 'institution', categoryId, xlsxPassword]);
-  worksheet.addRow([xlsxUsername.toUpperCase(), 'XLSX 重复', 'A2-XLSX-2', '', '', 'institution', categoryId, xlsxDuplicatePassword]);
-  worksheet.addRow([xlsxUniqueUsername, 'XLSX 唯一', 'A2-XLSX-3', '', '', 'institution', categoryId, xlsxUniquePassword]);
+  assert.ok(!worksheet.getRow(1).values.some((value) => /密码|password/i.test(String(value))), 'student template must omit password');
+  worksheet.addRow([xlsxUsername, 'XLSX 学员', 'A2-XLSX-1', randomLearnerPhone(), '', 'institution', categoryId]);
+  worksheet.addRow([xlsxUsername.toUpperCase(), 'XLSX 重复', 'A2-XLSX-2', randomLearnerPhone(), '', 'institution', categoryId]);
+  worksheet.addRow([xlsxUniqueUsername, 'XLSX 唯一', 'A2-XLSX-3', randomLearnerPhone(), '', 'institution', categoryId]);
   const xlsxPreview = await ctx.upload(admin, '/admin/students/import-preview', Buffer.from(await workbook.xlsx.writeBuffer()), 'students.xlsx');
   assert.equal(xlsxPreview.status, 200);
   assert.deepEqual(xlsxPreview.data.valid_rows, [4]);
   assert.deepEqual(xlsxPreview.data.duplicates, [2, 3]);
-  for (const actualPassword of [xlsxPassword, xlsxDuplicatePassword, xlsxUniquePassword]) {
+  for (const actualPassword of importPasswords) {
     assert.equal(JSON.stringify(xlsxPreview).includes(actualPassword), false);
   }
   const xlsxCommit = await ctx.request(admin, 'POST', `/admin/students/import-batches/${xlsxPreview.data.batch_id}/commit`, { row_numbers: [4] });
   assert.equal(xlsxCommit.status, 200);
   const xlsxStored = await ctx.queryTestDb('SELECT username, password_hash FROM sys_user WHERE username = ?', [xlsxUniqueUsername]);
   assert.equal(xlsxStored.length, 1);
-  assert.notEqual(xlsxStored[0].password_hash, xlsxPassword);
+  assert.match(xlsxStored[0].password_hash, /^\$2[aby]\$/);
   const xlsxBatch = await ctx.queryTestDb('SELECT normalized_rows, errors FROM import_batch WHERE id = ?', [xlsxPreview.data.batch_id]);
-  for (const actualPassword of [xlsxPassword, xlsxDuplicatePassword, xlsxUniquePassword]) {
+  for (const actualPassword of importPasswords) {
     assert.equal(JSON.stringify(xlsxBatch).includes(actualPassword), false);
   }
   const finalAuditText = await readFile(auditPath, 'utf8');

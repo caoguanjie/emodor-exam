@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomStrongPassword } from './training-access.mjs';
+import { learnerSession, randomLearnerPhone } from './support/learner-session-fixture.mjs';
 import {
   abortMultipartAfterTempCreated,
   createMediaServicePair,
@@ -333,12 +334,11 @@ async function verifyAbortedMultipartCleanup(ctx, actor) {
 
 async function createStudent(ctx, admin, categoryId, label) {
   const username = `media_${label}_${randomBytes(4).toString('hex')}`;
-  const password = randomStrongPassword(username, label);
   const created = await ctx.request(admin, 'POST', '/admin/students', {
-    username, password, real_name: label, category_id: String(categoryId), source: 'institution',
+    username, phone: randomLearnerPhone(), real_name: label, category_id: String(categoryId), source: 'institution',
   });
   assert(created.status === 200 && created.data?.id, `${label} create failed: ${created.status}`);
-  return { id: String(created.data.id), actor: await login(ctx, username, password, label) };
+  return { id: String(created.data.id), actor: await learnerSession(ctx, created.data.id) };
 }
 
 export async function run(ctx) {

@@ -1,6 +1,7 @@
 <template>
-  <div class="media-upload" :class="{ 'is-disabled': disabled }">
+  <div class="media-upload" :class="{ 'is-disabled': disabled, 'media-upload--picture-card': listType === 'picture-card' }">
     <input
+      v-if="listType === 'text'"
       ref="fileInput"
       class="media-upload__input"
       type="file"
@@ -9,8 +10,24 @@
       @change="onFileChange"
     />
 
-    <div class="media-upload__actions">
-      <button type="button" class="media-upload__button media-upload__button--primary" :disabled="disabled" @click="chooseFile">
+    <el-upload v-if="listType === 'picture-card'" ref="pictureUpload" class="media-upload__picture"
+      :class="{ 'is-full': pictureFiles.length > 0 }" list-type="picture-card" :file-list="pictureFiles"
+      :auto-upload="false" :limit="1" :accept="accept" :disabled="disabled" :on-change="onPictureChange" :on-remove="clearSelection">
+      <el-icon><Plus /></el-icon>
+      <template #file>
+        <img v-if="previewUrl && !isVideo" class="el-upload-list__item-thumbnail" :src="previewUrl" alt="课程封面缩略图" />
+        <video v-else-if="previewUrl && isVideo" class="el-upload-list__item-thumbnail" :src="previewUrl" preload="metadata" muted />
+        <span v-else class="media-upload__card-placeholder"><el-icon><VideoCamera v-if="isVideo" /><Picture v-else /></el-icon></span>
+        <span class="el-upload-list__item-actions">
+          <button type="button" class="media-upload__card-action" aria-label="预览文件" :disabled="!previewUrl"
+            :title="isVideo && !previewUrl ? '选择本地视频后可预览' : '预览文件'" @click.stop="previewVisible = true"><el-icon><ZoomIn /></el-icon></button>
+          <button type="button" class="media-upload__card-action" aria-label="移除文件" :disabled="disabled" @click.stop="clearSelection"><el-icon><Delete /></el-icon></button>
+        </span>
+      </template>
+    </el-upload>
+
+    <div v-if="listType === 'text' || state.status === 'error'" class="media-upload__actions">
+      <button v-if="listType === 'text'" type="button" class="media-upload__button media-upload__button--primary" :disabled="disabled" @click="chooseFile">
         选择文件
       </button>
       <button
@@ -23,7 +40,7 @@
         {{ state.assetId ? '重新查询' : '重试上传' }}
       </button>
       <button
-        v-if="state.file || state.assetId || modelValue"
+        v-if="listType !== 'picture-card' && (state.file || state.assetId || modelValue)"
         type="button"
         class="media-upload__button"
         :disabled="disabled"
@@ -33,11 +50,11 @@
       </button>
     </div>
 
-    <p class="media-upload__hint">{{ limitHint }}</p>
+    <p v-if="!compact" class="media-upload__hint">{{ limitHint }}</p>
 
-    <img v-if="previewUrl" class="media-upload__preview" :src="previewUrl" alt="媒体预览" />
+    <img v-if="previewUrl && listType !== 'picture-card'" class="media-upload__preview" :src="previewUrl" alt="媒体预览" />
 
-    <div v-if="displayName || state.status !== 'idle'" class="media-upload__summary">
+    <div v-if="!compact && (displayName || state.status !== 'idle')" class="media-upload__summary">
       <span class="media-upload__filename" :title="displayName">{{ displayName || '媒体文件' }}</span>
       <span class="media-upload__status" :data-status="state.status">{{ statusLabel }}</span>
       <span v-if="state.durationMs !== null" class="media-upload__duration">时长 {{ formatDuration(state.durationMs) }}</span>
@@ -48,11 +65,17 @@
     </progress>
     <p v-if="state.status === 'uploading'" class="media-upload__progress-label">上传中 {{ state.progress }}%</p>
     <p v-if="state.error" class="media-upload__error" role="alert">{{ state.error }}</p>
+    <el-image-viewer v-if="previewVisible && previewUrl && !isVideo" :url-list="[previewUrl]" teleported @close="previewVisible = false" />
+    <el-dialog v-if="previewVisible && previewUrl && isVideo" v-model="previewVisible" title="视频预览" width="min(900px, 92vw)" append-to-body destroy-on-close>
+      <video class="media-upload__video-player" :src="previewUrl" controls preload="metadata" />
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { ElDialog, ElIcon, ElImageViewer, ElUpload, type UploadFile, type UploadInstance, type UploadUserFile } from 'element-plus';
+import { Delete, Picture, Plus, VideoCamera, ZoomIn } from '@element-plus/icons-vue';
 import { getMediaImageContent, getMediaLimits, getMediaMetadata, uploadMedia, type MediaMetadata, type MediaUploadResponse } from '../api/media';
 import {
   createMediaUploadState,
@@ -77,11 +100,15 @@ const props = withDefaults(defineProps<{
   purpose?: MediaPurpose;
   ownerId?: string;
   disabled?: boolean;
+  listType?: 'text' | 'picture-card';
+  compact?: boolean;
 }>(), {
   modelValue: null,
   purpose: 'avatar',
   ownerId: undefined,
   disabled: false,
+  listType: 'text',
+  compact: false,
 });
 
 const emit = defineEmits<{
@@ -95,6 +122,8 @@ const POLL_INTERVAL_MS = 1000;
 const MAX_POLL_ATTEMPTS = 30;
 
 const fileInput = ref<HTMLInputElement | null>(null);
+const pictureUpload = ref<UploadInstance>();
+const previewVisible = ref(false);
 const limits = ref<MediaLimits | null>(null);
 const state = ref<MediaUploadState>(createMediaUploadState());
 const metadata = ref<MediaMetadata | null>(null);
@@ -105,6 +134,14 @@ let requestSerial = 0;
 let uploadController: AbortController | null = null;
 
 const disabled = computed(() => props.disabled);
+const isVideo = computed(() => mediaKindForPurpose(props.purpose) === 'video');
+const pictureFiles = computed<UploadUserFile[]>(() => state.value.file || state.value.assetId || props.modelValue ? [{
+  uid: 1,
+  name: displayName.value || '媒体文件',
+  url: previewUrl.value || undefined,
+  status: state.value.status === 'uploading' ? 'uploading' : state.value.status === 'error' ? 'fail' : 'success',
+  percentage: state.value.progress,
+}] : []);
 const accept = computed(() => {
   const kind = mediaKindForPurpose(props.purpose);
   const values = kind === 'video' ? limits.value?.allowed_video_types : limits.value?.allowed_image_types;
@@ -157,6 +194,7 @@ function clearPoll(resetAttempts = true) {
 }
 
 function revokePreview() {
+  previewVisible.value = false;
   if (previewUrl.value) {
     URL.revokeObjectURL(previewUrl.value);
     previewUrl.value = null;
@@ -306,6 +344,19 @@ async function startUpload(file: File, serial = ++requestSerial) {
 function onFileChange(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
+  if (file) selectFile(file);
+}
+
+function onPictureChange(file: UploadFile) {
+  // ElUpload creates its own preview before notifying us. clearFiles() only
+  // removes list entries, so release that temporary URL before using our
+  // request-scoped preview (which also covers video and context changes).
+  if (file.url?.startsWith('blob:')) URL.revokeObjectURL(file.url);
+  pictureUpload.value?.clearFiles();
+  if (file.raw) selectFile(file.raw);
+}
+
+function selectFile(file: File) {
   if (!file || disabled.value) return;
   requestSerial += 1;
   const serial = requestSerial;
@@ -320,6 +371,7 @@ function onFileChange(event: Event) {
     resetInput();
     return;
   }
+  if (props.listType === 'picture-card') previewUrl.value = URL.createObjectURL(file);
   void startUpload(file, serial);
 }
 
@@ -351,6 +403,7 @@ function clearSelection() {
   metadata.value = null;
   state.value = reduceMediaUploadState(state.value, { type: 'clear' });
   resetInput();
+  pictureUpload.value?.clearFiles();
   // Clearing the UI only changes the parent binding; it never DELETEs an
   // already-uploaded asset. The parent decides when a reference is saved.
   emit('update:modelValue', null);
@@ -442,4 +495,14 @@ onBeforeUnmount(() => {
 .media-upload__progress { width: 100%; height: 8px; }
 .media-upload__error { margin: 0; color: #b42318; font-size: 13px; line-height: 1.5; }
 .media-upload__preview { width: 72px; height: 72px; border-radius: 8px; object-fit: cover; border: 1px solid #e2e8f0; }
+.media-upload__picture :deep(.el-upload--picture-card),
+.media-upload__picture :deep(.el-upload-list__item) { width: 112px; height: 112px; }
+.media-upload__picture.is-full :deep(.el-upload--picture-card) { display: none; }
+.media-upload__picture :deep(.el-upload-list__item-thumbnail) { width: 100%; height: 100%; object-fit: contain; }
+.media-upload__picture :deep(.el-upload-list__item-actions) { display: flex; align-items: center; justify-content: center; gap: 16px; }
+.media-upload__picture :deep(.el-upload-list__item:focus-within .el-upload-list__item-actions) { opacity: 1; }
+.media-upload__card-placeholder { display: flex; height: 100%; align-items: center; justify-content: center; color: var(--el-text-color-placeholder); font-size: 32px; }
+.media-upload__card-action { display: inline-flex; border: 0; padding: 4px; color: white; background: transparent; font-size: 20px; cursor: pointer; }
+.media-upload__card-action:disabled { opacity: .45; cursor: not-allowed; }
+.media-upload__video-player { display: block; width: 100%; max-height: 65vh; background: #000; }
 </style>

@@ -83,6 +83,9 @@ export class SessionIssuerService {
     const blockTs = await this.redis.getTokenBlockTs(Number(user.id));
     if (blockTs && Number(payload.iat) < Number(blockTs)) throw Errors.tokenRevoked();
     if (client === 'mobile') await this.assertMobileUser(user);
+    if (client === 'pc' && user.role === 'employee' && !(await this.access.permissions(user.id, { useCache: false })).length) {
+      throw Errors.forbidden('学员请使用手机验证码登录');
+    }
     const remaining = Math.max(1, Number(payload.exp) - Math.floor(Date.now() / 1000));
     if (!await this.redis.claimRefreshJti(jti, remaining)) throw Errors.tokenRevoked();
     const session = sid ? { sid } : await this.sessions.create(user.id, ip, null, undefined, { client, authMethod: method });

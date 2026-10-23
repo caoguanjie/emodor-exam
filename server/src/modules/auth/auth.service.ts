@@ -109,7 +109,7 @@ export class AuthService {
         }
 
         const ok = current ? await bcrypt.compare(password, current.passwordHash) : false;
-        if (!current || !ok) throw Errors.badCredentials();
+        if (!current || !ok || !isAdminAccount) throw Errors.badCredentials();
         if (current.status === 0) {
           this.audit.log({
             actor_id: Number(current.id), actor_name: username, action: 'auth.login', object_type: 'sys_user',
@@ -176,6 +176,9 @@ export class AuthService {
         .where('u.id = :userId', { userId: String(userId) })
         .getOne();
       if (!u) throw Errors.notFound();
+      if (u.role === 'employee' && !(await this.access.permissions(u.id, { manager: m, useCache: false })).length) {
+        throw Errors.forbidden('学员请使用手机验证码登录');
+      }
       const ok = await bcrypt.compare(oldPassword, u.passwordHash);
       if (!ok) throw Errors.param('原密码错误');
       this.validatePasswordStrength(newPassword, u);

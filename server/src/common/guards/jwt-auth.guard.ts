@@ -90,6 +90,7 @@ export class JwtAuthGuard implements CanActivate {
     if (!currentUser) throw Errors.unauthenticated();
     if (currentUser.status === 0) throw Errors.accountDisabled();
     if (client === 'mobile' && (currentUser.role !== 'employee' || (await this.access.permissions(currentUser.id, { useCache: false })).length > 0)) throw Errors.forbidden('此账号请使用管理端账号密码登录');
+    if (client === 'pc' && currentUser.role === 'employee' && !(await this.access.permissions(currentUser.id, { useCache: false })).length) throw Errors.forbidden('学员请使用手机验证码登录');
     const tokenVersion = Number(payload.auth_version ?? 0);
     const currentVersion = Number(currentUser.authVersion || 0);
     if (!Number.isInteger(tokenVersion) || tokenVersion !== currentVersion) throw Errors.tokenRevoked();

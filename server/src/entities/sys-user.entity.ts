@@ -53,6 +53,10 @@ export class SysUser {
   @Column({ type: 'date', nullable: true })
   birthday: string | null;
 
+  /** 管理员维护的年龄；不反推或覆盖生日。 */
+  @Column({ type: 'tinyint', unsigned: true, nullable: true })
+  age: number | null;
+
   /** 1=启用（在职），0=停用 */
   @Column({ type: 'tinyint', default: 1 })
   status: number;

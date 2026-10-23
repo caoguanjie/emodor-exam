@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   `occupation`    VARCHAR(64)  NULL COMMENT '学员自维护工种展示字段',
   `gender`        VARCHAR(16)  NULL COMMENT 'male / female',
   `birthday`      DATE         NULL COMMENT '学员自维护生日；不得晚于服务端业务日期',
+  `age`           TINYINT UNSIGNED NULL COMMENT '管理员维护年龄，0-150；不反推生日',
   `status`        TINYINT      NOT NULL DEFAULT 1 COMMENT '1=启用（在职），0=停用',
   `auth_version`  INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '认证世代；密码/身份/管理权限变更递增',
   `force_password_change` TINYINT NOT NULL DEFAULT 0 COMMENT '1=当前口令必须改密；与登录统计分离',

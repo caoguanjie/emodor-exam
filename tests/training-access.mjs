@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import { startMockAi } from './e2e-smoke.mjs';
 import { randomStrongPassword } from './support/password-fixture.mjs';
+import { learnerSession, randomLearnerPhone } from './support/learner-session-fixture.mjs';
 
 export { randomStrongPassword } from './support/password-fixture.mjs';
 
@@ -30,7 +31,7 @@ async function readCaptchaAnswer(ctx, captchaId) {
   }
 }
 
-async function captchaLogin(ctx, username, password) {
+export async function captchaLogin(ctx, username, password) {
   // The API intentionally limits source IP login attempts to ten/minute. The
   // fixture exercises many independent accounts in one run, so give each
   // attempt an RFC 5737 test source through the harness' trusted XFF hop.
@@ -200,11 +201,18 @@ async function runBody(ctx, mockPort) {
   assert(fixtureCategory.status === 200 && fixtureCategory.data?.id, `fixture category create failed: ${fixtureCategory.status}`);
   const fixtureCategoryId = String(fixtureCategory.data.id);
 
+  const fixtureAdminRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
+    code: `security_admin_${randomBytes(4).toString('hex')}`,
+    name: '密码安全回归管理员', permissions: ['statistics:read'],
+  });
+  assert(fixtureAdminRole.status === 200 && fixtureAdminRole.data?.id, 'security administrator role create failed');
+  const fixtureAdminRoleIds = [String(fixtureAdminRole.data.id)];
+
   const employeeUsername = `employee_${randomBytes(4).toString('hex')}`;
   const employeePassword = randomStrongPassword(employeeUsername, '临时员工');
-  const employee = await ctx.request(admin.actor, 'POST', '/admin/students', {
+  const employee = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
     username: employeeUsername, password: employeePassword,
-    real_name: '临时员工', category_id: fixtureCategoryId, source: 'institution',
+    real_name: '临时员工', role_ids: fixtureAdminRoleIds,
   });
   assert(employee.status === 200, `employee fixture create failed: ${employee.status} ${JSON.stringify(employee.json || employee.data)}`);
   const loginCountBeforeSessionFailure = await ctx.queryTestDb(
@@ -217,8 +225,11 @@ async function runBody(ctx, mockPort) {
   await ctx.queryTestDb('RENAME TABLE auth_session TO auth_session_a3_failure');
   let failedSessionLogin;
   try {
+    const failedCaptcha = await ctx.request(null, 'POST', '/auth/captcha');
     failedSessionLogin = await ctx.request(null, 'POST', '/auth/login', {
       username: employee.data.username, password: employeePassword,
+      captcha_id: failedCaptcha.data.captcha_id,
+      captcha_code: await readCaptchaAnswer(ctx, failedCaptcha.data.captcha_id),
     });
   } finally {
     await ctx.queryTestDb('RENAME TABLE auth_session_a3_failure TO auth_session');
@@ -232,10 +243,7 @@ async function runBody(ctx, mockPort) {
     Number(loginCountAfterSessionFailure[0]?.login_count || 0) === Number(loginCountBeforeSessionFailure[0]?.login_count || 0),
     'failed session creation committed a successful-login count',
   );
-  const employeeLogin = await ctx.request(null, 'POST', '/auth/login', {
-    username: employee.data.username, password: employeePassword,
-  });
-  assert(employeeLogin.status === 200, `employeeLegacyLogin expected 200, got ${employeeLogin.status}`);
+  const { result: employeeLogin } = await captchaLogin(ctx, employee.data.username, employeePassword);
   const employeeSessionDb = await ctx.queryTestDb(
     'SELECT sid, created_at, updated_at, last_seen_at FROM auth_session WHERE user_id = ? ORDER BY id DESC LIMIT 1',
     [String(employee.data.id)],
@@ -273,17 +281,12 @@ async function runBody(ctx, mockPort) {
   assert(firstAssignmentRole.status === 200 && firstAssignmentRole.data?.id, `first assignment role create failed: ${firstAssignmentRole.status}`);
 
   const ordinaryUsername = `ordinary_${randomBytes(4).toString('hex')}`;
-  const ordinaryPassword = randomStrongPassword(ordinaryUsername);
   const ordinary = await ctx.request(admin.actor, 'POST', '/admin/students', {
-    username: ordinaryUsername, password: ordinaryPassword, real_name: '普通候选账号',
+    username: ordinaryUsername, phone: randomLearnerPhone(), real_name: '普通候选账号',
     category_id: fixtureCategoryId, source: 'institution',
   });
   assert(ordinary.status === 200 && ordinary.data?.id, `ordinary tree fixture create failed: ${ordinary.status}`);
-  const ordinaryLogin = await completeFirstLogin(
-    ctx,
-    await captchaLogin(ctx, ordinaryUsername, ordinaryPassword),
-    ordinaryUsername, ordinaryPassword, 'OrdinaryTreeReader',
-  );
+  const ordinaryLogin = { actor: await learnerSession(ctx, ordinary.data.id) };
   const ordinaryTree = await ctx.request(ordinaryLogin.actor, 'GET', '/departments/tree');
   assert(ordinaryTree.status === 404, `removed department tree unexpectedly reachable: ${ordinaryTree.status}`);
 
@@ -345,12 +348,15 @@ async function runBody(ctx, mockPort) {
   );
   for (const candidate of candidatePage.data.items) {
     assert(
-      Object.keys(candidate).sort().join(',') === 'id,real_name,status,system_role,username'
+      Object.keys(candidate).sort().join(',') === 'id,real_name,requires_initial_password,status,system_role,username'
+        && typeof candidate.requires_initial_password === 'boolean'
         && candidate.system_role !== 'super_admin'
         && candidate.id !== '1',
       `candidate leaked unsafe fields or highest identity: ${JSON.stringify(candidate)}`,
     );
   }
+  assert(candidatePage.data.items.find((candidate) => candidate.id === String(ordinary.data.id))?.requires_initial_password === true,
+    'pure learner candidate did not require an administrator initial password');
   const allCandidates = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators/candidates?page=1&page_size=100');
   assert(allCandidates.status === 200 && allCandidates.data?.items?.every((candidate) => candidate.id !== '1' && candidate.system_role !== 'super_admin'), `super admin appeared in candidate set: ${allCandidates.status}`);
   const malformedCandidate = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators/candidates?page=not-a-number');
@@ -370,6 +376,7 @@ async function runBody(ctx, mockPort) {
   }
   const firstAssignment = await ctx.request(writeLogin.actor, 'PUT', `/admin/administrators/${ordinary.data.id}/roles`, {
     role_ids: [String(firstAssignmentRole.data.id)],
+    initial_password: randomStrongPassword(ordinaryUsername, '普通候选账号'),
   });
   assert(firstAssignment.status === 200, `first business-role assignment failed: ${firstAssignment.status}`);
   const assignedAdministrators = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators');
@@ -455,19 +462,14 @@ async function runBody(ctx, mockPort) {
   assert(legacyAfterPasswordChange.status === 401, `legacy no-sid token survived password change: ${legacyAfterPasswordChange.status}`);
   const raceUsername = `race_employee_${randomBytes(4).toString('hex')}`;
   const racePassword = randomStrongPassword(raceUsername, '并发员工');
-  const raceEmployee = await ctx.request(admin.actor, 'POST', '/admin/students', {
+  const raceEmployee = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
     username: raceUsername, password: racePassword, real_name: '并发员工',
-    category_id: fixtureCategoryId, source: 'institution',
+    role_ids: fixtureAdminRoleIds,
   });
   assert(raceEmployee.status === 200 && raceEmployee.data?.id, `concurrent login fixture create failed: ${raceEmployee.status}/${raceEmployee.code}/${raceEmployee.message}`);
-  const raceInitialActor = {};
-  const raceInitial = await ctx.request(raceInitialActor, 'POST', '/auth/login', {
-    username: raceUsername, password: racePassword,
-  });
-  assert(raceInitial.status === 200, `concurrent login fixture initial login failed: ${raceInitial.status}`);
-  raceInitialActor.accessToken = raceInitial.data.access_token;
+  const raceInitialLogin = await captchaLogin(ctx, raceUsername, racePassword);
   const raceReady = await completeFirstLogin(
-    ctx, { actor: raceInitialActor, result: raceInitial }, raceUsername, racePassword, 'RaceEmployee',
+    ctx, raceInitialLogin, raceUsername, racePassword, 'RaceEmployee',
   );
   const warmedRaceProfile = await ctx.request(raceReady.actor, 'GET', '/auth/profile');
   assert(warmedRaceProfile.status === 200, `race permission cache warmup failed: ${warmedRaceProfile.status}`);
@@ -478,15 +480,15 @@ async function runBody(ctx, mockPort) {
       role_ids: [String(role.data.id)],
     });
     await waitForLockWaits(ctx, 1, 'login/grant assignment');
-    const raceLoginPromise = ctx.request(null, 'POST', '/auth/login', {
-      username: raceUsername, password: raceReady.password,
-    });
+    const raceLoginPromise = captchaLogin(ctx, raceUsername, raceReady.password);
     await waitForLockWaits(ctx, 2, 'login/grant classification');
     await closeLock(raceBlocker, true);
     raceReleased = true;
     const [raceAssignment, raceLogin] = await Promise.all([raceAssignmentPromise, raceLoginPromise]);
     assert(raceAssignment.status === 200, `deterministic role assignment failed: ${raceAssignment.status}`);
-    assert(raceLogin.status === 400, `deterministic post-grant login should require captcha, got ${raceLogin.status}`);
+    assert(raceLogin.result.status === 200, `deterministic post-grant administrator login failed: ${raceLogin.result.status}`);
+    const raceProfile = await ctx.request(raceLogin.actor, 'GET', '/auth/profile');
+    assert(raceProfile.status === 200, `post-grant login issued a stale generation: ${raceProfile.status}`);
   } finally {
     if (!raceReleased) await closeLock(raceBlocker);
   }
@@ -526,20 +528,14 @@ async function runBody(ctx, mockPort) {
 
   const passwordRaceUsername = `password_race_${randomBytes(4).toString('hex')}`;
   const passwordRacePassword = randomStrongPassword(passwordRaceUsername, '并发改密');
-  const passwordRaceUser = await ctx.request(admin.actor, 'POST', '/admin/students', {
+  const passwordRaceUser = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
     username: passwordRaceUsername, password: passwordRacePassword, real_name: '并发改密',
-    category_id: fixtureCategoryId, source: 'institution',
+    role_ids: fixtureAdminRoleIds,
   });
   assert(passwordRaceUser.status === 200 && passwordRaceUser.data?.id, `password race fixture create failed: ${passwordRaceUser.status}`);
   const passwordRaceLogin = await completeFirstLogin(
     ctx,
-    await (async () => {
-      const actor = {};
-      const result = await ctx.request(actor, 'POST', '/auth/login', { username: passwordRaceUsername, password: passwordRacePassword });
-      assert(result.status === 200, `password race initial login failed: ${result.status}`);
-      actor.accessToken = result.data.access_token;
-      return { actor, result };
-    })(),
+    await captchaLogin(ctx, passwordRaceUsername, passwordRacePassword),
     passwordRaceUsername, passwordRacePassword, 'PasswordRace',
   );
   const passwordRaceVersionBefore = await ctx.queryTestDb(
@@ -550,9 +546,11 @@ async function runBody(ctx, mockPort) {
   let passwordRaceReleased = false;
   let resetPromise;
   try {
-    resetPromise = ctx.request(admin.actor, 'PUT', `/admin/students/${passwordRaceUser.data.id}/password`, { password: passwordRaceResetPassword });
+    resetPromise = ctx.request(passwordRaceLogin.actor, 'PUT', '/auth/password', {
+      old_password: passwordRaceLogin.password, new_password: passwordRaceResetPassword,
+    });
     try {
-      await waitForLockWaits(ctx, 1, 'password reset');
+      await waitForLockWaits(ctx, 1, 'first administrator password change');
     } catch (error) {
       const earlyReset = await resetPromise;
       throw new Error(`${error.message}; reset=${earlyReset.status}/${earlyReset.code}/${earlyReset.message}`);
@@ -564,8 +562,8 @@ async function runBody(ctx, mockPort) {
     await closeLock(passwordRaceBlocker, true);
     passwordRaceReleased = true;
     const [resetResult, changeResult] = await Promise.all([resetPromise, changePromise]);
-    assert(resetResult.status === 200, `deterministic password reset failed: ${resetResult.status}`);
-    assert(changeResult.status !== 200, `old-password change raced through reset: ${changeResult.status}`);
+    assert(resetResult.status === 200, `first administrator password change failed: ${resetResult.status}`);
+    assert(changeResult.status !== 200, `old password was accepted twice: ${changeResult.status}`);
   } finally {
     if (!passwordRaceReleased) await closeLock(passwordRaceBlocker);
   }
@@ -579,22 +577,19 @@ async function runBody(ctx, mockPort) {
   const passwordRaceSessions = await ctx.queryTestDb(
     'SELECT COUNT(*) AS count FROM auth_session WHERE user_id = ? AND revoked_at IS NULL', [String(passwordRaceUser.data.id)],
   );
-  assert(Number(passwordRaceSessions[0]?.count || 0) === 0, 'old-password race created a current session after reset');
+  assert(Number(passwordRaceSessions[0]?.count || 0) === 1, 'concurrent old-password changes created more than one replacement session');
 
   const equalIatUsername = `equal_iat_${randomBytes(4).toString('hex')}`;
   const equalIatPassword = randomStrongPassword(equalIatUsername, '同秒令牌');
-  const equalIatUser = await ctx.request(admin.actor, 'POST', '/admin/students', {
+  const equalIatUser = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
     username: equalIatUsername, password: equalIatPassword, real_name: '同秒令牌',
-    category_id: fixtureCategoryId, source: 'institution',
+    role_ids: fixtureAdminRoleIds,
   });
   assert(equalIatUser.status === 200 && equalIatUser.data?.id, `equal-iat fixture create failed: ${equalIatUser.status}`);
-  const equalIatInitial = await ctx.request(null, 'POST', '/auth/login', {
-    username: equalIatUsername, password: equalIatPassword,
-  });
-  assert(equalIatInitial.status === 200, `equal-iat initial login failed: ${equalIatInitial.status}`);
+  const equalIatInitial = await captchaLogin(ctx, equalIatUsername, equalIatPassword);
   const equalIatReady = await completeFirstLogin(
     ctx,
-    { actor: { accessToken: equalIatInitial.data.access_token }, result: equalIatInitial },
+    equalIatInitial,
     equalIatUsername, equalIatPassword, 'EqualIat',
   );
   const equalIatA = await captchaLogin(ctx, equalIatUsername, equalIatReady.password);
@@ -614,8 +609,8 @@ async function runBody(ctx, mockPort) {
   assert(fixtureJwt.verify(equalIatSidTokenA, { secret: ctx.env.JWT_SECRET }).iat === equalIat, 'equal-iat sid A fixture drifted');
   assert(fixtureJwt.verify(equalIatSidTokenB, { secret: ctx.env.JWT_SECRET }).iat === equalIat, 'equal-iat sid B fixture drifted');
   assert(fixtureJwt.verify(equalIatNoSidToken, { secret: ctx.env.JWT_SECRET }).iat === equalIat, 'equal-iat no-sid fixture drifted');
-  const equalIatReset = await ctx.request(admin.actor, 'PUT', `/admin/students/${equalIatUser.data.id}/password`, {
-    password: randomStrongPassword(equalIatUsername, '重置同秒'),
+  const equalIatReset = await ctx.request(equalIatA.actor, 'PUT', '/auth/password', {
+    old_password: equalIatReady.password, new_password: randomStrongPassword(equalIatUsername, '同秒改密'),
   });
   assert(equalIatReset.status === 200, `equal-iat reset failed: ${equalIatReset.status}`);
   for (const token of [equalIatSidTokenA, equalIatSidTokenB, equalIatNoSidToken]) {
@@ -743,8 +738,16 @@ async function runBody(ctx, mockPort) {
 
   const studentUsername = `training_student_${randomBytes(4).toString('hex')}`;
   const studentPassword = randomStrongPassword(studentUsername, '培训学员');
+  const studentPhone = randomLearnerPhone();
+  for (const field of ['password', 'initial_password']) {
+    const refusedPassword = await ctx.request(employeeAdminLogin.actor, 'POST', '/admin/students', {
+      username: studentUsername, phone: studentPhone, [field]: studentPassword, real_name: '培训学员',
+      category_id: String(createdCategory.data.id), source: 'institution',
+    });
+    assert(refusedPassword.status === 400, `student create accepted ${field}: ${refusedPassword.status}`);
+  }
   const createdStudent = await ctx.request(employeeAdminLogin.actor, 'POST', '/admin/students', {
-    username: studentUsername, password: studentPassword, real_name: '培训学员',
+    username: studentUsername, phone: studentPhone, real_name: '培训学员',
     category_id: String(createdCategory.data.id), source: 'institution',
   });
   assert(createdStudent.status === 200 && createdStudent.data?.id, `delegated student create denied: ${createdStudent.status}`);
@@ -752,22 +755,22 @@ async function runBody(ctx, mockPort) {
     'SELECT force_password_change, login_count, last_login_at FROM sys_user WHERE id = ?',
     [String(createdStudent.data.id)],
   );
-  assert(Number(createdStudentFacts[0]?.force_password_change || 0) === 1, 'manual student create did not set force_password_change');
+  assert(Number(createdStudentFacts[0]?.force_password_change) === 0, 'manual student create enabled password change');
   assert(Number(createdStudentFacts[0]?.login_count || 0) === 0 && !createdStudentFacts[0]?.last_login_at, 'manual student create changed login facts');
   const studentLogin = await ctx.request(null, 'POST', '/auth/login', { username: studentUsername, password: studentPassword });
-  assert(studentLogin.status === 200 && studentLogin.data?.force_change_password === true, `manual student first login flag missing: ${studentLogin.status}`);
-  const studentChangedPassword = randomStrongPassword(studentUsername, '培训学员改密');
-  const studentChange = await ctx.request({ accessToken: studentLogin.data.access_token }, 'PUT', '/auth/password', {
-    old_password: studentPassword, new_password: studentChangedPassword,
+  assert(studentLogin.status === 401 && studentLogin.code === 40104 && !studentLogin.data?.access_token, `manual student used PC password login: ${studentLogin.status}`);
+  const mobileStudent = await learnerSession(ctx, createdStudent.data.id);
+  const studentChange = await ctx.request(mobileStudent, 'PUT', '/auth/password', {
+    old_password: studentPassword, new_password: randomStrongPassword(studentUsername),
   });
-  assert(studentChange.status === 200 && studentChange.data?.access_token, `manual student password change failed: ${studentChange.status}`);
-  const studentBeforeReset = await ctx.request({ accessToken: studentChange.data.access_token }, 'GET', '/auth/profile');
+  assert(studentChange.status === 403, `mobile student reached password change: ${studentChange.status}`);
+  const studentBeforeReset = await ctx.request(mobileStudent, 'GET', '/me/profile');
   assert(studentBeforeReset.status === 200, `manual student pre-reset profile failed: ${studentBeforeReset.status}`);
 
   const importedUsername = `training_import_${randomBytes(4).toString('hex')}`;
   const importedPassword = randomStrongPassword(importedUsername, '导入学员');
   const importPreview = await ctx.request(employeeAdminLogin.actor, 'POST', '/admin/students/import-preview', {
-    rows: [{ username: importedUsername, real_name: '导入学员', source: 'external', category_id: String(createdCategory.data.id), password: importedPassword }],
+    rows: [{ username: importedUsername, real_name: '导入学员', source: 'external', category_id: String(createdCategory.data.id), phone: randomLearnerPhone() }],
   });
   assert(importPreview.status === 200 && importPreview.data?.batch_id && importPreview.data?.valid_rows?.length === 1, `student import preview denied: ${importPreview.status}/${JSON.stringify(importPreview.json || importPreview.data)}`);
   const importCommit = await ctx.request(employeeAdminLogin.actor, 'POST', `/admin/students/import-batches/${importPreview.data.batch_id}/commit`, {
@@ -778,31 +781,27 @@ async function runBody(ctx, mockPort) {
     'SELECT id, force_password_change, login_count, last_login_at FROM sys_user WHERE username = ?',
     [importedUsername],
   );
-  assert(Number(importedStudentFacts[0]?.force_password_change || 0) === 1, 'imported student did not set force_password_change');
+  assert(Number(importedStudentFacts[0]?.force_password_change) === 0, 'imported student enabled password change');
   assert(Number(importedStudentFacts[0]?.login_count || 0) === 0 && !importedStudentFacts[0]?.last_login_at, 'student import changed login facts');
 
   const studentResetPassword = randomStrongPassword(studentUsername, '培训学员重置');
   const studentReset = await ctx.request(employeeAdminLogin.actor, 'PUT', `/admin/students/${createdStudent.data.id}/password`, { password: studentResetPassword });
-  assert(studentReset.status === 200, `delegated student reset denied: ${studentReset.status}`);
+  assert(studentReset.status === 404, `removed student password reset reachable: ${studentReset.status}`);
   const studentResetFacts = await ctx.queryTestDb(
     'SELECT force_password_change FROM sys_user WHERE id = ?', [String(createdStudent.data.id)],
   );
-  assert(Number(studentResetFacts[0]?.force_password_change || 0) === 1, 'student reset did not set force_password_change');
-  const studentOldToken = await ctx.request({ accessToken: studentChange.data.access_token }, 'GET', '/auth/profile');
-  assert(studentOldToken.status === 401 && studentOldToken.code === 40107, `student token after reset expected 40107, got ${studentOldToken.status}/${studentOldToken.code}`);
+  assert(Number(studentResetFacts[0]?.force_password_change) === 0, 'removed student reset enabled password change');
+  const studentOldToken = await ctx.request(mobileStudent, 'GET', '/me/profile');
+  assert(studentOldToken.status === 200, `removed student reset changed mobile session: ${studentOldToken.status}`);
 
   const importedLogin = await ctx.request(null, 'POST', '/auth/login', { username: importedUsername, password: importedPassword });
-  assert(importedLogin.status === 200 && importedLogin.data?.force_change_password === true, `imported student first login flag missing: ${importedLogin.status}`);
-  const importedChangedPassword = randomStrongPassword(importedUsername, '导入学员改密');
-  const importedChange = await ctx.request({ accessToken: importedLogin.data.access_token }, 'PUT', '/auth/password', {
-    old_password: importedPassword, new_password: importedChangedPassword,
-  });
-  assert(importedChange.status === 200 && importedChange.data?.access_token, `imported student password change failed: ${importedChange.status}`);
-  const importedBeforeDisable = await ctx.request({ accessToken: importedChange.data.access_token }, 'GET', '/auth/profile');
+  assert(importedLogin.status === 401 && importedLogin.code === 40104 && !importedLogin.data?.access_token, `imported student used PC password login: ${importedLogin.status}`);
+  const mobileImported = await learnerSession(ctx, importedStudentFacts[0].id);
+  const importedBeforeDisable = await ctx.request(mobileImported, 'GET', '/me/profile');
   assert(importedBeforeDisable.status === 200, `imported student pre-disable profile failed: ${importedBeforeDisable.status}`);
   const disabledStudent = await ctx.request(employeeAdminLogin.actor, 'PUT', `/admin/students/${importedStudentFacts[0].id}/status`, { status: 0 });
   assert(disabledStudent.status === 200, `delegated student disable denied: ${disabledStudent.status}`);
-  const disabledStudentToken = await ctx.request({ accessToken: importedChange.data.access_token }, 'GET', '/auth/profile');
+  const disabledStudentToken = await ctx.request(mobileImported, 'GET', '/me/profile');
   assert(disabledStudentToken.status === 403 && disabledStudentToken.code === 40105, `disabled student live session expected 40105/403, got ${disabledStudentToken.status}/${disabledStudentToken.code}`);
 
   const oldUsersDenied = await ctx.request(employeeAdminLogin.actor, 'GET', '/users');
@@ -834,7 +833,7 @@ async function runBody(ctx, mockPort) {
   const readOnlyCategoryWrite = await ctx.request(readOnlyLogin.actor, 'POST', '/admin/training-categories', { name: `forbidden_${randomBytes(4).toString('hex')}` });
   assert(readOnlyCategoryWrite.status === 403, `training read-only category write unexpectedly allowed: ${readOnlyCategoryWrite.status}`);
   const readOnlyStudentWrite = await ctx.request(readOnlyLogin.actor, 'POST', '/admin/students', {
-    username: `forbidden_${randomBytes(4).toString('hex')}`, password: randomStrongPassword('forbidden'), real_name: '禁止写入',
+    username: `forbidden_${randomBytes(4).toString('hex')}`, phone: randomLearnerPhone(), real_name: '禁止写入',
     category_id: String(createdCategory.data.id), source: 'institution',
   });
   assert(readOnlyStudentWrite.status === 403, `training read-only student write unexpectedly allowed: ${readOnlyStudentWrite.status}`);
@@ -871,17 +870,26 @@ async function runBody(ctx, mockPort) {
   const removed = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${restricted.data.id}/roles`, { role_ids: [] });
   assert(removed.status === 200, `role removal failed: ${removed.status}`);
   const oldAfterRoleRemoval = await ctx.request({ accessToken: oldRestrictedToken }, 'GET', '/statistics/regulations');
-  assert(oldAfterRoleRemoval.status === 401, `oldTokenAfterRoleRemoval expected 401, got ${oldAfterRoleRemoval.status}`);
+  assert(oldAfterRoleRemoval.status === 403, `oldTokenAfterRoleRemoval expected 403, got ${oldAfterRoleRemoval.status}`);
   const oldNoSidAfterRoleRemoval = await ctx.request({ accessToken: legacyNoSidToken }, 'GET', '/statistics/regulations');
-  assert(oldNoSidAfterRoleRemoval.status === 401, `legacyNoSidAfterRoleRemoval expected 401, got ${oldNoSidAfterRoleRemoval.status}`);
+  assert(oldNoSidAfterRoleRemoval.status === 403, `legacyNoSidAfterRoleRemoval expected 403, got ${oldNoSidAfterRoleRemoval.status}`);
 
-  // Role writes invalidate the durable session as well as incrementing the
-  // auth generation. Log in again to obtain a fresh, now-unprivileged session
-  // before exercising the explicit session-revoke endpoint.
+  const removedLogin = await ctx.request(null, 'POST', '/auth/login', {
+    username: restricted.data.username, password: restrictedLogin.password,
+  });
+  assert(removedLogin.status === 401 && removedLogin.code === 40104, 'permission-free employee regained a PC session');
+  // Restore only statistics access before testing explicit session revocation.
+  // The restored administrator still cannot read or write AI/question/paper APIs.
+  const restoredRestrictedPassword = randomStrongPassword(restricted.data.username, '受限管理员');
+  const restoredRestricted = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${restricted.data.id}/roles`, {
+    role_ids: [String(role.data.id)],
+    initial_password: restoredRestrictedPassword,
+  });
+  assert(restoredRestricted.status === 200, 'restricted role restoration failed');
   const postRemovalLogin = await completeFirstLogin(
     ctx,
-    await captchaLogin(ctx, restricted.data.username, restrictedLogin.password),
-    restricted.data.username, restrictedLogin.password, 'RestrictedAfterRemoval',
+    await captchaLogin(ctx, restricted.data.username, restoredRestrictedPassword),
+    restricted.data.username, restoredRestrictedPassword, 'RestrictedAfterRemoval',
   );
   const deniedRemovedGeneration = await ctx.request(postRemovalLogin.actor, 'POST', '/ai/generate-questions', {
     material_id: scopedRegulationId, material_version_id: scopedMaterial.versionId,

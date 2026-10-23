@@ -8,6 +8,7 @@
 import http from 'node:http';
 import { isSafeTestDatabase } from './support/test-target.mjs';
 import { randomStrongPassword } from './support/password-fixture.mjs';
+import { learnerSession, randomLearnerPhone } from './support/learner-session-fixture.mjs';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -323,8 +324,8 @@ async function main() {
     } });
     const category = await api('POST', '/admin/training-categories', { token: state.tokens.admin, body: {name:'冒烟培训'} });
     check('创建冒烟学员类别', category.status === 200, JSON.stringify({status:category.status,code:category.json?.code,message:category.json?.message}));
-    const student = (username, real_name, password = TEST_INIT_PW) => ({
-      username, password, real_name, category_id:String(category.json.data.id), source:'institution',
+    const student = (username, real_name) => ({
+      username, phone: randomLearnerPhone(), real_name, category_id:String(category.json.data.id), source:'institution',
     });
     const mkEmp = await api('POST', '/admin/students', { token: state.tokens.admin, body:student('emp001','李学员') });
     check('独立创建管理员与学员', mkAdmin.status === 200 && mkEmp.status === 200, JSON.stringify({
@@ -336,17 +337,19 @@ async function main() {
     const duplicate = await api('POST', '/admin/students', {token:state.tokens.admin,body:student('emp001','重复')});
     check('用户名重复被拒', duplicate.json?.code === 40001);
     for (const [username,password] of [['weakpw1','admin123'],['weakpw2','12345678']]) {
-      const rejected = await api('POST','/admin/students',{token:state.tokens.admin,body:student(username,'口令校验',password)});
-      check(`弱口令被拒：${username}`,rejected.json?.code===40001);
+      const rejected = await api('POST','/admin/students',{token:state.tokens.admin,body:{ ...student(username,'禁止学员口令'), password }});
+      check(`学员密码字段被拒：${username}`,rejected.json?.code===40001);
     }
     await db.query('UPDATE sys_user SET department_id=? WHERE id=?',[deptA,empId]);
     await db.query('UPDATE sys_user SET department_id=? WHERE id=?',[deptB,admin2Id]);
-    let er = await api('POST','/auth/login',{body:{username:'emp001',password:TEST_INIT_PW}});
-    const empNewPw = 'Wq7'+randomBytes(8).toString('hex');
-    await api('PUT','/auth/password',{token:er.json?.data?.access_token,body:{old_password:TEST_INIT_PW,new_password:empNewPw}});
-    er=await api('POST','/auth/login',{body:{username:'emp001',password:empNewPw}});
-    state.tokens.emp=er.json?.data?.access_token;
-    check('学员首登改密后可登录',!!state.tokens.emp);
+    const er = await api('POST','/auth/login',{body:{username:'emp001',password:TEST_INIT_PW}});
+    check('学员不能使用PC密码登录',er.status===401 && er.json?.code===40104);
+    const mobileEmployee = await learnerSession({
+      env: process.env,
+      queryTestDb: async (sql, params) => (await db.execute(sql, params))[0],
+    }, empId);
+    state.tokens.emp=mobileEmployee.accessToken;
+    check('学员业务使用隔离移动会话夹具',!!state.tokens.emp);
     const denied = await api('POST','/admin/question-materials',{token:state.tokens.emp,body:{title:'越权资料'}});
     check('学员无资料写权限',denied.status===403);
     let ar = await adminCaptchaLogin('regadmin',TEST_INIT_PW);
