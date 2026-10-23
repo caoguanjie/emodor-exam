@@ -764,6 +764,36 @@ test('administrator navigation renders five planned roots with system settings c
   mounted.unmount();
 });
 
+test('legacy exam navigation is normalized to include the separate question import entry', async () => {
+  testContext.navigation = demoNavigation().map((root) => root.id === 'exam'
+    ? {
+        ...root,
+        children: root.children
+          .filter((item) => item.route_path !== '/admin/questions/import')
+          .map((item) => item.route_path === '/admin/questions' ? { ...item, name: '题库管理' } : item),
+      }
+    : root);
+
+  const mounted = await mountShell('/admin/questions');
+  await waitFor(() => testContext.calls.some((call) => call.method === 'GET' && call.path === '/admin/menus/navigation'), 'legacy navigation');
+  const menu = findHostNode(mounted.rootNode, (node) => node.type === 'el-menu');
+  const examMenu = findHostNode(menu, (node) => node.type === 'el-sub-menu' && node.props.index === 'exam');
+
+  assert.deepEqual(
+    findHostNodes(examMenu, (node) => node.type === 'el-menu-item').map((node) => ({
+      path: node.props.index,
+      label: hostText(findHostNode(node, (child) => child.type === 'span')),
+    })),
+    [
+      { path: '/admin/questions', label: '试题管理' },
+      { path: '/admin/papers', label: '试卷管理' },
+      { path: '/admin/questions/import', label: '试题导入' },
+      { path: '/admin/exam-records', label: '考试记录' },
+    ],
+  );
+  mounted.unmount();
+});
+
 test('asynchronous navigation initializes the real menu with learning and exam expanded but settings closed', async () => {
   const mounted = await mountShell('/admin/dashboard', [], { realMenu: true });
   const menu = visitInstances(mounted.app._instance.subTree, (instance) => instance.type.name === 'ElMenu');
@@ -919,14 +949,27 @@ for (const [path, dialogTitle] of [
   });
 }
 
-test('learner navigation keeps existing learning and exam entries without administrator roots', async () => {
+test('PC learner navigation retains learning and scores without an exam entry', async () => {
   testContext.isAdmin = false;
   const mounted = await mountShell('/other');
   const menu = findHostNode(mounted.rootNode, (node) => node.type === 'el-menu');
   assert.ok(menu);
   assert.match(hostText(menu), /我的学习/);
-  assert.match(hostText(menu), /我的考试/);
+  assert.match(hostText(menu), /我的制度/);
+  assert.match(hostText(menu), /我的成绩/);
+  assert.doesNotMatch(hostText(menu), /我的考试/);
+  assert.equal(findHostNodes(menu, (node) => node.props.index === '/my/exams').length, 0);
   assert.equal(hostText(menu).includes('业务首页'), false);
+  mounted.unmount();
+});
+
+test('completed PC reading does not expose a learner exam button', async () => {
+  const mounted = await mountShell('/read/reg-1');
+  await waitFor(() => testContext.learningStarts === 1, 'reading session');
+  const reading = findInstance(mounted.app, 'isValid');
+  reading.setupState.isValid = true;
+  await nextTick();
+  assert.equal(findHostNodes(mounted.rootNode, (node) => node.type === 'el-button' && hostText(node).includes('参加考试')).length, 0);
   mounted.unmount();
 });
 
@@ -1114,6 +1157,25 @@ test('profile and business dirty sources coexist; logout cancellation has zero s
   assert.equal(shell.setupState.profile.real_name, '原姓名');
   assert.equal(settings.setupState.dirty, false);
   assert.equal(shell.setupState.profileDirty, false);
+  mounted.unmount();
+});
+
+test('self profile keeps the verified phone read-only and never submits it back to PATCH', async () => {
+  const mounted = await mountShell('/other');
+  const shell = findInstance(mounted.app, 'profileVisible');
+
+  await shell.setupState.openProfile();
+  shell.setupState.profile.real_name = '更新姓名';
+  shell.setupState.profile.email = 'new@example.test';
+  await shell.setupState.saveProfile();
+
+  const call = testContext.calls.find((item) => item.method === 'PATCH' && item.path === '/me/profile');
+  assert.deepEqual(call?.body, {
+    real_name: '更新姓名',
+    email: 'new@example.test',
+    avatar_id: 'avatar-saved',
+  });
+  assert.equal('phone' in call.body, false);
   mounted.unmount();
 });
 

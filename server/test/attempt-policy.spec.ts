@@ -430,8 +430,8 @@ describe('immutable question presentation', () => {
     expect(view).toEqual({
       item_id: '901',
       type: 'single',
-      stem: '<p>题干 101</p>',
-      options: [{ key: 'B', text: '乙' }, { key: 'A', text: '甲' }],
+      stem: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '题干 101' }] }] },
+      options: [{ id: 'B', content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '乙' }] }] } }, { id: 'A', content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '甲' }] }] } }],
       score: 100,
     });
     expect(JSON.stringify(view)).not.toMatch(/answer|analysis|rubric/);

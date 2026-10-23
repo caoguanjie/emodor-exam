@@ -1,0 +1,13 @@
+-- 019_learner_profile: optional learner-owned display fields; controlled identities stay unchanged.
+
+-- @step occupation
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='sys_user' AND COLUMN_NAME='occupation' AND DATA_TYPE='varchar' AND COLUMN_TYPE='varchar(64)' AND IS_NULLABLE='YES') THEN 1 ELSE 0 END AS complete;
+ALTER TABLE sys_user ADD COLUMN occupation VARCHAR(64) NULL AFTER avatar_id;
+
+-- @step gender
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='sys_user' AND COLUMN_NAME='gender' AND DATA_TYPE='varchar' AND COLUMN_TYPE='varchar(16)' AND IS_NULLABLE='YES') THEN 1 ELSE 0 END AS complete;
+ALTER TABLE sys_user ADD COLUMN gender VARCHAR(16) NULL AFTER occupation;
+
+-- @step birthday
+-- @check SELECT CASE WHEN EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='sys_user' AND COLUMN_NAME='birthday' AND DATA_TYPE='date' AND IS_NULLABLE='YES') THEN 1 ELSE 0 END AS complete;
+ALTER TABLE sys_user ADD COLUMN birthday DATE NULL AFTER gender;

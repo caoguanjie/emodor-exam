@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { startMockAi } from './e2e-smoke.mjs';
 import { randomStrongPassword } from './training-access.mjs';
+import { assertAttemptView, assertPureTimeout, assertTimeoutFacts, examLearner } from './support/exam-mobile-fixtures.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
@@ -12,7 +13,7 @@ const ExcelJS = require('exceljs');
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // One dataset crosses the real HTTP boundaries. A broken publication snapshot,
-// lost confirmed draft, incorrect automatic score, or mixed-difficulty report must
+// changed frozen question, incorrect manual score, or mixed-difficulty report must
 // fail the independent literal expectations below, not merely a helper mock.
 async function ok(ctx, actor, method, path, body, headers) {
   const response = await ctx.request(actor, method, path, body, headers);
@@ -112,15 +113,10 @@ export async function prepareTrainingFlow(ctx) {
   const category = await ok(ctx, admin.actor, 'POST', '/admin/training-categories', { name: `全链安全培训 ${tag}` });
   const categoryId = String(category.id);
   const learners = [];
-  for (const [source, label] of [['institution', '本机构学员'], ['external', '外来学员']]) {
+  for (const source of ['institution', 'external']) {
     const username = `flow_${source}_${tag}`;
-    const initialPassword = randomStrongPassword(username, label);
-    const created = await ok(ctx, admin.actor, 'POST', '/admin/students', {
-      username, password: initialPassword, real_name: label, employee_no: `F${source[0]}${tag}`, category_id: categoryId, source,
-    });
-    const signedIn = await flowLogin(ctx, username, initialPassword, label);
-    assert.equal(signedIn.id, String(created.id));
-    learners.push({ ...signedIn, source, difficulty: source === 'institution' ? 'easy' : 'hard' });
+    const actor = await examLearner(ctx, { categoryId, source, username });
+    learners.push({ actor, id: actor.userId, username, source, difficulty: source === 'institution' ? 'easy' : 'hard' });
   }
 
   const regulation = await ok(ctx, admin.actor, 'POST', '/admin/question-materials', { title: `全链安全资料 ${tag}`, description: '安全生产出题依据' });
@@ -208,49 +204,51 @@ export async function prepareTrainingFlow(ctx) {
   const release = await ok(ctx, admin.actor, 'POST', `/admin/papers/${paperId}/publish`);
   for (const learner of learners) {
     learner.attempt = await ok(ctx, learner.actor, 'POST', `/me/exams/${paperId}/start`);
-    assert.equal(learner.attempt.difficulty, learner.difficulty);
+    assertAttemptView(learner.attempt);
+    const [assignment] = await ctx.queryTestDb('SELECT difficulty FROM exam_record WHERE id=?', [learner.attempt.record_id]);
+    assert.equal(assignment.difficulty, learner.difficulty);
     assert.equal(learner.attempt.questions.length, 3);
     assertSafe(learner.attempt);
-    learner.answers = learner.attempt.questions.flatMap((item) => {
-      if (learner.source === 'external' && item.type !== 'multiple') return [];
-      const selected = item.options.flatMap((option, index) => {
-        const correct = item.type === 'judgment' ? option.text === '正确' : /安全核验|现场监护|（正确）/.test(option.text);
-        return correct ? [index] : [];
+    learner.answers = learner.attempt.questions.map((item) => {
+      if (learner.source === 'external' && item.type !== 'multiple') return { item_id: item.item_id, option_ids: [] };
+      const text = (node) => node.text || (node.content || []).map(text).join('');
+      const selected = item.options.flatMap((option) => {
+        const label = text(option.content);
+        const correct = item.type === 'judgment' ? label === '正确' : /安全核验|现场监护|（正确）/.test(label);
+        return correct ? [option.id] : [];
       });
-      return [{ item_id: item.item_id, selected: item.type === 'multiple' && learner.source === 'institution' ? selected.slice(0, 1) : selected }];
+      return { item_id: item.item_id, option_ids: item.type === 'multiple' && learner.source === 'institution' ? selected.slice(0, 1) : selected };
     });
-    const saved = await ok(ctx, learner.actor, 'PUT', `/me/exam-records/${learner.attempt.record_id}/draft`, { revision: 1, answers: learner.answers });
-    assert.equal(saved.revision, 1);
+    const [unsent] = await ctx.queryTestDb('SELECT COUNT(*) AS count FROM exam_answer WHERE exam_record_id=?', [learner.attempt.record_id]);
+    assert.equal(Number(unsent.count), 0, 'local answers do not write server drafts');
   }
   await ctx.restartApi();
   for (const learner of learners) {
     const recovered = await ok(ctx, learner.actor, 'GET', `/me/exam-records/${learner.attempt.record_id}`);
     assertSafe(recovered);
-    assert.equal(recovered.draft_revision, 1);
+    assertAttemptView(recovered);
     assert.deepEqual(recovered.questions, learner.attempt.questions);
-    const byId = (items) => [...items].sort((a, b) => a.item_id.localeCompare(b.item_id));
-    assert.deepEqual(byId(recovered.answers), byId(learner.answers));
   }
   return { admin, learners, categoryId, regulationId, courseId, paperId, releaseId: String(release.release_id) };
 }
 
 export async function finishTrainingFlow(ctx, flow) {
   const [institution, external] = flow.learners;
-  const manual = await ok(ctx, institution.actor, 'POST', `/me/exam-records/${institution.attempt.record_id}/submit`);
+  const manual = await ok(ctx, institution.actor, 'POST', `/me/exam-records/${institution.attempt.record_id}/submit`, { record_id: institution.attempt.record_id, answers: institution.answers });
   assert.equal(manual.grading_state, 'finalized');
   assert.equal(manual.score, 90);
   // Advance only the owned fixture's deadline, never the persisted answer/score.
   await ctx.queryTestDb('UPDATE exam_record SET deadline_at = DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 SECOND) WHERE id = ?', [external.attempt.record_id]);
-  const timeout = await ok(ctx, external.actor, 'POST', `/me/exam-records/${external.attempt.record_id}/submit`);
-  assert.equal(timeout.submission_method, 'timeout');
-  assert.equal(timeout.grading_state, 'finalized');
-  assert.equal(timeout.score, 20);
-  for (const [learner, expected] of [[institution, 90], [external, 20]]) {
+  const timeout = await ok(ctx, external.actor, 'GET', `/me/exam-records/${external.attempt.record_id}`);
+  assertAttemptView(timeout, { status: 'timeout' });
+  await assertTimeoutFacts(ctx, external.attempt.record_id);
+  for (const [learner, expected] of [[institution, 90], [external, 0]]) {
     const result = await ok(ctx, learner.actor, 'GET', `/me/exam-records/${learner.attempt.record_id}/result`);
-    assert.equal(result.grading_state, 'finalized');
+    assert.equal(result.grading_state, learner === institution ? 'finalized' : 'not_submitted');
     assert.equal(result.score, expected);
     assert.equal(result.passed, expected >= 60);
-    assert.equal(result.items.length, 3);
+    assert.equal(result.items.length, learner === institution ? 3 : 0);
+    if (learner === external) assertPureTimeout(result);
     const administrative = await ok(ctx, flow.admin.actor, 'GET', `/admin/exam-records/${learner.attempt.record_id}/result`);
     assert.deepEqual(administrative, result, 'admin and learner must consume the same final result');
     learner.result = result;
@@ -271,7 +269,8 @@ export async function run(ctx) {
   }
   await finishTrainingFlow(ctx, flow);
   const ended = await ok(ctx, flow.admin.actor, 'GET', recordsPath);
-  assert.ok(ended.items.every((row) => row.grading_state === 'finalized'));
+  assert.equal(ended.items.filter((row) => row.grading_state === 'finalized').length, 1);
+  assert.equal(ended.items.filter((row) => row.status === 'timeout').length, 1);
   for (const path of ['/users', '/departments/tree', '/regulations', '/admin/grading', `/admin/exams/${flow.paperId}/monitor`]) {
     assert.equal((await ctx.request(flow.admin.actor, 'GET', path)).status, 404, `retired interface must not remain callable: ${path}`);
   }
@@ -281,7 +280,7 @@ export async function run(ctx) {
   assert.equal(summary.eligible_started_count, 2);
   assert.equal(summary.historical_started_count, 2);
   assert.equal(summary.participation_rate, 1);
-  assert.equal(summary.finalized_users, 2);
+  assert.equal(summary.finalized_users, 1);
   for (const path of [
     '/statistics/training/options?unexpected=1',
     `/statistics/training/summary?paper_id=${flow.paperId}&unexpected=1`,
@@ -294,18 +293,22 @@ export async function run(ctx) {
     assert.equal(rejected.code, 40001);
   }
   assert.equal((await ctx.request(flow.admin.actor, 'GET', `/statistics/training/ranking?paper_id=${flow.paperId}`)).status, 400);
-  for (const [learner, expectedScore] of [[flow.learners[0], 90], [flow.learners[1], 20]]) {
+  for (const [learner, expectedScore] of [[flow.learners[0], 90], [flow.learners[1], null]]) {
     const group = summary.score_groups.find((item) => item.difficulty === learner.difficulty);
-    assert.equal(group.finalized_users, 1);
-    assert.equal(group.average_score, expectedScore);
-    assert.equal(group.pass_rate, expectedScore >= 60 ? 1 : 0);
+    assert.equal(group?.finalized_users || 0, expectedScore === null ? 0 : 1);
+    if (expectedScore !== null) {
+      assert.equal(group.average_score, expectedScore);
+      assert.equal(group.pass_rate, expectedScore >= 60 ? 1 : 0);
+    }
     const filter = `paper_id=${flow.paperId}&difficulty=${learner.difficulty}&page=1&page_size=20`;
     const ranking = await ok(ctx, flow.admin.actor, 'GET', `/statistics/training/ranking?${filter}`);
-    assert.equal(ranking.total, 1);
-    assert.equal(ranking.items[0].rank, 1);
-    assert.equal(ranking.items[0].user_id, learner.id);
-    assert.equal(ranking.items[0].score, expectedScore);
-    assert.equal(ranking.items[0].record_id, learner.attempt.record_id);
+    assert.equal(ranking.total, expectedScore === null ? 0 : 1);
+    if (expectedScore !== null) {
+      assert.equal(ranking.items[0].rank, 1);
+      assert.equal(ranking.items[0].user_id, learner.id);
+      assert.equal(ranking.items[0].score, expectedScore);
+      assert.equal(ranking.items[0].record_id, learner.attempt.record_id);
+    }
     const exported = await ok(ctx, flow.admin.actor, 'GET', `/statistics/training/export?${filter}`);
     assert.ok(Buffer.isBuffer(exported));
     const workbook = new ExcelJS.Workbook();
@@ -317,5 +320,5 @@ export async function run(ctx) {
     assert.deepEqual(rows, ranking.items.map((row) => [row.rank, row.user_id, row.name, row.source, row.difficulty, row.score, row.duration_seconds, row.record_id]), 'export and screen must use identical query rows');
   }
   assert.equal((await ctx.request(flow.learners[0].actor, 'GET', `/statistics/training/summary?paper_id=${flow.paperId}`)).status, 403);
-  console.log('[training-full-flow] materials/AI/review/import/video/dual-difficulty/restart/automatic-scoring/records/statistics/export passed');
+  console.log('[training-full-flow] materials/AI/review/import/video/mobile-identity/stable-ID/restart/manual-scoring/pure-timeout/records/statistics/export passed');
 }

@@ -1,0 +1,89 @@
+{
+	"easycom": {
+		"autoscan": true,
+		"custom": {
+			"^wd-(.*)": "@wot-ui/ui/components/wd-$1/wd-$1.vue"
+		}
+	},
+	"pages": [
+		{
+			"path": "pages/auth/login",
+			"style": { "navigationBarTitleText": "手机号验证码登录" }
+		},
+		{
+			"path": "pages/home/index",
+			"style": { "navigationBarTitleText": "首页" }
+		},
+		{
+			"path": "pages/course/index",
+			"style": { "navigationBarTitleText": "课程" }
+		},
+		{
+			"path": "pages/course/detail",
+			"style": { "navigationBarTitleText": "课程详情" }
+		},
+		{
+			"path": "pages/course/player",
+			"style": { "navigationBarTitleText": "课程学习" }
+		},
+		{
+			"path": "pages/exam/index",
+			"style": { "navigationBarTitleText": "考试" }
+		},
+		{
+			"path": "pages/exam/instructions",
+			"style": { "navigationBarTitleText": "考试须知" }
+		},
+		{
+			"path": "pages/exam/take",
+			"style": { "navigationBarTitleText": "在线考试" }
+		},
+		{
+			"path": "pages/exam/result",
+			"style": { "navigationBarTitleText": "考试结果" }
+		},
+		{
+			"path": "pages/exam/review",
+			"style": { "navigationBarTitleText": "答案解析" }
+		},
+		{
+			"path": "pages/identity/index",
+			"style": { "navigationBarTitleText": "实名认证" }
+		},
+		{
+			"path": "pages/identity/detail",
+			"style": { "navigationBarTitleText": "实名信息" }
+		},
+		{
+			"path": "pages/profile/index",
+			"style": { "navigationBarTitleText": "我的" }
+		},
+		{
+			"path": "pages/profile/info",
+			"style": { "navigationBarTitleText": "个人资料" }
+		},
+		{
+			"path": "pages/profile/about",
+			"style": { "navigationBarTitleText": "关于我们" }
+		},
+		{
+			"path": "pages/profile/terms",
+			"style": { "navigationBarTitleText": "服务条款" }
+		},
+		{
+			"path": "pages/profile/exam-history",
+			"style": { "navigationBarTitleText": "考试记录" }
+		},
+		{
+			"path": "pages/profile/wrong-book",
+			"style": { "navigationBarTitleText": "错题本" }
+		}
+	],
+	"globalStyle": {
+		"navigationBarTextStyle": "black",
+		"navigationBarTitleText": "海珠区安全教育培训中心",
+		"navigationBarBackgroundColor": "#FFFFFF",
+		"backgroundColor": "#F7F8FA",
+		"navigationStyle": "custom"
+	}
+}

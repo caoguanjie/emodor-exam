@@ -1,0 +1,13 @@
+@mixin page-content {
+  padding: var(--app-space-4);
+}
+
+@mixin safe-bottom($padding: 0px) {
+  padding-bottom: calc(#{$padding} + var(--app-safe-area-bottom));
+}
+
+@mixin surface-card {
+  background: var(--app-color-surface);
+  border: 1px solid var(--app-color-border);
+  border-radius: var(--app-radius-md);
+}

@@ -1,7 +1,7 @@
 import { Transform, Type } from 'class-transformer';
 import {
-  ArrayMaxSize, IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString,
-  Matches, Max, MaxLength, Min, MinLength, ValidateNested,
+  ArrayMaxSize, IsArray, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString,
+  Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested,
 } from 'class-validator';
 import type { Difficulty, QuestionType } from '../../common/training-contracts';
 
@@ -20,23 +20,27 @@ export class GenerateQuestionsDto {
 }
 
 export class QuestionOptionDto {
-  @IsOptional() @IsString() @MaxLength(16) key?: string;
+  @IsOptional() @IsString() @MaxLength(64) key?: string;
   @IsString() @MinLength(1) @MaxLength(20_000) text!: string;
 }
 
 export class CreateQuestionDto {
+  @IsOptional() @IsIn([2]) content_schema_version?: number;
+  @IsOptional() @IsObject() content_json?: any;
   @IsString() @IdField() category_id!: string;
   @IsIn(['easy', 'medium', 'hard']) difficulty!: Difficulty;
   @IsOptional() @IsString() @IdField() concept_id?: string;
   @IsIn(['single', 'multiple', 'judgment']) type!: QuestionType;
-  @IsString() @MinLength(1) @MaxLength(100_000) stem!: string;
-  @IsArray() @ArrayMaxSize(26) @ValidateNested({ each: true }) @Type(() => QuestionOptionDto) options!: QuestionOptionDto[];
-  @IsArray() @ArrayMaxSize(26) @IsInt({ each: true }) answer!: number[];
+  @ValidateIf((input) => input.content_schema_version !== 2 || input.stem !== undefined) @IsString() @MinLength(1) @MaxLength(100_000) stem!: string;
+  @ValidateIf((input) => input.content_schema_version !== 2 || input.options !== undefined) @IsArray() @ArrayMaxSize(26) @ValidateNested({ each: true }) @Type(() => QuestionOptionDto) options!: QuestionOptionDto[];
+  @ValidateIf((input) => input.content_schema_version !== 2 || input.answer !== undefined) @IsArray() @ArrayMaxSize(26) @IsInt({ each: true }) answer!: number[];
   @IsOptional() @IsString() @MaxLength(100_000) analysis?: string;
   @IsNumber() @Min(0.01) @Max(100) score!: number;
 }
 
 export class EditQuestionDto {
+  @IsOptional() @IsIn([2]) content_schema_version?: number;
+  @IsOptional() @IsObject() content_json?: any;
   @IsOptional() @IsString() @IdField() expected_version_id?: string | null;
   @IsOptional() @IsString() @IdField() category_id?: string;
   @IsOptional() @IsIn(['easy', 'medium', 'hard']) difficulty?: Difficulty;
@@ -106,6 +110,7 @@ export class CategoryOptionsQueryDto {
 
 export const QUESTION_CREATE_KEYS = [
   'category_id', 'difficulty', 'concept_id', 'type', 'stem', 'options', 'answer', 'analysis', 'score',
+  'content_schema_version', 'content_json',
 ] as const;
 export const QUESTION_EDIT_KEYS = ['expected_version_id', ...QUESTION_CREATE_KEYS] as const;
 export const QUESTION_LIST_KEYS = [

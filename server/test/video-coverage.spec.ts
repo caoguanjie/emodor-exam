@@ -232,18 +232,26 @@ describe('video learning persistence contract', () => {
     });
   });
 
-  it('excludes an external learner from the required denominator', async () => {
+  it.each([
+    ['external', null], ['external', '99'], ['institution', null], ['institution', '99'],
+  ])('includes %s learners with category %s in the published required video denominator', async (source, categoryId) => {
     const service = Object.create(CourseService.prototype) as any;
     service.userRepo = {
-      findOne: vi.fn().mockResolvedValue({ id: '31', status: 1, source: 'external', categoryId: '7' }),
+      findOne: vi.fn().mockResolvedValue({ id: '31', status: 1, source, categoryId }),
     };
     service.courseRepo = {
       findOne: vi.fn().mockResolvedValue({ id: '10', categoryId: '7', status: 'published' }),
     };
-    service.lessonRepo = { find: vi.fn() };
+    service.lessonRepo = { find: vi.fn().mockResolvedValue([
+      { id: '101', currentVersionId: '501', required: 1, lessonType: 'video' },
+    ]) };
+    service.versionRepo = { findBy: vi.fn().mockResolvedValue([
+      { id: '501', lessonId: '101', durationMs: '100000' },
+    ]) };
 
-    await expect(service.requiredVideoLessons('31', '10')).resolves.toEqual({ assigned: false, lessons: [] });
-    expect(service.lessonRepo.find).not.toHaveBeenCalled();
+    await expect(service.requiredVideoLessons('31', '10')).resolves.toEqual({
+      assigned: true, lessons: [{ lessonId: '101', versionId: '501', durationMs: 100000 }],
+    });
   });
 
   it('computes course completion from unique current-version coverage, not accumulated credited time', async () => {
@@ -280,6 +288,8 @@ describe('video learning persistence contract', () => {
       completion_rate: 0.5,
       lessons: [
         {
+          lesson_id: '101',
+          version_id: '501',
           confirmed_position_ms: 95_000,
           credited_ms: 250_000,
           coverage_ms: 95_000,
@@ -288,6 +298,8 @@ describe('video learning persistence contract', () => {
           last_seq: 0,
         },
         {
+          lesson_id: '102',
+          version_id: '502',
           confirmed_position_ms: 0,
           credited_ms: 0,
           coverage_ms: 0,
@@ -443,8 +455,9 @@ function videoStartService(options: {
       if (options.closeAdvancesTo) vi.setSystemTime(options.closeAdvancesTo);
     }),
   };
-  const service = new VideoSessionService(dataSource as any, learning as any, {} as any);
-  (service as any).currentScope = vi.fn().mockResolvedValue({ version: { id: '501' } });
+  const service = new VideoSessionService(dataSource as any, learning as any, {} as any,
+    { issue: async () => ({ content_url: '/api/v1/media/tickets/synthetic/content', expires_at: '2026-10-23T00:00:00.000Z' }) } as any);
+  (service as any).currentScope = vi.fn().mockResolvedValue({ version: { id: '501', assetId: '401' } });
   (service as any).recordFor = vi.fn().mockResolvedValue(record);
   return {
     service,

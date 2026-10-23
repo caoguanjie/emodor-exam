@@ -241,9 +241,31 @@ export interface QuestionOption {
   text: string;
 }
 
+export type ReadonlyQuestionInline =
+  | { type: 'text'; text: string }
+  | { type: 'hardBreak' }
+  | { type: 'image'; attrs: { asset_id: Id } };
+export type ReadonlyQuestionBlock =
+  | { type: 'paragraph'; content?: ReadonlyQuestionInline[] }
+  | { type: 'image'; attrs: { asset_id: Id } };
+export interface ReadonlyTiptapDoc {
+  type: 'doc';
+  content: ReadonlyQuestionBlock[];
+}
+export interface QuestionContentV2 {
+  stem: ReadonlyTiptapDoc;
+  options: Array<{ id: string; content: ReadonlyTiptapDoc }>;
+  analysis: ReadonlyTiptapDoc | null;
+  answer_option_ids: string[];
+}
+export interface QuestionContentFields {
+  content_schema_version?: 1 | 2;
+  content_json?: QuestionContentV2 | null;
+}
+
 export type QuestionSource = 'ai' | 'manual' | 'import';
 
-export interface QuestionDraftPayload {
+export interface QuestionDraftPayload extends QuestionContentFields {
   category_id: Id;
   difficulty: Difficulty | '';
   type: QuestionType;
@@ -274,19 +296,171 @@ export interface QuestionView extends Omit<QuestionDraftPayload, 'category_id' |
   regulation_version_id?: Id | null;
 }
 
-export function questionDraftFromView(row: Pick<QuestionView,
-  'category_id' | 'difficulty' | 'type' | 'stem' | 'options' | 'answer' | 'analysis' | 'score' | 'concept_id'>): QuestionDraftPayload {
+export function questionDraftFromView(row: Pick<QuestionDraftPayload,
+  'type' | 'stem' | 'options' | 'answer' | 'analysis' | 'score' | 'concept_id'> & QuestionContentFields & {
+    category_id: Id | null;
+    difficulty: Difficulty | '' | null;
+  }): QuestionDraftPayload {
+  const content = row.content_schema_version === 2 ? normalizeQuestionContentV2(row.content_json) : null;
+  const options = content ? content.options.map((option) => ({ key: option.id, text: readonlyQuestionDocToHtml(option.content) })) : JSON.parse(JSON.stringify(row.options || []));
   return {
     category_id: row.category_id || '',
     difficulty: row.difficulty || '',
     type: row.type,
-    stem: row.stem,
-    options: JSON.parse(JSON.stringify(row.options || [])),
-    answer: [...(row.answer || [])],
-    analysis: row.analysis ?? null,
+    stem: content ? readonlyQuestionDocToHtml(content.stem) : row.stem,
+    options,
+    answer: content ? content.options.flatMap((option, index) => content.answer_option_ids.includes(option.id) ? [index] : []) : [...(row.answer || [])],
+    analysis: content ? (content.analysis ? readonlyQuestionDocToHtml(content.analysis) : null) : row.analysis ?? null,
     score: Number(row.score),
     concept_id: row.concept_id || undefined,
+    ...(content ? { content_schema_version: 2 as const, content_json: content } : {}),
   };
+}
+
+function questionContentError(): never { throw new Error('题目内容格式不正确，请检查后重试'); }
+function contentObject(value: unknown, allowed: string[]): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return questionContentError();
+  if (Object.keys(value).some((key) => !allowed.includes(key))) return questionContentError();
+  return value as Record<string, unknown>;
+}
+
+/** Strictly rebuild the same readonly subset accepted by the mobile exam contract. */
+export function normalizeReadonlyQuestionDoc(value: unknown): ReadonlyTiptapDoc {
+  let nodes = 0;
+  let textLength = 0;
+  const visit = (input: unknown, depth: number, context: 'doc' | 'block' | 'inline'): any => {
+    if (++nodes > 2000 || depth > 4) return questionContentError();
+    const node = contentObject(input, ['type', 'content', 'text', 'attrs']);
+    if (node.type === 'doc' && context === 'doc') {
+      contentObject(input, ['type', 'content']);
+      if (!Array.isArray(node.content)) return questionContentError();
+      return { type: 'doc', content: node.content.map((child) => visit(child, depth + 1, 'block')) };
+    }
+    if (node.type === 'paragraph' && context === 'block') {
+      contentObject(input, ['type', 'content']);
+      if (node.content !== undefined && !Array.isArray(node.content)) return questionContentError();
+      return { type: 'paragraph', content: (node.content as unknown[] || []).map((child) => visit(child, depth + 1, 'inline')) };
+    }
+    if (node.type === 'text' && context === 'inline') {
+      contentObject(input, ['type', 'text']);
+      if (typeof node.text !== 'string' || (textLength += node.text.length) > 100000) return questionContentError();
+      return { type: 'text', text: node.text };
+    }
+    if (node.type === 'hardBreak' && context === 'inline') {
+      contentObject(input, ['type']);
+      return { type: 'hardBreak' };
+    }
+    if (node.type === 'image' && context !== 'doc') {
+      contentObject(input, ['type', 'attrs']);
+      const attrs = contentObject(node.attrs, ['asset_id']);
+      if (typeof attrs.asset_id !== 'string' || !/^[1-9]\d*$/.test(attrs.asset_id)) return questionContentError();
+      return { type: 'image', attrs: { asset_id: attrs.asset_id } };
+    }
+    return questionContentError();
+  };
+  return visit(value, 1, 'doc');
+}
+
+export function normalizeQuestionContentV2(value: unknown): QuestionContentV2 {
+  const content = contentObject(value, ['stem', 'options', 'analysis', 'answer_option_ids']);
+  if (!Array.isArray(content.options) || !Array.isArray(content.answer_option_ids)) return questionContentError();
+  const ids = new Set<string>();
+  const options = content.options.map((value) => {
+    const option = contentObject(value, ['id', 'content']);
+    if (typeof option.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(option.id) || ids.has(option.id)) return questionContentError();
+    ids.add(option.id);
+    return { id: option.id, content: normalizeReadonlyQuestionDoc(option.content) };
+  });
+  const answers = content.answer_option_ids;
+  if (answers.some((id) => typeof id !== 'string' || !ids.has(id)) || new Set(answers).size !== answers.length) return questionContentError();
+  return {
+    stem: normalizeReadonlyQuestionDoc(content.stem), options,
+    analysis: content.analysis === null ? null : normalizeReadonlyQuestionDoc(content.analysis),
+    answer_option_ids: [...answers] as string[],
+  };
+}
+
+export function readonlyQuestionDocToHtml(value: unknown): string {
+  const doc = normalizeReadonlyQuestionDoc(value);
+  const render = (node: ReadonlyQuestionBlock | ReadonlyQuestionInline): string => {
+    if (node.type === 'text') return escapeQuestionText(node.text);
+    if (node.type === 'hardBreak') return '<br>';
+    if (node.type === 'image') return `<img data-media-id="${node.attrs.asset_id}">`;
+    return `<p>${(node.content || []).map(render).join('')}</p>`;
+  };
+  return doc.content.map(render).join('');
+}
+
+/** Textarea HTML remains an authoring input; only paragraphs, text, breaks and controlled media are saved. */
+export function questionHtmlToReadonlyDoc(value: string | null | undefined): ReadonlyTiptapDoc {
+  const html = String(value || '');
+  const source = inertQuestionFragment(html);
+  if (!source) return normalizeReadonlyQuestionDoc({ type: 'doc', content: [{ type: 'paragraph', content: html ? [{ type: 'text', text: html }] : [] }] });
+  const content: ReadonlyQuestionBlock[] = [];
+  let pending: ReadonlyQuestionInline[] = [];
+  const flush = () => { if (pending.length) content.push({ type: 'paragraph', content: pending }); pending = []; };
+  const visit = (node: ChildNode): void => {
+    if (node.nodeType === 3) {
+      if (node.nodeValue) pending.push({ type: 'text', text: node.nodeValue });
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    const element = node as HTMLElement;
+    const tag = element.tagName.toLowerCase();
+    if ((element.namespaceURI && element.namespaceURI !== HTML_NAMESPACE) || DROP_CONTENT_TAGS.has(tag)) return;
+    if (tag === 'br') { pending.push({ type: 'hardBreak' }); return; }
+    if (tag === 'img') {
+      const assetId = element.getAttribute('data-media-id') || '';
+      if (/^[1-9]\d*$/.test(assetId)) pending.push({ type: 'image', attrs: { asset_id: assetId } });
+      return;
+    }
+    // Match the server legacyHtmlDoc boundary rule at every nesting level.
+    const block = ['p', 'div', 'h1', 'h2', 'h3', 'h4', 'li', 'blockquote', 'pre', 'tr'].includes(tag);
+    if (block) flush();
+    for (const child of Array.from(element.childNodes)) visit(child);
+    if (block) flush();
+  };
+  for (const node of Array.from(source.childNodes)) visit(node);
+  flush();
+  return normalizeReadonlyQuestionDoc({ type: 'doc', content });
+}
+
+/** Save correctness by stable ID; `checked`/learner selections are never copied into this payload. */
+export function questionDraftWithContent(value: QuestionDraftPayload): QuestionDraftPayload & { content_schema_version: 2; content_json: QuestionContentV2 } {
+  const content = normalizeQuestionContentV2({
+    stem: questionHtmlToReadonlyDoc(value.stem),
+    options: value.options.map((option) => ({ id: option.key, content: questionHtmlToReadonlyDoc(option.text) })),
+    analysis: value.analysis === null ? null : questionHtmlToReadonlyDoc(value.analysis),
+    answer_option_ids: value.answer.map((index) => value.options[index]?.key),
+  });
+  return {
+    category_id: value.category_id, difficulty: value.difficulty, type: value.type,
+    stem: value.stem, options: value.options.map((option) => ({ key: option.key, text: option.text })),
+    answer: [...value.answer], analysis: value.analysis, score: value.score, concept_id: value.concept_id,
+    content_schema_version: 2, content_json: content,
+  };
+}
+
+let optionIdSequence = 0;
+
+function questionOptionEntropy(): string {
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    try {
+      const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    } catch { /* A public editing ID can still use the local uniqueness fallback. */ }
+  }
+  // These IDs are public identifiers, never authentication credentials. The
+  // sequence also guarantees progress if the fallback clock/random repeat.
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14).padEnd(12, '0')}`;
+}
+
+export function newQuestionOptionId(options: QuestionOption[]): string {
+  const existing = new Set(options.map((option) => option.key));
+  const entropy = questionOptionEntropy();
+  let id: string;
+  do { id = `opt_${entropy}_${(++optionIdSequence).toString(36)}`; } while (existing.has(id));
+  return id;
 }
 
 const QUESTION_RICH_TAGS = new Set([
@@ -443,7 +617,7 @@ export interface TrainingPaperSummary {
   updated_at?: string;
 }
 
-export interface TrainingPaperQuestion {
+export interface TrainingPaperQuestion extends QuestionContentFields {
   paper_question_id?: Id;
   question_id: Id;
   question_version_id: Id;
@@ -465,7 +639,7 @@ export interface TrainingPaperDetail extends TrainingPaperSummary {
   questions: TrainingPaperQuestion[];
 }
 
-export interface PaperPreviewQuestion {
+export interface PaperPreviewQuestion extends QuestionContentFields {
   question_id: Id;
   question_version_id: Id;
   type: QuestionType;
@@ -542,19 +716,37 @@ export interface AttemptView {
   answers: AnswerInput[];
 }
 
-export interface FinalResultItem extends AttemptQuestion {
+export interface LegacyFinalResultItem extends AttemptQuestion {
   answer: AnswerInput | null;
   correct_answer: number[] | null;
   analysis: string | null;
   gained_score: number | null;
 }
 
+export interface AttemptQuestionV2 {
+  item_id: Id;
+  type: QuestionType;
+  score: number;
+  stem: ReadonlyTiptapDoc;
+  options: Array<{ id: string; content: ReadonlyTiptapDoc }>;
+}
+
+export interface FinalResultItemV2 extends AttemptQuestionV2 {
+  selected_option_ids: string[];
+  correct_option_ids: string[];
+  analysis: ReadonlyTiptapDoc | null;
+  gained_score: number;
+}
+
+export type FinalResultItem = FinalResultItemV2 | LegacyFinalResultItem;
+
 export interface FinalResult {
   record_id: Id;
+  status?: 'submitted' | 'passed' | 'failed' | 'timeout';
   grading_state: GradeState;
   submission_method: SubmissionMethod | null;
   legacy: boolean;
-  submitted_at: string;
+  submitted_at: string | null;
   graded_at: string | null;
   score: number | null;
   passed: boolean | null;
@@ -579,7 +771,4 @@ export interface ExamHistoryItem {
   graded_at: string | null;
 }
 
-export interface WrongItem extends FinalResultItem {
-  record_id: Id;
-  submitted_at: string;
-}
+export type WrongItem = FinalResultItem & { record_id: Id; submitted_at: string };

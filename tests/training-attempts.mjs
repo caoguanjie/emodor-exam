@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { assertTimeoutStartRace } from './training-attempts-race.mjs';
+import { assertAttemptView, assertPureTimeout, assertTimeoutFacts, examLearner, verifyExamLearner, wholeAnswers } from './support/exam-mobile-fixtures.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const bcrypt = require('bcryptjs');
@@ -170,19 +171,9 @@ async function runAttempts(ctx) {
     );
     const categoryId = String(category.insertId);
 
-    const learnerPassword = password('learner');
-    const learnerId = await createUser(ctx, {
-      username: `c2_learner_${runSuffix}`, password: learnerPassword, realName: 'C2 并发学员',
-      categoryId, source: 'institution',
-    });
-    const learner = await login(ctx, `c2_learner_${runSuffix}`, learnerPassword, 'learner');
-
-    const otherPassword = password('other');
-    const otherId = await createUser(ctx, {
-      username: `c2_other_${runSuffix}`, password: otherPassword, realName: 'C2 其他学员',
-      categoryId, source: 'institution',
-    });
-    const other = await login(ctx, `c2_other_${runSuffix}`, otherPassword, 'other learner');
+    const learner = await examLearner(ctx, { categoryId, verified: false });
+    const learnerId = learner.userId;
+    const other = await examLearner(ctx, { categoryId });
 
     const promptAssetId = await uploadQuestionImage(ctx, admin, `c2-prompt-${runSuffix}.png`);
     const answerAssetId = await uploadQuestionImage(ctx, admin, `c2-answer-${runSuffix}.png`);
@@ -202,6 +193,15 @@ async function runAttempts(ctx) {
       categoryId, actorId: adminId, title: `C2 并发随机卷 ${runSuffix}`, rule: oneRule, pool: [easy, hard],
     });
 
+    stage = 'mobile identity and PC session boundary';
+    assert.equal((await ctx.request(learner, 'GET', '/me/exams')).status, 200, 'unverified learners may browse available exams');
+    const notVerified = await ctx.request(learner, 'POST', `/me/exams/${paper.paperId}/start`);
+    assert.equal(notVerified.status, 403, JSON.stringify(notVerified));
+    assert.equal(notVerified.data.reason_code, 'IDENTITY_REQUIRED');
+    const pcDenied = await ctx.request(admin, 'GET', '/me/exams');
+    assert.equal(pcDenied.status, 403);
+    await verifyExamLearner(ctx, learner);
+
     stage = '20 concurrent first starts with stale redis lock';
     const redis = await redisFor(ctx);
     try {
@@ -215,9 +215,7 @@ async function runAttempts(ctx) {
     for (const response of starts) assert.equal(response.status, 200, JSON.stringify(response));
     assert.equal(new Set(starts.map((response) => response.data.record_id)).size, 1);
     const first = starts[0];
-    assert.equal(first.data.difficulty, 'easy');
-    assert.equal(first.data.source, 'institution');
-    assert.equal(first.data.category_id, categoryId);
+    assertAttemptView(first.data);
     assert.deepEqual(forbiddenKeys(first.data, ['answer', 'analysis', 'rubric']), []);
     const committed = await ctx.queryTestDb(
       'SELECT id, assignment_id, active_assignment_id, attempt_no, snapshot_origin FROM exam_record WHERE user_id = ? AND paper_id = ?',
@@ -231,6 +229,8 @@ async function runAttempts(ctx) {
     assert.equal(assignments.length, 1);
     const items = await ctx.queryTestDb('SELECT * FROM exam_record_question WHERE record_id = ?', [first.data.record_id]);
     assert.equal(items.length, 1);
+    const otherStart = await ctx.request(other, 'POST', `/me/exams/${paper.paperId}/start`);
+    assert.equal(otherStart.status, 200, JSON.stringify(otherStart));
 
     stage = 'snapshot recovery, withdraw and media ownership';
     await ctx.queryTestDb(
@@ -250,40 +250,55 @@ async function runAttempts(ctx) {
     const crossAccount = await ctx.request(other, 'GET', `/me/exam-records/${first.data.record_id}`);
     assert.equal(crossAccount.status, 403);
     assert.equal(crossAccount.code, 40302);
-    const promptRead = await ctx.request(learner, 'GET', `/media/${promptAssetId}/content`);
+    const promptTicket = await ctx.request(learner, 'POST', `/media/${promptAssetId}/tickets`, { owner_type: 'exam_record_question', owner_id: first.data.questions[0].item_id });
+    assert.equal(promptTicket.status, 200, JSON.stringify(promptTicket));
+    const promptPath = promptTicket.data.content_url.replace(/^\/api\/v1/, '');
+    const promptRead = await ctx.request(null, 'GET', promptPath);
     assert.equal(promptRead.status, 200);
-    const answerRead = await ctx.request(learner, 'GET', `/media/${answerAssetId}/content`);
+    const answerRead = await ctx.request(learner, 'POST', `/media/${answerAssetId}/tickets`, { owner_type: 'exam_record_question', owner_id: first.data.questions[0].item_id });
     assert.equal(answerRead.status, 403);
-    const crossPromptRead = await ctx.request(other, 'GET', `/media/${promptAssetId}/content`);
+    const crossPromptRead = await ctx.request(other, 'POST', `/media/${promptAssetId}/tickets`, { owner_type: 'exam_record_question', owner_id: first.data.questions[0].item_id });
     assert.equal(crossPromptRead.status, 403);
+    const otherTicket = await ctx.request(other, 'POST', `/media/${promptAssetId}/tickets`, { owner_type: 'exam_record_question', owner_id: otherStart.data.questions[0].item_id });
+    assert.equal(otherTicket.status, 200, JSON.stringify(otherTicket));
+    const otherPath = otherTicket.data.content_url.replace(/^\/api\/v1/, '');
+    await ctx.queryTestDb('UPDATE exam_record SET deadline_at=DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 SECOND) WHERE id=?', [otherStart.data.record_id]);
+    const otherTimeout = await ctx.request(other, 'GET', `/me/exam-records/${otherStart.data.record_id}/result`);
+    assert.equal(otherTimeout.status, 200);
+    assertPureTimeout(otherTimeout.data);
+    assert.equal((await ctx.request(null, 'GET', otherPath)).status, 403, 'timeout revokes an already issued question image ticket');
+    assert.equal((await ctx.request(other, 'POST', `/media/${promptAssetId}/tickets`, { owner_type: 'exam_record_question', owner_id: otherStart.data.questions[0].item_id })).status, 403);
 
     stage = 'retake keeps first source and difficulty';
     const trainingViaLegacySubmit = await ctx.request(learner, 'POST', `/exams/records/${first.data.record_id}/submit`, { answers: [] });
     assert.equal(trainingViaLegacySubmit.status, 404);
     assert.equal(trainingViaLegacySubmit.code, 40402);
-    await ctx.queryTestDb(
-      "UPDATE exam_record SET status = 'failed', score = 0.00, submitted_at = UTC_TIMESTAMP(3), active_assignment_id = NULL WHERE id = ?",
-      [first.data.record_id],
-    );
+    const firstSubmitted = await ctx.request(learner, 'POST', `/me/exam-records/${first.data.record_id}/submit`, wholeAnswers(first.data));
+    assert.equal(firstSubmitted.status, 200, JSON.stringify(firstSubmitted));
+    assert.equal(firstSubmitted.data.status, 'failed');
+    const analysisTicket = await ctx.request(learner, 'POST', `/media/${answerAssetId}/tickets`, { owner_type: 'exam_record_question', owner_id: first.data.questions[0].item_id });
+    assert.equal(analysisTicket.status, 200, JSON.stringify(analysisTicket));
+    assert.equal((await ctx.request(null, 'GET', analysisTicket.data.content_url.replace(/^\/api\/v1/, ''))).status, 200);
     await ctx.queryTestDb('UPDATE exam_paper SET status = ? WHERE id = ?', ['published', paper.paperId]);
     await ctx.queryTestDb('UPDATE sys_user SET source = ? WHERE id = ?', ['external', learnerId]);
     const retakeAfterSourceChange = await ctx.request(learner, 'POST', `/me/exams/${paper.paperId}/start`);
     assert.equal(retakeAfterSourceChange.status, 200, JSON.stringify(retakeAfterSourceChange));
-    assert.equal(retakeAfterSourceChange.data.difficulty, 'easy');
-    assert.equal(retakeAfterSourceChange.data.source, 'institution');
+    const [retakeAssignment] = await ctx.queryTestDb('SELECT difficulty,source FROM exam_record WHERE id=?', [retakeAfterSourceChange.data.record_id]);
+    assert.equal(retakeAssignment.difficulty, 'easy');
+    assert.equal(retakeAssignment.source, 'institution');
     assert.equal(retakeAfterSourceChange.data.release_id, paper.releaseId);
-    await ctx.queryTestDb(
-      "UPDATE exam_record SET status = 'failed', score = 0.00, submitted_at = UTC_TIMESTAMP(3), active_assignment_id = NULL WHERE id = ?",
-      [retakeAfterSourceChange.data.record_id],
-    );
+    const retakeSubmitted = await ctx.request(learner, 'POST', `/me/exam-records/${retakeAfterSourceChange.data.record_id}/submit`, wholeAnswers(retakeAfterSourceChange.data));
+    assert.equal(retakeSubmitted.status, 200, JSON.stringify(retakeSubmitted));
+
+    // No HTTP exam read/submit touches this expired attempt afterwards. Only
+    // the ordinary 30-second task may close it while the remaining cases run.
+    const scheduledStart = await ctx.request(other, 'POST', `/me/exams/${paper.paperId}/start`);
+    assert.equal(scheduledStart.status, 200, JSON.stringify(scheduledStart));
+    await ctx.queryTestDb('UPDATE exam_record SET deadline_at=DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 SECOND) WHERE id=?', [scheduledStart.data.record_id]);
 
     stage = 'legacy two attempts count and timeout sweeper releases active assignment';
-    const legacyCountPassword = password('legacy-count');
-    const legacyCountId = await createUser(ctx, {
-      username: `c2_count_${runSuffix}`, password: legacyCountPassword, realName: 'C2 旧次数学员',
-      categoryId, source: 'institution',
-    });
-    const legacyCountActor = await login(ctx, `c2_count_${runSuffix}`, legacyCountPassword, 'legacy count learner');
+    const legacyCountActor = await examLearner(ctx, { categoryId });
+    const legacyCountId = legacyCountActor.userId;
     await ctx.queryTestDb(
       "INSERT INTO exam_record (paper_id, regulation_id, user_id, attempt_no, status, score, started_at, deadline_at, submitted_at) VALUES (?, NULL, ?, 1, 'failed', 0.00, NOW(3), NOW(3), NOW(3)), (?, NULL, ?, 2, 'failed', 0.00, NOW(3), NOW(3), NOW(3))",
       [paper.paperId, legacyCountId, paper.paperId, legacyCountId],
@@ -346,8 +361,9 @@ async function runAttempts(ctx) {
       const snapshot = await readRaceSnapshot();
       return snapshot.status !== 'in_progress' ? snapshot : null;
     });
-    assert.equal(swept.status, 'failed');
+    assert.equal(swept.status, 'timeout');
     assert.equal(swept.active_assignment_id, null);
+    await assertTimeoutFacts(ctx, third.data.record_id);
     const fourth = await ctx.request(legacyCountActor, 'POST', `/me/exams/${paper.paperId}/start`);
     const fourthPost = await readRaceSnapshot();
     assert.equal(assertTimeoutStartRace({
@@ -358,12 +374,8 @@ async function runAttempts(ctx) {
     }), 'finalized-before-pre');
 
     stage = 'failed draw rolls back assignment record items and media references';
-    const failingPassword = password('failing');
-    const failingId = await createUser(ctx, {
-      username: `c2_fail_${runSuffix}`, password: failingPassword, realName: 'C2 抽题失败学员',
-      categoryId, source: 'institution',
-    });
-    const failingActor = await login(ctx, `c2_fail_${runSuffix}`, failingPassword, 'failing learner');
+    const failingActor = await examLearner(ctx, { categoryId });
+    const failingId = failingActor.userId;
     const insufficientRule = {
       ...oneRule,
       rules: [{ type: 'single', count: 2, scoreCents: 5000 }],
@@ -386,18 +398,10 @@ async function runAttempts(ctx) {
     assert.equal(Number(failedDrawFacts[0].items), 0);
 
     stage = 'real legacy fixed-client start heartbeat recover submit result';
-    const legacyPassword = password('fixed');
-    const legacyUserId = await createUser(ctx, {
-      username: `c2_fixed_${runSuffix}`, password: legacyPassword, realName: 'C2 固定卷学员',
-      categoryId, source: 'institution',
-    });
-    const legacyActor = await login(ctx, `c2_fixed_${runSuffix}`, legacyPassword, 'legacy fixed learner');
-    const noLearningPassword = password('no-learning');
-    const noLearningId = await createUser(ctx, {
-      username: `c2_nolearn_${runSuffix}`, password: noLearningPassword, realName: 'C2 未学习学员',
-      categoryId, source: 'institution',
-    });
-    const noLearningActor = await login(ctx, `c2_nolearn_${runSuffix}`, noLearningPassword, 'no learning learner');
+    const legacyActor = await examLearner(ctx, { categoryId });
+    const legacyUserId = legacyActor.userId;
+    const noLearningActor = await examLearner(ctx, { categoryId });
+    const noLearningId = noLearningActor.userId;
     const regulation = await ctx.queryTestDb(
       'INSERT INTO regulation (title, category, category_id, description, status, current_version_id, required_minutes, scroll_segments, created_by) VALUES (?, ?, ?, NULL, ?, NULL, 1, 10, ?)',
       [`C2 legacy 制度 ${runSuffix}`, 'C2', categoryId, 'published', adminId],
@@ -524,7 +528,7 @@ async function runAttempts(ctx) {
     assert.equal(timeoutFinishedRecover.status, 200, JSON.stringify(timeoutFinishedRecover));
     assert.deepEqual(timeoutFinishedRecover.data, {
       exam_record_id: timeoutStart.data.exam_record_id,
-      status: 'failed',
+      status: 'timeout',
       score: 0,
       finished: true,
     });
@@ -579,6 +583,13 @@ async function runAttempts(ctx) {
     const list = await ctx.request(learner, 'GET', '/me/exams?page=1&page_size=100');
     assert.equal(list.status, 200, JSON.stringify(list));
     assert.equal(list.data.items.some((item) => String(item.paper_id) === legacyPaperId), false);
+    stage = 'scheduled timeout never auto-submits or grades';
+    const scheduledTimeout = await waitFor(ctx, async () => {
+      const [row] = await ctx.queryTestDb('SELECT status FROM exam_record WHERE id=?', [scheduledStart.data.record_id]);
+      return row.status !== 'in_progress' ? row : null;
+    });
+    assert.equal(scheduledTimeout.status, 'timeout');
+    await assertTimeoutFacts(ctx, scheduledStart.data.record_id);
 
     console.log(JSON.stringify({
       suite: 'training-attempts',

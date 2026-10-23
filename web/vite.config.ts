@@ -16,9 +16,9 @@ export default defineConfig({
     },
   },
   build: {
-    // 发布目录与 web/、mobile/ 同级；后续 H5 产物在 PC 构建完成后合并至 dist/mobile/。
-    outDir: '../dist',
-    emptyOutDir: true,
+    // 统一脚本传入同盘临时目录；直接运行 Vite 也不能清掉 dist/mobile/。
+    outDir: process.env.RULEEXAM_BUILD_OUT_DIR || '../dist',
+    emptyOutDir: Boolean(process.env.RULEEXAM_BUILD_OUT_DIR),
     chunkSizeWarningLimit: 2000,
   },
 });

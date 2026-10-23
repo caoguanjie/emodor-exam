@@ -21,11 +21,12 @@ export class SessionService {
     this.refreshTtlSeconds = (config?.jwt.refreshExpiresDays || 7) * 86400;
   }
 
-  async create(userId: string | number, ip: string | null, userAgent: string | null, manager?: EntityManager): Promise<AuthSession> {
+  async create(userId: string | number, ip: string | null, userAgent: string | null, manager?: EntityManager, identity: { client: 'pc' | 'mobile'; authMethod: 'password' | 'sms' | 'debug' } = { client: 'pc', authMethod: 'password' }): Promise<AuthSession> {
     const repo = manager?.getRepository(AuthSession) || this.repo;
     const now = new Date();
     const session = repo.create({
       sid: randomBytes(24).toString('hex'), userId: String(userId),
+      client: identity.client, authMethod: identity.authMethod,
       ipAddress: ip, userAgent: userAgent?.slice(0, 255) || null,
       // Do not let MySQL CURRENT_TIMESTAMP(3) fill these two columns in its
       // own timezone.  A newly-created session must share one JS timestamp
@@ -58,7 +59,15 @@ export class SessionService {
     const session = await this.repo.findOne({ where: { sid } });
     // 带 sid 的新令牌必须对应落库会话；不存在的 sid 视为无效，避免伪造
     // 一个格式正确但从未签发过的会话标识绕过会话收口。
-    return !session || Boolean(session.revokedAt);
+    return !session || Boolean(session.revokedAt) || Boolean(session.expiresAt && session.expiresAt.getTime() <= Date.now());
+  }
+
+  /** Durable session identity must match JWT claims; a valid sid is not enough. */
+  async isActiveFor(sid: string, userId: string | number, client: 'pc' | 'mobile', authMethod?: string): Promise<boolean> {
+    if (await this.isRevoked(sid)) return false;
+    const session = await this.repo.findOne({ where: { sid } });
+    return Boolean(session && String(session.userId) === String(userId)
+      && (session.client || 'pc') === client && (!authMethod || (session.authMethod || 'password') === authMethod));
   }
 
   async revoke(sessionId: string, actorId: string | number): Promise<void> {

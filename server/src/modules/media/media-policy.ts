@@ -1,7 +1,7 @@
 import { Errors } from '../../common/errors';
 
 /** Only retained business media purposes may be uploaded or bound. */
-export const MEDIA_PURPOSES = ['avatar', 'course_cover', 'video', 'question', 'branding'] as const;
+export const MEDIA_PURPOSES = ['avatar', 'course_cover', 'video', 'question', 'branding', 'identity_id_portrait', 'identity_id_emblem', 'identity_face'] as const;
 export type MediaPurpose = (typeof MEDIA_PURPOSES)[number];
 export const MEDIA_UPLOAD_PURPOSES = ['avatar', 'course_cover', 'video', 'question', 'branding'] as const;
 export type MediaUploadPurpose = (typeof MEDIA_UPLOAD_PURPOSES)[number];

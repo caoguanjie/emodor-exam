@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { AuditService } from '../../common/audit.service';
 import { BizError, Errors } from '../../common/errors';
-import type { Difficulty, PoolRule, QuestionOption, QuestionType, RuleSnapshot } from '../../common/training-contracts';
+import type { Difficulty, PoolRule, QuestionContentV2, QuestionOption, QuestionType, RuleSnapshot } from '../../common/training-contracts';
 import { ExamPaper } from '../../entities/exam-paper.entity';
 import { PaperQuestion } from '../../entities/paper-question.entity';
 import { PaperRelease } from '../../entities/paper-release.entity';
@@ -18,6 +18,8 @@ export type PaperBusinessScope = 'regulation' | 'training';
 export type PaperMode = 'fixed' | 'random';
 
 export interface ReleaseQuestionSnapshot {
+  contentSchemaVersion?: number;
+  contentJson?: QuestionContentV2 | null;
   questionId: string;
   versionId: string;
   revision: number;
@@ -89,6 +91,8 @@ function snapshotFromEntity(version: QuestionVersion): QuestionVersionSnapshot {
     throw Errors.paperReleaseConflict('题目版本缺少有效的培训类别或难度');
   }
   return {
+    contentSchemaVersion: version.contentSchemaVersion || 1,
+    contentJson: version.contentJson || null,
     questionId: String(version.questionId),
     versionId: String(version.id),
     revision: Number(version.revision),
@@ -114,6 +118,8 @@ function snapshotFromEntity(version: QuestionVersion): QuestionVersionSnapshot {
 
 function releaseSnapshotFromEntity(version: QuestionVersion): ReleaseQuestionSnapshot {
   return {
+    contentSchemaVersion: version.contentSchemaVersion || 1,
+    contentJson: version.contentJson || null,
     questionId: String(version.questionId),
     versionId: String(version.id),
     revision: Number(version.revision),

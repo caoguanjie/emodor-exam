@@ -3,6 +3,7 @@ import type { RuleSnapshot } from '../src/common/training-contracts';
 import { ExamAnswer } from '../src/entities/exam-answer.entity';
 import { ExamRecord } from '../src/entities/exam-record.entity';
 import { SysUser } from '../src/entities/sys-user.entity';
+import { LearnerIdentity } from '../src/entities/learner-identity.entity';
 import { projectFinalResult } from '../src/modules/exams/exam-history.service';
 import { LegacyExamAdapter } from '../src/modules/exams/legacy-exam-adapter';
 import { SubmissionService, gradeSubmissionSnapshot } from '../src/modules/exams/submission.service';
@@ -76,7 +77,7 @@ describe('submission grading', () => {
 
 function submissionFixture(overrides: Record<string, unknown> = {}) {
   const record: any = {
-    id: '41', paperId: '11', regulationId: '2', userId: '9', assignmentId: '31', activeAssignmentId: '31',
+    id: '41', paperId: '11', regulationId: null, userId: '9', assignmentId: '31', activeAssignmentId: '31',
     status: 'in_progress', ruleSnapshot: RULE, deadlineAt: new Date('2099-10-22T09:00:00.000Z'),
     draftRevision: 0, gradingState: 'not_submitted', submissionMethod: null,
     submittedAt: null, gradedAt: null, score: null, ...overrides,
@@ -91,6 +92,7 @@ function submissionFixture(overrides: Record<string, unknown> = {}) {
     save: vi.fn(async (value: any) => { saves += 1; return Object.assign(record, value); }),
   };
   const answerRepo: any = {
+    delete: vi.fn(async () => { answers.splice(0); }),
     find: vi.fn(async () => answers),
     create: vi.fn((value: any) => ({ ...value })),
     save: vi.fn(async (values: any[]) => {
@@ -104,6 +106,7 @@ function submissionFixture(overrides: Record<string, unknown> = {}) {
   };
   const repositories = new Map<any, any>([
     [ExamRecord, recordRepo], [ExamAnswer, answerRepo],
+    [LearnerIdentity, { findOne: vi.fn(async () => ({ userId: '9' })) }],
     [SysUser, { findOne: vi.fn(async () => ({ id: '9', status: 1, username: 'student9' })) }],
   ]);
   const manager: any = { getRepository: (entity: any) => repositories.get(entity) };
@@ -133,11 +136,11 @@ function submissionFixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe('SubmissionService idempotent objective finalizer', () => {
-  it('saves an optional latest draft and finalizes it inside the same transaction', async () => {
+  it('persists the whole stable-ID submission and finalizes it inside the same transaction', async () => {
     const fixture = submissionFixture();
-    const result = await fixture.service.submit('9', '41', { revision: 1, answers: [{ item_id: '501', selected: [0] }] });
+    const result = await fixture.service.submit('9', '41', { record_id: '41', answers: [{ item_id: '501', option_ids: ['B'] }, { item_id: '502', option_ids: [] }, { item_id: '503', option_ids: [] }] });
 
-    expect(fixture.drafts.saveInTransaction).toHaveBeenCalledTimes(1);
+    expect(fixture.drafts.saveInTransaction).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       record_id: '41', grading_state: 'finalized', submission_method: 'manual',
       score: 25, passed: false, correct_rate: 1 / 3,
@@ -147,34 +150,56 @@ describe('SubmissionService idempotent objective finalizer', () => {
       status: 'failed', gradingState: 'finalized', submissionMethod: 'manual', activeAssignmentId: null,
     });
     expect(fixture.record.gradedAt).toBeInstanceOf(Date);
-    expect(fixture.statistics.invalidateRegulationCache).toHaveBeenCalledWith('2');
+    expect(fixture.statistics.invalidateRegulationCache).not.toHaveBeenCalled();
     expect(fixture.audit.log).toHaveBeenCalledWith(expect.objectContaining({
       actor_id: 9, actor_name: 'student9', action: 'exam.submit', object_id: '41',
       detail: expect.objectContaining({ timeout: false, status: 'failed', score: 25 }),
     }));
-    expect(fixture.events.slice(-3)).toEqual(['commit', 'cache', 'audit']);
+    expect(fixture.events.slice(-2)).toEqual(['commit', 'audit']);
   });
 
   it('returns the first terminal result on retries without finalizing twice', async () => {
     const fixture = submissionFixture();
-    const first = await fixture.service.submit('9', '41');
+    const first = await fixture.service.submit('9', '41', { record_id: '41', answers: [{ item_id: '501', option_ids: ['B'] }, { item_id: '502', option_ids: [] }, { item_id: '503', option_ids: [] }] });
     const saveCount = fixture.saves;
     const retried = await fixture.service.submit('9', '41');
 
     expect(retried).toEqual(first);
     expect(fixture.saves).toBe(saveCount);
-    expect(fixture.statistics.invalidateRegulationCache).toHaveBeenCalledTimes(1);
+    expect(fixture.statistics.invalidateRegulationCache).not.toHaveBeenCalled();
     expect(fixture.audit.log).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores a late manual payload and records timeout against the last confirmed draft', async () => {
+  it('checks the owner before validating an untrusted submission body', async () => {
+    const fixture = submissionFixture({ userId: '10' });
+    await expect(fixture.service.submit('9', '41', { unexpected: true })).rejects.toMatchObject({ code: 40302 });
+    expect(fixture.answers).toHaveLength(1);
+    expect(fixture.saves).toBe(0);
+  });
+
+  it('treats exact deadline equality as timeout and clears draft metadata', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-22T09:00:00.000Z'));
+      const fixture = submissionFixture({ deadlineAt: new Date('2026-10-22T09:00:00.000Z'), draftRevision: 7, draftPayloadHash: 'old', draftSavedAt: new Date() });
+      const result = await fixture.service.submit('9', '41', null);
+      expect(result).toMatchObject({ status: 'timeout', score: 0, submitted_at: null, items: [] });
+      expect(fixture.record).toMatchObject({ draftRevision: 0, draftPayloadHash: null, draftSavedAt: null });
+      expect(fixture.answers).toEqual([]);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('ignores late input and deletes old draft rows without scoring them', async () => {
     const fixture = submissionFixture({ deadlineAt: new Date('2000-01-01T00:00:00.000Z') });
     const result = await fixture.service.submit('9', '41', { revision: 1, answers: [{ item_id: '501', selected: [1] }] });
 
     expect(fixture.drafts.saveInTransaction).not.toHaveBeenCalled();
-    expect(result.submission_method).toBe('timeout');
-    expect(result.grading_state).toBe('finalized');
-    expect(fixture.record.submissionMethod).toBe('timeout');
+    expect(result.submission_method).toBeNull();
+    expect(result.grading_state).toBe('not_submitted');
+    expect(result.score).toBe(0);
+    expect(fixture.record.submittedAt).toBeNull();
+    expect(fixture.answers).toEqual([]);
+    expect(fixture.record.submissionMethod).toBeNull();
     expect(fixture.audit.log).toHaveBeenCalledWith(expect.objectContaining({
       detail: expect.objectContaining({ timeout: true }),
     }));
@@ -189,14 +214,30 @@ describe('SubmissionService idempotent objective finalizer', () => {
 
     const expired = submissionFixture({ deadlineAt: new Date('2000-01-01T00:00:00.000Z') });
     await expect(expired.service.heartbeat('9', '41')).rejects.toMatchObject({ code: 40905 });
-    expect(expired.record.submissionMethod).toBe('timeout');
-    expect(expired.statistics.invalidateRegulationCache).toHaveBeenCalledTimes(1);
+    expect(expired.record.submissionMethod).toBeNull();
+    expect(expired.statistics.invalidateRegulationCache).not.toHaveBeenCalled();
     expect(expired.audit.log).toHaveBeenCalledTimes(1);
-    expect(expired.events.slice(-3)).toEqual(['commit', 'cache', 'audit']);
+    expect(expired.events.slice(-2)).toEqual(['commit', 'audit']);
   });
 });
 
 describe('legacy fixed-client result bridge', () => {
+  it.each(['timeout', null])('keeps old scored timeout details and stored status for method %s', async (method) => {
+    const record: any = { id: '41', paperId: '11', userId: '9', assignmentId: '31', status: 'timeout', score: '25.00', gradingState: 'finalized', submissionMethod: method, submittedAt: new Date('2026-10-22T02:00:00.000Z'), startedAt: new Date(), attemptNo: 1, ruleSnapshot: RULE };
+    const repo: any = { findOne: vi.fn(async () => record), find: vi.fn(async () => [record]) };
+    const adapter = new LegacyExamAdapter(repo, {} as any, { find: async () => [{ recordQuestionId: '501', selected: [1], gainedScore: '25.00', isCorrect: 1 }] } as any, {} as any, {} as any, { forGrading: async () => structuredClone(SNAPSHOT) } as any, { manager: {} } as any);
+    expect(await adapter.result('41', '9', 'employee')).toMatchObject({ status: 'timeout', score: 25, submitted_at: record.submittedAt, questions: expect.arrayContaining([expect.objectContaining({ question_id: 101, selected: [1], gained_score: 25, analysis: 'a1' })]) });
+  });
+
+  it('does not expose question answers or analysis for a pure legacy timeout', async () => {
+    const record: any = { id: '41', paperId: '11', userId: '9', assignmentId: '31', status: 'timeout', score: '0.00', submittedAt: null, startedAt: new Date(), attemptNo: 1, ruleSnapshot: RULE };
+    const repo: any = { findOne: vi.fn(async () => record), find: vi.fn(async () => [record]) };
+    const reader: any = { forGrading: vi.fn(async () => { throw new Error('timeout must not read grading snapshot'); }) };
+    const adapter = new LegacyExamAdapter(repo, {} as any, {} as any, {} as any, {} as any, reader, { manager: {} } as any);
+    expect(await adapter.result('41', '9', 'employee')).toMatchObject({ status: 'timeout', submitted_at: null, questions: [] });
+    expect(reader.forGrading).not.toHaveBeenCalled();
+  });
+
   it('uses record_question_id as the snapshot item domain after migration 010', async () => {
     const record: any = {
       id: '41', paperId: '11', userId: '9', assignmentId: '31', status: 'passed', score: '25.00',

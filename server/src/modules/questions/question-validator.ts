@@ -1,6 +1,7 @@
 import sanitizeHtml from 'sanitize-html';
 import { Errors } from '../../common/errors';
-import type { Difficulty, QuestionOption, QuestionType } from '../../common/training-contracts';
+import type { Difficulty, QuestionContentV2, QuestionOption, QuestionType } from '../../common/training-contracts';
+import { docHtml, questionContent } from './question-content';
 
 export type QuestionSource = 'ai' | 'manual' | 'import';
 
@@ -20,6 +21,8 @@ export interface QuestionDraftInput {
   sourcePageStart?: number;
   sourcePageEnd?: number;
   source: QuestionSource;
+  contentSchemaVersion?: number;
+  contentJson?: QuestionContentV2 | null;
 }
 
 export interface ValidatedQuestionDraft extends QuestionDraftInput {
@@ -110,7 +113,7 @@ function normalizeOptions(options: unknown, type: QuestionType): QuestionOption[
   }
   if (options.length < 2 || options.length > 26) throw Errors.param('选项非法：须有 2–26 个选项');
   return options.map((option, index) => ({
-    key: String.fromCharCode(65 + index),
+    key: typeof option?.key === 'string' && option.key ? option.key : String.fromCharCode(65 + index),
     text: cleanRichText(option?.text, `选项 ${index + 1}`, true)!,
   }));
 }
@@ -142,6 +145,7 @@ export function validateAndSanitizeQuestionDraft(
   validationOptions: { allowReferenceAi?: boolean } = {},
 ): ValidatedQuestionDraft {
   const type = input?.type;
+  if (input?.contentJson != null && input.contentSchemaVersion !== 2) throw Errors.param('v2 内容必须声明 content_schema_version=2');
   if (!TYPES.includes(type)) throw Errors.param('题型非法（single / multiple / judgment）');
   if (!DIFFICULTIES.includes(input.difficulty)) throw Errors.param('难度非法（easy / medium / hard）');
   if (!SOURCES.includes(input.source)) throw Errors.param('题目来源非法（ai / manual / import）');
@@ -168,10 +172,12 @@ export function validateAndSanitizeQuestionDraft(
     throw Errors.param('建议分值须为 1–10000 整数分');
   }
 
-  const stem = cleanRichText(input.stem, '题干', true)!;
-  const options = normalizeOptions(input.options, type);
-  const answer = normalizeAnswer(input.answer, type, options.length);
-  const analysis = cleanRichText(input.analysis, '解析', false);
+  const v2 = input.contentSchemaVersion === 2 ? questionContent(input) : null;
+  const stem = v2 ? docHtml(v2.stem) : cleanRichText(input.stem, '题干', true)!;
+  const options = v2 ? v2.options.map((option) => ({ key: option.id, text: docHtml(option.content) })) : normalizeOptions(input.options, type);
+  const answer = v2 ? v2.answer_option_ids.map((id) => v2.options.findIndex((option) => option.id === id)).sort((a, b) => a - b) : normalizeAnswer(input.answer, type, options.length);
+  const analysis = v2 ? v2.analysis && docHtml(v2.analysis) : cleanRichText(input.analysis, '解析', false);
+  const contentJson = v2 || questionContent({ type, stem, options, answer, analysis });
   return {
     categoryId,
     difficulty: input.difficulty,
@@ -180,6 +186,8 @@ export function validateAndSanitizeQuestionDraft(
     options,
     answer,
     analysis,
+    contentSchemaVersion: 2,
+    contentJson,
     scoreCents: input.scoreCents,
     conceptId,
     regulationId,

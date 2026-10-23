@@ -1,0 +1,41 @@
+// Semantic values follow docs/ui/gemini.pen; no remote font dependency is required.
+$primary: #1989fa;
+$primary-deep: #0b5fd3;
+$background: #f7f8fa;
+$surface: #fff;
+$text: #323233;
+
+page {
+  --app-color-primary: #{$primary};
+  --app-color-primary-deep: #{$primary-deep};
+  --app-color-primary-soft: #ecf5ff;
+  --app-color-background: #{$background};
+  --app-color-surface: #{$surface};
+  --app-color-text: #{$text};
+  --app-color-text-secondary: #646566;
+  --app-color-text-muted: #969799;
+  --app-color-border: #ebedf0;
+  --app-color-border-strong: #dcdee0;
+  --app-color-success: #07c160;
+  --app-color-success-soft: #e6f8ee;
+  --app-color-danger: #ee0a24;
+  --app-color-danger-soft: #fdecee;
+  --app-color-warning: #ff976a;
+  --app-color-warning-soft: #fff3ec;
+  --app-space-1: 8rpx;
+  --app-space-2: 16rpx;
+  --app-space-3: 24rpx;
+  --app-space-4: 32rpx;
+  --app-space-6: 48rpx;
+  --app-radius-sm: 12rpx;
+  --app-radius-md: 24rpx;
+  --app-radius-lg: 36rpx;
+  --app-radius-full: 999rpx;
+  --app-safe-area-top: env(safe-area-inset-top, 0px);
+  --app-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --app-font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+
+  --wot-primary-1: var(--app-color-primary-soft);
+  --wot-primary-6: var(--app-color-primary);
+  --wot-primary-7: var(--app-color-primary-deep);
+}

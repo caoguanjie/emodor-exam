@@ -14,6 +14,7 @@ import { SysRolePermission } from '../../entities/sys-role-permission.entity';
 import { SysUserRole } from '../../entities/sys-user-role.entity';
 import { AuthSession } from '../../entities/auth-session.entity';
 import { SessionService } from '../auth/session.service';
+import { normalizeOptionalChinaMobile } from '../auth/phone';
 import {
   LEGACY_REGULATION_ADMIN_PERMISSIONS,
   PERMISSION_CATALOG,
@@ -326,7 +327,7 @@ export class AccessService {
           categoryId: null,
           source: null,
           role: RoleEnum.EMPLOYEE,
-          phone: input.phone?.trim() || null,
+          phone: normalizeOptionalChinaMobile(input.phone),
           email: input.email?.trim() || null,
           status: 1,
           authVersion: 0,
@@ -342,7 +343,10 @@ export class AccessService {
         })));
       });
     } catch (error: any) {
-      if (String(error?.code) === 'ER_DUP_ENTRY') throw Errors.param('用户名已存在');
+      if (String(error?.code) === 'ER_DUP_ENTRY') {
+        const duplicate = String(error?.constraint || error?.sqlMessage || error?.message || '');
+        throw Errors.param(duplicate.includes('uk_sys_user_phone') ? '手机号已存在' : '用户名已存在');
+      }
       throw error;
     }
     await this.invalidate(created.id);

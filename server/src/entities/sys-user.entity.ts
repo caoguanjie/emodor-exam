@@ -1,6 +1,7 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
 @Entity('sys_user')
+@Index('uk_sys_user_phone', ['phone'], { unique: true })
 export class SysUser {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
@@ -42,6 +43,15 @@ export class SysUser {
   /** 受控媒体头像资源；本人资料与学员管理只保存 media_asset.id。 */
   @Column({ name: 'avatar_id', type: 'bigint', unsigned: true, nullable: true })
   avatarId: string | null;
+
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  occupation: string | null;
+
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  gender: 'male' | 'female' | null;
+
+  @Column({ type: 'date', nullable: true })
+  birthday: string | null;
 
   /** 1=启用（在职），0=停用 */
   @Column({ type: 'tinyint', default: 1 })

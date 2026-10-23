@@ -1,12 +1,10 @@
-import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, Max, Min } from 'class-validator';
 import { AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
-import { DtoValidationPipe, StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
+import { DtoValidationPipe } from '../../common/dto-validation.pipe';
 import { TRAINING_DEFAULTS } from '../../common/training-contracts';
 import { Errors } from '../../common/errors';
-import { AnswerDraftService } from './answer-draft.service';
-import { DraftInputDto, SubmitAttemptDto } from './attempt.dto';
 import { AttemptService } from './attempt.service';
 import { SubmissionService } from './submission.service';
 import { ExamHistoryService } from './exam-history.service';
@@ -20,17 +18,20 @@ class AttemptPageDto {
   page_size?: number;
 }
 
+function mobileLearner(user: AuthUser): void { if (user.client !== 'mobile' || user.role !== 'employee') throw Errors.forbidden(); }
+function decimalId(value: string): string { if (!/^[1-9]\d*$/.test(value)) throw Errors.param('必须是十进制 ID 字符串'); return value; }
+
 @Controller('me')
 export class TrainingExamsController {
   constructor(
     private readonly attempts: AttemptService,
-    private readonly drafts: AnswerDraftService,
     private readonly submissions: SubmissionService,
     private readonly history: ExamHistoryService,
   ) {}
 
   @Get('exams')
   list(@CurrentUser() user: AuthUser, @Query(new DtoValidationPipe()) query: AttemptPageDto) {
+    mobileLearner(user);
     return this.attempts.list(
       String(user.id),
       query.page || 1,
@@ -40,11 +41,13 @@ export class TrainingExamsController {
 
   @Post('exams/:id/start')
   start(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.attempts.start(String(user.id), String(id));
+    mobileLearner(user);
+    return this.attempts.start(String(user.id), decimalId(id), true);
   }
 
   @Get('exam-records')
   historyList(@CurrentUser() user: AuthUser, @Query(new DtoValidationPipe()) query: HistoryPageDto) {
+    mobileLearner(user);
     return this.history.history(
       String(user.id),
       query.page || 1,
@@ -54,6 +57,7 @@ export class TrainingExamsController {
 
   @Get('wrong-questions')
   wrongQuestions(@CurrentUser() user: AuthUser, @Query(new DtoValidationPipe()) query: HistoryPageDto) {
+    mobileLearner(user);
     return this.history.wrongItems(
       String(user.id),
       query.page || 1,
@@ -63,40 +67,23 @@ export class TrainingExamsController {
 
   @Get('exam-records/:id')
   recover(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.attempts.recover(String(user.id), String(id));
-  }
-
-  @Put('exam-records/:id/draft')
-  saveDraft(
-    @Param('id') id: string,
-    @Body(new DtoValidationPipe()) dto: DraftInputDto,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.drafts.save(String(user.id), String(id), dto);
-  }
-
-  @Post('exam-records/:id/heartbeat')
-  heartbeat(
-    @Param('id') id: string,
-    @Body(new StrictDtoValidationPipe([])) _body: object,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.submissions.heartbeat(String(user.id), String(id));
+    mobileLearner(user);
+    return this.attempts.recover(String(user.id), decimalId(id), true);
   }
 
   @Post('exam-records/:id/submit')
   submit(
     @Param('id') id: string,
-    @Body(new DtoValidationPipe()) dto: SubmitAttemptDto,
+    @Body() dto: unknown,
     @CurrentUser() user: AuthUser,
   ) {
-    const draft = dto?.draft();
-    if (draft === null) throw Errors.param('revision 与 answers 必须同时提供');
-    return this.submissions.submit(String(user.id), String(id), draft);
+    mobileLearner(user);
+    return this.submissions.submit(String(user.id), decimalId(id), dto);
   }
 
   @Get('exam-records/:id/result')
   result(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.history.result(String(user.id), String(id));
+    mobileLearner(user);
+    return this.history.result(String(user.id), decimalId(id));
   }
 }

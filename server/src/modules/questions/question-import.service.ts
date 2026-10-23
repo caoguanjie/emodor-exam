@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { AppConfig } from '../../config/configuration';
 import { AuditService } from '../../common/audit.service';
-import { Errors } from '../../common/errors';
+import { BizError, Errors } from '../../common/errors';
 import type { Difficulty, Id, ImportPreview, ImportResult, QuestionOption, QuestionType } from '../../common/training-contracts';
 import { ImportBatch } from '../../entities/import-batch.entity';
 import { Question } from '../../entities/question.entity';
@@ -18,6 +18,7 @@ import {
   type QuestionImportFormat,
 } from './question-import-format';
 import { QuestionVersionService, type QuestionDraft } from './question-version.service';
+import { docHtml, legacyHtmlDoc } from './question-content';
 
 export interface QuestionImportDefaults {
   categoryId?: Id;
@@ -67,6 +68,12 @@ function normalizeContent(value: unknown): string {
   return String(value ?? '').replace(/>\s+</g, '><').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeRichContent(value: unknown): string {
+  // Preview retains legacy HTML, while the version adapter renders v2 content
+  // on confirmation. Compare both through the same supported document shape.
+  return normalizeContent(docHtml(legacyHtmlDoc(String(value ?? ''))));
+}
+
 function fingerprint(draft: Pick<QuestionDraft,
   'categoryId' | 'type' | 'difficulty' | 'stem' | 'options' | 'answer' | 'analysis'>): string {
   const canonical = {
@@ -74,12 +81,12 @@ function fingerprint(draft: Pick<QuestionDraft,
     type: draft.type,
     difficulty: draft.difficulty,
     content: {
-      stem: normalizeContent(draft.stem),
+      stem: normalizeRichContent(draft.stem),
       options: (draft.options || []).map((option) => ({
         key: normalizeContent(option.key),
-        text: normalizeContent(option.text),
+        text: normalizeRichContent(option.text),
       })),
-      analysis: normalizeContent(draft.analysis),
+      analysis: normalizeRichContent(draft.analysis),
     },
     answer: [...(draft.answer || [])].map(Number).sort((a, b) => a - b),
   };
@@ -315,7 +322,7 @@ export class QuestionImportService implements OnModuleInit {
     for (const row of rows) {
       if (!row.categoryId || !row.difficulty) continue;
       if (!allowed.has(`${row.categoryId}:${row.type}:${row.difficulty}`)) continue;
-      result.add(fingerprint({
+      const draft = {
         categoryId: String(row.categoryId),
         type: row.type as QuestionType,
         difficulty: row.difficulty as Difficulty,
@@ -323,7 +330,15 @@ export class QuestionImportService implements OnModuleInit {
         options: row.options,
         answer: row.answer,
         analysis: row.analysis,
-      }));
+      };
+      try {
+        result.add(fingerprint(draft));
+      } catch (error) {
+        // An unrelated legacy row may exceed today's content rules. Only its
+        // deterministic content-validation failure is isolated; query failures
+        // and unexpected errors must still abort preview or confirmation.
+        if (!(error instanceof BizError) || error.code !== 40001) throw error;
+      }
     }
     return result;
   }
@@ -549,6 +564,7 @@ export class QuestionImportService implements OnModuleInit {
       if (expected && fingerprint(expected) !== row.fingerprint) throw Errors.importBatchConflict('题目已被修改，请刷新后重试');
       const input = {
         ...row.draft, ...patch,
+        contentSchemaVersion: undefined, contentJson: undefined,
         ...(patch.options !== undefined ? { options: questionOptions(patch.options) } : {}),
         ...(patch.answer !== undefined ? { answer: answerIndexes(patch.answer) } : {}),
       };

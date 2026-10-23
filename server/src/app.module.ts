@@ -53,11 +53,19 @@ import { QuestionVersion } from './entities/question-version.entity';
 import { SysMenu } from './entities/sys-menu.entity';
 import { SysDictionary } from './entities/sys-dictionary.entity';
 import { SiteSetting } from './entities/site-setting.entity';
+import { LearnerIdentity } from './entities/learner-identity.entity';
+import { IdentityVerificationSession } from './entities/identity-verification-session.entity';
 
 import { AuthController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
 import { CaptchaService } from './modules/auth/captcha.service';
 import { SessionService } from './modules/auth/session.service';
+import { SessionIssuerService } from './modules/auth/session-issuer.service';
+import { MobileAuthController } from './modules/auth/mobile-auth.controller';
+import { DebugMobileAuthController } from './modules/auth/debug-mobile-auth.controller';
+import { MobileAuthService } from './modules/auth/mobile-auth.service';
+import { SmsChallengeService } from './modules/auth/sms-challenge.service';
+import { SMS_PROVIDER, YunxinSmsProvider } from './modules/auth/sms-provider';
 import { AccessController } from './modules/access/access.controller';
 import { AccessService } from './modules/access/access.service';
 import { DepartmentService } from './modules/departments/department.service';
@@ -107,6 +115,19 @@ import { TasksService } from './tasks.service';
 import { MediaController } from './modules/media/media.controller';
 import { MediaService } from './modules/media/media.service';
 import { MediaProbeService } from './modules/media/media-probe.service';
+import { MediaTicketController } from './modules/media/media-ticket.controller';
+import { MediaTicketService } from './modules/media/media-ticket.service';
+import { IdentityController } from './modules/identity/identity.controller';
+import { IdentityService } from './modules/identity/identity.service';
+import { IdentityCrypto } from './modules/identity/identity-crypto';
+import { IdentityImageService } from './modules/identity/identity-image.service';
+import {
+  DisabledIdentityProvider,
+  IDENTITY_PROVIDER,
+  TencentFaceIdAdapter,
+  TencentIdentityProvider,
+  TencentIdCardOcrAdapter,
+} from './modules/identity/identity-provider';
 import { CourseAdminController, LearnerHomeController, MyCoursesController } from './modules/courses/course.controller';
 import { CourseService } from './modules/courses/course.service';
 import { LessonVersionService } from './modules/courses/lesson-version.service';
@@ -139,15 +160,16 @@ const config = loadConfig();
       VideoLearningRecord, VideoLearningSession,
       QuestionConcept, QuestionVersion,
       SysMenu, SysDictionary, SiteSetting,
+      LearnerIdentity, IdentityVerificationSession,
     ]),
     JwtModule.register({ secret: config.jwt.secret, signOptions: { expiresIn: config.jwt.expiresIn } }),
     ScheduleModule.forRoot(),
   ],
   controllers: [
-    AuthController, AccessController, StudentsController, MeProfileController, CategoryController,
+    AuthController, MobileAuthController, DebugMobileAuthController, AccessController, StudentsController, MeProfileController, CategoryController,
     RegulationContentController, QuestionMaterialsController, AiController, LearningController, ExamsController, TrainingExamsController, PaperAdminController, ExamAdminController,
     StatisticsController, TrainingStatisticsController, AdminDashboardController, HealthController,
-    MediaController,
+    MediaController, MediaTicketController, IdentityController,
     CourseAdminController, LearnerHomeController, MyCoursesController,
     VideoLearningController, QuestionImportController, AiQuestionImportController,
     SystemController, SiteConfigController,
@@ -155,14 +177,27 @@ const config = loadConfig();
   providers: [
     // 全局配置单例（loadConfig 启动时读取环境变量）
     { provide: AppConfig, useValue: config },
-    AuthService, CaptchaService, SessionService, AccessService, DepartmentService, UsersService, CategoryService, ImportBatchService,
+    AuthService, CaptchaService, SessionService, SessionIssuerService, MobileAuthService, SmsChallengeService, YunxinSmsProvider,
+    { provide: SMS_PROVIDER, useExisting: YunxinSmsProvider },
+    AccessService, DepartmentService, UsersService, CategoryService, ImportBatchService,
     RegulationVersionService, RegulationScopeService, ParsePipelineService, ContentService, QuestionMaterialsService,
     AiConfigService, AiGatewayService, PdfVisionService, QuestionGenerationService, QuestionReviewService, PaperService,
     LearningSessionService, ExamService, AttemptService, AttemptReaderService, LegacyExamAdapter, AnswerDraftService, SubmissionService,
     ExamHistoryService, ExamRecordsService,
     ShuffleService, GradingService, PaperReleaseService, SamplingService, StatisticsService, TrainingStatisticsService,
     RedisService, AuditService, TasksService,
-    MediaService, MediaProbeService,
+    MediaService, MediaProbeService, MediaTicketService,
+    IdentityService, IdentityCrypto, IdentityImageService,
+    {
+      provide: IDENTITY_PROVIDER,
+      useFactory: (appConfig: AppConfig) => appConfig.identity.provider === 'tencent'
+        ? new TencentIdentityProvider(
+          new TencentIdCardOcrAdapter(appConfig.identity.idCardOcr),
+          new TencentFaceIdAdapter(appConfig.identity.faceId),
+        )
+        : new DisabledIdentityProvider(),
+      inject: [AppConfig],
+    },
     CourseService, LessonVersionService,
     VideoSessionService,
     QuestionConceptService, QuestionVersionService, QuestionImportService, AiQuestionImportService,

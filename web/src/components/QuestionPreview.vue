@@ -7,10 +7,10 @@
     </div>
     <div class="question-preview__stem rich-content" v-html="rendered.stem" />
     <div class="question-preview__options">
-      <div v-for="(option, index) in rendered.options" :key="index" class="question-preview__option">
-        <span class="question-preview__key">{{ option.key || String.fromCharCode(65 + index) }}</span>
+      <div v-for="(option, index) in rendered.options" :key="option.key" class="question-preview__option">
+        <span class="question-preview__key">{{ String.fromCharCode(65 + index) }}</span>
         <div class="rich-content" v-html="option.text" />
-        <el-tag v-if="revealAnswer && (question.answer || []).includes(index)" size="small" type="success">正确答案</el-tag>
+        <el-tag v-if="revealAnswer && rendered.correctIds.includes(option.key)" size="small" type="success">正确答案</el-tag>
       </div>
     </div>
     <section v-if="revealAnswer && rendered.analysis" class="question-preview__explanation">
@@ -23,10 +23,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, watch } from 'vue';
 import { getMediaImageContent } from '../api/media';
-import { sanitizeQuestionHtmlForPreview, type QuestionOption, type QuestionType } from '../api/training-types';
+import { normalizeQuestionContentV2, readonlyQuestionDocToHtml, sanitizeQuestionHtmlForPreview, type QuestionContentFields, type QuestionOption, type QuestionType } from '../api/training-types';
 
 const props = withDefaults(defineProps<{
-  question: {
+  question: QuestionContentFields & {
     type?: QuestionType;
     difficulty?: string | null;
     stem?: string;
@@ -39,8 +39,8 @@ const props = withDefaults(defineProps<{
 }>(), { revealAnswer: true });
 const emit = defineEmits<{ ready: [result: { ok: boolean }] }>();
 
-const rendered = reactive<{ stem: string; options: QuestionOption[]; analysis: string }>({
-  stem: '', options: [], analysis: '',
+const rendered = reactive<{ stem: string; options: QuestionOption[]; analysis: string; correctIds: string[] }>({
+  stem: '', options: [], analysis: '', correctIds: [],
 });
 const objectUrls = new Set<string>();
 let renderSerial = 0;
@@ -73,8 +73,8 @@ async function decodeObjectUrl(url: string): Promise<void> {
   });
 }
 
-async function hydrate(html: string | null | undefined, serial: number): Promise<{ html: string; ok: boolean }> {
-  const safeHtml = sanitizeQuestionHtmlForPreview(html);
+async function hydrate(html: string | null | undefined, serial: number, restricted = false): Promise<{ html: string; ok: boolean }> {
+  const safeHtml = restricted ? html || '' : sanitizeQuestionHtmlForPreview(html);
   if (!safeHtml || typeof document === 'undefined') return { html: safeHtml, ok: true };
   const template = document.createElement('template');
   template.innerHTML = safeHtml;
@@ -123,21 +123,42 @@ async function hydrate(html: string | null | undefined, serial: number): Promise
 async function renderQuestion() {
   const serial = ++renderSerial;
   clearObjectUrls();
+  let question = props.question;
+  const restricted = question.content_schema_version === 2;
+  try {
+    if (restricted) {
+      const content = normalizeQuestionContentV2(question.content_json);
+      question = {
+        ...question, stem: readonlyQuestionDocToHtml(content.stem),
+        options: content.options.map((option) => ({ key: option.id, text: readonlyQuestionDocToHtml(option.content) })),
+        analysis: content.analysis ? readonlyQuestionDocToHtml(content.analysis) : null,
+        answer: content.options.flatMap((option, index) => content.answer_option_ids.includes(option.id) ? [index] : []),
+      };
+    }
+  } catch {
+    rendered.stem = '题目内容格式不正确，暂不可预览';
+    rendered.options = [];
+    rendered.analysis = '';
+    rendered.correctIds = [];
+    emit('ready', { ok: false });
+    return;
+  }
   const [stem, options, analysis] = await Promise.all([
-    hydrate(props.question.stem, serial),
-    Promise.all((props.question.options || []).map(async (option, index) => ({
-      key: option.key || String.fromCharCode(65 + index), text: await hydrate(option.text, serial),
+    hydrate(question.stem, serial, restricted),
+    Promise.all((question.options || []).map(async (option, index) => ({
+      key: option.key || String.fromCharCode(65 + index), text: await hydrate(option.text, serial, restricted),
     }))),
-    hydrate(props.question.analysis, serial),
+    hydrate(props.revealAnswer ? question.analysis : null, serial, restricted),
   ]);
   if (serial !== renderSerial) return;
   rendered.stem = stem.html;
   rendered.options = options.map((option) => ({ key: option.key, text: option.text.html }));
   rendered.analysis = analysis.html;
+  rendered.correctIds = (question.answer || []).flatMap((index) => question.options?.[index] ? [question.options[index].key] : []);
   emit('ready', { ok: stem.ok && options.every((option) => option.text.ok) && analysis.ok });
 }
 
-watch(() => props.question, () => { void renderQuestion(); }, { deep: true, immediate: true });
+watch([() => props.question, () => props.revealAnswer], () => { void renderQuestion(); }, { deep: true, immediate: true });
 onBeforeUnmount(() => {
   renderSerial += 1;
   clearObjectUrls();

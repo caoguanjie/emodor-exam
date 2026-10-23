@@ -25,6 +25,10 @@ function id(value: string, label: string): string {
   return normalized;
 }
 
+function mobileLearner(user: AuthUser): void {
+  if (user.client !== 'mobile' || user.role !== 'employee') throw Errors.forbidden();
+}
+
 @Controller('me')
 export class VideoLearningController {
   constructor(private readonly sessions: VideoSessionService) {}
@@ -35,6 +39,7 @@ export class VideoLearningController {
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
+    mobileLearner(user);
     assertKeys(req.body, VIDEO_START_KEYS, '视频学习请求');
     return this.sessions.start(String(user.id), dto.lesson_id);
   }
@@ -46,12 +51,14 @@ export class VideoLearningController {
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
+    mobileLearner(user);
     assertKeys(req.body, VIDEO_HEARTBEAT_KEYS, '视频心跳请求');
     return this.sessions.heartbeat(String(user.id), id(sessionId, 'session_id'), dto);
   }
 
   @Post('video-sessions/:id/close')
   close(@Param('id') sessionId: string, @CurrentUser() user: AuthUser) {
+    mobileLearner(user);
     return this.sessions.close(String(user.id), id(sessionId, 'session_id'));
   }
 
@@ -61,12 +68,14 @@ export class VideoLearningController {
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
+    mobileLearner(user);
     assertKeys(req.query, VIDEO_RECORD_QUERY_KEYS, '视频学习记录查询');
     return this.sessions.records(String(user.id), query.page ?? 1, query.page_size ?? 20);
   }
 
   @Get('courses/:id/progress')
   progress(@Param('id') courseId: string, @CurrentUser() user: AuthUser) {
+    mobileLearner(user);
     return this.sessions.progress(String(user.id), id(courseId, 'course_id'));
   }
 }

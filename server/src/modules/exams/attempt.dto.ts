@@ -31,16 +31,10 @@ export class DraftInputDto {
 }
 
 export class SubmitAttemptDto {
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1)
-  revision?: number;
+  @IsString() @Matches(/^[1-9]\d*$/)
+  record_id!: string;
 
-  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => AnswerInputDto)
-  answers?: AnswerInputDto[];
-
-  draft() {
-    const hasRevision = this.revision !== undefined;
-    const hasAnswers = this.answers !== undefined;
-    if (hasRevision !== hasAnswers) return null;
-    return hasRevision ? { revision: this.revision!, answers: this.answers! } : undefined;
-  }
+  // Validated after ownership, the record lock and terminal/deadline arbitration.
+  // A controller-level validation pipe would break terminal idempotent replays.
+  answers!: Array<{ item_id: string; option_ids: string[] }>;
 }

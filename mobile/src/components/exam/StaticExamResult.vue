@@ -1,0 +1,28 @@
+<script setup lang="ts">
+import AppPage from '@/components/common/AppPage.vue'
+import AppTopBar from '@/components/common/AppTopBar.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
+import { examReviewSummary, examTitle, useExamScenario } from '@/fixtures/ui-scenarios/exam'
+const { scenario, loadScenario } = useExamScenario('exam-result')
+const props = defineProps<{ query: Record<string, unknown> }>()
+loadScenario(props.query)
+function list() { uni.reLaunch({ url: '/pages/exam/index' }) }
+function review() { uni.navigateTo({ url: '/pages/exam/review' }) }
+const scoreRows = examReviewSummary.typeRows
+const summaryMetrics = [
+  { value: examReviewSummary.correct, label: '答对', color: 'success' },
+  { value: examReviewSummary.wrong, label: '答错', color: 'danger' },
+  { value: examReviewSummary.unanswered, label: '未答', color: 'muted' },
+  { value: `${examReviewSummary.accuracy}%`, label: '正确率', color: 'primary' },
+]
+</script>
+<template>
+  <AppPage :padded="false"><template #header><view v-if="!scenario.state" class="result-hero"><AppTopBar title="考试结果" back-target="/pages/exam/index" light /><text class="result-hero__name">{{ examTitle }}</text><view class="result-hero__score"><text>{{ examReviewSummary.score }}</text><text>分</text></view><text class="result-hero__status">✓ 已通过 · 及格线 60 分</text></view><AppTopBar v-else title="考试结果" back-target="/pages/exam/index" /></template>
+    <EmptyState v-if="scenario.state" :title="scenario.state === 'missing' ? '记录不存在' : '考试结果暂不可用'" :description="scenario.state === 'missing' ? '该考试记录不存在或无权查看。' : '结果获取失败，交卷记录已安全保存，可稍后重试。'"><wd-button @click="scenario.state === 'missing' ? list() : (scenario.state = undefined)">{{ scenario.state === 'missing' ? '返回考试中心' : '重试' }}</wd-button></EmptyState>
+    <view v-else class="result-body"><view class="result-summary"><view class="result-summary__metrics"><view v-for="metric in summaryMetrics" :key="metric.label"><text :class="`result-summary__${metric.color}`">{{ metric.value }}</text><text>{{ metric.label }}</text></view></view><view class="result-summary__track"><view :style="{ width: `${examReviewSummary.accuracy}%` }" /></view><view class="result-summary__time"><text>用时 21 分 36 秒</text><text>交卷 10-21 14:28</text></view></view><view class="result-types"><text class="result-types__heading">题型得分</text><view v-for="row in scoreRows" :key="row.title" class="result-types__row"><view><text>{{ row.title }} <text class="result-types__muted">对 {{ row.correct }}/{{ row.count }}</text></text><text>{{ row.score }} / {{ row.totalScore }}</text></view><view class="result-types__track"><view :style="{ width: `${row.score / row.totalScore * 100}%` }" /></view></view></view></view>
+    <template #footer><view v-if="!scenario.state" class="result-footer"><wd-button type="info" variant="plain" @click="list">返回列表</wd-button><wd-button @click="review">查看答案解析</wd-button></view></template>
+  </AppPage>
+</template>
+<style scoped>
+.result-hero { padding-bottom: 28px; text-align: center; color: var(--app-color-surface); background: linear-gradient(180deg, var(--app-color-primary), var(--app-color-primary-deep)); }.result-hero__name { display: block; margin-top: 10px; padding: 0 20px; font-size: 12px; }.result-hero__score { margin-top: 10px; display: flex; align-items: baseline; justify-content: center; gap: 4px; }.result-hero__score > text:first-child { font: italic 600 72px monospace; }.result-hero__score > text:last-child { font-size: 14px; }.result-hero__status { display: inline-block; margin-top: 4px; background: rgba(255,255,255,.16); padding: 5px 12px; border-radius: 16px; font-size: 11px; }.result-body { padding: 0 16px 100px; }.result-summary { background: var(--app-color-surface); padding: 20px 16px 14px; border-radius: 0 0 var(--app-radius-md) var(--app-radius-md); }.result-summary__metrics { display: flex; text-align: center; }.result-summary__metrics > view { display: flex; flex: 1; flex-direction: column; gap: 4px; font-size: 11px; color: var(--app-color-text-muted); border-right: 1px solid var(--app-color-border); }.result-summary__metrics > view:last-child { border: 0; }.result-summary__metrics > view > text:first-child { font: 500 22px monospace; }.result-summary__success { color: var(--app-color-success); }.result-summary__danger { color: var(--app-color-danger); }.result-summary__primary { color: var(--app-color-primary); }.result-summary__track, .result-types__track { height: 5px; margin-top: 18px; border-radius: 4px; background: var(--app-color-background); overflow: hidden; }.result-summary__track > view { width: 80%; height: 100%; background: var(--app-color-success); }.result-summary__time { display: flex; justify-content: space-between; margin-top: 10px; font-size: 10px; color: var(--app-color-text-muted); }.result-types { margin-top: 16px; padding: 18px 16px; border-radius: var(--app-radius-md); background: var(--app-color-surface); }.result-types__heading { font-size: 15px; font-weight: 600; }.result-types__row { margin-top: 18px; font-size: 12px; }.result-types__row > view:first-child { display: flex; justify-content: space-between; }.result-types__muted { color: var(--app-color-text-muted); font-size: 11px; padding-left: 5px; }.result-types__track { margin-top: 8px; }.result-types__track > view { height: 100%; background: var(--app-color-primary); }.result-footer { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(12px + var(--app-safe-area-bottom)); display: flex; gap: 12px; background: var(--app-color-surface); border-top: 1px solid var(--app-color-border); }.result-footer :deep(.wd-button) { flex: 1; }
+</style>

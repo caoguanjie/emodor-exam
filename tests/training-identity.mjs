@@ -101,6 +101,8 @@ export async function run(ctx) {
   assert.equal(forbiddenProfilePatch.status, 400, `forbiddenProfilePatch ${JSON.stringify(forbiddenProfilePatch)}`);
   const unknownProfilePatch = await ctx.request(admin, 'PATCH', '/me/profile', { username: 'must-not-be-accepted' });
   assert.equal(unknownProfilePatch.status, 400, `unknownProfilePatch ${JSON.stringify(unknownProfilePatch)}`);
+  const phoneProfilePatch = await ctx.request(admin, 'PATCH', '/me/profile', { phone: '13800138000' });
+  assert.equal(phoneProfilePatch.status, 400, `phoneProfilePatch ${JSON.stringify(phoneProfilePatch)}`);
 
   const importPasswords = [];
   const importUsername = `a2_import_${randomBytes(3).toString('hex')}`;

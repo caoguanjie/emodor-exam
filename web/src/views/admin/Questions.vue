@@ -180,6 +180,7 @@ import QuestionPreview from '../../components/QuestionPreview.vue';
 import { Filter } from '@element-plus/icons-vue';
 import {
   questionDraftFromView,
+  questionDraftWithContent,
   questionRichTextToPlainText,
   type Id, type Page, type QuestionConcept, type QuestionDraftPayload, type QuestionType, type QuestionView,
 } from '../../api/training-types';
@@ -475,7 +476,7 @@ async function loadHistoryPage(page: number) {
 
 function payload(value: QuestionDraftPayload) {
   return Object.fromEntries(Object.entries({
-    ...value,
+    ...questionDraftWithContent(value),
     concept_id: value.concept_id || null,
     analysis: value.analysis ?? null,
   }).filter(([, item]) => item !== undefined && item !== ''));
@@ -490,14 +491,21 @@ async function saveQuestion() {
   const requestContext = editorContext;
   if (!requestContext || !editorVisible.value) return;
   const submitted = editorSnapshot();
+  let body: ReturnType<typeof payload>;
+  try {
+    body = payload(submitted.form);
+  } catch (error) {
+    ElMessage.warning(error instanceof Error ? error.message : '题目内容格式不正确，请检查后重试');
+    return;
+  }
   saving.value = true;
   try {
     let saved: any;
     if (submitted.mode === 'create') {
-      saved = await http.post('/ai/questions', payload(submitted.form));
+      saved = await http.post('/ai/questions', body);
     } else {
       saved = await http.put(`/ai/questions/${submitted.id}`, {
-        ...payload(submitted.form), expected_version_id: submitted.expectedVersionId,
+        ...body, expected_version_id: submitted.expectedVersionId,
       });
     }
     const receipt = savedVersionReceipt(saved?.saved_version_id);

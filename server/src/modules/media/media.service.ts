@@ -2,13 +2,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Errors } from '../../common/errors';
 import { AppConfig } from '../../config/configuration';
 import { MediaAsset } from '../../entities/media-asset.entity';
 import { MediaReference } from '../../entities/media-reference.entity';
+import { IdentityVerificationSession } from '../../entities/identity-verification-session.entity';
+import { SysUser } from '../../entities/sys-user.entity';
 import {
   assertMediaPurpose,
   assertMediaSize,
@@ -46,6 +48,7 @@ export interface ContentDescriptor {
 export interface MediaOwnerPolicy {
   allowedPurposes: readonly MediaPurpose[];
   authorizeRead: (actorId: MediaId, businessId: MediaId, assetId?: MediaId) => boolean | Promise<boolean>;
+  authorizeTicket?: (actorId: MediaId, businessId: MediaId, assetId?: MediaId) => boolean | Promise<boolean>;
   validateBinding?: (manager: EntityManager, asset: MediaAsset, businessId: MediaId) => void | Promise<void>;
 }
 
@@ -108,6 +111,7 @@ export class MediaService {
     this.ownerPolicies.set(ownerType, {
       allowedPurposes: [...new Set(policy.allowedPurposes)],
       authorizeRead: policy.authorizeRead,
+      authorizeTicket: policy.authorizeTicket,
       validateBinding: policy.validateBinding,
     });
   }
@@ -317,6 +321,82 @@ export class MediaService {
     return this.uploadForPurpose(actorId, purpose, file, ownerId);
   }
 
+  /** Only the identity image processor may pass already sanitized JPEG bytes here. */
+  async storeIdentityImage(actorId: string, purpose: 'identity_id_portrait' | 'identity_id_emblem' | 'identity_face', bytes: Buffer): Promise<MediaUploadResult> {
+    const uploaded = await this.uploadForPurpose(actorId, purpose, { buffer: bytes, size: bytes.length, originalname: '', mimetype: 'image/jpeg' } as Express.Multer.File);
+    await this.dataSource.transaction(async (manager) => this.bind(manager, uploaded.assetId, 'identity_verification_user', actorId));
+    return uploaded;
+  }
+
+  async releaseIdentityImage(actorId: string, assetId: string): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      // Same user lock as session creation prevents release racing a new submission.
+      await manager.getRepository(SysUser).findOne({ where: { id: actorId }, lock: { mode: 'pessimistic_write' } });
+      const repo = manager.getRepository(MediaAsset);
+      const asset = await repo.findOne({ where: { id: assetId }, lock: { mode: 'pessimistic_write' } });
+      if (!asset || asset.ownerId !== actorId || asset.uploadedBy !== actorId || !['identity_id_portrait', 'identity_id_emblem', 'identity_face'].includes(asset.purpose)) throw Errors.dataForbidden();
+      const used = await manager.getRepository(IdentityVerificationSession).createQueryBuilder('s')
+        .where('s.user_id = :actorId', { actorId })
+        .andWhere('(s.face_asset_id = :assetId OR s.id_card_portrait_asset_id = :assetId OR s.id_card_emblem_asset_id = :assetId)', { assetId }).getCount();
+      if (used) throw Errors.mediaReferenced('认证会话正在保留该材料');
+      const refs = manager.getRepository(MediaReference);
+      const own = await refs.findOne({ where: { assetId, ownerType: 'identity_verification_user', ownerId: actorId }, lock: { mode: 'pessimistic_write' } });
+      if (!own || await refs.count({ where: { assetId } }) !== 1) throw Errors.mediaReferenced();
+      await refs.delete({ assetId, ownerType: 'identity_verification_user', ownerId: actorId });
+      asset.status = 'deleting'; await repo.save(asset);
+    });
+    await this.remove(actorId, assetId);
+  }
+
+  /** Maintenance entry: only 24h-old, never-submitted identity assets are released. */
+  async cleanupTemporaryIdentityImages(): Promise<number> {
+    const candidates = await this.assetRepo.createQueryBuilder('a').where('a.purpose IN (:...purposes)', { purposes: ['identity_id_portrait', 'identity_id_emblem', 'identity_face'] })
+      .andWhere('a.created_at < :cutoff', { cutoff: new Date(Date.now() - 24 * 60 * 60 * 1000) }).getMany();
+    let removed = 0;
+    for (const asset of candidates) {
+      try { await this.releaseIdentityImage(asset.ownerId, String(asset.id)); removed++; }
+      catch (error) { if (![40302, 40913].includes(Number((error as any)?.code))) this.logger.warn('临时认证材料清理暂未完成'); }
+    }
+    return removed;
+  }
+
+  /** Private, bounded identity access; neither HTTP route accepts a local path. */
+  async readPrivateBytes(actorId: string, assetId: string, purpose: string): Promise<Buffer> {
+    await this.assertUsable(actorId, assetId, purpose, actorId);
+    const asset = await this.findAsset(assetId);
+    if (asset.uploadedBy !== actorId || !purpose.startsWith('identity_')) throw Errors.dataForbidden();
+    const path = this.storagePath(asset.storageKey);
+    const info = await stat(path).catch(() => null);
+    if (!info?.isFile() || info.size > 10 * 1024 * 1024) throw Errors.notFound('认证材料不存在');
+    return readFile(path);
+  }
+
+  /** Tickets never inherit uploader ownership: they require an exact live business reference. */
+  async authorizeTicket(actorId: string, assetId: string, ownerType: string, ownerId: string): Promise<MediaAsset> {
+    const actor = await this.dataSource.getRepository(SysUser).findOne({ where: { id: actorId } });
+    if (!actor || Number(actor.status) !== 1) throw Errors.dataForbidden('媒体访问账号不可用');
+    const policy = this.ownerPolicy(ownerType);
+    const asset = await this.findAsset(assetId);
+    if (asset.status !== 'ready') throw Errors.notFound('媒体不存在或尚未就绪');
+    if (!policy.allowedPurposes.includes(asset.purpose as MediaPurpose)) throw Errors.dataForbidden();
+    if (asset.purpose === 'video' && ownerType !== 'lesson_version_video') throw Errors.dataForbidden();
+    const authorize = policy.authorizeTicket ?? (asset.purpose === 'video' ? undefined : policy.authorizeRead);
+    const reference = await this.referenceRepo.findOne({ where: { assetId, ownerType, ownerId } });
+    if (!reference || !authorize || !await authorize(actorId, ownerId, assetId)) throw Errors.dataForbidden();
+    return asset;
+  }
+
+  async openTicketContent(claims: { user: string; asset: string; purpose: string; ownerType: string; ownerId: string }, rangeHeader?: string): Promise<ContentDescriptor> {
+    const asset = await this.authorizeTicket(claims.user, claims.asset, claims.ownerType, claims.ownerId);
+    if (asset.purpose !== claims.purpose) throw Errors.dataForbidden();
+    const path = this.storagePath(asset.storageKey);
+    const info = await stat(path).catch(() => null);
+    if (!info?.isFile()) throw Errors.notFound('媒体不存在');
+    let range: ByteRange | null;
+    try { range = parseRange(rangeHeader, info.size); } catch { throw Errors.mediaRangeInvalid(); }
+    return { asset, path, size: info.size, range };
+  }
+
   private async findAsset(assetId: MediaId, manager?: EntityManager): Promise<MediaAsset> {
     const repo = manager?.getRepository(MediaAsset) || this.assetRepo;
     const asset = await repo.findOne({ where: { id: String(assetId) } });
@@ -371,9 +451,10 @@ export class MediaService {
   }
 
   private async canRead(actorId: string, asset: MediaAsset): Promise<boolean> {
-    if (asset.ownerId === actorId) return true;
+    if (asset.purpose !== 'video' && asset.ownerId === actorId) return true;
     const refs = await this.referenceRepo.find({ where: { assetId: String(asset.id) } });
     for (const ref of refs) {
+      if (asset.purpose === 'video' && ref.ownerType !== 'lesson_version_video') continue;
       const policy = this.ownerPolicies.get(ref.ownerType);
       if (!policy || !policy.allowedPurposes.includes(asset.purpose as MediaPurpose)) continue;
       if (await policy.authorizeRead(actorId, String(ref.ownerId), String(asset.id))) return true;

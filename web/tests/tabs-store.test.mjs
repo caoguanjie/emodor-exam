@@ -50,6 +50,7 @@ test('restored business tabs discard retired routes and refuse to recreate them'
     ['re_admin_tabs', JSON.stringify([
       { path: '/admin/regulations/7', title: '制度详情', closable: true },
       { path: '/admin/statistics', title: '统计报表', closable: true },
+      { path: '/my/exams/42', title: '旧PC考试页', closable: true },
       { path: '/admin/questions', title: '题库管理', closable: true },
     ])],
   ]);
@@ -62,6 +63,7 @@ test('restored business tabs discard retired routes and refuse to recreate them'
     const tabs = useTabsStore(createPinia());
     assert.deepEqual(tabs.tabs.map((tab) => tab.path), ['/admin/questions']);
     tabs.visit('/admin/grading/9', '人工阅卷');
+    tabs.visit('/my/exams?continue=1', '我的考试');
     assert.deepEqual(tabs.tabs.map((tab) => tab.path), ['/admin/questions']);
     assert.deepEqual(JSON.parse(values.get('re_admin_tabs')), [
       { path: '/admin/questions', title: '题库管理', closable: true },

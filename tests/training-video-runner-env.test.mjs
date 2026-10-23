@@ -8,12 +8,32 @@ function suiteEnvFor(path) {
   return runner.suiteRuntimeEnvOverrides(path);
 }
 
-test('standard video suite supplies pool size 2 without mutating caller environment', () => {
+function suiteApiFor(path) {
+  assert.equal(typeof runner.suiteRuntimeApi, 'function');
+  return runner.suiteRuntimeApi(path);
+}
+
+test('course progress reads use mobile debug login without a fake identity provider', () => {
+  const [courseSuite] = runner.resolveSuitePaths('training-courses');
+  assert.deepEqual(suiteEnvFor(courseSuite), {
+    NODE_ENV: 'test', SERVER_DEBUG_LOGIN_ENABLED: 'true', SMS_PROVIDER: 'disabled',
+  });
+  assert.deepEqual(suiteApiFor(courseSuite), {});
+  const allPath = runner.resolveSuitePaths('all').find((path) => path === courseSuite);
+  assert.deepEqual(suiteEnvFor(allPath), suiteEnvFor(courseSuite));
+});
+
+test('video suite supplies its isolated identity runtime and pool size 2 without mutating caller environment', () => {
   const original = process.env.DB_POOL_SIZE;
   process.env.DB_POOL_SIZE = 'caller-value';
   try {
     const [videoSuite] = runner.resolveSuitePaths('training-video-learning');
-    assert.deepEqual(suiteEnvFor(videoSuite), { DB_POOL_SIZE: '2' });
+    assert.deepEqual(suiteEnvFor(videoSuite), {
+      DB_POOL_SIZE: '2', NODE_ENV: 'test', SERVER_DEBUG_LOGIN_ENABLED: 'true',
+      SMS_PROVIDER: 'disabled', IDENTITY_PROVIDER: 'disabled',
+    });
+    assert.match(suiteApiFor(videoSuite).apiEntry, /server\/node_modules\/tsx\/dist\/cli\.mjs$/);
+    assert.match(suiteApiFor(videoSuite).apiArgs[0].replaceAll('\\', '/'), /server\/test\/identity-e2e-main\.ts$/);
     assert.equal(process.env.DB_POOL_SIZE, 'caller-value');
   } finally {
     if (original === undefined) delete process.env.DB_POOL_SIZE;
@@ -23,13 +43,34 @@ test('standard video suite supplies pool size 2 without mutating caller environm
 
 test('all selection gives the video suite the same override and leaves other suites unforced', () => {
   const [selectedVideoSuite] = runner.resolveSuitePaths('training-video-learning');
+  const [selectedMobileAuthSuite] = runner.resolveSuitePaths('mobile-auth');
+  const [selectedCourseSuite] = runner.resolveSuitePaths('training-courses');
   const allSuites = runner.resolveSuitePaths('all');
   const enumeratedVideoSuite = allSuites.find((path) => path === selectedVideoSuite);
+  const enumeratedMobileAuthSuite = allSuites.find((path) => path === selectedMobileAuthSuite);
 
   assert.ok(enumeratedVideoSuite);
+  assert.ok(enumeratedMobileAuthSuite);
   assert.deepEqual(suiteEnvFor(enumeratedVideoSuite), suiteEnvFor(selectedVideoSuite));
-  assert.deepEqual(suiteEnvFor(enumeratedVideoSuite), { DB_POOL_SIZE: '2' });
-  for (const suitePath of allSuites.filter((path) => path !== enumeratedVideoSuite)) {
+  assert.deepEqual(suiteEnvFor(enumeratedVideoSuite), {
+    DB_POOL_SIZE: '2', NODE_ENV: 'test', SERVER_DEBUG_LOGIN_ENABLED: 'true',
+    SMS_PROVIDER: 'disabled', IDENTITY_PROVIDER: 'disabled',
+  });
+  assert.deepEqual(suiteEnvFor(enumeratedMobileAuthSuite), {
+    NODE_ENV: 'test', SERVER_DEBUG_LOGIN_ENABLED: 'true', SMS_PROVIDER: 'disabled',
+  });
+  const identitySuites = ['mobile-identity', 'mobile-media-ticket', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5'].map((name) => runner.resolveSuitePaths(name)[0]);
+  for (const suitePath of identitySuites) {
+    assert.deepEqual(suiteEnvFor(suitePath), {
+      NODE_ENV: 'test', SERVER_DEBUG_LOGIN_ENABLED: 'true', SMS_PROVIDER: 'disabled', IDENTITY_PROVIDER: 'disabled',
+    });
+    assert.match(suiteApiFor(suitePath).apiEntry, /server\/node_modules\/tsx\/dist\/cli\.mjs$/);
+    const apiArgs = suiteApiFor(suitePath).apiArgs.map((value) => value.replaceAll('\\', '/'));
+    assert.equal(apiArgs.length, 1);
+    assert.match(apiArgs[0], /server\/test\/identity-e2e-main\.ts$/);
+  }
+  for (const suitePath of allSuites.filter((path) => ![enumeratedVideoSuite, enumeratedMobileAuthSuite, selectedCourseSuite, ...identitySuites].includes(path))) {
     assert.deepEqual(suiteEnvFor(suitePath), {});
+    assert.deepEqual(suiteApiFor(suitePath), {});
   }
 });

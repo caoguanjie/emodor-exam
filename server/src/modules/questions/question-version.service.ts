@@ -194,6 +194,8 @@ export class QuestionVersionService implements OnModuleInit {
       options: draft.options,
       answer: draft.answer,
       analysis: draft.analysis,
+      contentSchemaVersion: 2,
+      contentJson: draft.contentJson,
       scoreCents: draft.scoreCents,
       conceptId: draft.conceptId || null,
       regulationId: draft.regulationId || null,
@@ -225,6 +227,8 @@ export class QuestionVersionService implements OnModuleInit {
     question.options = version.options;
     question.answer = version.answer;
     question.analysis = version.analysis;
+    question.contentSchemaVersion = version.contentSchemaVersion;
+    question.contentJson = version.contentJson;
     question.score = (version.scoreCents / 100).toFixed(2);
     question.status = version.status;
     question.source = version.source;
@@ -621,6 +625,7 @@ export class QuestionVersionService implements OnModuleInit {
       questionId: String(version.questionId), versionId: String(version.id), revision: Number(version.revision),
       categoryId: String(version.categoryId), difficulty: version.difficulty as Difficulty, type: version.type as QuestionType,
       stem: version.stem, options: version.options as QuestionOption[], answer: version.answer, analysis: version.analysis,
+      contentSchemaVersion: version.contentSchemaVersion || 1, contentJson: version.contentJson || null,
       scoreCents: Number(version.scoreCents), conceptId: version.conceptId || undefined,
       regulationId: version.regulationId || undefined, regulationVersionId: version.regulationVersionId || undefined,
       sourcePageGroup: version.sourcePageGroup ?? undefined,

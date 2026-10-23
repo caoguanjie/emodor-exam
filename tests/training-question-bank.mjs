@@ -244,6 +244,20 @@ async function runBody(ctx, mockPort) {
   assert.equal(sanitized.status, 200);
   assert.equal(sanitized.data.stem.includes('<script'), false);
   assert.equal(sanitized.data.stem.includes('onclick'), false);
+  const doc = (text) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
+  const v2Content = { stem: doc('稳定 ID 题干'), options: [{ id: 'opt_red', content: doc('红色') }, { id: 'opt_blue', content: doc('蓝色') }], analysis: doc('冻结解析'), answer_option_ids: ['opt_blue'] };
+  const v2 = await ctx.request(admin.actor, 'POST', '/ai/questions', { category_id: categoryId, difficulty: 'easy', type: 'single', score: 5, content_schema_version: 2, content_json: v2Content });
+  assert.equal(v2.status, 200, `v2-only create: ${JSON.stringify(v2)}`);
+  assert.deepEqual(v2.data.content_json, v2Content);
+  assert.deepEqual(v2.data.options.map((option) => option.key), ['opt_red', 'opt_blue']);
+  assert.deepEqual(v2.data.answer, [1]);
+  const reordered = await ctx.request(admin.actor, 'PUT', `/ai/questions/${v2.data.question_id}`, { expected_version_id: v2.data.current_version_id, content_schema_version: 2, content_json: { ...v2Content, options: [...v2Content.options].reverse() } });
+  assert.equal(reordered.status, 200, `stable reorder: ${JSON.stringify(reordered)}`);
+  assert.deepEqual(reordered.data.content_json.answer_option_ids, ['opt_blue']);
+  assert.deepEqual(reordered.data.options.map((option) => option.key), ['opt_blue', 'opt_red']);
+  assert.deepEqual(reordered.data.answer, [0]);
+  const badV2 = await ctx.request(admin.actor, 'POST', '/ai/questions', { category_id: categoryId, difficulty: 'easy', type: 'single', score: 5, content_schema_version: 2, content_json: { ...v2Content, stem: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '不透传', checked: true }] }] } } });
+  assert.equal(badV2.status, 400, 'v2 deep unknown fields must fail closed');
   const maliciousLegacyStem = '<p onclick="steal()">恶意旧题<script>alert(1)</script><img src="https://evil.test/tracker.png" onerror="steal()"></p>';
   const maliciousLegacy = await ctx.queryTestDb(
     'INSERT INTO question (regulation_id, version_id, type, stem, options, answer, analysis, score, status, source, created_by) VALUES (NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',

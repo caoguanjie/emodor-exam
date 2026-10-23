@@ -79,41 +79,53 @@ export interface QuestionOption {
   text: string;
 }
 
+export interface ReadonlyTiptapNode {
+  type: 'doc' | 'paragraph' | 'text' | 'hardBreak' | 'image';
+  text?: string;
+  content?: ReadonlyTiptapNode[];
+  attrs?: { asset_id: string };
+}
+export interface ReadonlyTiptapDoc extends ReadonlyTiptapNode { type: 'doc'; content: ReadonlyTiptapNode[] }
+export interface QuestionContentV2 {
+  stem: ReadonlyTiptapDoc;
+  options: Array<{ id: string; content: ReadonlyTiptapDoc }>;
+  analysis: ReadonlyTiptapDoc | null;
+  answer_option_ids: string[];
+}
+export interface SubmitAttemptRequest { record_id: string; answers: Array<{ item_id: string; option_ids: string[] }> }
+
 export interface AttemptQuestion {
   item_id: Id;
   type: QuestionType;
-  stem: string;
-  options: QuestionOption[];
+  stem: ReadonlyTiptapDoc;
+  options: Array<{ id: string; content: ReadonlyTiptapDoc }>;
   score: number;
 }
 
 export interface AttemptView {
+  status: 'in_progress' | 'submitted' | 'passed' | 'failed' | 'timeout';
   record_id: Id;
   paper_id: Id;
   release_id: Id | null;
-  source: LearnerSource | null;
-  category_id: Id | null;
-  difficulty: ExamDifficulty;
   deadline_at: string;
   server_now: string;
-  draft_revision: number;
   questions: AttemptQuestion[];
-  answers: AnswerInput[];
 }
 
 export interface FinalResultItem extends AttemptQuestion {
-  answer: AnswerInput | null;
-  correct_answer: number[] | null;
-  analysis: string | null;
-  gained_score: number | null;
+  selected_option_ids: string[];
+  correct_option_ids: string[];
+  analysis: ReadonlyTiptapDoc | null;
+  gained_score: number;
 }
 
 export interface FinalResult {
+  status: 'submitted' | 'passed' | 'failed' | 'timeout';
   record_id: Id;
   grading_state: GradeState;
   submission_method: SubmissionMethod | null;
   legacy: boolean;
-  submitted_at: string;
+  submitted_at: string | null;
   graded_at: string | null;
   score: number | null;
   passed: boolean | null;
@@ -139,6 +151,7 @@ export interface ExamHistoryItem {
 }
 
 export interface WrongItem extends FinalResultItem {
+  legacy: boolean;
   record_id: Id;
   submitted_at: string;
 }

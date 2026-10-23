@@ -38,6 +38,20 @@ test('training video learning suite is registered once in aggregate selection', 
   assert.equal(resolveSuitePaths('all').filter((path) => path === expected).length, 1);
 });
 
+test('mobile auth suite is registered once in aggregate selection', () => {
+  const expected = fileURLToPath(new URL('./mobile-auth.mjs', import.meta.url));
+  assert.deepEqual(resolveSuitePaths('mobile-auth'), [expected]);
+  assert.equal(resolveSuitePaths('all').filter((path) => path === expected).length, 1);
+});
+
+for (const name of ['mobile-identity', 'mobile-media-ticket']) {
+  test(`${name} suite is registered once in aggregate selection`, () => {
+    const expected = fileURLToPath(new URL(`./${name}.mjs`, import.meta.url));
+    assert.deepEqual(resolveSuitePaths(name), [expected]);
+    assert.equal(resolveSuitePaths('all').filter((path) => path === expected).length, 1);
+  });
+}
+
 test('training question import suite is registered once in aggregate selection', () => {
   const expected = fileURLToPath(new URL('./training-question-import.mjs', import.meta.url));
   assert.deepEqual(resolveSuitePaths('training-question-import'), [expected]);

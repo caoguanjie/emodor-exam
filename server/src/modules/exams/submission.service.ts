@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { AuditService } from '../../common/audit.service';
 import { Errors, ExamStatus } from '../../common/errors';
-import type { DraftInput, FinalResult, Id, SubmissionMethod } from '../../common/training-contracts';
+import type { FinalResult, Id, SubmissionMethod } from '../../common/training-contracts';
 import { ExamAnswer } from '../../entities/exam-answer.entity';
 import { ExamRecord } from '../../entities/exam-record.entity';
 import { SysUser } from '../../entities/sys-user.entity';
@@ -10,6 +10,8 @@ import { StatisticsService } from '../statistics/statistics.service';
 import { AttemptReaderService, type GradingSnapshot } from './attempt-reader.service';
 import { AnswerDraftService } from './answer-draft.service';
 import { ExamHistoryService } from './exam-history.service';
+import { questionContent } from '../questions/question-content';
+import { assertExamIdentity, expireExamRecord } from './exam-state';
 
 export interface SubmissionGradeDetail {
   itemId: string;
@@ -31,14 +33,20 @@ export function gradeSubmissionSnapshot(snapshot: GradingSnapshot, rows: ExamAns
     if (!['single', 'multiple', 'judgment'].includes(item.type)) {
       throw Errors.submitConflict('题型不支持自动评分');
     }
-    const selected = Array.isArray(row?.selected)
+    const content = questionContent(item);
+    const selected = Array.isArray(row?.selectedOptionIds)
+      ? row!.selectedOptionIds!.map((id) => content.options.findIndex((option) => option.id === id)).sort((a, b) => a - b)
+      : Array.isArray(row?.selected)
       ? [...new Set(row!.selected!.map(Number))].sort((left, right) => left - right)
       : [];
-    const expected = [...new Set(item.answer.map(Number))].sort((left, right) => left - right);
+    const selectedIds = [...new Set(Array.isArray(row?.selectedOptionIds)
+      ? row.selectedOptionIds
+      : selected.map((index) => content.options[index]?.id).filter((id): id is string => Boolean(id)))].sort();
+    const expected = [...content.answer_option_ids].sort();
     if (!selected.length) {
       return { itemId: String(item.itemId), selected: null, isCorrect: null, gainedCents: 0 };
     }
-    const fullyCorrect = selected.length === expected.length && selected.every((value, index) => value === expected[index]);
+    const fullyCorrect = selectedIds.length === expected.length && selectedIds.every((value, index) => value === expected[index]);
     let gainedCents = 0;
     let isCorrect = 0;
     if (fullyCorrect) {
@@ -46,8 +54,8 @@ export function gradeSubmissionSnapshot(snapshot: GradingSnapshot, rows: ExamAns
       isCorrect = 1;
     } else if (item.type === 'multiple') {
       const expectedSet = new Set(expected);
-      const hasWrong = selected.some((value) => !expectedSet.has(value));
-      if (!hasWrong && selected.length < expected.length) {
+      const hasWrong = selectedIds.some((value) => !expectedSet.has(value));
+      if (!hasWrong && selectedIds.length < expected.length) {
         gainedCents = Math.round(Number(item.scoreCents) * Number(snapshot.rule.partialCreditRatio));
       }
     }
@@ -60,6 +68,23 @@ export function gradeSubmissionSnapshot(snapshot: GradingSnapshot, rows: ExamAns
     fullScoreCount: details.filter((detail, index) => detail.gainedCents === Number(snapshot.items[index].scoreCents)).length,
     details,
   };
+}
+
+export function validateWholeSubmission(recordId: string, input: unknown, snapshot: GradingSnapshot): Array<{ item_id: string; option_ids: string[] }> {
+  const obj = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
+  if (!obj(input) || Object.keys(input).some((key) => !['record_id', 'answers'].includes(key)) || typeof input.record_id !== 'string' || !/^[1-9]\d*$/.test(input.record_id) || input.record_id !== recordId || !Array.isArray(input.answers)) throw Errors.param('整卷交卷请求非法');
+  if (input.answers.length !== snapshot.items.length) throw Errors.param('必须提交全部题目，未答题使用空数组');
+  const byItem = new Map(snapshot.items.map((item) => [String(item.itemId), item]));
+  const seen = new Set<string>();
+  return input.answers.map((answer: unknown) => {
+    if (!obj(answer) || Object.keys(answer).some((key) => !['item_id', 'option_ids'].includes(key)) || typeof answer.item_id !== 'string' || !Array.isArray(answer.option_ids) || !byItem.has(answer.item_id) || seen.has(answer.item_id)) throw Errors.param('交卷题目缺失、重复或非法');
+    seen.add(answer.item_id);
+    const item = byItem.get(answer.item_id)!;
+    const allowed = new Set(questionContent(item).options.map((option) => option.id));
+    const ids = answer.option_ids;
+    if (new Set(ids).size !== ids.length || ids.some((id) => typeof id !== 'string' || !allowed.has(id)) || (item.type !== 'multiple' && ids.length > 1)) throw Errors.param('交卷选项非法');
+    return { item_id: answer.item_id, option_ids: [...ids] as string[] };
+  });
 }
 
 type ResultRecord = ExamRecord & {
@@ -100,7 +125,7 @@ export class SubmissionService {
     this.audit.log({
       actor_id: Number(effect.userId),
       actor_name: actorName,
-      action: 'exam.submit',
+      action: effect.method === 'timeout' ? 'exam.timeout' : 'exam.submit',
       object_type: 'exam_record',
       object_id: effect.recordId,
       detail: { status: effect.status, score: effect.score, timeout: effect.method === 'timeout' },
@@ -110,29 +135,35 @@ export class SubmissionService {
     return outcome.result;
   }
 
-  async submit(userId: Id, recordId: Id, input?: DraftInput): Promise<FinalResult> {
+  async submit(userId: Id, recordId: Id, input?: unknown): Promise<FinalResult> {
     const completed = await this.dataSource.transaction(async (manager) => {
       const user = await manager.getRepository(SysUser).findOne({
         where: { id: String(userId) }, lock: { mode: 'pessimistic_write' },
       });
       if (!user) throw Errors.notFound('用户不存在');
       if (Number(user.status) !== 1) throw Errors.accountDisabled();
-      let record = await manager.getRepository(ExamRecord).findOne({
-        where: { id: String(recordId) }, lock: { mode: 'pessimistic_write' },
-      }) as ResultRecord | null;
+      let record = await manager.getRepository(ExamRecord).findOne({ where: { id: String(recordId) } }) as ResultRecord | null;
       if (!record) throw Errors.notFound('考试记录不存在');
       if (String(record.userId) !== String(userId)) throw Errors.dataForbidden();
+      record = await manager.getRepository(ExamRecord).findOne({ where: { id: String(recordId) }, lock: { mode: 'pessimistic_write' } }) as ResultRecord;
       if (record.status !== ExamStatus.IN_PROGRESS || record.gradingState !== 'not_submitted') {
           return { outcome: { result: await this.history.resultInTransaction(manager, record), effect: null }, actorName: user.username };
       }
-      const expired = new Date(record.deadlineAt).getTime() <= Date.now();
-      if (input && !expired) {
-        await this.drafts.saveInTransaction(manager, userId, recordId, input, record as any);
-        record = await manager.getRepository(ExamRecord).findOne({
-          where: { id: String(recordId) }, lock: { mode: 'pessimistic_write' },
-        }) as ResultRecord;
-      }
-      return { outcome: await this.finalize(manager, recordId, expired ? 'timeout' : 'manual', record), actorName: user.username };
+      if (record.regulationId || !record.assignmentId) throw Errors.dataForbidden('请使用培训考试入口');
+      const acceptedAt = new Date();
+      if (acceptedAt.getTime() >= new Date(record.deadlineAt).getTime()) return { outcome: await this.finalize(manager, recordId, 'timeout', record), actorName: user.username };
+      await assertExamIdentity(manager, String(userId));
+      const snapshot = await this.reader.forGrading(manager, String(recordId));
+      const answers = validateWholeSubmission(String(recordId), input, snapshot);
+      const repo = manager.getRepository(ExamAnswer);
+      await repo.delete({ examRecordId: String(recordId) });
+      const items = new Map(snapshot.items.map((item) => [String(item.itemId), item]));
+      await repo.save(answers.map((answer) => {
+        const item = items.get(answer.item_id)!;
+        const content = questionContent(item);
+        return repo.create({ examRecordId: String(recordId), recordQuestionId: answer.item_id, questionId: String(item.questionId), selectedOptionIds: answer.option_ids, selected: answer.option_ids.map((id) => content.options.findIndex((option) => option.id === id)), isCorrect: null, gainedScore: null });
+      }));
+      return { outcome: await this.finalize(manager, recordId, 'manual', record, acceptedAt), actorName: user.username };
     });
     return this.publishFinalization(completed.outcome, completed.actorName);
   }
@@ -152,11 +183,12 @@ export class SubmissionService {
       if (record.status !== ExamStatus.IN_PROGRESS || record.gradingState !== 'not_submitted') {
         return { outcome: { result: await this.history.resultInTransaction(manager, record), effect: null }, actorName: user.username };
       }
-      if (new Date(record.deadlineAt).getTime() <= Date.now()) {
+      const acceptedAt = new Date();
+      if (new Date(record.deadlineAt).getTime() <= acceptedAt.getTime()) {
         return { outcome: await this.finalize(manager, recordId, 'timeout', record), actorName: user.username };
       }
       await this.drafts.patchLegacyInTransaction(manager, userId, record as any, patch);
-      return { outcome: await this.finalize(manager, recordId, 'manual', record), actorName: user.username };
+      return { outcome: await this.finalize(manager, recordId, 'manual', record, acceptedAt), actorName: user.username };
     });
     return this.publishFinalization(completed.outcome, completed.actorName);
   }
@@ -197,7 +229,7 @@ export class SubmissionService {
     });
     if (outcome.expired) {
       await this.publishFinalization(outcome.outcome, outcome.actorName);
-      throw Errors.submitConflict('考试已超时，系统已自动交卷');
+      throw Errors.submitConflict('考试已超时未交卷');
     }
     return outcome.value;
   }
@@ -225,6 +257,7 @@ export class SubmissionService {
     recordId: Id,
     method: SubmissionMethod,
     alreadyLocked?: ResultRecord,
+    acceptedAt = new Date(),
   ): Promise<FinalizationOutcome> {
     const recordRepo = manager.getRepository(ExamRecord);
     const record = alreadyLocked || await recordRepo.findOne({
@@ -233,6 +266,10 @@ export class SubmissionService {
     if (!record) throw Errors.notFound('考试记录不存在');
     if (record.status !== ExamStatus.IN_PROGRESS || record.gradingState !== 'not_submitted') {
       return { result: await this.history.resultInTransaction(manager, record), effect: null };
+    }
+    if (method === 'timeout') {
+      const expired = await expireExamRecord(manager, record);
+      return { result: await this.history.resultInTransaction(manager, expired), effect: { recordId: String(record.id), regulationId: record.regulationId, userId: String(record.userId), method, status: expired.status, score: 0 } };
     }
     const snapshot = await this.reader.forGrading(manager, String(recordId));
     const answerRepo = manager.getRepository(ExamAnswer);
@@ -255,7 +292,7 @@ export class SubmissionService {
     });
     if (persisted.length) await answerRepo.save(persisted);
 
-    const submittedAt = new Date();
+    const submittedAt = acceptedAt;
     record.submissionMethod = method;
     record.submittedAt = submittedAt;
     record.activeAssignmentId = null;

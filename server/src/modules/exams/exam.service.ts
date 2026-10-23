@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, LessThanOrEqual, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, LessThanOrEqual, Repository } from 'typeorm';
 import { ExamRecord } from '../../entities/exam-record.entity';
 import { ExamAnswer } from '../../entities/exam-answer.entity';
 import { ExamPaper } from '../../entities/exam-paper.entity';
@@ -21,13 +21,14 @@ import { ScrollCoverageUtil } from '../../entities/learning-record.entity';
 import { LegacyExamAdapter } from './legacy-exam-adapter';
 import { AnswerDraftService } from './answer-draft.service';
 import { SubmissionService } from './submission.service';
+import { expireExamRecord, isScoredLegacyTimeout } from './exam-state';
 
 const SUBMIT_LOCK_TTL = 30; // exam:lock:submit:{record_id} TTL = 判分 P99 × 3（07 册 3.2.4）
 
 /**
  * 考试评分服务（05 册 6.4，06 册 §4）：
  * 五步资格校验链 → 开考事务（deadline_at 快照 + Redis 计时）→ 确定性 seed 乱序下发
- * → 作答暂存 → 三层幂等交卷 → 自动评分落库 → 超时自动交卷（定时扫描）。
+ * → 作答暂存 → 幂等主动交卷 → 自动评分落库；到期只收口为超时未交卷。
  */
 @Injectable()
 export class ExamService {
@@ -168,10 +169,12 @@ export class ExamService {
 
   // ================= 开考 =================
 
-  private async loadLegacyPaperQuestions(paperId: string) {
-    const pqs = await this.pqRepo.find({ where: { paperId }, order: { sort: 'ASC', id: 'ASC' } });
+  private async loadLegacyPaperQuestions(paperId: string, manager?: EntityManager) {
+    const pqRepo = manager?.getRepository(PaperQuestion) || this.pqRepo;
+    const questionRepo = manager?.getRepository(Question) || this.questionRepo;
+    const pqs = await pqRepo.find({ where: { paperId }, order: { sort: 'ASC', id: 'ASC' } });
     const qIds = pqs.map((pq) => pq.questionId);
-    const questions = qIds.length ? await this.questionRepo.find({ where: { id: In(qIds) } }) : [];
+    const questions = qIds.length ? await questionRepo.find({ where: { id: In(qIds) } }) : [];
     const qMap = new Map(questions.map((q) => [q.id, q]));
     if (qIds.some((questionId) => !qMap.has(questionId))) throw Errors.param('固定试卷包含不存在的题目');
     for (const questionId of qIds) {
@@ -184,8 +187,8 @@ export class ExamService {
   }
 
   /** 乱序试卷视图（下发不含 answer / analysis，06 册 4.1） */
-  private async buildPaperView(record: ExamRecord, paper: ExamPaper) {
-    const { pqs, qMap } = await this.loadLegacyPaperQuestions(String(paper.id));
+  private async buildPaperView(record: ExamRecord, paper: ExamPaper, manager?: EntityManager) {
+    const { pqs, qMap } = await this.loadLegacyPaperQuestions(String(paper.id), manager);
     const seed = this.shuffle.deriveSeed(record.id);
     const ordered = this.shuffle.shuffleQuestionOrder(pqs, seed);
     return ordered.map((pq) => {
@@ -216,8 +219,8 @@ export class ExamService {
     return this.legacyAdapter.start(String(paperId), String(userId));
   }
 
-  private async startResponse(record: ExamRecord, paper: ExamPaper) {
-    const questions = await this.buildPaperView(record, paper);
+  private async startResponse(record: ExamRecord, paper: ExamPaper, manager?: EntityManager) {
+    const questions = await this.buildPaperView(record, paper, manager);
     return {
       exam_record_id: Number(record.id),
       attempt_no: record.attemptNo,
@@ -252,9 +255,17 @@ export class ExamService {
       };
     }
     if (record.assignmentId) return this.legacyAdapter.recover(String(recordId), String(userId));
-    const paper = await this.paperRepo.findOne({ where: { id: record.paperId } });
-    if (!paper) throw Errors.notFound('试卷不存在');
-    return this.startResponse(record, paper);
+    return this.dataSource.transaction(async (manager) => {
+      let locked = await manager.getRepository(ExamRecord).findOne({ where: { id: String(recordId) }, lock: { mode: 'pessimistic_write' } });
+      if (!locked) throw Errors.notFound('考试记录不存在');
+      if (String(locked.userId) !== String(userId)) throw Errors.dataForbidden();
+      this.assertLegacyRecordRoute(locked);
+      if (locked.status === ExamStatus.IN_PROGRESS && new Date(locked.deadlineAt).getTime() <= Date.now()) locked = await expireExamRecord(manager, locked);
+      if (locked.status !== ExamStatus.IN_PROGRESS) return { exam_record_id: Number(locked.id), status: locked.status, score: locked.score === null ? null : Number(locked.score), finished: true };
+      const paper = await manager.getRepository(ExamPaper).findOne({ where: { id: locked.paperId } });
+      if (!paper) throw Errors.notFound('试卷不存在');
+      return this.startResponse(locked, paper, manager);
+    });
   }
 
   private async loadSavedAnswers(recordId: string): Promise<Record<string, number[]>> {
@@ -282,9 +293,9 @@ export class ExamService {
       throw Errors.submitConflict('考试已结束');
     }
     if (new Date(record.deadlineAt).getTime() <= now) {
-      // 已超时：立即触发自动交卷
-      await this.autoSubmit(record);
-      throw Errors.submitConflict('考试已超时，系统已自动交卷');
+      // 已超时：收口为未交卷，不评分缓存答案。
+      await this.expireAttempt(record);
+      throw Errors.submitConflict('考试已超时未交卷');
     }
     const persistedAnswers = record.assignmentId && record.regulationId
       ? await this.legacyAdapter.answersToItems(String(record.id), answers)
@@ -351,6 +362,10 @@ export class ExamService {
     }
     const now = Date.now();
     const isTimeout = new Date(record.deadlineAt).getTime() <= now;
+    if (isTimeout) {
+      await this.expireAttempt(record);
+      return this.submitResultView((await this.recordRepo.findOne({ where: { id: recordId } }))!);
+    }
     const submittedAnswers = record.assignmentId && record.regulationId
       ? await this.legacyAdapter.answersToItems(String(record.id), answers)
       : answers;
@@ -376,14 +391,11 @@ export class ExamService {
           if (Array.isArray(arr)) merged.set(qid, arr.map(Number));
         } catch { /* ignore */ }
       }
-      // 超时口径（07 册 3.2.4）：deadline 已过则忽略请求体增量，仅以截止时刻的 Redis 暂存判分（与 autoSubmit 一致）
-      if (!isTimeout) {
-        for (const a of submittedAnswers || []) {
-          merged.set(String(a.question_id), (a.selected || []).map(Number));
-        }
+      for (const a of submittedAnswers || []) {
+        merged.set(String(a.question_id), (a.selected || []).map(Number));
       }
 
-      const result = await this.gradeAndPersist(record, merged, isTimeout ? 'timeout' : 'submitted', user.username);
+      const result = await this.gradeAndPersist(record, merged, 'submitted', user.username);
       // 成功清理顺序：提交事务 → DEL 答案暂存 → DEL 防重锁 → DEL deadline
       await this.redis.del(this.answerKey(recordId), `exam:lock:submit:${recordId}`, this.deadlineKey(recordId));
       return result;
@@ -398,7 +410,7 @@ export class ExamService {
   private async gradeAndPersist(
     record: ExamRecord,
     answers: Map<string, number[]>,
-    submitStatus: 'submitted' | 'timeout',
+    submitStatus: 'submitted',
     actorName: string,
   ): Promise<Record<string, unknown>> {
     const paper = await this.paperRepo.findOne({ where: { id: record.paperId } });
@@ -429,13 +441,19 @@ export class ExamService {
     const submittedAt = new Date();
 
     let savedRecord: ExamRecord | null = null;
+    let manuallyFinalized = false;
     await this.dataSource.transaction(async (m) => {
       const recordRepo = m.getRepository(ExamRecord);
+      const lockedRecord = await recordRepo.findOne({ where: { id: record.id }, lock: { mode: 'pessimistic_write' } });
+      if (!lockedRecord) throw Errors.notFound('考试记录不存在');
+      if (lockedRecord.status !== ExamStatus.IN_PROGRESS) { savedRecord = lockedRecord; return; }
+      const acceptedAt = new Date();
+      if (acceptedAt.getTime() >= new Date(lockedRecord.deadlineAt).getTime()) { savedRecord = await expireExamRecord(m, lockedRecord); return; }
       // 状态机单向 + 乐观锁（条件 UPDATE：影响行数 0 = 已被处理）
       const upd = await recordRepo
         .createQueryBuilder()
         .update(ExamRecord)
-        .set({ status: submitStatus, score: String(graded.total), submittedAt })
+        .set({ status: submitStatus, score: String(graded.total), submittedAt: acceptedAt, submissionMethod: 'manual', gradingState: 'finalized', gradedAt: acceptedAt })
         .where('id = :id AND status = :status', { id: record.id, status: ExamStatus.IN_PROGRESS })
         .execute();
       if (!upd.affected) throw Errors.submitConflict();
@@ -456,14 +474,17 @@ export class ExamService {
       // 判分后落终态：submitted/timeout → passed/failed（五态状态机，03 册 3.4.4）
       await recordRepo.update(record.id, { status: finalStatus });
       savedRecord = await recordRepo.findOne({ where: { id: record.id } });
+      manuallyFinalized = true;
     });
+
+    if (!manuallyFinalized && savedRecord) return this.submitResultView(savedRecord);
 
     // 交卷事件按制度失效统计缓存（05 册 7.4.4）：完成率/通过率不滞后于最新交卷
     await this.statistics.invalidateRegulationCache(String(record.regulationId));
 
     this.audit.log({
       actor_id: Number(record.userId), actor_name: actorName, action: 'exam.submit', object_type: 'exam_record',
-      object_id: record.id, detail: { status: finalStatus, score: graded.total, timeout: submitStatus === 'timeout' },
+      object_id: record.id, detail: { status: finalStatus, score: graded.total, timeout: false },
       result: 'success', source_ip: null,
     });
     return this.submitResultView(savedRecord || ({ ...record, status: finalStatus, score: String(graded.total), submittedAt } as ExamRecord));
@@ -505,6 +526,7 @@ export class ExamService {
     if (record.status === ExamStatus.IN_PROGRESS) {
       throw Errors.submitConflict('考试进行中，成绩明细交卷后可查');
     }
+    if (record.status === ExamStatus.TIMEOUT && !isScoredLegacyTimeout(record)) return { ...await this.submitResultView(record), paper_id: Number(record.paperId), attempt_no: Number(record.attemptNo), started_at: record.startedAt, questions: [] };
     const paper = await this.paperRepo.findOne({ where: { id: record.paperId } });
     const pqs = await this.pqRepo.find({ where: { paperId: record.paperId } });
     const qRows = await this.questionRepo.find({ where: { id: In(pqs.length ? pqs.map((p) => p.questionId) : ['0']) } });
@@ -541,9 +563,9 @@ export class ExamService {
     };
   }
 
-  // ================= 超时自动交卷 =================
+  // ================= 超时未交卷收口 =================
 
-  /** 超时自动交卷（定时任务主触发，每 30 秒扫描 idx_status_deadline 条件，06 册 4.3） */
+  /** 每 30 秒扫描 idx_status_deadline 条件，纯 timeout 不评分。 */
   async sweepTimeouts() {
     const rows = await this.recordRepo.find({
       where: { status: ExamStatus.IN_PROGRESS, deadlineAt: LessThanOrEqual(new Date()) },
@@ -552,43 +574,25 @@ export class ExamService {
     });
     for (const record of rows) {
       try {
-        await this.autoSubmit(record);
+        await this.expireAttempt(record);
       } catch (e: any) {
-        this.logger.warn(`超时自动交卷失败 record=${record.id}: ${e?.message}`);
+        this.logger.warn(`超时收口失败 record=${record.id}: ${e?.message}`);
       }
     }
     return rows.length;
   }
 
-  /** Redis 到期键辅助触发（04 册 3.7 辅通道）：检查指定记录是否到期并交卷 */
+  /** Redis 到期键辅助触发：检查指定记录并收口为超时未交卷。 */
   async checkAndSubmitIfExpired(recordId: string) {
     const record = await this.recordRepo.findOne({ where: { id: recordId } });
     if (record && record.status === ExamStatus.IN_PROGRESS && new Date(record.deadlineAt).getTime() <= Date.now()) {
-      await this.autoSubmit(record);
+      await this.expireAttempt(record);
     }
   }
 
-  /** 单条超时交卷：与主动交卷同一评分路径，status=timeout、按当前已答内容评分（FR-EXM-03） */
-  private async autoSubmit(record: ExamRecord) {
-    if (record.assignmentId) {
-      await this.submissions.timeout(String(record.id));
-      return;
-    }
-    const locked = await this.redis.setNx(`exam:lock:submit:${record.id}`, '1', SUBMIT_LOCK_TTL);
-    if (!locked) return; // 主动交卷进行中，先到者生效（幂等，06 册 4.3）
-    try {
-      const saved = await this.redis.hgetall(this.answerKey(record.id));
-      const merged = new Map<string, number[]>();
-      for (const [qid, val] of Object.entries(saved || {})) {
-        try {
-          const arr = JSON.parse(val);
-          if (Array.isArray(arr)) merged.set(qid, arr.map(Number));
-        } catch { /* ignore */ }
-      }
-      await this.gradeAndPersist(record, merged, 'timeout', 'system');
-      await this.redis.del(this.answerKey(record.id), this.deadlineKey(record.id));
-    } finally {
-      await this.redis.del(`exam:lock:submit:${record.id}`);
-    }
+  /** Deadline closes an attempt without submitting or grading cached answers. */
+  private async expireAttempt(record: ExamRecord) {
+    await this.submissions.timeout(String(record.id));
+    await this.redis.del(this.answerKey(record.id), this.deadlineKey(record.id));
   }
 }

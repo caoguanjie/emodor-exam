@@ -20,6 +20,9 @@ export class ExamAnswer {
   @Column({ type: 'json', nullable: true })
   selected: number[] | null;
 
+  @Column({ name: 'selected_option_ids', type: 'json', nullable: true })
+  selectedOptionIds: string[] | null;
+
   /** 1=全对，0=非全对（含漏选得部分分），NULL=未作答 */
   @Column({ name: 'is_correct', type: 'tinyint', width: 1, nullable: true })
   isCorrect: number | null;

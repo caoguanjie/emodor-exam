@@ -116,6 +116,28 @@ function emptySchemaConnection(database) {
   };
 }
 
+function mobileAuthPreflightConnection(database, { invalidCount = 0, duplicateGroupCount = 0, duplicateRowCount = 0 } = {}) {
+  return {
+    async query(sql) {
+      assert.match(sql, /SELECT DATABASE\(\)/i);
+      return [[{ database_name: database }]];
+    },
+    async execute(sql, params = []) {
+      if (/INFORMATION_SCHEMA\.TABLES/i.test(sql)) {
+        return [[{ present: params[0] === 'sys_user' ? 1 : 0 }]];
+      }
+      if (/INFORMATION_SCHEMA\.COLUMNS/i.test(sql)) {
+        return [[{ present: params[0] === 'sys_user' && params[1] === 'phone' ? 1 : 0 }]];
+      }
+      if (/invalid_count/i.test(sql)) return [[{ invalid_count: invalidCount }]];
+      if (/duplicate_group_count/i.test(sql)) {
+        return [[{ duplicate_group_count: duplicateGroupCount, duplicate_row_count: duplicateRowCount }]];
+      }
+      throw new Error(`unexpected mobile auth preflight SQL: ${sql}`);
+    },
+  };
+}
+
 function replacementFixture(id, stepId, target = undefined) {
   const replacement = target ? `\n-- @replaces-check ${target}` : '';
   return fixtureMigration(id, `
@@ -136,6 +158,31 @@ test('replacement-check metadata is parsed and preserved on a migration step', (
   ]) {
     assert.throws(() => parseMigrationText('002_successor', sql), /replaces-check|replacement/i);
   }
+});
+
+test('018 mobile auth preflight rejects invalid or duplicate normalized phones before any write', async () => {
+  const database = 'ruleexam_test_mobile_auth_preflight';
+  const mobileAuth = fixtureMigration('018_mobile_auth', `
+-- @step mobile_auth_fixture
+-- @check SELECT 0 AS complete;
+CREATE TABLE mobile_auth_fixture (id INT PRIMARY KEY);
+`);
+  await assert.rejects(
+    () => inspectMigrations({
+      connection: mobileAuthPreflightConnection(database, { invalidCount: 2 }),
+      database,
+      migrations: [mobileAuth],
+    }),
+    /invalid.*phone|phone.*invalid|手机号.*不合法/i,
+  );
+  await assert.rejects(
+    () => inspectMigrations({
+      connection: mobileAuthPreflightConnection(database, { duplicateGroupCount: 1, duplicateRowCount: 3 }),
+      database,
+      migrations: [mobileAuth],
+    }),
+    /duplicate.*phone|phone.*duplicate|手机号.*重复/i,
+  );
 });
 
 test('replacement-check definitions accept one linear predecessor chain', async () => {
@@ -451,6 +498,7 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
       '008_paper_release', '009_attempt_snapshot', '010_answers', '011_manual_grading',
       '012_course_navigation', '013_exam_monitor_navigation', '014_training_statistics_navigation',
       '015_demo_slimming', '016_learning_navigation', '017_exam_question_navigation',
+      '018_mobile_auth', '019_learner_profile', '020_identity_verification', '021_exam_stable_option_ids',
     ]);
 
     await conn.query("INSERT INTO sys_department (name, sort, status) VALUES ('完整升级保留数据', 917, 0)");
@@ -1151,6 +1199,42 @@ test('media migration completion checks reject same-count schema drift without d
     } finally {
       await conn.end();
     }
+  }
+});
+
+test('identity migration rejects column, collation and index drift on both durable tables', async () => {
+  const target = await migration('020_identity_verification');
+  assert.ok(target);
+  const variants = [
+    { stepId: 'learner_identity', table: 'learner_identity', changes: [
+      'ALTER TABLE learner_identity DROP INDEX uk_learner_identity_fingerprint',
+      'ALTER TABLE learner_identity MODIFY id_fingerprint VARCHAR(64) NOT NULL',
+      'ALTER TABLE learner_identity ADD COLUMN unexpected INT NULL',
+      'ALTER TABLE learner_identity CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci',
+    ] },
+    { stepId: 'identity_verification_session', table: 'identity_verification_session', changes: [
+      'ALTER TABLE identity_verification_session DROP INDEX uk_identity_session_bound_event',
+      'ALTER TABLE identity_verification_session DROP INDEX idx_identity_session_material, ADD INDEX idx_identity_session_material(user_id,material_fingerprint(1))',
+      'ALTER TABLE identity_verification_session MODIFY provider_result_encrypted VARCHAR(64) NULL',
+      'ALTER TABLE identity_verification_session MODIFY provider_lease_until DATETIME NULL',
+      'ALTER TABLE identity_verification_session ADD COLUMN unexpected INT NULL',
+      'ALTER TABLE identity_verification_session CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci',
+    ] },
+  ];
+  for (const variant of variants) {
+    const database = await createDatabase(); const conn = await connectionFor(database);
+    const step = target.steps.find((item) => item.id === variant.stepId);
+    try {
+      for (const change of variant.changes) {
+        await conn.query(step.sql);
+        const [[correct]] = await conn.execute(step.checkSql);
+        assert.equal(Number(correct.complete), 1, `${variant.table} exact baseline must be complete`);
+        await conn.query(change);
+        const [[drifted]] = await conn.execute(step.checkSql);
+        assert.equal(Number(drifted.complete), 0, `${change} must not be marked complete`);
+        await conn.query(`DROP TABLE \`${variant.table}\``);
+      }
+    } finally { await conn.end(); }
   }
 });
 

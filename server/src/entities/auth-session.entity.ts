@@ -11,6 +11,12 @@ export class AuthSession {
   @Column({ name: 'user_id', type: 'bigint' })
   userId!: string;
 
+  @Column({ type: 'varchar', length: 16, default: 'pc' })
+  client!: 'pc' | 'mobile';
+
+  @Column({ name: 'auth_method', type: 'varchar', length: 16, default: 'password' })
+  authMethod!: 'password' | 'sms' | 'debug';
+
   @Column({ name: 'user_agent', type: 'varchar', length: 255, nullable: true })
   userAgent!: string | null;
 

@@ -10,6 +10,8 @@ export interface AuthUser {
   sid?: string;
   authVersion?: number;
   pwdPending?: boolean;
+  client?: 'pc' | 'mobile';
+  authMethod?: 'password' | 'sms' | 'debug';
 }
 
 /** 取当前认证用户（JwtAuthGuard 注入 req.user，05 册 2.4.2） */

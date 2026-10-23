@@ -18,6 +18,8 @@ import { ExamRecordQuestion } from '../../entities/exam-record-question.entity';
 import { AccessService } from '../access/access.service';
 import { MediaService } from '../media/media.service';
 import { AttemptReaderService, attemptQuestionView, resultMediaIds, type GradingSnapshot, type GradingSnapshotItem } from './attempt-reader.service';
+import { questionContent } from '../questions/question-content';
+import { expireExamRecord, isScoredLegacyTimeout } from './exam-state';
 
 type ResultRecord = ExamRecord;
 
@@ -44,22 +46,25 @@ export function projectResultItem(item: GradingSnapshotItem, recordId: Id, row?:
     type: item.type, scoreCents: Number(item.scoreCents), position: Number(item.position),
     displayToOriginal: [...item.displayToOriginal], snapshotJson: item,
   } as any);
-  const correctAnswer = item.answer
-    .map((original) => item.displayToOriginal.indexOf(Number(original)))
-    .filter((display) => display >= 0);
+  const content = questionContent(item);
   return {
     ...question,
-    answer: answerView(row, item),
-    correct_answer: correctAnswer,
-    analysis: item.analysis ?? null,
-    gained_score: row?.gainedScore === null || row?.gainedScore === undefined ? null : Number(row.gainedScore),
+    selected_option_ids: Array.isArray(row?.selectedOptionIds) ? [...row.selectedOptionIds] : (row?.selected || []).map((index) => content.options[index]?.id).filter((id): id is string => Boolean(id)),
+    correct_option_ids: content.answer_option_ids,
+    analysis: content.analysis,
+    gained_score: row?.gainedScore === null || row?.gainedScore === undefined ? 0 : Number(row.gainedScore),
   };
 }
 
 export function projectFinalResult(record: ResultRecord, snapshot: GradingSnapshot, rows: ExamAnswer[]): FinalResult {
+  const historicalTimeout = isScoredLegacyTimeout(record);
+  if ((record.status === ExamStatus.TIMEOUT && !historicalTimeout) || record.status === ExamStatus.SUBMITTED) return { ...projectSnapshotlessLegacy(record), legacy: record.status === ExamStatus.SUBMITTED || snapshot.items.some((item) => item.contentSchemaVersion !== 2) };
   if (!record.submittedAt) throw Errors.internal('历史考试结果缺少交卷时间');
   const byItem = new Map(rows.filter((row) => row.recordQuestionId).map((row) => [String(row.recordQuestionId), row]));
   const finalized = record.gradingState === 'finalized';
+  const resultStatus = historicalTimeout
+    ? Math.round(Number(record.score) * 100) >= Number(snapshot.rule.passCents) ? ExamStatus.PASSED : ExamStatus.FAILED
+    : record.status;
   const items = snapshot.items.map((item) => projectResultItem(item, String(record.id), byItem.get(String(item.itemId))));
   const fullScoreCount = snapshot.items.filter((item) => {
     const row = byItem.get(String(item.itemId));
@@ -67,25 +72,29 @@ export function projectFinalResult(record: ResultRecord, snapshot: GradingSnapsh
   }).length;
   return {
     record_id: String(record.id),
+    status: resultStatus as FinalResult['status'],
     grading_state: record.gradingState || (record.score === null ? 'not_submitted' : 'finalized'),
     submission_method: record.submissionMethod || null,
-    legacy: !record.submissionMethod,
+    legacy: historicalTimeout || snapshot.items.some((item) => item.contentSchemaVersion !== 2),
     submitted_at: new Date(record.submittedAt).toISOString(),
     graded_at: iso(record.gradedAt),
     score: finalized && record.score !== null ? Number(record.score) : null,
-    passed: finalized ? record.status === ExamStatus.PASSED : null,
+    passed: finalized ? resultStatus === ExamStatus.PASSED : null,
     correct_rate: finalized ? (items.length ? fullScoreCount / items.length : null) : null,
     items,
   };
 }
 
 function projectSnapshotlessLegacy(record: ResultRecord): FinalResult {
+  if (record.status === ExamStatus.TIMEOUT && !isScoredLegacyTimeout(record)) return { record_id: String(record.id), status: 'timeout', grading_state: 'not_submitted', submission_method: null, legacy: record.snapshotOrigin === 'legacy_start' || !record.assignmentId, submitted_at: null, graded_at: null, score: 0, passed: false, correct_rate: null, items: [] };
+  if (record.status === ExamStatus.SUBMITTED) return { record_id: String(record.id), status: 'submitted', grading_state: 'not_submitted', submission_method: null, legacy: true, submitted_at: iso(record.submittedAt), graded_at: null, score: null, passed: null, correct_rate: null, items: [] };
   if (!record.submittedAt) throw Errors.internal('历史考试结果缺少交卷时间');
   const finalized = record.gradingState === 'finalized' || (
     [ExamStatus.PASSED, ExamStatus.FAILED].includes(record.status as any) && record.score !== null
   );
   return {
     record_id: String(record.id),
+    status: record.status as FinalResult['status'],
     grading_state: finalized ? 'finalized' : record.gradingState,
     submission_method: record.submissionMethod || null,
     legacy: true,
@@ -115,9 +124,10 @@ export class ExamHistoryService {
 
   async result(viewerId: Id, recordId: Id): Promise<FinalResult> {
     return this.dataSource.transaction('REPEATABLE READ', async (manager) => {
-      const record = await manager.getRepository(ExamRecord).findOne({ where: { id: String(recordId) } });
+      let record = await manager.getRepository(ExamRecord).findOne({ where: { id: String(recordId) }, lock: { mode: 'pessimistic_write' } });
       if (!record) throw Errors.notFound('考试记录不存在');
       if (String(record.userId) !== String(viewerId)) throw Errors.dataForbidden();
+      if (record.status === ExamStatus.IN_PROGRESS && new Date(record.deadlineAt).getTime() <= Date.now()) record = await expireExamRecord(manager, record);
       if (record.status === ExamStatus.IN_PROGRESS && record.gradingState === 'not_submitted') {
         throw Errors.submitConflict('考试进行中，结果不可查');
       }
@@ -146,6 +156,11 @@ export class ExamHistoryService {
     suppliedSnapshot?: GradingSnapshot,
     suppliedRows?: ExamAnswer[],
   ): Promise<FinalResult> {
+    if (record.status === ExamStatus.SUBMITTED) return projectSnapshotlessLegacy(record);
+    if (record.status === ExamStatus.TIMEOUT && !isScoredLegacyTimeout(record)) {
+      const items = suppliedSnapshot?.items || await manager.getRepository(ExamRecordQuestion).find({ where: { recordId: String(record.id) } });
+      return { ...projectSnapshotlessLegacy(record), legacy: items.length ? items.some((item: any) => (item.snapshotJson || item).contentSchemaVersion !== 2) : !record.assignmentId };
+    }
     if (!record.submittedAt) throw Errors.internal('历史考试结果缺少交卷时间');
     let snapshot = suppliedSnapshot;
     if (!snapshot) {
@@ -196,6 +211,8 @@ export class ExamHistoryService {
     const paperIds = [...new Set(rows.map((record) => String(record.paperId)))];
     const papers = paperIds.length ? await this.paperRepo.find({ where: { id: In(paperIds) } }) : [];
     const titleById = new Map(papers.map((paper) => [String(paper.id), paper.title]));
+    const recordIds = rows.map((record) => String(record.id));
+    const itemRows = recordIds.length ? await this.itemRepo.find({ where: { recordId: In(recordIds) } }) : [];
     return {
       items: rows.map((record) => ({
         record_id: String(record.id),
@@ -205,10 +222,10 @@ export class ExamHistoryService {
         status: record.status,
         grading_state: record.gradingState,
         submission_method: record.submissionMethod,
-        legacy: !record.submissionMethod,
+        legacy: isScoredLegacyTimeout(record) || !record.assignmentId || record.status === 'submitted' || itemRows.some((item) => String(item.recordId) === String(record.id) && item.snapshotJson.contentSchemaVersion !== 2),
         source: record.source,
         difficulty: record.difficulty || 'unknown',
-        score: record.gradingState === 'finalized' && record.score !== null ? Number(record.score) : null,
+        score: record.status === 'timeout' && !isScoredLegacyTimeout(record) ? 0 : record.gradingState === 'finalized' && record.score !== null ? Number(record.score) : null,
         started_at: new Date(record.startedAt).toISOString(),
         submitted_at: iso(record.submittedAt),
         graded_at: iso(record.gradedAt),
@@ -281,6 +298,7 @@ export class ExamHistoryService {
       }
       await this.ensureResultMediaReferences(manager, pageRows.map((row) => row.item));
       const result: WrongItem[] = pageRows.map(({ record, submittedAt, item, answer }) => ({
+        legacy: item.contentSchemaVersion !== 2,
         record_id: String(record.id),
         submitted_at: submittedAt,
         ...projectResultItem(item, String(record.id), answer),

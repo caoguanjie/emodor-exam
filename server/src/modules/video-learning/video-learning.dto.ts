@@ -43,14 +43,23 @@ export interface VideoSessionView {
   session_id: string;
   version_id: string;
   heartbeat_interval_ms: 30_000;
+  media: {
+    asset_id: string;
+    ticket: { content_url: string; expires_at: string };
+  };
   progress: VideoProgress;
+}
+
+export interface CourseLessonProgress extends VideoProgress {
+  lesson_id: string;
+  version_id: string;
 }
 
 export interface CourseProgress {
   required: number;
   completed: number;
   completion_rate: number | null;
-  lessons: VideoProgress[];
+  lessons: CourseLessonProgress[];
 }
 
 export interface VideoRecordView {

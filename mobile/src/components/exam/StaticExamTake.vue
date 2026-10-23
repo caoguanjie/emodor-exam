@@ -1,0 +1,43 @@
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+import AppIcon from '@/components/common/AppIcon.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
+import QuestionView from '@/components/exam/QuestionView.vue'
+import ExamTimer from '@/components/exam/ExamTimer.vue'
+import AnswerCard from '@/components/exam/AnswerCard.vue'
+import { examAssets, examTakeItems, initialExamAnswers, useExamScenario } from '@/fixtures/ui-scenarios/exam'
+import { countAnswered, toggleOption, type ExamAnswers } from '@/types/exam'
+const { scenario, loadScenario } = useExamScenario('exam-single')
+const props = defineProps<{ query: Record<string, unknown> }>()
+loadScenario(props.query)
+const currentIndex = ref(0)
+const answers = ref<ExamAnswers>({})
+const cardVisible = ref(false)
+const dialog = ref('')
+watch(scenario, value => { currentIndex.value = value.questionIndex || 0; answers.value = initialExamAnswers(value); cardVisible.value = value.overlay === 'card'; dialog.value = value.overlay === 'card' ? '' : value.overlay || '' }, { immediate: true })
+const item = computed(() => examTakeItems[currentIndex.value])
+const answered = computed(() => countAnswered(answers.value))
+const remaining = computed(() => scenario.value.remaining ?? 1458)
+const locked = computed(() => ['timeout', 'submitting'].includes(dialog.value) || remaining.value <= 0)
+const dialogVisible = computed({ get: () => !!dialog.value, set: visible => { if (!visible && !locked.value) dialog.value = '' } })
+const dialogTitles: Record<string, string> = { submit: '确认交卷？', exit: '确定退出答题？', timeout: '考试时间已到', submitting: '正在提交答卷', 'submit-failed': '交卷未成功' }
+const dialogMessages: Record<string, string> = { submit: '交卷后将无法修改答案，系统将自动评分。', exit: '退出后倒计时不会暂停，已作答内容已保存为本人草稿，截止前可从考试中心继续。', timeout: '已锁定作答，正在查询服务端考试状态。未成功交卷按超时处理，不能再交卷。', submitting: '已锁定作答，正在提交 20 题答案。若网络超时，将自动向服务端查询本次作答状态，不会重复交卷。', 'submit-failed': '网络异常，服务端暂未确认收到答卷。答案已保留在本人草稿中，重试不会延长考试截止时间。' }
+function choose(optionId: string) { if (!locked.value) answers.value = toggleOption(answers.value, item.value.id, optionId, item.value.type) }
+function jump(id: string) { if (!locked.value) currentIndex.value = examTakeItems.findIndex(row => row.id === id) }
+function submit() { if (!locked.value) { cardVisible.value = false; dialog.value = 'submit' } }
+function result() { uni.redirectTo({ url: '/pages/exam/result' }) }
+function exit() { uni.reLaunch({ url: '/pages/exam/index' }) }
+function login() { uni.reLaunch({ url: '/pages/auth/login' }) }
+function move(offset: number) { if (!locked.value) currentIndex.value = Math.max(0, Math.min(examTakeItems.length - 1, currentIndex.value + offset)) }
+</script>
+<template>
+  <view class="take-page"><view class="take-header"><view class="take-header__bar"><view role="button" aria-label="退出答题" class="take-header__exit" @click="!locked && (dialog = 'exit')"><AppIcon name="chevron-left" :size="22" /><text>退出</text></view><ExamTimer :remaining-seconds="remaining" /><text role="button" aria-label="交卷" class="take-header__submit" :aria-disabled="locked" @click="submit">交卷</text></view><view class="take-progress"><view :style="{ width: `${answered / examTakeItems.length * 100}%` }" /></view><view class="take-header__meta"><text>已答 {{ scenario.state === 'load-failed' ? '—' : answered }} / 20</text><text>{{ scenario.state === 'load-failed' ? '倒计时继续' : '草稿已保存 14:08' }}</text></view></view>
+    <view class="take-body"><EmptyState v-if="scenario.state === 'load-failed'" title="题目加载失败" description="网络异常，暂时无法获取第 3 题。考试已开始，倒计时以服务端截止时间为准，不会因重试而重置或延长。"><text class="take-deadline">截止 10-25 18:00 · 剩余 24:18</text><wd-button @click="scenario.state = undefined">重新加载</wd-button></EmptyState><EmptyState v-else-if="scenario.state === 'expired'" title="登录已过期" description="请重新登录。本人未提交的草稿将在登录后核验恢复。"><wd-button @click="login">重新登录</wd-button></EmptyState><QuestionView v-else :item="item" :number="currentIndex + 1" :selected="answers[item.id] || []" :disabled="locked" :assets="examAssets" @select="choose" /></view>
+    <view class="take-footer"><wd-button variant="plain" type="info" round :disabled="locked || currentIndex === 0" @click="move(-1)">‹ 上一题</wd-button><view class="take-footer__card" role="button" aria-label="打开答题卡" @click="!locked && (cardVisible = true)"><text>▦ 答题卡</text><text>{{ answered }}/20</text></view><wd-button round :disabled="locked || currentIndex === 19" @click="move(1)">下一题 ›</wd-button></view>
+    <AnswerCard v-model="cardVisible" :items="examTakeItems" :answers="answers" :current-id="item.id" @select="jump" @submit="submit" />
+    <wd-popup v-model="dialogVisible" position="center" round :close-on-click-modal="!locked" custom-style="width: calc(100% - 48px); max-width: 366px"><view class="exam-dialog"><text class="exam-dialog__title">{{ dialogTitles[dialog] }}</text><text class="exam-dialog__message">{{ dialogMessages[dialog] }}</text><text v-if="dialog === 'submit'" class="exam-dialog__warning">还有 {{ 20 - answered }} 题未作答</text><text v-if="dialog === 'exit' || dialog === 'submit-failed'" class="exam-dialog__remaining">剩余 {{ dialog === 'exit' ? '24:18' : '02:41' }}</text><view v-if="dialog === 'submitting'" class="exam-dialog__steps"><text>✓ 汇总最新答案</text><text>◷ 提交至服务端</text><text>○ 确认交卷状态</text></view><view class="exam-dialog__actions"><template v-if="dialog === 'submit'"><wd-button variant="soft" @click="dialog = ''">继续答题</wd-button><wd-button @click="dialog = 'submitting'">确定交卷</wd-button></template><template v-else-if="dialog === 'exit'"><wd-button variant="soft" @click="exit">退出</wd-button><wd-button @click="dialog = ''">继续答题</wd-button></template><template v-else-if="dialog === 'submit-failed'"><wd-button variant="soft" @click="result">查询状态</wd-button><wd-button @click="dialog = 'submitting'">重新提交</wd-button></template><wd-button v-else-if="dialog === 'timeout'" block @click="exit">返回考试中心</wd-button><wd-button v-else block loading disabled>提交中，请勿关闭页面</wd-button></view></view></wd-popup>
+  </view>
+</template>
+<style scoped>
+.take-page { min-height: 100vh; padding-top: var(--app-safe-area-top); display: flex; flex-direction: column; background: var(--app-color-background); }.take-header { background: var(--app-color-surface); flex: none; padding: 0 16px 12px; }.take-header__bar { height: 48px; display: flex; align-items: center; justify-content: space-between; }.take-header__exit { display: flex; align-items: center; width: 80px; font-size: 14px; }.take-header__submit { width: 80px; text-align: right; color: var(--app-color-primary); font-weight: 600; font-size: 15px; }.take-progress { margin-top: 2px; height: 4px; border-radius: 2px; overflow: hidden; background: var(--app-color-background); }.take-progress > view { height: 100%; border-radius: 2px; background: var(--app-color-primary); }.take-header__meta { display: flex; justify-content: space-between; padding-top: 8px; font-size: 12px; color: var(--app-color-text-muted); }.take-body { flex: 1; padding: 24px 16px 110px; }.take-footer { position: fixed; z-index: 3; bottom: 0; left: 0; right: 0; display: flex; align-items: center; gap: 10px; padding: 10px 16px calc(12px + var(--app-safe-area-bottom)); background: var(--app-color-surface); border-top: 1px solid var(--app-color-border); }.take-footer :deep(.wd-button) { width: 96px; padding: 0 10px; font-size: 14px; --wot-button-height-medium: 44px; }.take-footer__card { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; flex: 1; height: 44px; border-radius: 22px; background: var(--app-color-background); font-size: 14px; font-weight: 600; }.take-footer__card > text:last-child { color: var(--app-color-text-muted); font: 11px monospace; }.take-deadline { font: 11px monospace; color: var(--app-color-text-muted); }.exam-dialog { padding: 26px 22px; text-align: center; }.exam-dialog__title { display: block; font-size: 20px; font-weight: 600; margin-bottom: 14px; }.exam-dialog__message { font-size: 13px; color: var(--app-color-text-secondary); line-height: 1.7; }.exam-dialog__warning { display: block; margin-top: 16px; padding: 10px; color: var(--app-color-danger); background: var(--app-color-danger-soft); border-radius: var(--app-radius-sm); font-size: 12px; }.exam-dialog__remaining { display: block; margin-top: 16px; color: var(--app-color-primary); font: 600 17px monospace; }.exam-dialog__actions { display: flex; gap: 10px; margin-top: 24px; }.exam-dialog__actions :deep(.wd-button) { flex: 1; }.exam-dialog__steps { display: flex; flex-direction: column; text-align: left; gap: 12px; margin-top: 20px; color: var(--app-color-primary); font-size: 12px; }
+</style>

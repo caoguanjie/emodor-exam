@@ -558,6 +558,39 @@ async function slimmingPreflight(connection, migrations) {
   }
 }
 
+// 018 在写入规范化手机号和唯一索引前，必须先用只读查询阻断脏数据。
+// 错误只返回计数，不回显手机号或其他个人信息。
+async function mobileAuthPreflight(connection, migrations) {
+  if (!migrations.some((migration) => migration.id === '018_mobile_auth')) return;
+  if (!await tableExists(connection, 'sys_user')) return;
+  if (!await columnExists(connection, 'sys_user', 'phone')) {
+    throw new Error('sys_user exists but has no phone column; refusing mobile auth migration');
+  }
+  const normalizedPhone = "NULLIF(REGEXP_REPLACE(`phone`, '[[:space:]-]', ''), '')";
+  const [[invalid]] = await connection.execute(
+    `SELECT COUNT(*) AS invalid_count FROM \`sys_user\` WHERE ${normalizedPhone} IS NOT NULL AND ${normalizedPhone} NOT REGEXP '^1[3-9][0-9]{9}$'`,
+  );
+  const invalidCount = Number(invalid?.invalid_count || 0);
+  if (invalidCount > 0) {
+    throw new Error(`手机号不合法，阻断 mobile auth migration：${invalidCount} 条；请先修正后重试`);
+  }
+  const [[duplicates]] = await connection.execute(
+    `SELECT COUNT(*) AS duplicate_group_count, COALESCE(SUM(duplicate_count), 0) AS duplicate_row_count
+       FROM (
+         SELECT ${normalizedPhone} AS normalized_phone, COUNT(*) AS duplicate_count
+           FROM \`sys_user\`
+          WHERE ${normalizedPhone} IS NOT NULL
+          GROUP BY normalized_phone
+         HAVING COUNT(*) > 1
+       ) duplicate_phones`,
+  );
+  const duplicateGroupCount = Number(duplicates?.duplicate_group_count || 0);
+  if (duplicateGroupCount > 0) {
+    const duplicateRowCount = Number(duplicates?.duplicate_row_count || 0);
+    throw new Error(`手机号重复，阻断 mobile auth migration：${duplicateGroupCount} 组、${duplicateRowCount} 条；请先合并或修正后重试`);
+  }
+}
+
 async function readRegistryColumns(connection) {
   if (!await tableExists(connection, REGISTRY_TABLE)) return new Set();
   const [rows] = await connection.execute(
@@ -651,6 +684,7 @@ export async function inspectMigrations({ connection, database, migrations, allo
   const definitions = await prepareMigrations(migrations);
   await readPreflight(connection, database);
   await slimmingPreflight(connection, definitions);
+  await mobileAuthPreflight(connection, definitions);
   const rows = await registryRows(connection);
   const byId = new Map(rows.map((row) => [row.migration_id, row]));
   const pending = [];
@@ -870,6 +904,7 @@ export async function applyMigrations({ connection, database, migrations, onChec
   validateMigrationTarget(database);
   await readPreflight(connection, database);
   await slimmingPreflight(connection, definitions);
+  await mobileAuthPreflight(connection, definitions);
   const lockName = await acquireMigrationLock(connection, database);
   try {
     await readPreflight(connection, database);

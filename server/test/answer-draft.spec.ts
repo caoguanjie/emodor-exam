@@ -4,6 +4,7 @@ import { ExamAnswer } from '../src/entities/exam-answer.entity';
 import { ExamRecord } from '../src/entities/exam-record.entity';
 import { ExamRecordQuestion } from '../src/entities/exam-record-question.entity';
 import { SysUser } from '../src/entities/sys-user.entity';
+import { LearnerIdentity } from '../src/entities/learner-identity.entity';
 import { AnswerDraftService } from '../src/modules/exams/answer-draft.service';
 import { AttemptReaderService } from '../src/modules/exams/attempt-reader.service';
 import { DraftInputDto } from '../src/modules/exams/attempt.dto';
@@ -65,9 +66,10 @@ function draftFixture(overrides: Record<string, unknown> = {}) {
       if (index >= 0) answers.splice(index, 1);
     }),
   };
-  const userRepo: any = { findOne: vi.fn(async () => ({ id: '9', status: 1 })) };
+  const userRepo: any = { findOne: vi.fn(async () => ({ id: '9', status: 1, role: 'employee' })) };
   const repositories = new Map<any, any>([
     [ExamRecord, recordRepo], [ExamRecordQuestion, itemRepo], [ExamAnswer, answerRepo], [SysUser, userRepo],
+    [LearnerIdentity, { findOne: vi.fn(async () => ({ userId: '9' })) }],
   ]);
   const manager: any = { getRepository: (entity: any) => repositories.get(entity) };
   const dataSource: any = { transaction: vi.fn(async (work: any) => work(manager)) };
@@ -149,7 +151,7 @@ describe('AnswerDraftService persistent objective drafts', () => {
 });
 
 describe('AttemptReaderService persistent recovery', () => {
-  it('returns revision, items and selected answers from one consistent transaction snapshot', async () => {
+  it('returns only the active readonly snapshot without old server draft state', async () => {
     const fixture = draftFixture({ draftRevision: 4 });
     fixture.answers.push({
       id: '1', examRecordId: '41', recordQuestionId: '501', questionId: '101',
@@ -163,8 +165,9 @@ describe('AttemptReaderService persistent recovery', () => {
 
     const recovered = await reader.forStudent('9', '41');
 
-    expect(recovered.draft_revision).toBe(4);
-    expect(recovered.answers).toEqual([{ item_id: '501', selected: [0] }]);
+    expect(recovered).toMatchObject({ status: 'in_progress', record_id: '41' });
+    expect(recovered).not.toHaveProperty('draft_revision');
+    expect(recovered).not.toHaveProperty('answers');
     expect(dataSource.transaction).toHaveBeenCalledWith('REPEATABLE READ', expect.any(Function));
     expect(outsideRepo.findOne).not.toHaveBeenCalled();
   });
@@ -173,11 +176,11 @@ describe('AttemptReaderService persistent recovery', () => {
     const fixture = draftFixture();
     fixture.items[0].snapshotJson = {
       type: 'single', stem: '<p>题干<img data-media-id="801"></p>',
-      options: [{ key: 'A', text: '甲' }], answer: [0],
+      options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }], answer: [0],
       analysis: '<p>解析<img data-media-id="802"></p>', scoreCents: 3000,
     };
     const reader = new AttemptReaderService(
-      fixture.recordRepo, fixture.itemRepo, fixture.answerRepo, fixture.media, { transaction: vi.fn() } as any, fixture.access,
+      fixture.recordRepo, fixture.itemRepo, fixture.answerRepo, fixture.media, { transaction: vi.fn(), getRepository: fixture.manager.getRepository, manager: fixture.manager } as any, fixture.access,
     );
     reader.onModuleInit();
     const policy = fixture.media.registerOwnerPolicy.mock.calls[0][1];
@@ -192,6 +195,18 @@ describe('AttemptReaderService persistent recovery', () => {
     await expect(policy.authorizeRead('9', '501', '802')).resolves.toBe(true);
     await expect(policy.authorizeRead('8', '501', '802')).resolves.toBe(true);
     await expect(policy.authorizeRead('10', '501', '802')).resolves.toBe(false);
+
+    fixture.record.status = 'timeout';
+    fixture.record.gradingState = 'finalized';
+    fixture.record.score = '25.00';
+    fixture.record.submissionMethod = null;
+    await expect(policy.authorizeRead('9', '501', '802')).resolves.toBe(true);
+    await expect(policy.authorizeTicket('9', '501', '802')).resolves.toBe(true);
+    fixture.record.gradingState = 'not_submitted';
+    fixture.record.submittedAt = null;
+    fixture.record.score = '0.00';
+    await expect(policy.authorizeTicket('9', '501', '801')).resolves.toBe(false);
+    await expect(policy.authorizeTicket('9', '501', '802')).resolves.toBe(false);
   });
 });
 

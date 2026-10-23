@@ -9,6 +9,7 @@ import { validateAndSanitizeQuestionDraft, type QuestionDraftInput } from '../sr
 import { QuestionVersionService } from '../src/modules/questions/question-version.service';
 import { Question } from '../src/entities/question.entity';
 import { QuestionVersion } from '../src/entities/question-version.entity';
+import { Errors } from '../src/common/errors';
 import ExcelJS from 'exceljs';
 
 describe('question import format', () => {
@@ -216,6 +217,11 @@ function questionImportFixture(existingQuestions: any[] = []) {
   return { service, imports, versions, batches, batchRepo };
 }
 
+const damagedLegacyContent = [
+  { name: 'over-limit paragraphs', stem: '<p>历史段落</p>'.repeat(1000) },
+  { name: 'an uncontrolled image', stem: '<p>历史图片<img src="https://example.com/legacy.png"></p>' },
+];
+
 describe('question import preview', () => {
   it('separates valid, invalid, and later duplicate rows after canonical validation', async () => {
     const { service, versions } = questionImportFixture();
@@ -253,6 +259,74 @@ describe('question import preview', () => {
     expect(preview.errors).toEqual([]);
   });
 
+  it.each([
+    { type: 'single', options: [{ key: 'A', text: '先检测' }, { key: 'B', text: '直接进入' }], answer: [0] },
+    { type: 'multiple', options: [{ key: 'A', text: '先检测' }, { key: 'B', text: '先通风' }, { key: 'C', text: '直接进入' }], answer: [0, 1] },
+    { type: 'judgment', options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], answer: [0] },
+  ] as const)('recognizes a $type import after the version adapter renders its v2 option paragraphs', async ({ type, options, answer }) => {
+    const saved = validateAndSanitizeQuestionDraft(validateAndSanitizeQuestionDraft(importDraft({
+      type, stem: '<p>重复导入的题目</p>', options: [...options], answer: [...answer],
+    })));
+    const { service } = questionImportFixture([{ id: '91', ...saved }]);
+    const row = singleRow('<p>重复导入的题目</p>', {
+      type, concept: '', options: JSON.stringify(options), answer: JSON.stringify(answer), analysis: '<p>解析</p>',
+    });
+
+    const preview = await service.preview('1', txtFile([row]), 'txt', { categoryId: '10' });
+
+    expect(preview.valid_rows).toEqual([]);
+    expect(preview.duplicates).toEqual([2]);
+    expect(preview.errors).toEqual([]);
+  });
+
+  it.each(damagedLegacyContent)('isolates $name in stored questions while still recognizing valid duplicates', async ({ stem }) => {
+    const { service } = questionImportFixture([
+      { ...importDraft({ stem }) },
+      { ...importDraft({
+        stem: '<p>正常旧题</p>', analysis: '<p>应先检测。</p>',
+        options: [{ key: 'A', text: '先检测' }, { key: 'B', text: '直接进入' }],
+      }) },
+    ]);
+
+    const preview = await service.preview('1', txtFile([
+      singleRow('<p>新题</p>'), singleRow('<p>正常旧题</p>'),
+    ]), 'txt', { categoryId: '10' });
+
+    expect(preview.valid_rows).toEqual([2]);
+    expect(preview.duplicates).toEqual([3]);
+    expect(preview.errors).toEqual([]);
+  });
+
+  it.each(damagedLegacyContent)('continues rejecting $name in an incoming row', async ({ stem }) => {
+    const { service } = questionImportFixture();
+
+    const preview = await service.preview('1', txtFile([singleRow(stem)]), 'txt', { categoryId: '10' });
+
+    expect(preview.valid_rows).toEqual([]);
+    expect(preview.duplicates).toEqual([]);
+    expect(preview.errors).toEqual([{ row: 2, message: expect.any(String) }]);
+  });
+
+  it('propagates repository failures even when they use the parameter error code', async () => {
+    const { service } = questionImportFixture();
+    const error = Errors.param('query failed');
+    service.questionRepo.find.mockRejectedValueOnce(error);
+
+    await expect(service.preview('1', txtFile([singleRow('<p>新题</p>')]), 'txt', { categoryId: '10' }))
+      .rejects.toBe(error);
+  });
+
+  it('propagates unexpected failures in stored row fingerprinting', async () => {
+    const error = new Error('unexpected stored row failure');
+    const oldOption = { key: 'A' };
+    Object.defineProperty(oldOption, 'text', { get() { throw error; } });
+    const oldQuestion = { ...importDraft(), options: [oldOption] };
+    const { service } = questionImportFixture([oldQuestion]);
+
+    await expect(service.preview('1', txtFile([singleRow('<p>新题</p>')]), 'txt', { categoryId: '10' }))
+      .rejects.toBe(error);
+  });
+
   it('rejects string answer indexes instead of coercing non-integer JSON values', async () => {
     const { service } = questionImportFixture();
 
@@ -269,6 +343,19 @@ describe('question import preview', () => {
 });
 
 describe('question import ownership and commit', () => {
+  it.each(damagedLegacyContent)('isolates unrelated $name during the commit current read', async ({ stem }) => {
+    const stored: any[] = [];
+    const { service, imports } = questionImportFixture(stored);
+    const preview = await service.preview('1', txtFile([singleRow('<p>确认新题</p>')]), 'txt', { categoryId: '10' });
+    stored.push({ ...importDraft({ stem }) });
+
+    const committed = await imports.commitQuestions('1', preview.batch_id, [2]);
+
+    expect(committed.created_ids).toEqual(['100']);
+    expect(committed.committed_rows).toEqual([2]);
+    expect(stored).toHaveLength(2);
+    expect(stored[0].stem).toBe(stem);
+  });
   it('keeps the legacy students commit entry bound to student batches', async () => {
     const { service, imports, versions } = questionImportFixture();
     const preview = await service.preview('1', txtFile([singleRow('<p>不可借学员入口确认</p>')]), 'txt', { categoryId: '10' });
@@ -341,6 +428,21 @@ function importDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraft
 }
 
 describe('approved import adapter for the versioned question bank', () => {
+  it.each(damagedLegacyContent)('rejects $name in the batch itself before locks or writes', async ({ stem }) => {
+    const lockActive = vi.fn();
+    const getRepository = vi.fn();
+    const service = Object.create(QuestionVersionService.prototype) as QuestionVersionService & Record<string, any>;
+    Object.assign(service, {
+      categories: { lockActive },
+      media: { assertUsable: vi.fn(), bind: vi.fn() },
+    });
+
+    await expect(service.createApprovedImportsInManager({ getRepository } as any, [importDraft({ stem })], '7'))
+      .rejects.toMatchObject({ code: 40001 });
+    expect(lockActive).not.toHaveBeenCalled();
+    expect(getRepository).not.toHaveBeenCalled();
+  });
+
   it('passes the caller manager through controlled-media validation', async () => {
     const assertUsable = vi.fn(async () => undefined);
     const service = Object.create(QuestionVersionService.prototype) as QuestionVersionService & Record<string, any>;

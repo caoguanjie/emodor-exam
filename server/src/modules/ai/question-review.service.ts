@@ -47,6 +47,8 @@ export class QuestionReviewService {
       options: q.options.map((option) => ({ ...option, text: sanitizeQuestionRichTextForDisplay(option.text) || '' })),
       answer: q.answer,
       analysis: sanitizeQuestionRichTextForDisplay(q.analysis),
+      content_schema_version: q.contentSchemaVersion || 1,
+      content_json: q.contentJson || null,
       score: Number(q.score),
       status: q.status,
       source: q.source,
@@ -158,6 +160,8 @@ export class QuestionReviewService {
       options: patch.options ?? q.options,
       answer: patch.answer ?? q.answer,
       analysis: patch.analysis === undefined ? q.analysis : patch.analysis,
+      contentSchemaVersion: (patch as any).content_schema_version,
+      contentJson: (patch as any).content_json,
       scoreCents: patch.score === undefined ? Math.round(Number(q.score) * 100) : Math.round(Number(patch.score) * 100),
       conceptId: patch.concept_id === null ? undefined : patch.concept_id ?? q.conceptId ?? undefined,
       regulationId: q.regulationId ? String(q.regulationId) : undefined,
@@ -176,7 +180,7 @@ export class QuestionReviewService {
     const q = await this.questionRepo.findOne({ where: { id: String(id) } });
     if (!q) throw Errors.notFound('题目不存在');
     await this.assertTypeChangeAllowed(String(q.id), q.type, patch.type);
-    const touchingCore = ['category_id', 'difficulty', 'concept_id', 'type', 'stem', 'options', 'answer', 'score']
+    const touchingCore = ['category_id', 'difficulty', 'concept_id', 'type', 'stem', 'options', 'answer', 'score', 'content_json']
       .some((field) => (patch as Record<string, unknown>)[field] !== undefined);
     if (touchingCore) await this.assertNotInLiveExam(id);
     const editedFields = Object.keys(patch);
@@ -194,10 +198,12 @@ export class QuestionReviewService {
     category_id: string; difficulty: Difficulty; concept_id?: string;
     type: QuestionType; stem: string; options: QuestionOption[]; answer: number[]; analysis?: string | null;
     score: number;
+    content_schema_version?: number; content_json?: any;
   }, actor: { id: number; name: string }, ip: string | null) {
     const created = await this.versions.create({
       categoryId: String(input.category_id), difficulty: input.difficulty, type: input.type, stem: input.stem,
       options: input.options, answer: input.answer, analysis: input.analysis || null,
+      contentSchemaVersion: input.content_schema_version, contentJson: input.content_json,
       scoreCents: Math.round(Number(input.score) * 100), conceptId: input.concept_id,
       source: 'manual',
     }, String(actor.id));

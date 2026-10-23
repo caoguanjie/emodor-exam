@@ -119,7 +119,8 @@ test('question navigation reuses route identities under a non-fixed exam directo
     const [before] = await connection.query('SELECT * FROM sys_menu ORDER BY id');
     const routeIds = Object.fromEntries(before.filter((row) => ['/admin/questions','/admin/papers','/admin/questions/import','/admin/exam-records'].includes(row.route_path)).map((row) => [row.route_path,row.id]));
     const [historyBefore] = await connection.query('SELECT migration_id,checksum,status,attempts,progress FROM schema_migration ORDER BY migration_id');
-    const applied = await applyMigrations({ connection, database, migrations });
+    const questionNavigationMigrations = migrations.filter((item) => item.id <= '017_exam_question_navigation');
+    const applied = await applyMigrations({ connection, database, migrations: questionNavigationMigrations });
     assert.deepEqual(applied.applied, ['017_exam_question_navigation']);
     const [managed] = await connection.query("SELECT id,parent_id,name,route_path,permission_code,sort,status FROM sys_menu WHERE route_path IN ('/admin/questions','/admin/papers','/admin/questions/import','/admin/exam-records') ORDER BY sort,id");
     assert.deepEqual(managed.map((row) => [row.name,row.sort,row.parent_id,row.status]), [
@@ -131,7 +132,7 @@ test('question navigation reuses route identities under a non-fixed exam directo
     assert.deepEqual(after.filter((row) => !(row.route_path in routeIds)), before.filter((row) => !(row.route_path in routeIds)));
     const [historyAfter] = await connection.query("SELECT migration_id,checksum,status,attempts,progress FROM schema_migration WHERE migration_id <= '016_learning_navigation' ORDER BY migration_id");
     assert.deepEqual(historyAfter, historyBefore);
-    assert.deepEqual((await applyMigrations({ connection, database, migrations })).applied, []);
+    assert.deepEqual((await applyMigrations({ connection, database, migrations: questionNavigationMigrations })).applied, []);
   } finally { await connection.end(); }
 });
 

@@ -2,7 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { Errors, ExamStatus } from '../../common/errors';
-import type { AttemptView, RuleSnapshot } from '../../common/training-contracts';
+import type { AnswerInput, AttemptView, RuleSnapshot } from '../../common/training-contracts';
+import { docHtml } from '../questions/question-content';
+import { isScoredLegacyTimeout } from './exam-state';
 import { ExamAnswer } from '../../entities/exam-answer.entity';
 import { ExamPaper } from '../../entities/exam-paper.entity';
 import { ExamRecord } from '../../entities/exam-record.entity';
@@ -83,7 +85,7 @@ export function gradeFrozenSnapshot(snapshot: GradingSnapshot, answers: Map<stri
 }
 
 export function legacyAttemptView(input: {
-  attempt: AttemptView;
+  attempt: AttemptView & { answers?: AnswerInput[] };
   attemptNo: number;
   status: string;
   title: string;
@@ -92,7 +94,7 @@ export function legacyAttemptView(input: {
 }) {
   const { attempt, rule } = input;
   const savedAnswers = Object.fromEntries(
-    attempt.answers
+    (attempt.answers || [])
       .filter((answer) => Array.isArray(answer.selected))
       .map((answer) => [input.itemToQuestionId.get(String(answer.item_id)), answer.selected])
       .filter((entry): entry is [string, number[]] => Boolean(entry[0])),
@@ -116,8 +118,8 @@ export function legacyAttemptView(input: {
       return {
         question_id: Number(questionId),
         type: question.type,
-        stem: question.stem,
-        options: question.options.map((option) => ({ ...option })),
+        stem: typeof question.stem === 'string' ? question.stem : docHtml(question.stem),
+        options: question.options.map((option: any) => option.content ? { key: option.id, text: docHtml(option.content) } : { ...option }),
         score: question.score,
       };
     }),
@@ -165,8 +167,17 @@ export class LegacyExamAdapter {
     const paper = record && await this.paperRepo.findOne({ where: { id: String(record.paperId) } });
     if (!record || !paper || !record.ruleSnapshot) throw Errors.notFound('考试记录不存在');
     const { itemToQuestionId } = await this.idMaps(String(recordId));
+    const answers: AnswerInput[] = [];
+    if (attempt.status === 'in_progress') {
+      const snapshot = await this.reader.forGrading(this.dataSource.manager, String(recordId));
+      const rows = await this.answerRepo.find({ where: { examRecordId: String(recordId) } });
+      for (const row of rows) {
+        const item = snapshot.items.find((item) => String(item.itemId) === String(row.recordQuestionId));
+        if (item && row.selected?.length) answers.push({ item_id: String(item.itemId), selected: row.selected.map((index) => item.displayToOriginal.indexOf(index)).filter((index) => index >= 0) });
+      }
+    }
     return legacyAttemptView({
-      attempt,
+      attempt: { ...attempt, answers },
       attemptNo: Number(record.attemptNo),
       status: record.status,
       title: paper.title,
@@ -218,6 +229,7 @@ export class LegacyExamAdapter {
     const isAdmin = userRole === 'super_admin' || userRole === 'regulation_admin';
     if (!isOwner && !isAdmin) throw Errors.dataForbidden();
     if (record.status === ExamStatus.IN_PROGRESS) throw Errors.submitConflict('考试进行中，成绩明细交卷后可查');
+    if (record.status === ExamStatus.TIMEOUT && !isScoredLegacyTimeout(record)) return { exam_record_id: Number(record.id), paper_id: Number(record.paperId), attempt_no: Number(record.attemptNo), status: 'timeout', score: 0, pass_score: record.ruleSnapshot ? Number(record.ruleSnapshot.passCents) / 100 : null, started_at: record.startedAt, submitted_at: null, best_score: null, questions: [] };
     const snapshot = await this.reader.forGrading(this.dataSource.manager, String(record.id));
     const answers = await this.answerRepo.find({ where: { examRecordId: String(record.id) } });
     const answerMap = new Map(answers.map((answer) => [String(answer.recordQuestionId), answer]));

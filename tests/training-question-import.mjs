@@ -405,6 +405,13 @@ async function runBody(ctx) {
   const rollbackPreview = await previewFile(ctx, admin.actor, 'txt', txtBytes(rollbackRows), categoryId);
   assert.equal(rollbackPreview.status, 200, JSON.stringify(rollbackPreview));
   assert.deepEqual(rollbackPreview.data.valid_rows, [2, 3]);
+  const importState = async () => Promise.all([
+    ctx.queryTestDb('SELECT id, current_version_id, source, stem, options, answer, analysis FROM question ORDER BY id'),
+    ctx.queryTestDb('SELECT id, question_id, source, regulation_id, regulation_version_id FROM question_version ORDER BY id'),
+    ctx.queryTestDb('SELECT id, asset_id, owner_type, owner_id FROM media_reference ORDER BY id'),
+    ctx.queryTestDb('SELECT status, normalized_rows, valid_rows, committed_rows, created_ids FROM import_batch WHERE id = ?', [rollbackPreview.data.batch_id]),
+  ]);
+  const beforeFailedImport = await importState();
   let rollbackCommit;
   let triggerCreated = false;
   let triggerConnection;
@@ -454,6 +461,25 @@ async function runBody(ctx) {
     [mediaId],
   );
   assert.equal(rollbackMediaRefs.length, 0, 'failed batch left media references');
+  assert.deepEqual(await importState(), beforeFailedImport, 'failed import must roll back every new write and preserve all pre-existing rows');
+
+  const rollbackRetry = await ctx.request(
+    admin.actor, 'POST', `/admin/questions/import-batches/${rollbackPreview.data.batch_id}/commit`,
+    { row_numbers: rollbackPreview.data.valid_rows },
+  );
+  assert.equal(rollbackRetry.status, 200, JSON.stringify(rollbackRetry));
+  assert.equal(rollbackRetry.data.created_ids.length, 2);
+  const rollbackRetryAgain = await ctx.request(
+    admin.actor, 'POST', `/admin/questions/import-batches/${rollbackPreview.data.batch_id}/commit`,
+    { row_numbers: rollbackPreview.data.valid_rows },
+  );
+  assert.equal(rollbackRetryAgain.status, 200, JSON.stringify(rollbackRetryAgain));
+  assert.deepEqual(rollbackRetryAgain.data, rollbackRetry.data, 'retrying a recovered batch must return its first committed result');
+  const recoveredImport = await ctx.queryTestDb(
+    'SELECT q.id, v.id AS version_id FROM question q JOIN question_version v ON v.question_id = q.id WHERE q.stem IN (?, ?)',
+    [rollbackFirstStem, rollbackSecondStem],
+  );
+  assert.equal(recoveredImport.length, 2, 'recovered batch must create exactly one version per question');
 
   const correctedRows = [
     {
@@ -496,7 +522,7 @@ async function runBody(ctx) {
 
   const duplicatePreview = await previewFile(ctx, admin.actor, 'txt', txtBytes(rows), categoryId, 'hard');
   assert.equal(duplicatePreview.status, 200, JSON.stringify(duplicatePreview));
-  assert.deepEqual(duplicatePreview.data.valid_rows, []);
+  assert.deepEqual(duplicatePreview.data.valid_rows, [], 'committed imports must remain duplicates after v2 HTML rendering');
   assert.equal(duplicatePreview.data.errors.some((item) => item.row === 3), true);
   assert.deepEqual(duplicatePreview.data.duplicates, [2, 4, 5]);
 

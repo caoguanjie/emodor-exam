@@ -230,3 +230,33 @@ test('loads an objective terminal result without monitoring or manual-grading re
   }
   mounted.unmount();
 });
+
+test('admin readonly v2 result maps stable selected IDs separately from correct IDs', async () => {
+  const doc = (text) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
+  testContext.record = record('failed');
+  testContext.result = {
+    record_id: '42', status: 'failed', grading_state: 'finalized', submission_method: 'manual', legacy: false,
+    submitted_at: '2026-10-22T01:20:00.000Z', graded_at: '2026-10-22T01:20:00.000Z', score: 0, passed: false, correct_rate: 0,
+    items: [{ item_id: '101', type: 'single', stem: doc('稳定ID题干'), score: 100,
+      options: [{ id: 'stable-right', content: doc('正确选项') }, { id: 'stable-wrong', content: doc('学员所选') }],
+      selected_option_ids: ['stable-wrong'], correct_option_ids: ['stable-right'], analysis: doc('解析'), gained_score: 0 }],
+  };
+  const mounted = await mountDetail();
+  assert.match(textContent(mounted.root), /学员作答.*B/s);
+  assert.deepEqual(testContext.previews[0].content_json.answer_option_ids, ['stable-right']);
+  assert.equal('selected_option_ids' in testContext.previews[0], false);
+  mounted.unmount();
+});
+
+test('admin pure timeout shows no submission and no question review', async () => {
+  testContext.record = { ...record('timeout'), submitted_at: null, submission_method: null, grading_state: 'not_submitted', score: 0 };
+  testContext.result = {
+    record_id: '42', status: 'timeout', grading_state: 'not_submitted', submission_method: null, legacy: false,
+    submitted_at: null, graded_at: null, score: 0, passed: false, correct_rate: null, items: [],
+  };
+  const mounted = await mountDetail();
+  assert.match(textContent(mounted.root), /超时未交卷/);
+  assert.equal(testContext.previews.length, 0);
+  assert.doesNotMatch(textContent(mounted.root), /历史未知/);
+  mounted.unmount();
+});

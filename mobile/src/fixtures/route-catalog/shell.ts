@@ -1,0 +1,28 @@
+import type { RouteScenario } from '../types'
+
+export const shellRouteCatalog: RouteScenario[] = [
+  { path: '/pages/auth/login', scenario: 'login-default', pencilBoard: 'v2fcv', expectedText: '手机号验证码登录' },
+  { path: '/pages/auth/login', scenario: 'login-sent', pencilBoard: 'h3DZW', expectedText: '验证码已发送，请留意手机短信' },
+  { path: '/pages/auth/login', scenario: 'login-error', pencilBoard: 'QVBwh', expectedText: '验证码错误或已过期，请重新获取' },
+  { path: '/pages/auth/login', scenario: 'login-expired', pencilBoard: 'QVBwh', expectedText: '验证码错误或已过期，请重新获取' },
+  { path: '/pages/auth/login', scenario: 'login-loading', pencilBoard: 'U6hQx', expectedText: '正在验证身份，请稍候' },
+  { path: '/pages/auth/login', scenario: 'login-send-failed', pencilBoard: 'O1zuf', expectedText: '验证码发送失败，请检查网络后重试' },
+  { path: '/pages/auth/login', scenario: 'login-help', pencilBoard: 'Qnobr', expectedText: '确认手机号填写正确' },
+  { path: '/pages/home/index', scenario: 'home-default', pencilBoard: 'y208N', expectedText: '安全学习，从这里开始' },
+  { path: '/pages/course/index', scenario: 'course-list', pencilBoard: 'Y0ZNqY', expectedText: '全部课程 · 6门' },
+  { path: '/pages/course/detail', scenario: 'course-video', pencilBoard: 'esQcE', expectedText: '课程目录' },
+  { path: '/pages/course/detail', scenario: 'course-no-video', pencilBoard: 't6Z5eu', expectedText: '课程视频尚未提供' },
+  { path: '/pages/course/detail', scenario: 'course-collapsed', pencilBoard: 'B4ZpOc', expectedText: '第二章 整改闭环' },
+  { path: '/pages/course/player', scenario: 'course-video', pencilBoard: 'esQcE', expectedText: '点击播放课程视频' },
+  { path: '/pages/course/player', scenario: 'course-no-video', pencilBoard: 't6Z5eu', expectedText: '课程视频尚未提供' },
+  { path: '/pages/course/player', scenario: 'course-collapsed', pencilBoard: 'B4ZpOc', expectedText: '第二章 整改闭环' },
+  { path: '/pages/profile/index', scenario: 'profile-default', pencilBoard: 'gmOqo', expectedText: '学员演示账号' },
+  { path: '/pages/profile/index', scenario: 'profile-unverified', pencilBoard: 'jcvqt', expectedText: '未实名' },
+  { path: '/pages/profile/index', scenario: 'profile-verified', pencilBoard: 'I69w9x', expectedText: '已完成实名认证' },
+  { path: '/pages/profile/info', scenario: 'profile-info', pencilBoard: 'OeE1w', expectedText: '请核对机构登记的姓名与手机号。' },
+  { path: '/pages/profile/info', scenario: 'profile-job', pencilBoard: 'KNYYf', expectedText: '选择工种' },
+  { path: '/pages/profile/info', scenario: 'profile-gender', pencilBoard: 'p5YUs', expectedText: '选择性别' },
+  { path: '/pages/profile/info', scenario: 'profile-birthday', pencilBoard: 'HnYQl', expectedText: '选择生日' },
+  { path: '/pages/profile/about', scenario: 'about-default', pencilBoard: 'PSd26', expectedText: '版本信息' },
+  { path: '/pages/profile/terms', scenario: 'terms-default', pencilBoard: 'cjhAi', expectedText: '服务使用协议' },
+]

@@ -45,9 +45,9 @@
             <QuestionPreview :question="previewQuestion(item)" :reveal-answer="true" />
             <div class="answer-panel">
               <h4>学员作答</h4>
-              <div v-if="item.answer?.selected?.length" class="selected-options">
-                <el-tag v-for="selected in item.answer.selected" :key="selected" type="primary">
-                  {{ answerOptionLabel(item, selected) }}
+              <div v-if="selectedOptionLabels(item).length" class="selected-options">
+                <el-tag v-for="selected in selectedOptionLabels(item)" :key="selected" type="primary">
+                  {{ selected }}
                 </el-tag>
               </div>
               <span v-else class="muted">未作答</span>
@@ -64,7 +64,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import http from '../../api/http';
-import type { ExamRecordDetail, FinalResult, FinalResultItem, SubmissionMethod } from '../../api/training-types';
+import type { ExamRecordDetail, FinalResult, FinalResultItem, FinalResultItemV2, SubmissionMethod } from '../../api/training-types';
 import QuestionPreview from '../../components/QuestionPreview.vue';
 import { createLatestRequestScope } from '../../utils/latest-request-scope';
 
@@ -77,25 +77,34 @@ const errorMessage = ref('');
 const requestScope = createLatestRequestScope();
 const sourceLabels: Record<string, string> = { institution: '本机构', external: '外来' };
 const difficultyLabels: Record<string, string> = { easy: '初级', medium: '中级', hard: '高级', mixed: '混合', unknown: '历史未知' };
-const statusLabels: Record<string, string> = { in_progress: '进行中', submitted: '已交卷', passed: '已通过', failed: '未通过', timeout: '超时交卷' };
+const statusLabels: Record<string, string> = { in_progress: '进行中', submitted: '历史结果待确认', passed: '已通过', failed: '未通过', timeout: '超时未交卷' };
 const gradingLabels: Record<string, string> = { not_submitted: '未交卷', finalized: '已出分' };
 
 function sourceLabel(value: string | null) { return value ? sourceLabels[value] || value : '未知'; }
 function difficultyLabel(value: string | null) { return value ? difficultyLabels[value] || value : '未知'; }
 function statusLabel(value: string) { return statusLabels[value] || value; }
 function gradingLabel(value: string) { return gradingLabels[value] || value; }
-function submissionLabel(value: SubmissionMethod | null) { return value === 'manual' ? '主动交卷' : value === 'timeout' ? '超时交卷' : '历史未知'; }
+function submissionLabel(value: SubmissionMethod | null) { return value === 'manual' ? '主动交卷' : value === 'timeout' ? '超时交卷' : record.value?.status === 'timeout' ? '未交卷' : '历史未知'; }
 function statusType(value: string) { return value === 'passed' ? 'success' : value === 'failed' || value === 'timeout' ? 'danger' : value === 'in_progress' ? 'primary' : 'warning'; }
 function formatTime(value: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'; }
 function formatRate(value: number | null) { return value === null ? '待汇总' : `${Math.round(value * 10000) / 100}%`; }
+function isV2Item(item: FinalResultItem): item is FinalResultItemV2 { return typeof item.stem !== 'string'; }
 function previewQuestion(item: FinalResultItem) {
+  if (isV2Item(item)) return {
+    type: item.type, score: item.score, content_schema_version: 2 as const,
+    content_json: { stem: item.stem, options: item.options, analysis: item.analysis, answer_option_ids: item.correct_option_ids },
+  };
   return {
     type: item.type, stem: item.stem, options: item.options, score: item.score,
     answer: item.correct_answer || [], analysis: item.analysis,
   };
 }
-function answerOptionLabel(item: FinalResultItem, selected: number) {
-  return item.options[selected]?.key || String.fromCharCode(65 + selected);
+function selectedOptionLabels(item: FinalResultItem): string[] {
+  if (isV2Item(item)) return item.selected_option_ids.map((id) => {
+    const index = item.options.findIndex((option) => option.id === id);
+    return index >= 0 ? String.fromCharCode(65 + index) : '未知选项';
+  });
+  return (item.answer?.selected || []).map((selected) => String.fromCharCode(65 + selected));
 }
 async function load() {
   const ticket = requestScope.begin();

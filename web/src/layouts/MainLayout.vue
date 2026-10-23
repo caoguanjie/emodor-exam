@@ -27,7 +27,6 @@
           <template v-else>
             <li class="nav-group">我的学习</li>
             <el-menu-item index="/my/regulations"><el-icon><Reading /></el-icon><span>我的制度</span></el-menu-item>
-            <el-menu-item index="/my/exams"><el-icon><AlarmClock /></el-icon><span>我的考试</span></el-menu-item>
             <el-menu-item index="/my/scores"><el-icon><Medal /></el-icon><span>我的成绩</span></el-menu-item>
           </template>
         </el-menu>
@@ -79,7 +78,7 @@
       <el-form label-width="90px" v-loading="profileLoading">
         <el-form-item label="头像"><MediaUpload v-model="profile.avatar_id" purpose="avatar" :owner-id="String(auth.user?.id || '')" /></el-form-item>
         <el-form-item label="姓名"><el-input v-model="profile.real_name" maxlength="64" /></el-form-item>
-        <el-form-item label="手机"><el-input v-model="profile.phone" maxlength="32" /></el-form-item>
+        <el-form-item label="手机"><el-input v-model="profile.phone" maxlength="32" disabled /></el-form-item>
         <el-form-item label="邮箱"><el-input v-model="profile.email" maxlength="128" /></el-form-item>
         <el-form-item label="学员属性"><span>{{ profile.source || '—' }} / 类别 {{ profile.category_id || '—' }}</span></el-form-item>
       </el-form>
@@ -131,8 +130,21 @@ const defaultOpeneds=computed(()=>adminGroups.value.filter(group=>!group.path&&g
 const homePath=computed(()=>defaultHomePath(auth.isAdmin));
 
 function routeAllowed(path:string){const resolved=router.resolve(path);if(!resolved.matched.length||resolved.matched.some(record=>record.path.includes(':pathMatch')))return false;return routeAccessAllowed(resolved.meta,auth.can,auth.isSuperAdmin)}
+const examMenuOrder=new Map([
+  ['/admin/questions',10],
+  ['/admin/papers',20],
+  ['/admin/questions/import',30],
+  ['/admin/exam-records',40],
+]);
+function normalizeNavigation(nodes:NavigationNode[]){return nodes.map(root=>{
+  if(root.type!=='directory'||root.name!=='考试管理')return root;
+  const children=(root.children||[]).map(item=>item.route_path==='/admin/questions'?{...item,name:'试题管理'}:item);
+  if(!children.some(item=>item.route_path==='/admin/questions/import'))children.push({id:'compat-question-import',name:'试题导入',type:'menu',route_path:'/admin/questions/import',permission_code:'questions:write',icon:'Upload',status:1,children:[]});
+  children.sort((left,right)=>(examMenuOrder.get(left.route_path||'')??1000)-(examMenuOrder.get(right.route_path||'')??1000));
+  return{...root,children};
+})}
 function flattenMenus(nodes:NavigationNode[], output:NavigationItem[]=[]){for(const node of nodes){if(!node.status)continue;if(node.type==='menu'&&node.route_path&&routeAllowed(node.route_path))output.push({name:node.name,path:node.route_path,icon:node.icon});if(node.children?.length)flattenMenus(node.children,output)}return output}
-async function loadNavigation(){if(!auth.isAdmin){adminGroups.value=[];return}try{const roots=await http.get('/admin/menus/navigation') as NavigationNode[];adminGroups.value=roots.filter(root=>root.status).map(root=>{const directPath=root.type==='menu'&&root.route_path&&routeAllowed(root.route_path)?root.route_path:null;return{id:String(root.id),name:root.name,path:directPath,icon:root.icon,items:directPath?[]:flattenMenus(root.children||[])}}).filter(group=>!!group.path||group.items.length>0)}catch{adminGroups.value=[]}}
+async function loadNavigation(){if(!auth.isAdmin){adminGroups.value=[];return}try{const roots=normalizeNavigation(await http.get('/admin/menus/navigation') as NavigationNode[]);adminGroups.value=roots.filter(root=>root.status).map(root=>{const directPath=root.type==='menu'&&root.route_path&&routeAllowed(root.route_path)?root.route_path:null;return{id:String(root.id),name:root.name,path:directPath,icon:root.icon,items:directPath?[]:flattenMenus(root.children||[])}}).filter(group=>!!group.path||group.items.length>0)}catch{adminGroups.value=[]}}
 async function loadSiteConfig(){try{const value=await http.get('/site-config') as SiteConfig;siteConfig.logo_asset_id=value.logo_asset_id||null;siteConfig.banners=[...(value.banners||[])]}catch{/* bundled logo remains */}}
 function toggleSidebar(){sidebarCollapsed.value=!sidebarCollapsed.value;try{window.localStorage?.setItem(SIDEBAR_STORAGE_KEY,sidebarCollapsed.value?'1':'0')}catch{/* layout preference stays in memory */}}
 
@@ -179,7 +191,7 @@ function discardProfile(){applyingProfile=true;Object.assign(profile,profileBase
 async function confirmProfileDiscard(){return profileUnsaved.confirmDiscard()}
 async function beforeProfileClose(done:()=>void){if(await confirmProfileDiscard()){profileVisible.value=false;done()}} async function closeProfile(){if(await confirmProfileDiscard())profileVisible.value=false}
 async function openProfile(){profileVisible.value=true;profileLoading.value=true;try{applyProfile(await http.get('/me/profile'))}finally{profileLoading.value=false}}
-async function saveProfile(){profileSaving.value=true;try{await http.patch('/me/profile',{real_name:profile.real_name,phone:profile.phone||null,email:profile.email||null,avatar_id:profile.avatar_id});profileBaseline={...profile};profileDirty.value=false;profileVisible.value=false;await auth.fetchProfile();ElMessage.success('本人资料已保存')}finally{profileSaving.value=false}}
+async function saveProfile(){profileSaving.value=true;try{await http.patch('/me/profile',{real_name:profile.real_name,email:profile.email||null,avatar_id:profile.avatar_id});profileBaseline={...profile};profileDirty.value=false;profileVisible.value=false;await auth.fetchProfile();ElMessage.success('本人资料已保存')}finally{profileSaving.value=false}}
 async function onLogout(){try{await ElMessageBox.confirm('确定退出当前账号吗？','退出登录',{type:'warning'})}catch{return}if(!await confirmAllUnsavedChanges())return;await auth.logout();tabs.reset();await router.push('/login')}
 function onUserCommand(command:string){if(command==='profile')void openProfile();else if(command==='password')void router.push('/change-password');else if(command==='logout')void onLogout()}
 

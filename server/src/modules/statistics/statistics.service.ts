@@ -11,8 +11,15 @@ import { SysDepartment } from '../../entities/sys-department.entity';
 import { Errors, ExamStatus as ExamStatusEnum } from '../../common/errors';
 import { RedisService } from '../../common/redis.service';
 import { GradingService } from '../exams/grading.service';
+import { isScoredLegacyTimeout } from '../exams/exam-state';
 
 const TERMINAL_STATUSES = [ExamStatusEnum.SUBMITTED, ExamStatusEnum.PASSED, ExamStatusEnum.FAILED, ExamStatusEnum.TIMEOUT];
+
+/** Scores are facts only after grading; pure timeout zeroes are not results. */
+function hasScoredResult(record: ExamRecord): boolean {
+  if (record.score === null || record.score === undefined) return false;
+  return record.status === ExamStatusEnum.PASSED || record.status === ExamStatusEnum.FAILED || isScoredLegacyTimeout(record);
+}
 
 export interface UserExamStat {
   userId: string;
@@ -25,7 +32,7 @@ export interface UserExamStat {
 /**
  * 统计口径服务（05 册 7.4.1，逐字实现）：
  * 应学集合（C-09：发布范围内 status=1 在职员工）；学习完成率分子分母同源；
- * 参考人数 = 非 in_progress 去重考生；通过率/平均分/分数分布按「每人最高分」口径（C-06），
+ * 成绩分母只计已有评分事实；通过率/平均分/分数分布按「每人最高分」口径（C-06），
  * 及格线取最高分所在试卷的 pass_score（「以最好成绩认定」语义）；个人维度一律不缓存（越权边界）。
  */
 @Injectable()
@@ -85,20 +92,20 @@ export class StatisticsService {
     const assignedCount = audience.length;
     const completionRate = assignedCount ? validCount / assignedCount : 0;
 
-    // 考试指标（事实数据口径：status ≠ in_progress，排除进行中记录）
+    // 纯 timeout 没有交卷或评分事实，不能把其占位零分并入成绩分母。
     const examRecords = await this.examRepo
       .createQueryBuilder('er')
       .where('er.regulation_id = :rid', { rid: regulationId })
       .andWhere('er.status <> :ip', { ip: ExamStatusEnum.IN_PROGRESS })
       .getMany();
-    const participantIds = new Set(examRecords.map((r) => r.userId));
+    const scoredRecords = examRecords.filter(hasScoredResult);
+    const participantIds = new Set(scoredRecords.map((r) => r.userId));
 
     // 每人最高分（跨试卷口径）+ 及格线取最高分所在试卷 pass_score（05 册 7.4.1）
     const papers = await this.paperRepo.find({ where: { regulationId } });
     const passScoreMap = new Map(papers.map((p) => [p.id, Number(p.passScore)]));
     const bestByUser = new Map<string, ExamRecord>();
-    for (const r of examRecords) {
-      if (r.score === null) continue;
+    for (const r of scoredRecords) {
       const cur = bestByUser.get(r.userId);
       if (!cur || Number(r.score) > Number(cur.score)) bestByUser.set(r.userId, r);
     }
@@ -164,7 +171,7 @@ export class StatisticsService {
     const passScoreMap = new Map(papers.map((p) => [p.id, Number(p.passScore)]));
     const bestByUser = new Map<string, ExamRecord>();
     for (const r of examRecords) {
-      if (r.score === null) continue;
+      if (!hasScoredResult(r)) continue;
       const cur = bestByUser.get(r.userId);
       if (!cur || Number(r.score) > Number(cur.score)) bestByUser.set(r.userId, r);
     }
@@ -230,7 +237,7 @@ export class StatisticsService {
     const passScoreMap = new Map(papers.map((p) => [p.id, Number(p.passScore)]));
     const bestByUser = new Map<string, ExamRecord>();
     for (const r of examRecords) {
-      if (r.score === null) continue;
+      if (!hasScoredResult(r)) continue;
       const cur = bestByUser.get(r.userId);
       if (!cur || Number(r.score) > Number(cur.score)) bestByUser.set(r.userId, r);
     }
@@ -321,7 +328,7 @@ export class StatisticsService {
       byPaper.get(r.paperId)!.push(r);
     }
     const exams = Array.from(byPaper.entries()).map(([paperId, rows]) => {
-      const finished = rows.filter((r) => r.status !== ExamStatusEnum.IN_PROGRESS && r.score !== null);
+      const finished = rows.filter(hasScoredResult);
       const best = finished.length ? Math.max(...finished.map((r) => Number(r.score))) : null;
       return {
         paper_id: Number(paperId),
@@ -396,9 +403,9 @@ export class StatisticsService {
       const record = recordMap.get(u.id);
       const coverage = record ? ScrollCoverageUtil.normalize(record.scrollCoverage, regulation.scrollSegments) : ScrollCoverageUtil.empty(regulation.scrollSegments);
       const papersOfUser = Array.from(byUserPaper.get(u.id)?.entries() || []);
-      const bestScores = papersOfUser.flatMap(([, rows]) => rows.filter((r) => r.score !== null && r.status !== ExamStatusEnum.IN_PROGRESS).map((r) => Number(r.score)));
+      const bestScores = papersOfUser.flatMap(([, rows]) => rows.filter(hasScoredResult).map((r) => Number(r.score)));
       const best = bestScores.length ? Math.max(...bestScores) : null;
-      const bestRows = papersOfUser.flatMap(([, rows]) => rows).sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+      const bestRows = papersOfUser.flatMap(([, rows]) => rows).filter(hasScoredResult).sort((a, b) => Number(b.score) - Number(a.score));
       const bestRow = bestRows[0] || null;
       return {
         name: u.realName,

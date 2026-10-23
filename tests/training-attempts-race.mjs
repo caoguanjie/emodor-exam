@@ -21,23 +21,26 @@ function assertSnapshotState(snapshot, expected) {
     assert.equal(snapshot.score, null);
     return 'active';
   }
-  assert.equal(snapshot.status, 'failed');
+  assert.equal(snapshot.status, 'timeout');
   assert.equal(snapshot.active_assignment_id, null);
-  assert.ok(snapshot.submitted_at !== null && snapshot.submitted_at !== undefined);
+  assert.equal(snapshot.submitted_at, null);
   assert.ok(snapshot.score !== null && snapshot.score !== undefined);
   assert.equal(Number(snapshot.score), 0);
-  return 'failed';
+  return 'timeout';
 }
 
 export function assertTimeoutStartRace({ pre, response, post, expected }) {
   const preState = assertSnapshotState(pre, expected);
-  assert.equal(response.status, 409);
   const postState = assertSnapshotState(post, expected);
-  if (response.code === 40904) {
+  assert.equal(postState, 'timeout');
+  if (response.status === 200) {
     assert.equal(preState, 'active');
-    return postState === 'active' ? 'active' : 'finalized-after-start';
+    assert.equal(response.data.status, 'timeout');
+    assert.equal(String(response.data.record_id), String(expected.recordId));
+    assert.deepEqual(response.data.questions, []);
+    return 'finalized-before-start';
   }
+  assert.equal(response.status, 409);
   assert.equal(response.code, 40902);
-  assert.equal(postState, 'failed');
   return preState === 'active' ? 'finalized-before-start' : 'finalized-before-pre';
 }

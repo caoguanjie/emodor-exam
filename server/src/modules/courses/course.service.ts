@@ -7,6 +7,8 @@ import type { CourseSummary, Id, Page } from '../../common/training-contracts';
 import { CourseChapter } from '../../entities/course-chapter.entity';
 import { CourseLesson } from '../../entities/course-lesson.entity';
 import { LessonVersion } from '../../entities/lesson-version.entity';
+import { LearnerIdentity } from '../../entities/learner-identity.entity';
+import { IdentityVerificationSession } from '../../entities/identity-verification-session.entity';
 import { MediaAsset } from '../../entities/media-asset.entity';
 import { Regulation } from '../../entities/regulation.entity';
 import { SysUser } from '../../entities/sys-user.entity';
@@ -76,7 +78,8 @@ export class CourseService implements OnModuleInit {
     });
     this.media.registerOwnerPolicy('lesson_version_video', {
       allowedPurposes: ['video'],
-      authorizeRead: (actorId, versionId) => this.canReadLessonVersion(actorId, versionId),
+      authorizeRead: (actorId, versionId, assetId) => this.canReadLessonVersion(actorId, versionId, assetId),
+      authorizeTicket: (actorId, versionId, assetId) => this.canReadLearnerVideo(actorId, versionId, assetId),
       validateBinding: async (manager, _asset, versionId) => {
         const exists = await manager.getRepository(LessonVersion).exist({ where: { id: String(versionId) } });
         if (!exists) throw Errors.notFound('课时版本不存在');
@@ -306,15 +309,18 @@ export class CourseService implements OnModuleInit {
       && course.status === 'published' && String(course.categoryId) === String(user.categoryId));
   }
 
+  private canBrowse(user: SysUser | null, course: TrainingCourse): boolean {
+    return Boolean(user && Number(user.status) === 1 && course.status === 'published');
+  }
+
   async visibleCourses(userId: Id, page = 1, pageSize = 20): Promise<Page<CourseSummary>> {
     const normalized = this.page(page, pageSize);
     const user = await this.learner(userId);
-    if (!user || Number(user.status) !== 1 || user.source !== 'institution' || !user.categoryId) {
+    if (!user || Number(user.status) !== 1) {
       return { items: [], total: 0, page: normalized.page, page_size: normalized.pageSize };
     }
     const qb = this.courseRepo.createQueryBuilder('course')
       .where('course.status = :status', { status: 'published' })
-      .andWhere('course.category_id = :categoryId', { categoryId: String(user.categoryId) })
       .orderBy('course.is_recommended', 'DESC')
       .addOrderBy('course.sort_order', 'ASC')
       .addOrderBy('course.id', 'DESC');
@@ -354,7 +360,7 @@ export class CourseService implements OnModuleInit {
       courseRepo.findOne({ where: { id: String(courseId) } }),
     ]);
     if (!course) throw Errors.notFound('课程不存在');
-    if (!this.isVisibleTo(user, course)) return { assigned: false, lessons: [] };
+    if (!this.canBrowse(user, course)) return { assigned: false, lessons: [] };
 
     const lessons = (await lessonRepo.find({
       where: { courseId: String(courseId), required: 1, lessonType: 'video' },
@@ -383,7 +389,7 @@ export class CourseService implements OnModuleInit {
       this.courseRepo.findOne({ where: { id: String(courseId) } }),
     ]);
     if (!course) throw Errors.notFound('课程不存在');
-    if (!this.isVisibleTo(user, course)) throw Errors.dataForbidden('无权访问该课程');
+    if (!this.canBrowse(user, course)) throw Errors.dataForbidden('无权访问该课程');
     return this.detailView(course, true);
   }
 
@@ -437,7 +443,7 @@ export class CourseService implements OnModuleInit {
     };
   }
 
-  private async canReadCourse(actorId: string, courseId: string): Promise<boolean> {
+  private async canReadCourse(actorId: string, courseId: string, assignedOnly = false): Promise<boolean> {
     try {
       const permissions = await this.access.permissions(actorId);
       if (permissions.includes('courses:read')) return true;
@@ -445,16 +451,45 @@ export class CourseService implements OnModuleInit {
         this.learner(actorId),
         this.courseRepo.findOne({ where: { id: String(courseId) } }),
       ]);
-      return Boolean(course && this.isVisibleTo(user, course));
+      return Boolean(course && (assignedOnly ? this.isVisibleTo(user, course) : this.canBrowse(user, course)));
     } catch {
       return false;
     }
   }
 
-  private async canReadLessonVersion(actorId: string, versionId: string): Promise<boolean> {
+  private async canReadLessonVersion(actorId: string, versionId: string, assetId?: string): Promise<boolean> {
+    try {
+      const version = await this.versionRepo.findOne({ where: { id: String(versionId) } });
+      if (!version || (assetId && String(version.assetId) !== String(assetId))) return false;
+      const user = await this.learner(actorId);
+      if (!user || Number(user.status) !== 1) return false;
+      if ((await this.access.permissions(actorId, { useCache: false })).includes('courses:read')) {
+        const lesson = await this.lessonRepo.findOne({ where: { id: String(version.lessonId) } });
+        return Boolean(lesson && await this.courseRepo.findOne({ where: { id: String(lesson.courseId) } }));
+      }
+      return await this.canReadLearnerVideo(actorId, versionId, assetId);
+    } catch {
+      return false;
+    }
+  }
+
+  private async canReadLearnerVideo(actorId: string, versionId: string, assetId?: string): Promise<boolean> {
+    const user = await this.learner(actorId);
+    if (!user || Number(user.status) !== 1 || user.role !== 'employee'
+      || (await this.access.permissions(actorId, { useCache: false })).length > 0) return false;
+    if (!await this.dataSource.getRepository(LearnerIdentity).findOne({ where: { userId: actorId } })) {
+      const latest = await this.dataSource.getRepository(IdentityVerificationSession).findOne({
+        where: { userId: actorId }, order: { createdAt: 'DESC' },
+      });
+      const pending = latest && !['verified', 'rejected', 'expired'].includes(latest.status)
+        && latest.expiresAt.getTime() > Date.now();
+      throw Errors.dataForbidden('请先完成实名认证', { reason_code: pending ? 'IDENTITY_PENDING' : 'IDENTITY_REQUIRED' });
+    }
     const version = await this.versionRepo.findOne({ where: { id: String(versionId) } });
-    if (!version) return false;
+    if (!version || Number(version.durationMs) <= 0 || (assetId && String(version.assetId) !== String(assetId))) return false;
     const lesson = await this.lessonRepo.findOne({ where: { id: String(version.lessonId) } });
-    return Boolean(lesson && await this.canReadCourse(actorId, String(lesson.courseId)));
+    if (!lesson || lesson.lessonType !== 'video' || String(lesson.currentVersionId) !== String(version.id)) return false;
+    const course = await this.courseRepo.findOne({ where: { id: String(lesson.courseId) } });
+    return Boolean(course && this.canBrowse(user, course));
   }
 }

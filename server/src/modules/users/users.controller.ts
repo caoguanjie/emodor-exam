@@ -51,10 +51,14 @@ class StudentResetPasswordDto {
 
 class SelfProfileDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(64) real_name?: string;
-  @IsOptional() @IsString() @MaxLength(20) phone?: string;
-  @IsOptional() @IsString() @MaxLength(128) email?: string;
+  @IsOptional() @IsString() @MaxLength(128) email?: string | null;
   @IsOptional() @IsString() @MaxLength(32) avatar_id?: string | null;
+  @IsOptional() @IsString() occupation?: string | null;
+  @IsOptional() @IsIn(['male', 'female']) gender?: 'male' | 'female' | null;
+  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) birthday?: string | null;
 }
+
+const SELF_PROFILE_FIELDS = ['real_name', 'email', 'avatar_id', 'occupation', 'gender', 'birthday'] as const;
 
 class StudentAvatarDto {
   @IsOptional() @IsString() @MaxLength(32) avatar_id?: string | null;
@@ -252,11 +256,21 @@ export class MeProfileController {
 
   @Patch('profile')
   update(
-    @Body(new StrictDtoValidationPipe(['real_name', 'phone', 'email', 'avatar_id'])) dto: SelfProfileDto,
+    @Body(new StrictDtoValidationPipe(SELF_PROFILE_FIELDS)) dto: SelfProfileDto,
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
-    assertImportObject(req.body, ['real_name', 'phone', 'email', 'avatar_id'], '本人资料请求');
+    assertImportObject(req.body, SELF_PROFILE_FIELDS, '本人资料请求');
     return this.users.updateSelfProfile(String(user.id), dto);
+  }
+
+  /** 微信小程序 request 不支持 PATCH，使用相同的受控资料保存契约。 */
+  @Post('profile')
+  updateViaPost(
+    @Body(new StrictDtoValidationPipe(SELF_PROFILE_FIELDS)) dto: SelfProfileDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.update(dto, user, req);
   }
 }

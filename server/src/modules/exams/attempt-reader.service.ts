@@ -10,6 +10,9 @@ import { MediaService } from '../media/media.service';
 import { AccessService } from '../access/access.service';
 import { controlledQuestionMediaIds } from '../questions/question-validator';
 import type { PublishedQuestionSnapshot } from './paper-release.service';
+import { contentMediaIds, questionContent } from '../questions/question-content';
+import { assertExamIdentity, expireExamRecord, isScoredLegacyTimeout } from './exam-state';
+import { SysUser } from '../../entities/sys-user.entity';
 
 export type GradingSnapshotItem = PublishedQuestionSnapshot & {
   itemId: Id;
@@ -30,25 +33,25 @@ function deepClone<T>(value: T): T {
 }
 
 export function promptMediaIds(snapshot: PublishedQuestionSnapshot): string[] {
-  return controlledQuestionMediaIds([
-    snapshot.stem,
-    ...snapshot.options.map((option) => option.text),
-  ]);
+  const content = questionContent(snapshot);
+  return contentMediaIds([content.stem, ...content.options.map((option) => option.content)]);
 }
 
 export function resultMediaIds(snapshot: PublishedQuestionSnapshot): string[] {
-  return controlledQuestionMediaIds([snapshot.analysis]);
+  return contentMediaIds([questionContent(snapshot).analysis]);
 }
 
 /** Public in-progress view. Standard answers and analysis never cross this boundary. */
 export function attemptQuestionView(row: AttemptQuestionRow): AttemptQuestion {
   const snapshot = row.snapshotJson;
   const mapping = row.displayToOriginal;
+  const content = questionContent(snapshot);
+  if (mapping.length !== content.options.length || new Set(mapping).size !== mapping.length || mapping.some((index) => !Number.isInteger(index) || index < 0 || index >= content.options.length)) throw Errors.param('冻结选项显示映射非法');
   return {
     item_id: String(row.id),
     type: snapshot.type,
-    stem: snapshot.stem,
-    options: mapping.map((originalIndex) => snapshot.options[originalIndex]).filter(Boolean).map((option) => ({ ...option })),
+    stem: content.stem,
+    options: mapping.map((originalIndex) => content.options[originalIndex]),
     score: Number(row.scoreCents) / 100,
   };
 }
@@ -68,6 +71,7 @@ export class AttemptReaderService implements OnModuleInit {
     this.media.registerOwnerPolicy('exam_record_question', {
       allowedPurposes: ['question'],
       authorizeRead: (actorId, itemId, assetId) => this.canReadQuestionMedia(actorId, itemId, assetId),
+      authorizeTicket: (actorId, itemId, assetId) => this.canReadQuestionMedia(actorId, itemId, assetId, true),
       validateBinding: (manager, asset, itemId) => this.validateQuestionBinding(manager, itemId, String(asset.id)),
     });
   }
@@ -84,18 +88,32 @@ export class AttemptReaderService implements OnModuleInit {
     return record ? { item, record } : null;
   }
 
-  private async canReadQuestionMedia(actorId: string, itemId: string, assetId?: string): Promise<boolean> {
+  private async canReadQuestionMedia(actorId: string, itemId: string, assetId?: string, ticket = false): Promise<boolean> {
     if (!assetId) return false;
     const resolved = await this.itemWithRecord(itemId);
     if (!resolved) return false;
     const prompt = promptMediaIds(resolved.item.snapshotJson).includes(String(assetId));
     const resultOnly = resultMediaIds(resolved.item.snapshotJson).includes(String(assetId));
     if (!prompt && !resultOnly) return false;
-    const terminal = resolved.record.status !== ExamStatus.IN_PROGRESS && Boolean(resolved.record.submittedAt);
-    if (String(resolved.record.userId) === String(actorId)) return prompt || (resultOnly && terminal);
+    const terminal = ([ExamStatus.PASSED, ExamStatus.FAILED].includes(resolved.record.status as any) || isScoredLegacyTimeout(resolved.record)) && Boolean(resolved.record.submittedAt);
     const permissions = await this.access.permissions(String(actorId));
     const canReadRecord = permissions.includes('exam_records:read');
-    return canReadRecord && (prompt || (resultOnly && terminal));
+    if (!ticket && canReadRecord) return prompt || (resultOnly && terminal);
+    if (ticket && canReadRecord) return false;
+    if (String(resolved.record.userId) !== String(actorId)) return false;
+    const actor = await this.dataSource.getRepository(SysUser).findOne({ where: { id: actorId } });
+    if (!actor || actor.role !== 'employee' || Number(actor.status) !== 1) return false;
+    if ((resolved.record.status === ExamStatus.TIMEOUT && !isScoredLegacyTimeout(resolved.record)) || resolved.record.status === ExamStatus.SUBMITTED) return false;
+    if (terminal) return prompt || resultOnly;
+    if (new Date(resolved.record.deadlineAt).getTime() <= Date.now()) {
+      await this.dataSource.transaction(async (manager) => {
+        const record = await manager.getRepository(ExamRecord).findOne({ where: { id: resolved.record.id }, lock: { mode: 'pessimistic_write' } });
+        if (record?.status === ExamStatus.IN_PROGRESS && new Date(record.deadlineAt).getTime() <= Date.now()) await expireExamRecord(manager, record);
+      });
+      return false;
+    }
+    try { await assertExamIdentity(this.dataSource.manager, actorId); } catch { return false; }
+    return prompt;
   }
 
   private async validateQuestionBinding(manager: EntityManager, itemId: string, assetId: string): Promise<void> {
@@ -131,10 +149,13 @@ export class AttemptReaderService implements OnModuleInit {
 
   async forStudent(userId: Id, recordId: Id): Promise<AttemptView> {
     return this.dataSource.transaction('REPEATABLE READ', async (manager) => {
-      const record = await manager.getRepository(ExamRecord).findOne({ where: { id: String(recordId) } });
+      let record = await manager.getRepository(ExamRecord).findOne({ where: { id: String(recordId) }, lock: { mode: 'pessimistic_write' } });
       if (!record) throw Errors.notFound('考试记录不存在');
       if (String(record.userId) !== String(userId)) throw Errors.dataForbidden();
-      if (record.status !== ExamStatus.IN_PROGRESS) throw Errors.submitConflict('考试已结束');
+      if (record.status === ExamStatus.IN_PROGRESS && new Date(record.deadlineAt).getTime() <= Date.now()) record = await expireExamRecord(manager, record);
+      const base = { status: record.status as AttemptView['status'], record_id: String(record.id), paper_id: String(record.paperId), release_id: record.releaseId ? String(record.releaseId) : null, deadline_at: new Date(record.deadlineAt).toISOString(), server_now: new Date().toISOString() };
+      if (record.status !== ExamStatus.IN_PROGRESS) return { ...base, questions: [] };
+      if (!record.regulationId) await assertExamIdentity(manager, String(userId));
       if (!record.assignmentId || !record.ruleSnapshot || !record.difficulty) {
         throw Errors.notFound('本次个人题单不存在');
       }
@@ -143,17 +164,8 @@ export class AttemptReaderService implements OnModuleInit {
       });
       if (!items.length) throw Errors.notFound('本次个人题单不存在');
       return {
-        record_id: String(record.id),
-        paper_id: String(record.paperId),
-        release_id: record.releaseId ? String(record.releaseId) : null,
-        source: record.source,
-        category_id: record.categoryId ? String(record.categoryId) : null,
-        difficulty: record.difficulty,
-        deadline_at: new Date(record.deadlineAt).toISOString(),
-        server_now: new Date().toISOString(),
-        draft_revision: Number(record.draftRevision || 0),
+        ...base,
         questions: items.map(attemptQuestionView),
-        answers: await this.confirmedAnswers(manager, String(record.id), items),
       };
     });
   }

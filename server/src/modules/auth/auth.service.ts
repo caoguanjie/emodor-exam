@@ -1,21 +1,21 @@
-import { Injectable, Res } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Response, Request } from 'express';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
-import { randomBytes } from 'node:crypto';
 import { SysUser } from '../../entities/sys-user.entity';
 import { AppConfig } from '../../config/configuration';
 import { Errors } from '../../common/errors';
 import { RedisService } from '../../common/redis.service';
 import { AuditService } from '../../common/audit.service';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
-import { REFRESH_COOKIE, KEY_COMPONENT_PATTERN } from '../../common/guards/jwt-auth.guard';
+import { KEY_COMPONENT_PATTERN } from '../../common/guards/jwt-auth.guard';
 import { validatePasswordStrength as assertPasswordStrength } from '../../common/password-policy';
 import { CaptchaService } from './captcha.service';
 import { SessionService } from './session.service';
 import { AccessService } from '../access/access.service';
+import { parseExpirySeconds, SessionIssuerService } from './session-issuer.service';
 
 const LOGIN_MAX_FAILS = 5; // username 连续失败 5 次
 const LOGIN_LOCK_SECONDS = 600; // 锁定 10 分钟
@@ -24,19 +24,6 @@ const LOGIN_IP_LIMIT_PER_MIN = 10; // source_ip 维度 10 次/分钟
 export interface TokenPair {
   access_token: string;
   expires_in: number;
-}
-
-function parseExpirySeconds(expr: string): number {
-  const m = expr.trim().match(/^(\d+)([smhd])?$/);
-  if (!m) return 7200;
-  const n = Number(m[1]);
-  switch (m[2]) {
-    case 's': return n;
-    case 'm': return n * 60;
-    case 'h': return n * 3600;
-    case 'd': return n * 86400;
-    default: return n;
-  }
 }
 
 /**
@@ -59,34 +46,10 @@ export class AuthService {
     private readonly captcha: CaptchaService,
     private readonly sessions: SessionService,
     private readonly access: AccessService,
+    private readonly issuer: SessionIssuerService,
   ) {
     this.accessTtl = parseExpirySeconds(this.config.jwt.expiresIn);
     this.refreshTtlDays = this.config.jwt.refreshExpiresDays;
-  }
-
-  private sign(user: { id: number; username: string; role: string; authVersion?: number }, type: 'access' | 'refresh', opts?: { pwdPending?: boolean; sid?: string }) {
-    const ttl = type === 'access' ? this.accessTtl : this.refreshTtlDays * 86400;
-    const payload: Record<string, unknown> = {
-      sub: String(user.id),
-      username: user.username,
-      role: user.role,
-      auth_version: Number(user.authVersion || 0),
-      type,
-      jti: randomBytes(16).toString('hex'),
-    };
-    if (opts?.pwdPending) payload.pwd_pending = true;
-    if (opts?.sid) payload.sid = opts.sid;
-    return this.jwt.sign(payload, { expiresIn: ttl });
-  }
-
-  private setRefreshCookie(res: Response, token: string) {
-    res.cookie(REFRESH_COOKIE, token, {
-      httpOnly: true,
-      secure: this.config.env === 'production',
-      sameSite: 'strict',
-      path: '/api/v1/auth',
-      maxAge: this.refreshTtlDays * 86400 * 1000,
-    });
   }
 
   /** 密码强度策略（07 册 2.2.2）：≥8 位、含字母与数字、不含个人信息 ≥3 字符子串、非常见弱口令 */
@@ -179,59 +142,21 @@ export class AuthService {
     const loggedInUser = loginResult.user;
     const session = loginResult.session;
     const firstLogin = loginResult.firstLogin;
-    const core = { id: Number(loggedInUser.id), username: loggedInUser.username, role: loggedInUser.role, authVersion: this.authVersion(loggedInUser) };
-    const access = this.sign(core, 'access', { pwdPending: firstLogin, sid: session.sid });
-    const refresh = this.sign(core, 'refresh', { sid: session.sid });
-    this.setRefreshCookie(res, refresh);
+    const pair = await this.issuer.issue(loggedInUser, { client: 'pc', authMethod: 'password', ip, userAgent: req.get('user-agent') || null }, res, session, firstLogin);
     this.audit.log({
       actor_id: Number(loggedInUser.id), actor_name: username, action: 'auth.login', object_type: 'sys_user',
       object_id: loggedInUser.id, detail: { first_login: firstLogin }, result: 'success', source_ip: ip,
     });
     return {
-      access_token: access,
-      expires_in: this.accessTtl,
+      ...pair,
       force_change_password: firstLogin,
       user: { ...this.sanitize(loggedInUser), permissions: await this.access.permissions(loggedInUser.id) },
     };
   }
 
   async refresh(token: string | undefined, ip: string | null, res: Response) {
-    if (!token) throw Errors.refreshTokenInvalid();
-    let payload: any;
-    try {
-      payload = this.jwt.verify(token);
-    } catch {
-      throw Errors.refreshTokenInvalid();
-    }
-    if (payload?.type !== 'refresh') throw Errors.refreshTokenInvalid();
-    // refresh 单令牌黑名单：登出时已吊销的 refresh 不可再轮换（07 册 2.1.4）
-    const refreshJti = String(payload.jti ?? '');
-    if (!KEY_COMPONENT_PATTERN.test(refreshJti)) throw Errors.refreshTokenInvalid();
-    if (await this.redis.isTokenBlacklisted(refreshJti)) throw Errors.tokenRevoked();
-    const sid = typeof payload.sid === 'string' ? payload.sid : undefined;
-    if (sid && (!/^[a-f0-9]{48}$/.test(sid) || await this.sessions.isRevoked(sid))) throw Errors.tokenRevoked();
-    const userId = Number(payload.sub);
-    const user = await this.userRepo.findOne({ where: { id: String(userId) } });
-    if (!user || user.status === 0) throw Errors.refreshTokenInvalid();
-    if (Number(payload.auth_version ?? 0) !== this.authVersion(user)) throw Errors.tokenRevoked();
-    // 用户级封禁同样适用于 refresh 轮换路径（07 册 2.1.4）
-    const blockTs = await this.redis.getTokenBlockTs(userId);
-    if (blockTs && Number(payload.iat) < Number(blockTs)) throw Errors.tokenRevoked();
-
-    const core = { id: Number(user.id), username: user.username, role: user.role, authVersion: this.authVersion(user) };
-    const firstLogin = this.passwordChangeRequired(user);
-    const refreshRemaining = Math.max(1, this.refreshTtlDays * 86400 - (Math.floor(Date.now() / 1000) - Number(payload.iat || 0)));
-    // Claim before minting either successor. This closes the GET/SET race in
-    // which two simultaneous refresh requests both passed the blacklist read.
-    if (!await this.redis.claimRefreshJti(refreshJti, refreshRemaining)) throw Errors.tokenRevoked();
-    const session = sid ? { sid } : await this.sessions.create(user.id, ip, null);
-    if (sid) await this.sessions.touch(sid, true);
-    const access = this.sign(core, 'access', { pwdPending: firstLogin, sid: session.sid });
-    const newRefresh = this.sign(core, 'refresh', { sid: session.sid });
-    // 轮换必须废弃前一个 refresh，不能等到自然过期。
-    await this.redis.blacklistJti(refreshJti, refreshRemaining);
-    this.setRefreshCookie(res, newRefresh);
-    return { access_token: access, expires_in: this.accessTtl, force_change_password: firstLogin };
+    const result = await this.issuer.refresh(token, 'pc', ip, res);
+    return { access_token: result.access_token, expires_in: result.expires_in, force_change_password: result.force_change_password };
   }
 
   async profile(userId: number) {
@@ -278,43 +203,21 @@ export class AuthService {
         }
       } catch { /* 无效旧 Cookie 不影响已完成的密码更新 */ }
     }
-    const core = { id: userId, username: changed.user.username, role: changed.user.role, authVersion: this.authVersion(changed.user) };
-    const access = this.sign(core, 'access', { sid: changed.session.sid });
-    const refresh = this.sign(core, 'refresh', { sid: changed.session.sid });
-    this.setRefreshCookie(res, refresh);
+    const pair = await this.issuer.issue(changed.user, { client: 'pc', authMethod: 'password', ip, userAgent: req?.get('user-agent') || null }, res, changed.session);
     this.audit.log({
       actor_id: userId, actor_name: changed.user.username, action: 'auth.password.change', object_type: 'sys_user',
       object_id: changed.user.id, detail: {}, result: 'success', source_ip: ip,
     });
-    return { access_token: access, expires_in: this.accessTtl };
+    return pair;
   }
 
   /** 登出：吊销所呈报 access（jti 黑名单）+ 吊销 Cookie 中的 refresh + 审计 + 清 Cookie（04 册 1.3 / 07 册 2.1.4） */
   async logout(user: AuthUser, ip: string | null, res: Response, refreshToken?: string) {
-    const nowSec = Math.floor(Date.now() / 1000);
-    const remaining = Math.max(1, this.accessTtl - (nowSec - user.iat));
-    if (user.jti && KEY_COMPONENT_PATTERN.test(user.jti)) {
-      await this.redis.blacklistJti(user.jti, remaining);
-    }
-    // refresh 同步吊销：否则已持有 Cookie 的会话在登出后仍可轮换新令牌（TTL = refresh 剩余有效期）
-    if (refreshToken) {
-      try {
-        const payload: any = this.jwt.verify(refreshToken);
-        if (payload?.type === 'refresh' && Number(payload.sub) === user.id) {
-          const jti = String(payload.jti ?? '');
-          if (KEY_COMPONENT_PATTERN.test(jti)) {
-            const refreshRemaining = Math.max(1, this.refreshTtlDays * 86400 - (nowSec - Number(payload.iat || nowSec)));
-            await this.redis.blacklistJti(jti, refreshRemaining);
-          }
-        }
-      } catch { /* Cookie 中无有效 refresh：忽略 */ }
-    }
-    if (user.sid) await this.sessions.revokeBySid(user.sid, user.id);
+    await this.issuer.revoke(user, res, refreshToken);
     this.audit.log({
       actor_id: user.id, actor_name: user.username, action: 'auth.logout', object_type: 'sys_user',
       object_id: user.id, detail: {}, result: 'success', source_ip: ip,
     });
-    res.clearCookie(REFRESH_COOKIE, { path: '/api/v1/auth' });
     return null;
   }
 

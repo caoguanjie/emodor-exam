@@ -288,6 +288,46 @@ export async function run(ctx) {
 
   const ordinary = await createStudent(ctx, admin, categoryId, 'ordinary student');
   const ordinaryLogin = await login(ctx, ordinary.username, ordinary.password, ordinary.employeeNo, ordinary.realName);
+  const profileBefore = await ctx.request(ordinaryLogin.actor, 'GET', '/me/profile');
+  assert(profileBefore.status === 200 && profileBefore.data?.occupation === null
+    && profileBefore.data?.gender === null && profileBefore.data?.birthday === null,
+  'new nullable self-profile fields missing');
+  const savedProfile = await ctx.request(ordinaryLogin.actor, 'POST', '/me/profile', {
+    occupation: '  电工  ', gender: 'female', birthday: '2000-02-29',
+  });
+  assert(savedProfile.status === 200 && savedProfile.data?.occupation === '电工'
+    && savedProfile.data?.gender === 'female' && savedProfile.data?.birthday === '2000-02-29',
+  `POST self-profile save failed: ${savedProfile.status}/${savedProfile.code}`);
+  const persistedProfile = await ctx.queryTestDb(
+    "SELECT occupation, gender, DATE_FORMAT(birthday, '%Y-%m-%d') AS birthday FROM sys_user WHERE id = ?", [ordinary.id],
+  );
+  assert(persistedProfile[0]?.occupation === '电工' && persistedProfile[0]?.gender === 'female'
+    && persistedProfile[0]?.birthday === '2000-02-29', 'self-profile fields did not persist');
+  const reloadedProfile = await ctx.request(ordinaryLogin.actor, 'GET', '/me/profile');
+  assert(reloadedProfile.status === 200 && reloadedProfile.data?.birthday === '2000-02-29'
+    && reloadedProfile.data?.source === 'institution' && String(reloadedProfile.data?.category_id) === categoryId,
+  'self-profile reload changed authoritative fields');
+  for (const method of ['PATCH', 'POST']) {
+    for (const field of ['phone', 'source', 'category_id', 'role', 'status', 'identity_status', 'username']) {
+      const forged = await ctx.request(ordinaryLogin.actor, method, '/me/profile', { [field]: 'forged' });
+      assert(forged.status === 400 && forged.code === 40001,
+        `${method} self-profile accepted controlled field ${field}: ${forged.status}/${forged.code}`);
+    }
+    for (const invalid of [
+      { occupation: '  ' }, { occupation: 'a'.repeat(65) }, { gender: 'other' },
+      { birthday: '2023-02-29' }, { birthday: '2026-02-30' }, { birthday: '2999-01-01' },
+    ]) {
+      const rejected = await ctx.request(ordinaryLogin.actor, method, '/me/profile', invalid);
+      assert(rejected.status === 400 && rejected.code === 40001,
+        `${method} self-profile accepted invalid display fields: ${rejected.status}/${rejected.code}`);
+    }
+  }
+  const clearedProfile = await ctx.request(ordinaryLogin.actor, 'PATCH', '/me/profile', {
+    occupation: null, gender: null, birthday: null, email: 'learner@example.test',
+  });
+  assert(clearedProfile.status === 200 && clearedProfile.data?.occupation === null
+    && clearedProfile.data?.gender === null && clearedProfile.data?.birthday === null
+    && clearedProfile.data?.email === 'learner@example.test', 'PATCH profile null clear/PC compatibility failed');
   const ordinaryBeforeUpdate = await userState(ctx, ordinary.id);
   const ordinaryProfileBeforeUpdate = await ctx.request(ordinaryLogin.actor, 'GET', '/auth/profile');
   assert(ordinaryProfileBeforeUpdate.status === 200, `ordinary profile before update failed: ${ordinaryProfileBeforeUpdate.status}`);

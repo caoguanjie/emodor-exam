@@ -9,7 +9,7 @@ import { VideoSessionService } from './modules/video-learning/video-session.serv
 
 /**
  * 定时任务编排（02 册 2.2 横切能力，06 册 4.3 双触发）：
- * ① 超时自动交卷：每 30 秒扫描 in_progress 且 deadline_at ≤ NOW 的记录（主触发）；
+ * ① 超时收口：每 30 秒扫描 in_progress 且 deadline_at ≤ NOW 的记录（主触发）；
  * ② 僵尸学习会话收口：每 60 秒扫描（90 秒离线 / 长暂停 / 超长会话兜底）；
  * ③ 解析兜底：每 60 秒扫描 pending 超过 2 分钟的版本（防事件丢失）；
  * ④ 统计缓存兜底过期由 TTL 5 分钟承担，事件失效由交卷/达标事务后主动触发。
@@ -29,14 +29,14 @@ export class TasksService {
     private readonly videoLearning: VideoSessionService,
   ) {}
 
-  /** 触发器一（主）：超时自动交卷，每 30 秒（06 册 4.3） */
+  /** 触发器一（主）：超时未交卷收口，每 30 秒。 */
   @Interval(30_000)
   async sweepExamTimeouts() {
     if (this.examSweepRunning) return;
     this.examSweepRunning = true;
     try {
       const n = await this.examService.sweepTimeouts();
-      if (n > 0) this.logger.log(`超时自动交卷：${n} 条`);
+      if (n > 0) this.logger.log(`超时未交卷收口：${n} 条`);
     } catch (e: any) {
       this.logger.warn(`超时扫描失败: ${e?.message}`);
     } finally {
@@ -82,9 +82,15 @@ export class TasksService {
     } catch { /* ignore */ }
   }
 
-  /** 媒体孤儿延迟清理：锁定资源后二次检查引用，不能删除已绑定文件。 */
+  /** 媒体延迟清理：先释放 24h 未提交实名材料，再二次检查其余孤儿引用。 */
   @Interval(3_600_000)
   async sweepMediaOrphans() {
+    try {
+      const removed = await this.media.cleanupTemporaryIdentityImages();
+      if (removed > 0) this.logger.log(`临时实名材料清理：${removed} 条`);
+    } catch (e: any) {
+      this.logger.warn(`临时实名材料清理失败: ${e?.message}`);
+    }
     try {
       const removed = await this.media.cleanupOrphans();
       if (removed > 0) this.logger.log(`媒体孤儿清理：${removed} 条`);

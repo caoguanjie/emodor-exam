@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { randomStrongPassword } from './training-access.mjs';
+import { assertAttemptView, assertPureTimeout, assertTimeoutFacts, examLearner } from './support/exam-mobile-fixtures.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
@@ -51,12 +52,6 @@ function assertNoSecrets(value) {
   }
 }
 
-function displayedIndex(question, key) {
-  const index = question.options.findIndex((option) => option.key === key);
-  assert.notEqual(index, -1, `missing option ${key}`);
-  return index;
-}
-
 export async function run(ctx) {
   const suffix = randomBytes(4).toString('hex');
   const admin = await login(ctx, 'admin', ctx.adminPassword, 'records admin');
@@ -84,16 +79,7 @@ export async function run(ctx) {
   const reader = await login(ctx, readerUsername, readerPassword, 'records reader');
 
   const learnerUsername = `records_learner_${suffix}`;
-  const learnerPassword = randomStrongPassword(learnerUsername, '记录学员');
-  const learnerCreated = await ctx.request(admin.actor, 'POST', '/admin/students', {
-    username: learnerUsername,
-    password: learnerPassword,
-    real_name: `记录学员${suffix}`,
-    source: 'institution',
-    category_id: categoryId,
-  });
-  assert.equal(learnerCreated.status, 200, JSON.stringify(learnerCreated));
-  const learner = await login(ctx, learnerUsername, learnerPassword, 'records learner');
+  const learner = { actor: await examLearner(ctx, { categoryId, username: learnerUsername }) };
 
   const question = await ctx.request(admin.actor, 'POST', '/ai/questions', {
     category_id: categoryId,
@@ -122,15 +108,19 @@ export async function run(ctx) {
 
   const started = await ctx.request(learner.actor, 'POST', `/me/exams/${paperId}/start`);
   assert.equal(started.status, 200, JSON.stringify(started));
+  assertAttemptView(started.data);
   const recordId = String(started.data.record_id);
   const item = started.data.questions[0];
   const submitted = await ctx.request(learner.actor, 'POST', `/me/exam-records/${recordId}/submit`, {
-    revision: 1,
-    answers: [{ item_id: item.item_id, selected: [displayedIndex(item, 'A')] }],
+    record_id: recordId,
+    answers: [{ item_id: item.item_id, option_ids: ['A'] }],
   });
   assert.equal(submitted.status, 200, JSON.stringify(submitted));
   assert.equal(submitted.data.grading_state, 'finalized');
   assert.equal(submitted.data.score, 100);
+  assert.equal(submitted.data.legacy, false, 'newly authored question freezes v2 content');
+  assert.deepEqual(submitted.data.items[0].selected_option_ids, ['A']);
+  assert.deepEqual(submitted.data.items[0].correct_option_ids, ['A']);
 
   const denied = await ctx.request(learner.actor, 'GET', '/admin/exam-records');
   assert.equal(denied.status, 403, JSON.stringify(denied));
@@ -156,6 +146,32 @@ export async function run(ctx) {
   assert.equal(result.data.record_id, recordId);
   assert.equal(result.data.grading_state, 'finalized');
   assert.equal(result.data.score, 100);
+
+  const timeoutActor = await examLearner(ctx, { categoryId });
+  const timeoutStart = await ctx.request(timeoutActor, 'POST', `/me/exams/${paperId}/start`);
+  assert.equal(timeoutStart.status, 200, JSON.stringify(timeoutStart));
+  const timeoutId = timeoutStart.data.record_id;
+  await ctx.queryTestDb('UPDATE exam_record SET deadline_at=DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 SECOND) WHERE id=?', [timeoutId]);
+  const timeoutResult = await ctx.request(timeoutActor, 'GET', `/me/exam-records/${timeoutId}/result`);
+  assert.equal(timeoutResult.status, 200, JSON.stringify(timeoutResult));
+  assertPureTimeout(timeoutResult.data);
+  assert.equal(timeoutResult.data.legacy, false);
+  await assertTimeoutFacts(ctx, timeoutId);
+  const adminTimeout = await ctx.request(reader.actor, 'GET', `/admin/exam-records/${timeoutId}/result`);
+  assert.equal(adminTimeout.status, 200);
+  assert.deepEqual(adminTimeout.data, timeoutResult.data);
+  const history = await ctx.request(timeoutActor, 'GET', '/me/exam-records');
+  assert.equal(history.status, 200);
+  const timeoutRow = history.data.items.find((row) => row.record_id === timeoutId);
+  assert.equal(timeoutRow.status, 'timeout');
+  assert.equal(timeoutRow.submitted_at, null);
+  assert.equal(timeoutRow.grading_state, 'not_submitted');
+  const wrong = await ctx.request(learner.actor, 'GET', '/me/wrong-questions');
+  assert.equal(wrong.status, 200);
+  assert.deepEqual(wrong.data.items, [], 'a correct manual answer creates no wrong items');
+  const timeoutWrong = await ctx.request(timeoutActor, 'GET', '/me/wrong-questions');
+  assert.equal(timeoutWrong.status, 200);
+  assert.deepEqual(timeoutWrong.data.items, [], 'an unsubmitted timeout creates no wrong items');
 
   for (const [method, path, body] of [
     ['GET', `/admin/exams/${paperId}/monitor`, undefined],

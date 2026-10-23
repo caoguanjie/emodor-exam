@@ -4,9 +4,11 @@
 >
 > **口径基准**：本文档所有表名、字段名、枚举值、角色值、模块名与 [README.md](README.md) 逐字一致；接口行为与 [05-模块设计.md](05-模块设计.md) 的模块内部设计逐条对应（章节引用形如「05 册 5.4.3 节」）。
 
-> **状态边界（2026-10-22）**：现行接口只支持 single/multiple/judgment、持久草稿、主动/超时统一终结、自动评分、本人历史/错题和管理端考试记录。图片答案、人工阅卷、实时监控、切屏上报，以及 `/users`、`/departments`、制度管理写接口已删除。题库资料使用 `/admin/question-materials`，外部 AI 生成参数为 `material_id + material_version_id`；底层来源字段仍为 `regulation_id/regulation_version_id`。旧 `/learning`、旧 `/exams`、旧 `/statistics` 与制度内容/文件只读路由继续兼容。
+> **状态边界（2026-10-22）**：Task13/14 / Gate H2已实现并自动验证：新移动考试使用三类客观题、稳定ID/受限Tiptap、本地草稿、实名主动整卷提交与纯timeout。主动截止前受理才自动评分；到期不提交、不评分。旧`/exams`数字协议仅兼容制度固定卷，不能访问training release；历史已评分timeout保持只读。PC只保留题库、组卷与只读记录。真实后端浏览器全链、真实短信/腾讯、真实弱网和微信开发者工具/真机仍未验。其他已删除能力不因兼容路由恢复。
 
 > **试题入口增量（2026-10-22）**：PC 考试管理依次为试题管理、试卷管理、试题导入、考试记录。`/admin/questions` 保留列表、人工录题、修改、审核、预览及单题重新生成；`/admin/questions/import` 独立承载文件导入与 AI 生成两个 Tab。资料管理和整批资料 AI 生成接口继续兼容，但列表页不再提供这些入口。AI 参考题导入见 §3.5.3，是 `source=ai` 不绑定永久制度版本的明确例外。
+
+> **移动认证增量（2026-10-22）**：§3.1.1 登记学员 H5 短信认证、独立 mobile 会话与调试登录的当前接口。真实手机号收码/验码仍需人工验收；接口与自动回归通过不能替代真实短信、实名供应商或微信真机验收。
 
 ---
 
@@ -17,7 +19,7 @@
 | 项 | 约定 |
 |---|---|
 | 基础 URL | `/api/v1`（由 nginx 反向代理至 NestJS 应用） |
-| 协议风格 | REST：资源名词复数、动作用 HTTP 方法表达（GET 查询 / POST 创建与动作 / PUT 修改 / DELETE 删除）。多数 legacy PUT 为字段修改；C3 `PUT .../draft` 明确定义为带 revision 的全量替换。非幂等动作（retry、archive 等）一律使用 POST |
+| 协议风格 | REST：资源名词复数、动作用HTTP方法表达；legacy PUT可为字段修改。新移动考试不提供服务端draft/heartbeat。非幂等动作（retry、archive等）用POST |
 | 请求格式 | `application/json`；文件上传为 `multipart/form-data`；Excel 导出响应为二进制流（`Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`） |
 | 认证方式 | `Authorization: Bearer <access_token>`（JWT 双令牌，见 1.3） |
 | 时间格式 | ISO 8601（`2026-09-12T14:30:00.000+08:00`）；纯秒数字段（如 `total_seconds`）为整型 |
@@ -62,13 +64,16 @@
 
 | 令牌 | 有效期 | 载荷 | 用途 |
 |---|---|---|---|
-| access token | 2 小时（`JWT_EXPIRES_IN` 可配） | sub（sys_user.id）、username、role、type=access、jti、iat、exp | 每次业务请求的 Bearer 凭据 |
-| refresh token | 7 天 | sub、type=refresh、jti、iat、exp | 调用 `POST /auth/refresh` 换新 access，同时轮换新 refresh |
+| access token | 2 小时（`JWT_EXPIRES_IN` 可配） | sub（sys_user.id）、username、role、auth_version、sid、client、auth_method、type=access、jti、iat、exp | 每次业务请求的 Bearer 凭据 |
+| refresh token | 7 天（`JWT_REFRESH_EXPIRES_DAYS` 可配） | 同上，type=refresh | 经所属客户端的 HttpOnly Cookie 刷新，同时轮换新 refresh |
 
-- 刷新策略：access 过期前以 refresh 换发，旧 refresh 到期自然失效。
-- 登出走 **Redis 黑名单吊销**（07 册 2.1.4 定稿）：`POST /auth/logout` 将 access token 的 `jti` 写入 `auth:blacklist:{jti}`（TTL = access 剩余有效期，到期自动清理）并记录审计日志，客户端同时清除双令牌；认证守卫命中黑名单即拒绝。
+- `client=pc` 只接受 `auth_method=password`；`client=mobile` 只接受 `sms/debug`。新令牌均绑定持久 sid；仅历史 PC 缺失 client/auth_method/sid 的令牌按 pc/password 兼容。令牌不携带完整手机号、密码哈希或邮箱。
+- PC Cookie 为 `ruleexam_refresh`、Path `/api/v1/auth`；mobile Cookie 为 `ruleexam_mobile_refresh`、Path `/api/v1/mobile/auth`。两者均为 HttpOnly、SameSite=Strict，生产环境 Secure；不在 JSON body 返回 refresh token，刷新接口也不从 body 读取它。
+- 刷新策略：PC 调用 `POST /auth/refresh`，mobile 调用 `POST /mobile/auth/refresh`；服务端检查客户端/认证方式/会话身份后一次性消费旧 refresh jti，轮换成功后旧 refresh 不可重放，持久会话到期时间顺延完整 TTL。
+- 登出走 **Redis 黑名单与会话吊销**（07 册 2.1.4）：PC `POST /auth/logout` 校验 access 后吊销对应 jti/sid 并清理 PC Cookie；mobile `POST /mobile/auth/logout` 是公开、Cookie 驱动的幂等入口，不要求 access 有效，只撤销自身 mobile Cookie 对应的 jti/sid 并始终清理该 Cookie。两端都只清理本端前端认证状态。
 - 改密 / 重置密码 / 停用账号写用户级封禁键 `auth:block:{user_id}`，值为封禁时刻时间戳（秒级），TTL = refresh 剩余有效期；认证守卫（含 refresh 换发路径）判定 `token.iat < block_ts` 即拒绝（40107），封禁时刻之后新签发的令牌天然放行（05 册 2.4.1 取舍说明）。
 - 敏感操作（开考、交卷、管理端写操作）执行前实时回查 `sys_user.status = 1`，停用账号的存量令牌即时失效（Redis 故障降级路径，07 册 2.1.4）。
+- mobile 登录、刷新和每个受保护请求还须实时确认当前用户启用、`role=employee` 且有效管理权限集合为空；普通业务接口继续检查 auth_version、jti 黑名单、用户封禁及 sid。mobile 凭据不得调用 `/admin/*` 或 PC `/auth/*`；PC 凭据不得调用受保护的 `/mobile/*`。
 
 ### 1.4 接口守卫链
 
@@ -80,10 +85,9 @@
 
 | 关键动作 | 幂等机制 |
 |---|---|
-| C2 开考 `POST /me/exams/{id}/start` 与旧固定入口 | `sys_user → exam_assignment → exam_record → 新开时 exam_paper` 数据库锁及唯一键裁决；Redis start 锁不参与正确性。有效 active 返回同一记录，过期 active 返回 40904 等待事务外 sweeper |
+| 开考 `POST /me/exams/{id}/start` 与旧固定入口 | 用户/assignment/record/新开时paper数据库锁及唯一键裁决；有效active沿原record/题面/deadline恢复，过期active先纯timeout，不能重抽或延时；Redis start锁不参与正确性 |
 | 交卷 `POST /exams/records/{id}/submit` | 三层幂等（05 册 6.4.5）：状态前置校验 + Redis 提交锁 + 事务内终态判定；重复调用返回首次评分结果 |
-| C3 草稿 `PUT /me/exam-records/{id}/draft` | 只接受 `current+1`；当前 revision+同一规范化 payload 返回原 ACK（含截止后重放），当前 revision 异 payload或其他版本返回 40905 |
-| C3 交卷 `POST /me/exam-records/{id}/submit` | `sys_user → exam_record` 行锁；可选最后一版草稿与 finalizer 同事务，超时忽略新 body；主动/定时并发后到者返回首次 `FinalResult`，不重复缓存失效与审计 |
+| 移动交卷 `POST /me/exam-records/{id}/submit` | 本人record悲观锁后取accepted_at；严格早于deadline才校验完整稳定ID答案并评分。passed/failed重复请求忽略新答案返回首次结果；timeout返回超时，历史submitted返回待确认；不新增submission_id |
 | 会话开始 `POST /learning/sessions/start` | 单活跃会话约束（后开者胜）：同 user + regulation 已有活跃会话时，旧会话被结束落库并返回新会话（05 册 5.4.1） |
 | 学习心跳 | 天然幂等：以服务端时钟差结算，重复/乱序心跳不虚增时长（45 秒封顶，05 册 5.4.2） |
 | 视频会话开始 `POST /me/video-sessions` | 短事务持 `sys_user` 行锁做范围/活动重查；旧 reading 在释放事务连接后按原算法收口并最多重试 3 次，最终事务关闭旧 video 后再取新锚点；`active_user_id` 可空唯一索引兜底 |
@@ -95,12 +99,12 @@
 |---|---|---|
 | `/auth`、`/learning`、旧 `/exams`、旧 `/statistics`、`/regulations/{id}/content` 与 `/regulations/{id}/content/file` | 共享兼容契约 | 旧制度阅读资格、旧固定卷自动评分与原统计保持；不恢复制度管理写接口，下发不含答案/解析，refresh 走 HttpOnly Cookie |
 | `/admin/training-categories`、`/admin/students`、`/admin/administrators`、`/admin/question-materials`、`/admin/questions`、课程/视频、`/admin/papers` | 当前管理契约 | 字符串 ID 与 `Page.items`；新资料不绑定类别；题目内部保存实际来源；三类客观题版本和发布快照不可变 |
-| 个人题单、持久答案、统一终结与结果 | 当前考试契约 | `/me/exams*` 使用字符串 ID、本人所有权与不可变快照；在考不下发 answer/analysis；草稿只含 `item_id + selected`，交卷后自动 finalized |
+| 个人题单、主动整卷与结果 | 当前Exam Contract v1 | `/me`考试仅mobile employee；在考字符串item/option ID与受限Tiptap，不下发答案/解析；无服务端draft/heartbeat；主动受理才manual/finalized，到期纯timeout |
 | 考试记录 | 当前只读管理契约 | `/admin/exam-records`、`/{id}`、`/{id}/result` 均要求 `exam_records:read`；不返回监控、设备、切屏或人工评分字段 |
 | 培训统计与权限首页 | 当前增量契约（C6） | `/statistics/training/*` 与 `/admin/dashboard`；实时读取冻结考试事实和 B2 当前版本，不改变旧 `/statistics` |
 | 旧固定卷 vs 新培训考试开考 | 两条口径并存 | 旧固定卷继续检查 `learning_record.is_valid`；新培训考试默认关闭学习门槛，但仍检查发布、类别/来源、权限、次数、身份状态和服务端 deadline |
 
-目标考试链路固定遵循：发布/候选版本快照 → 个人题单快照 → 确认草稿持久化 → 主动或超时幂等终结 → 三类客观题自动判分 → 最终结果只读。旧 `/exams` 只为制度固定客户端保留兼容形状，training 记录不能借该入口提交。
+目标链路：发布/候选版本快照→个人题单快照→客户端本地草稿→学员主动整卷提交→锁后截止前受理/评分→只读结果；到期分支直接纯timeout，不评分。旧`/exams`只保留制度固定协议，training记录不能借该入口提交。
 
 ---
 
@@ -111,6 +115,9 @@
 | 路由前缀 | 所属模块 | 状态 | 说明 |
 |---|---|---|---|
 | /auth | 身份与权限 | 现行 | 验证码、登录、刷新、个人信息、改密、登出 |
+| /mobile/auth | 学员移动认证 | 现行增量 | 短信发码/登录、mobile 刷新/登出；显式开启时提供 test/development 调试登录 |
+| /me/identity-verification | 学员实名 | Gate G自动化与独立代码审查已通过 | 本人三图上传/释放、持久核验会话与权威状态，见3.2.8；真实供应商/真机另验 |
+| /media/{assetId}/tickets、/media/tickets/{ticket}/content | 媒体票据 | Gate G已通过；视频增量见Task 12冻结契约 | mobile签发短期票据；内容二次检查精确引用/当前授权，支持单段Range |
 | /admin/training-categories | 学习管理 | 现行 | 培训类别分页、详情、增改、启停、引用保护删除 |
 | /admin/students | 学习管理 | 现行 | 无部门学员增改查、头像、启停、重置密码、xlsx 模板/预检/确认；不提供删除 |
 | /admin/administrators、/admin/roles 等 | 系统设置 | 现行 | 管理员创建必须提交非空 `role_ids`；另含权限、会话与公共配置治理 |
@@ -118,10 +125,10 @@
 | /admin/questions | 题库导入 | 现行 | 9 列 Excel/TXT 模板、预检、批次状态与幂等确认 |
 | /ai | AI 与题库 | 现行 | AI 配置/任务、类别与考点选项、三类客观题版本审核、人工录入 |
 | /admin/papers | 试卷发布 | 现行 | 固定/随机卷配置、来源选项、候选、预览、发布、复制、撤回、归档 |
-| /me | 本人/考试 | 现行 | 本人资料/首页、考试列表、开考、恢复、草稿、心跳、交卷、结果、历史、错题 |
+| /me | 本人/考试 | Gate H2已自动验证 | 本人资料/首页、考试列表、开考/状态恢复、主动整卷交卷、结果、历史和错题；无考试draft/heartbeat |
 | /media | 受控媒体 | 现行 | 头像、课程、视频、题目和品牌媒体；无答题图片 purpose |
-| /admin/courses、/me/courses | 课程 | 现行 | 课程/章节/视频版本与本人同类别课程 |
-| /me/video-sessions、/me/video-records | 视频学习 | 现行 | 服务端计时、递增序号心跳、主动关闭与历史 |
+| /admin/courses、/me/courses | 课程 | 现行；视频增量见Task 12冻结契约 | 课程/章节/视频版本；启用学员可浏览全部已发布课程，来源/类别不额外阻断视频学习，开播须实名 |
+| /me/video-sessions、/me/video-records | 视频学习 | B2协议；Task 12冻结契约 | 当前mobile employee本人；服务端计时、递增序号心跳、主动关闭与历史，见3.10 |
 | /admin/exam-records | 考试记录 | 现行 | 列表、详情、结果，统一要求 `exam_records:read` |
 | /statistics/training、/admin/dashboard | 培训统计 | 现行 | 场次汇总、排名、同筛选导出与权限裁剪首页 |
 | /learning、/exams、/statistics | 共享兼容 | 保留 | 旧制度学习、固定卷自动评分和原统计；原统计菜单隐藏 |
@@ -158,6 +165,45 @@
 规则：凭据校验 → `status = 0` 拒绝 →「用户不存在」与「密码错误」返回同一错误码 40104（不泄露区别，05 册 2.4.1）；每次真实密码成功登录（包括 pending 阶段）递增 `login_count` 并更新 `last_login_at` / `last_login_ip`，refresh 不更新这些统计。`force_password_change = 1` 时签发**受限令牌**（payload 含 `pwd_pending: true`），响应携带 `force_change_password: true`；该状态与登录统计分离。
 
 **PUT /auth/password**：body 含 `old_password`、`new_password`（强度策略见 07 册 2.2）；成功后在同一事务内清除 `force_password_change`、递增 `auth_version`、吊销旧会话并创建新会话，写 `auth:block:{user_id}` 兼容吊销键，并签发完整令牌（payload 无 `pwd_pending`）随响应返回，客户端替换本地双令牌。
+
+### 3.1.1 学员移动认证 /mobile/auth
+
+以下路径均带 `/api/v1` 前缀，成功统一返回 HTTP 200 与 `{code,message,data}` 信封。公开入口不要求 Bearer；刷新与退出只读取 `ruleexam_mobile_refresh`，不读取 PC Cookie。
+
+| 方法 | 路径 | 认证与请求 body | 成功 data |
+|---|---|---|---|
+| POST | /mobile/auth/sms/send | 公开；`{phone:string}` | `{challenge_id:string,expires_in:number,retry_after:number,masked_phone:string}` |
+| POST | /mobile/auth/sms/login | 公开；`{phone:string,challenge_id:string,code:string}` | `MobileSessionResult` |
+| POST | /mobile/auth/refresh | mobile refresh Cookie；无 body 凭据 | `MobileSessionResult`，同时轮换 mobile Cookie |
+| POST | /mobile/auth/logout | 公开幂等、mobile refresh Cookie 驱动；不要求 access，无 body | `null`，始终清理 mobile Cookie |
+| POST | /mobile/auth/debug-login | 公开；`{phone:string}`；仅 test/development 显式开启 | `MobileSessionResult` |
+
+```ts
+interface MobileSessionResult {
+  access_token: string
+  expires_in: number
+  user: {
+    id: number
+    username: string
+    real_name: string
+    phone_masked: string
+    role: 'employee'
+    source: 'institution' | 'external' | null
+    category_id: number | null
+    identity_status: 'unverified' | 'pending' | 'verified' | 'rejected'
+  }
+}
+```
+
+此移动认证响应当前沿用 number 用户/类别 ID；不要据此改变课程、考试等接口的字符串 ID 契约。Gate G 契约将 `identity_status` 与已实名姓名接入 `IdentityService` 权威查询，不能根据普通姓名、头像或手机号推断通过；新建调试/短信学员没有实名事实时仍为 `unverified`。Gate G 验收状态独立于既有认证验收。
+
+手机号先去除空白及连字符，结果必须是匹配 `^1[3-9][0-9]{9}$` 的中国大陆 11 位手机号。`challenge_id` 是 48 位小写十六进制随机串，验证码为 6 位数字。默认挑战有效期 300 秒、重发间隔 60 秒、每挑战最多 5 次验码，手机号/IP 的 86400 秒计数窗口上限分别为 10/100 次；配置项见 07 册 §2.2.5。新发码使该手机号旧挑战失效，验码成功一次性消费挑战；响应和日志均不返回验证码或完整手机号。
+
+短信通过后按规范化手机号关联账号；不存在时在事务内创建 `source=external`、`role=employee`、类别为空的学员，随机用户名与不可知随机密码哈希不作为短信登录凭据。唯一手机号索引处理并发首次登录。已有账号须启用、为 employee 且当前有效管理权限为空；管理账号应使用 PC 密码入口。短信登录不清除 PC 的 `force_password_change`，也不据此签发 PC 令牌。移动成功登录更新 `last_login_at/last_login_ip`，不递增仅统计密码登录的 `login_count`。
+
+mobile access 仅保存在 Pinia 内存；refresh 仅保存在 HttpOnly Cookie。401 刷新采用同一时刻共用一次请求、原业务请求最多重放一次的规则；失败清空 mobile 内存态并进入登录页。退出时，即使 access 已过期也可凭 mobile refresh Cookie 撤销对应会话；缺失、无效或误传 PC Cookie 只作安全空操作并清理 mobile Cookie，不触碰 PC 会话。前端无论退出请求是否成功均清理 mobile 内存态。
+
+`SERVER_DEBUG_LOGIN_ENABLED` 默认 false；只允许 `NODE_ENV=test|development` 显式开启，production 开启必须使启动失败。调试入口仅绕过短信，仍复用手机号规范化、账号关联/创建、普通学员权限检查与同一个会话签发器；新建调试学员仍未实名。H5 页面不提供调试按钮或固定验证码；调试成功不算真实短信验收。
 
 ### 3.2 培训身份与系统权限 /admin、/me
 
@@ -206,8 +252,13 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 | # | 方法 | 路径 | 请求 | 成功 data |
 |---|---|---|---|---|
-| 1 | GET | /me/profile | — | 当前用户资料（含 `category_id/source`，旧用户可为 null） |
-| 2 | PATCH | /me/profile | 仅允许 `real_name?`、`phone?`、`email?`、`avatar_id?` | 更新后的资料 |
+| 1 | GET | /me/profile | — | 当前用户资料（含 `occupation/gender/birthday/category_id/source`，旧用户可为 null） |
+| 2 | POST | /me/profile | 移动端兼容入口；仅允许 `real_name?`、`email?`、`avatar_id?`、`occupation?`、`gender?`、`birthday?` | 更新后的资料 |
+| 3 | PATCH | /me/profile | PC/既有兼容；请求与 POST 相同 | 更新后的资料 |
+
+手机号已是认证标识，不能经普通本人资料接口修改；携带 `phone` 返回 40001。手机号关联由短信认证完成，后台新建/导入或受控学员管理入口统一做规范化与唯一性校验；管理入口改号时递增认证世代并吊销旧会话。本期不另提供未经短信校验的自助换绑接口。POST 与 PATCH 共用同一严格 DTO 和服务；POST 用于微信原生 request 不支持 PATCH 的跨端兼容，不得放宽字段白名单。
+
+`occupation` 去首尾空白后为 1—64 字符或 null，且不修改培训类别；`gender` 仅 `male/female/null`；`birthday` 仅真实 `YYYY-MM-DD/null` 且不得晚于服务端 Asia/Shanghai 业务当前日期。普通保存继续禁止 `source/category_id/role/status/identity_status/username` 等权威字段；Gate G 实名契约规定已实名姓名不得由兼容的 `real_name` 字段修改，PC/mobile 共用事务内检查，非法修改返回 40001。
 
 `source/category_id/role/avatarId/username/department_id` 等未知或越权字段均返回 40001，不静默丢弃；`avatar_id` 只接受已经由本人上传且 ready 的头像资源，绑定与旧资源解绑在同一事务内完成。
 
@@ -288,6 +339,74 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 `logo_asset_id` 可为 null，`banners` 必须为数组、最多 3 项、`asset_id` 不得重复，服务端按 `sort + asset_id` 稳定排序。`GET /site-config` 不会序列化整张设置表，任何 AI 配置、密钥或未白名单 setting 都不得进入响应。
 
 审计查询只打开 `LOG_DIR/audit/audit-YYYY-MM-DD.log` 普通文件，拒绝路径越界与符号链接；忽略损坏旧行而不返回原文。审计目录尚未产生时可返回空页；目录存在但类型非法、不可读、读取中变化或目标日志文件发生 EACCES/其他 I/O 错误时返回 50004/HTTP 503，不用空页或部分页伪装成功。写入、文件失败后的 stderr 降级、查询输出三条路径都对 password/token/authorization/cookie/api_key/credential 等敏感字段递归脱敏；字符串若是 JSON 则解析后递归清洗，非 JSON 的 `key=value`/`key:value` 会清除完整值（含空格），同时保留 action/result/reason 等非敏感诊断信息。
+
+### 3.2.8 学员实名与短期媒体票据（Task 10/11，Gate G 自动化与独立代码审查已通过）
+
+路径均以 `/api/v1` 为前缀。除原始内容流外，须为 mobile Bearer access，实名路由另要求普通 employee 且仅操作本人；沿用严格 DTO 白名单与 `{code,message,data}`。ID 为正十进制字符串（`^[1-9]\d{0,19}$`），session ID 为服务端 UUID。
+
+| 方法 | 完整路径 | 请求 | 成功 data |
+|---|---|---|---|
+| GET | `/api/v1/me/identity-verification` | — | `IdentityVerificationView` |
+| POST | `/api/v1/me/identity-verification/images` | multipart `image_type` + 单个 `file` | `IdentityImageUpload`；HTTP 200 |
+| DELETE | `/api/v1/me/identity-verification/images/:assetId` | 无 body | `null`；只释放本人且未进入 session/实名事实的临时材料 |
+| POST | `/api/v1/me/identity-verification/sessions` | `IdentitySessionCreate` | `IdentitySessionView`；HTTP 200 |
+| GET | `/api/v1/me/identity-verification/sessions/:sessionId` | — | `IdentitySessionView`；检查本人归属 |
+| POST | `/api/v1/media/:assetId/tickets` | `{owner_type: string, owner_id: string}` | `MediaTicketView`；HTTP 200 |
+| GET | `/api/v1/media/tickets/:ticket/content` | 签名票据；可带单段 Range | 原始内容流 200/206；跳过响应信封，无须 Bearer |
+
+```ts
+type IdentityImageType = 'id_card_portrait' | 'id_card_emblem' | 'face'
+type IdentityReasonCode = 'ID_CARD_PORTRAIT_PARSE_FAILED' | 'ID_CARD_EMBLEM_PARSE_FAILED'
+  | 'ID_CARD_DOCUMENT_INVALID' | 'ID_CARD_EXPIRED' | 'FACE_MISMATCH'
+  | 'FACE_QUALITY_FAILED' | 'IDENTITY_ALREADY_BOUND' | 'SESSION_EXPIRED'
+interface MediaTicketView { content_url: string; expires_at: string }
+interface IdentityVerificationView {
+  status: 'unverified' | 'pending' | 'verified' | 'rejected'
+  real_name: string | null
+  id_number_masked: string | null
+  verified_at: string | null
+  current_session_id: string | null
+  reason_code: IdentityReasonCode | null
+}
+interface IdentityImageUpload {
+  asset_id: string
+  image_type: IdentityImageType
+  scan_status: 'safe'
+  processed_preview: MediaTicketView | null
+}
+interface IdentitySessionCreate {
+  face_asset_id: string
+  id_card_portrait_asset_id: string
+  id_card_emblem_asset_id: string
+}
+interface IdentitySessionView {
+  session_id: string
+  status: 'pending' | 'verified' | 'rejected'
+  reason_code: IdentityReasonCode | null
+  clear_materials: IdentityImageType[]
+  expires_at: string
+}
+```
+
+图片只允许 JPEG/PNG，原文件 ≤10 MiB、至少 320×320，普通源图 ≤20M 像素、正脸源图 ≤60M 像素。服务端修正 EXIF、重编码去元数据，长边 ≤1600，JPEG Base64 ≤约 2.8M；身份证面先 OCR 裁剪清洗，预览返回处理图票据，face 用本地临时预览。客户端不得传 owner、学员 ID、来源、scan status 或实名通过状态。三资产必须不同、本人所有、ready、未删除且分别匹配 `identity_face/identity_id_portrait/identity_id_emblem` purpose；通用 `/media/upload` 不接受实名三种 purpose。
+
+`POST sessions` 成功只返回 `IdentitySessionView`。同用户相同三资产且未过期时复用原会话（包括 rejected）；不同材料遇到现有非终态返回 40906，客户端查询当前权威状态，不并行创建。已实名返回 **40960/HTTP 409**，错误 `data={status:'verified',reason_code:null,clear_materials:[]}`，客户端随后 GET 本人实名视图，不能假造 session 或仅凭冲突文案显示成功。`provider_pending/provider_unknown/provider_verified` 对外均为 pending；无结果过期映射 rejected + SESSION_EXPIRED，已持久成功结果优先恢复绑定，不受普通 TTL 丢弃。
+
+上传/创建的可恢复业务错误在非零错误信封中固定提供 `data={reason_code: IdentityReasonCode|null, clear_materials: IdentityImageType[]}`。session 材料拒绝属于成功查询到 rejected 终态，不把供应商不可用伪造成 rejected；供应商关闭/超时、存储或安全配置不可用沿用 50004/HTTP 503，未知原因保留材料。前端只按 code/data 分支，不能解析 message。
+
+| reason_code | clear_materials | 处理 |
+|---|---|---|
+| ID_CARD_PORTRAIT_PARSE_FAILED | `['id_card_portrait']` | 只重拍人像面 |
+| ID_CARD_EMBLEM_PARSE_FAILED | `['id_card_emblem']` | 只重拍国徽面 |
+| ID_CARD_DOCUMENT_INVALID / ID_CARD_EXPIRED | `['id_card_portrait','id_card_emblem']` | 重拍两面 |
+| FACE_MISMATCH / FACE_QUALITY_FAILED | `['face']` | 重新现场拍正脸 |
+| IDENTITY_ALREADY_BOUND / SESSION_EXPIRED / null | `[]` | 展示受控原因；不静默合并或自动清材料 |
+
+签票 DTO 仅接受 `owner_type`（最长 64）和 `owner_id`。已冻结 owner 为 `identity_verification_user + user ID`、`user_avatar + user ID`、`training_course_cover + course ID`，Task 12增加 `lesson_version_video + version ID`，视频专属资格见3.10；题图由Task 13/14再冻结。签发前须存在精确 `media_reference(asset_id,owner_type,owner_id)` 并通过对应票据授权；视频使用独立learner-only authorizer，不能直接借用PC管理预览的 `authorizeRead` 旁路。内容读取验证HMAC/expiry后，再按票内actor/asset/purpose/owner重查同一引用、当前业务权限及资源ready/未删除；撤销引用或权限后旧票据也不得继续读。
+
+`content_url` 为站内相对 URL，仅含短期票据，默认 300 秒，不含 access/refresh JWT、真实文件名、磁盘路径或供应商凭据。票据无效/过期返回 40302/HTTP 403；客户端重新签发，不能把访问令牌放 URL。Range 沿用单段 `bytes=start-end`/后缀范围，成功返回 206、`Content-Range/Accept-Ranges/Content-Length`，无 Range 为 200；非法、多段或不可满足范围为 41601/HTTP 416。内容响应使用 `private, no-store`、`inline` 和 `nosniff`。
+
+自动化仅在 Nest TestingModule override Provider 后走完整三图/会话/轮询/绑定；真实腾讯及真机验收另记，不以本节契约同步宣称已通过。
 
 ### 3.3 题库资料 /admin/question-materials
 
@@ -481,41 +600,37 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 **POST /exams/records/{id}/heartbeat**：body 含 `answers[]`（source question_id + 呈现位置选择）。有 C2 assignment 的记录先按同一 record 映射为 item_id，再把 partial patch 合并进数据库确认稿；遗漏题目不清空。真正升级前无 assignment 的进行中记录继续使用 Redis 暂存。响应返回 `remaining_seconds`（`deadline − 服务端当前时刻`，前端每 30 秒校准，不信任本地时钟）。
 
-**POST /exams/records/{id}/submit**：旧 body 仍含 `answers[]`。有 assignment 的记录把 source question_id 映射为本次 item_id，合并持久确认稿并调用 C3 finalizer；终态重试先返回旧形状结果，不受重试 body 影响。旧无 assignment 记录保持原 Redis/评分路径。旧结果中的 `options/answer/selected` 均为原始选项域，010 不改既有 selected/score。
+**POST /exams/records/{id}/submit**：旧body仍含数字`answers[]`；有assignment先按冻结source question ID映射本次item，并由legacy adapter转换冻结稳定ID后主动提交；无assignment保留旧主动评分兼容。终态重试返回首次旧形状结果；到期一律纯timeout，不再按Redis暂存评分。旧结果options/answer/selected保留原始域，010/021不改历史selected/score。本节API不提供PC学员页面入口。
 
 **GET /exams/records/{id}/result**：`status` / `score` / 逐题明细（stem / selected（已还原原始下标）/ is_correct / gained_score / answer / analysis）——解析仅在交卷后的成绩回看中下发。
 
-### 3.7.1 本人培训考试 /me（权限：本人，字符串 ID）
+### 3.7.1 本人培训考试 /me（mobile employee，Exam Contract v1）
 
 | # | 方法 | 路径 | 说明 |
 |---|---|---|---|
 | 1 | GET | /me/exams | 当前类别已发布 training 卷 + 本人已有 assignment 分页列表 |
 | 2 | POST | /me/exams/{id}/start | 原子首次开考、补考或有效 active 恢复 |
-| 3 | GET | /me/exam-records/{id} | 本人按 record_id 恢复有效在考题单 |
-| 4 | PUT | /me/exam-records/{id}/draft | 全量替换并确认一版持久草稿 |
-| 5 | POST | /me/exam-records/{id}/heartbeat | 返回服务端时间、剩余秒数、截止时间与草稿 revision；body 必须为空对象 |
-| 6 | POST | /me/exam-records/{id}/submit | 可选保存最后草稿并统一幂等终结 |
-| 7 | GET | /me/exam-records/{id}/result | 本人读取自动结算结果与交卷后解析 |
-| 8 | GET | /me/exam-records | 本人考试历史分页 |
-| 9 | GET | /me/wrong-questions | 本人 finalized 非满分题分页 |
+| 3 | GET | /me/exam-records/{id} | 权威状态；进行中才返回题面，到期先纯timeout |
+| 4 | POST | /me/exam-records/{id}/submit | 学员主动确认后的严格整卷稳定ID答案 |
+| 5 | GET | /me/exam-records/{id}/result | 主动交卷结果、纯timeout或历史待确认结果 |
+| 6 | GET | /me/exam-records | 本人考试历史Page分页，保留timeout记录 |
+| 7 | GET | /me/wrong-questions | 本人finalized非满分题Page分页，新纯timeout无条目 |
 
 `POST /me/exams/{id}/start` 的首次新开要求账号启用、试卷 published、启用培训类别、用户 category/source 必填且类别与 release 匹配。random 卷按 `institution → easy`、`external → hard` 抽取；fixed 卷按冻结题单得出单一难度或 `mixed`。首次同事务冻结 `release_id/source/category_id/difficulty/rule_snapshot/snapshot_origin`，补考沿用 assignment，不按用户新资料或题库当前内容重算。升级前旧 `exam_record` 同样计入 `max_attempts`，默认总次数 3 次（含首次）。
 
-恢复顺序刻意早于试卷状态和用户当前 category/source 检查：有效 active 即使试卷已撤回也返回同一 record、deadline、题序和选项序；账号停用仍拒绝。服务端 `deadline_at` 已过时返回 40904，不在持有用户锁的 start 事务内嵌套终结；30 秒 timeout sweeper 在事务外读取冻结规则/题单完成客观收口并清空 `active_assignment_id`。收口后再开按冻结最大次数裁决。
+全部接口只接受启用中的mobile employee。未实名可浏览列表；新开考、恢复进行中题面、主动交卷要求`learner_identity`权威事实。unverified/rejected返回40302 + `IDENTITY_REQUIRED`，pending为`IDENTITY_PENDING`；Debug Login不产生实名，供应商disabled不否定既有verified事实。终态状态/历史结果不重复要求实名。
 
-成功响应 `AttemptView` 固定含 `record_id/paper_id/release_id/source/category_id/difficulty/deadline_at/server_now/draft_revision/questions/answers`。`questions[]` 只含 `item_id/type/stem/options/score`，`item_id` 是新答题主键；在考响应任何层级都不得出现标准 `answer/analysis`。record、items、确认答案在同一 `REPEATABLE READ` 事务快照中读取。`answers[].selected` 是显示域；数据库 `exam_answer.selected` 是原始域，保存只映射一次、恢复时逆映射一次。
+恢复先于当前category/source和paper状态检查：active沿用原record/snapshot/deadline，不因改来源/类别、撤卷或改题重抽/延时。状态查询在锁内检查deadline，已到期先纯timeout再返回。新链路不提供`PUT .../draft`和`POST .../heartbeat`，不能从读状态、恢复、清扫、Redis事件触发交卷或评分。
 
-个人题图使用 `media_reference(owner_type=exam_record_question, owner_id=item_id)`。题干/选项图片在开考时绑定；本人或具有 `exam_records:read` 的管理员只可读取精确属于该 record/item 的资源。解析图片仅在 record 终态时由统一结果投影授权；在考本人、未授权用户及猜测 asset_id 均不可读。
+`AttemptRecordViewV2`见§4.7.1：只含status、record_id、paper_id、release_id、deadline_at、server_now和questions。进行中题目仅`item_id/type/score/stem/options[{id,content}]`，终态questions=[]。受限Tiptap递归重建白名单只允许doc/paragraph/text/hardBreak/image，图片attrs仅十进制字符串asset_id；最多2000节点、100000文本字符、深度4。拒绝marks/src/HTML/链接/样式/未知字段，任何层级不下发答案、解析、checked/correct、来源/难度或服务端草稿元数据。
 
-`DraftInput` 为 `{revision, answers[]}`；每个答案只能是 `{item_id, selected?}`。`answers` 是完整替换集，单选/判断最多一个显示下标，多选下标去重且不越界。成功返回 `DraftAck={revision,saved_at,answered_count}`。只接受 `current+1`；同 revision、同规范化 payload 重试返回首次 ACK 且不刷新 `saved_at`。当前 revision 的不同 payload、旧/跳号 revision、截止后的新写入均返回 40905。
+提交body严格为`{record_id,answers:[{item_id,option_ids}]}`，ID是字符串，path/body相同；每题恰一次、未答[]，选项须本题存在且唯一，single/judgment最多一项。拒绝缺项/重复/未知/跨题、selected/revision/asset_ids等旧字段或未知嵌套字段，返回40001。处理先认证、查本人记录和加锁；passed/failed直接返回首次结果，历史submitted返回待确认，timeout返回超时；只有active首次提交才严格校验body。锁后唯一accepted_at严格`< deadline_at`才受理，同一时刻写submitted_at并同事务评分到manual/finalized的passed/failed。事务失败全部回滚，并发不同答案/timeout竞争只产生一个终态及一组副作用。
 
-`POST .../heartbeat` body 必须是空对象，响应 `{server_time,remaining_seconds,deadline_at,draft_revision}`。它只校准服务端时间并在到期时触发统一终结，不采集设备、连接或切屏信息。
+纯timeout原子写status=timeout、score=0、grading_state=not_submitted；submission_method/submitted_at/graded_at及active_assignment_id=NULL，draft_revision=0且其余draft元数据NULL。不调用评分、不创建exam_answer、不生成逐题得分；升级前active草稿行只做同record清理，历史终态不改。结果为passed=false、correct_rate=null、items=[]，展示“超时未交卷”，不开放解析、不进错题或finalized统计分母。
 
-`POST .../submit` body 可省略，或完整复用 `DraftInput`。未过期时最后草稿与 finalizer 同事务；已过期时忽略新 body，只按此前确认稿以 timeout 终结。主动、心跳发现超时和定时 sweeper 都锁同一 record、复用同一 finalizer；终态重试只返回首次结果。
+`FinalResultV2`含status、record_id、grading_state、submission_method、legacy、可空submitted_at/graded_at、score、passed、correct_rate及items；题项用稳定selected_option_ids/correct_option_ids与受限analysis。历史submitted单独返回`LegacySubmittedResult`（score/passed/correct_rate=null、items=[]），展示“历史结果待确认”；历史已评分timeout保留既有分数/明细及timeout方式，按历史评分事实投影passed/failed。legacy由schema/快照与历史事实判定，不能用submission_method为空推断。完整DTO见§4.7.1。
 
-`FinalResult` 固定含 `record_id/grading_state/submission_method/legacy/submitted_at/graded_at/score/passed/correct_rate/items`。`items[]` 含安全题面、本人 `answer`、显示域 `correct_answer`、`analysis/gained_score`。三类客观题即时 finalized；`correct_rate` 按 `gained_score == 冻结满分` 计算。新结果 `submission_method=manual|timeout、legacy=false`；无历史快照的 legacy 结果不回查当前题库，保留已知分数、`items=[]/correct_rate=NULL/submission_method=NULL/graded_at=NULL/legacy=true`。
-
-`GET /me/exam-records?page&page_size` 返回 `Page<ExamHistoryItem>`；每项包含 record/paper、次数、状态、`grading_state`、来源/难度、提交/评分时间和最终分数。`GET /me/wrong-questions` 只统计 `grading_state=finalized` 且 `gained_score < 冻结 score` 的题，包含未答和多选部分分题。新结果中的题面、本人答案与正确答案统一使用显示域；旧 `/exams` 结果继续使用原始域。
+本人历史为`Page<ExamHistoryItemV2>`；错题为`Page<WrongItemV2>`，只读finalized非满分（含主动交卷未答和部分分）题。新纯timeout不进错题，旧finalized历史timeout保留事实。题图固定`exam_record_question/item_id`精确引用，签票/读取均重查归属和阶段：在考实名且未截止只开放prompt；passed/failed及历史已评分timeout按冻结结果允许题干/选项/解析图；仅新纯timeout拒绝题图。PC `exam_records:read` Bearer预览独立，不能签learner票据。
 
 ### 3.7.2 管理端考试记录（只读）
 
@@ -527,7 +642,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 | GET | `/admin/exam-records/{id}` | `exam_records:read` | 返回与列表同源的单条记录摘要；不返回题目答案或解析 |
 | GET | `/admin/exam-records/{id}/result` | `exam_records:read` | 终态返回与本人接口同源的 `FinalResult`；进行中记录按结果 reader 的状态规则拒绝 |
 
-列表/详情摘要字段为 `record_id/paper_id/paper_title/user_id/username/name/source/category_id/difficulty/release_id/attempt_no/started_at/deadline_at/submitted_at/answered_count/total_count/status/grading_state/submission_method/score`。`source/difficulty` 只读该记录冻结值；未知 submission_method 返回 null。接口不返回或派生 `last_heartbeat_at/connection_state/switch_count/device_summary`。终态 result 可读取题干、选项和解析中的受控题图，但不存在学员答案图片或人工评语。
+列表/详情摘要字段为 `record_id/paper_id/paper_title/user_id/username/name/source/category_id/difficulty/release_id/attempt_no/started_at/deadline_at/submitted_at/answered_count/total_count/status/grading_state/submission_method/score`。`source/difficulty` 只读该记录冻结值；submission_method为null包含新纯timeout未交卷或旧历史方式未知，不能由null推断legacy。接口不返回或派生 `last_heartbeat_at/connection_state/switch_count/device_summary`。主动评分终态与历史已评分timeout可按冻结结果读取题干/选项/解析图，新纯timeout不能读取题图，但不存在学员答案图片或人工评语。
 
 ### 3.8 统计模块 /statistics（权限：制度管理）
 
@@ -572,7 +687,7 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 - 当前应考按查询时点的启用账号、当前类别/来源及当前发布模式的难度映射计算；业务管理权限不改变学习身份。`eligible_started_count` 只取当前应考 ID 与历史成功开考 ID 的交集；`historical_started_count` 保留该 paper 全历史，当前范围外人数由 `historical_only_started_count` 单列，零分母参与率为 null。
 - 历史筛选只读 `exam_record` 冻结的 `category_id/source/difficulty`，未知难度保持 `unknown`。成绩组和排名只使用 `release_id` 指向的最新 release、与其 `rule_snapshot` 完全一致、同 difficulty 且 `grading_state=finalized` 的记录，再取个人最高分；不跨 release/规则合榜。
-- 同分使用标准竞争排名（1/1/3）。个人同分答卷在两个 `graded_at` 都已知时选较早者；任一历史时间未知时按最小 `record_id` 稳定兜底。用时取 `started_at → submitted_at`，timeout 取 `started_at → deadline_at`。
+- 同分使用标准竞争排名（1/1/3）。个人同分答卷在两个 `graded_at` 都已知时选较早者；任一历史时间未知时按最小 `record_id` 稳定兜底。用时取 `started_at → submitted_at`，旧已评分timeout按历史交卷方式取started_at→deadline_at；新纯timeout不进入排名。
 - 课程完成率只统计当前应学的 institution 学员，按 published 课程必学课时的当前 `lesson_version` 与 B2 `video_learning_record.is_completed` 核算；external 不进入分母，零必学课时返回 null。未完成原因固定为 `learning_incomplete/not_started/not_passed`。
 
 首页指标逐项授权：`students:read` 才返回正常学员数，`questions:read` 才返回题目数，`papers:read` 才返回试卷数，`statistics:read` 才返回近 7 日考试记录趋势。不存在待阅卷指标。趋势以服务端 `started_at` 转换到 Asia/Shanghai 自然日；无权限不返回 0 占位。
@@ -616,34 +731,46 @@ A3 学员管理边界：列表、详情、资料更新、启停和重置密码�
 
 课程状态为 `draft / published / offline`。只有 draft/offline 可改变章节或课时结构；published 仍允许追加新 `lesson_version`，旧版本与媒体引用不覆盖。上架时锁定并确认类别启用，并要求每个必学课时的当前版本属于该课时、时长大于 0，且媒体为 ready 的 video；不满足返回 40930。课程的 `regulation_ids` 只是信息关联，不能进入抽题池或变成学习门槛。
 
-学员可见集合固定为：账号启用、`source=institution`、有类别、课程 `status=published` 且类别相同；排序为推荐优先、`sort_order ASC,id DESC`。external 或缺来源/类别返回空页，跨类别/下架详情返回 40302。`GET /me/home` 直接并行组合真实 `SystemService.publicConfig()` 与 `CourseService.visibleCourses()`，所以站点字段仍只有 `logo_asset_id/banners`，课程集合、排序、分页及 external 空页语义与 `/me/courses` 完全相同；不另造推荐可见性、完成度或学习门槛。
+课程浏览集合固定为：账号启用且课程 `status=published`；`source`、`category_id` 与实名状态不作为列表/详情筛选条件，跨类别、external 或类别缺失仍可浏览，下架/草稿详情返回 40302。排序为推荐优先、`sort_order ASC,id DESC`。`GET /me/home` 直接并行组合真实 `SystemService.publicConfig()` 与 `CourseService.visibleCourses()`，站点字段仍只有 `logo_asset_id/banners`，课程集合、排序和分页与 `/me/courses` 完全相同。Task 12 Video Contract v1替换旧institution/同类别视频分配：两类来源及缺类别均可学习published课程；浏览仍不等于播放授权，后者须按3.10重查mobile employee、实名、current version与精确媒体引用。
 
 PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可见，`/admin/courses/{id}` 仍要求 `courses:read`。这只是前端注册路由的 `permissionAny` 语义；服务端每个 API 的 `@Permissions` 仍保持 AND 守卫，不改变全局授权模型。write-only 账号可创建课程，但不会读取列表或跳转到无权详情。
 
 ### 3.10 B2 视频学习 /me/video-sessions、/me/video-records、/me/courses/{id}/progress
 
+本节按Task 12 `Video Contract v1`记录已通过 Gate H1 自动化与独立代码审查的实现；真实视频解码、断网、全屏、微信开发者工具和真机仍未验。下列 `/me` 接口均只接受 `client=mobile` 且当前仍为employee的access token，PC password会话不能创建或维持学员视频会话。
+
 | 方法 | 路径 | 权限 | 请求与成功 data |
 |---|---|---|---|
-| POST | /me/video-sessions | 登录本人 | `{lesson_id:Id}`；返回 `VideoSessionView` |
-| POST | /me/video-sessions/{id}/heartbeat | 登录本人 | `VideoHeartbeat`；返回 `VideoProgress` |
-| POST | /me/video-sessions/{id}/close | 登录本人 | 无 body；只收口、不补记未上报区间，返回 `VideoProgress` |
-| GET | /me/video-records | 登录本人 | `page` 默认 1、`page_size` 默认 20 且范围 1—100；返回本人历史 `Page<VideoRecordView>`，未知 query 拒绝 |
-| GET | /me/courses/{id}/progress | 登录本人 | 返回当前应学集合 `CourseProgress` |
+| POST | /me/video-sessions | mobile employee本人且已实名 | `{lesson_id:Id}`；返回 `VideoSessionView` |
+| POST | /me/video-sessions/{id}/heartbeat | mobile employee本人 | `VideoHeartbeat`；返回 `VideoProgress`，服务端复核活动所有权和当前资格 |
+| POST | /me/video-sessions/{id}/close | mobile employee本人 | 无 body；只收口、不补记未上报区间，返回 `VideoProgress` |
+| GET | /me/video-records | mobile employee本人 | `page` 默认 1、`page_size` 默认 20 且范围 1—100；返回本人历史 `Page<VideoRecordView>`，未知 query 拒绝；不以实名筛掉已有记录 |
+| GET | /me/courses/{id}/progress | mobile employee本人 | 只读 `CourseProgress`；未实名仍可查询已有进度 |
+| POST | /media/{assetId}/tickets | mobile普通学员本人且已实名 | `{owner_type:'lesson_version_video',owner_id:version_id}`；返回 `MediaTicketView`，签发/读取均走learner-only授权 |
 
 ```ts
 type VideoHeartbeat = { seq:number; position_ms:number; state:'playing'|'paused'|'buffering'|'background'|'ended' };
 type VideoProgress = { confirmed_position_ms:number; credited_ms:number; coverage_ms:number;
   duration_ms:number; completed:boolean; last_seq:number };
-type VideoSessionView = { session_id:Id; version_id:Id; heartbeat_interval_ms:30000; progress:VideoProgress };
+type VideoSessionView = { session_id:Id; version_id:Id; heartbeat_interval_ms:30000;
+  media:{ asset_id:Id; ticket:MediaTicketView }; progress:VideoProgress };
+type MediaTicketView = { content_url:string; expires_at:string };
 type VideoRecordView = { record_id:Id; lesson_id:Id; version_id:Id; progress:VideoProgress };
-type CourseProgress = { required:number; completed:number; completion_rate:number|null; lessons:VideoProgress[] };
+type CourseLessonProgress = VideoProgress & { lesson_id:Id; version_id:Id };
+type CourseProgress = { required:number; completed:number; completion_rate:number|null; lessons:CourseLessonProgress[] };
 ```
 
-start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`source=institution`、类别、课程 published、课时归属及 `current_version_id`，不能只相信 `LessonVersionService.current()` 或事务外 `assignedCourseIds()`。若发现活动 reading，事务立即释放；随后才在事务外等待原 reading mutex 并调用唯一的旧阅读 flush 算法，再重新进入短事务权威校验，最多竞争重试 3 次，仍被抢占返回会话冲突。最终无活动 reading 的事务用同一 manager 关闭旧 video，完成后重新取服务端时钟作为新会话锚点。阅读 start 使用同一循环并在锁内复核账号状态。其 DB 会话提交后发布 Redis 前再次锁用户并检查 DB `ended_at` 与当前活动所有权，避免已被视频替换的迟到 Redis 指针复活旧阅读计时；若 phase2 在真正替换前完成并返回 200，后续 start 仍会收口它，最终所有权以 DB 为准。
+所有ID均为十进制字符串，客户端不得用number承载。start每轮先用短事务锁定 `sys_user`，重新检查mobile employee、账号启用、已有 `learner_identity`、课程published、video课时归属及current version正时长、ready/purpose=video资产与精确 `lesson_version_video + version_id` 引用；external/institution采用相同资格，类别缺失或课程类别不同不阻断。不能只相信 `LessonVersionService.current()` 或事务外 `assignedCourseIds()`。若发现活动reading，事务立即释放；随后才在事务外等待原reading mutex并调用唯一的旧阅读flush算法，再重新进入短事务权威校验，最多竞争重试3次。最终事务关闭旧video后重新取服务端时钟，初始锚点为paused、位置为confirmed_position_ms；实际play的第一拍playing仅重置锚点。阅读start同一循环及DB提交后、Redis发布前的所有权复核保持原约束。
+
+start按同一轮权威current version返回 `media.asset_id` 和精确版本票据，禁止从课程详情旧缓存拼播放地址；事务提交后若签票前发生换版/下架/授权变化，须先关闭本次新session再失败，不返回半成品或遗留未知活动会话。票据即将过期可用start返回的asset_id/version_id重签，只换src并恢复当前播放器位置，不重建session或补时。未实名/被拒绝为40302 + `data.reason_code='IDENTITY_REQUIRED'`，核验处理中为40302 + `IDENTITY_PENDING`；只按reason_code引导。已结束/被替换session返回40950；下架、换版、引用失效或课程不可学先关闭活动session再返回40951，客户端停止播放/心跳并刷新权威进度，不自动start。
+
+视频短票签发及每次内容读取使用独立learner-only authorizer：重查启用employee、无有效管理权限、已有实名、published/current、ready资产及精确引用。通用Bearer内容读取仍兼容具备 `courses:read` 的PC管理预览；普通学员通用读取仍须实名及published/current，video不允许以上传者 `asset.owner_id===actor_id` 短路。角色/权限变化、停用、下架、换版或引用撤销即时使旧学员短票失效。
 
 心跳以数据库中的 `last_seq/last_heartbeat_at/anchor_position_ms/anchor_state` 为权威，进程重启后继续。仅前一锚点为 playing 且本拍为 playing/ended 时可确认区间；先以完整的非负服务端实际间隔判断 `forward_ms ≤ server_elapsed_ms + 2000`，再将有效时长取服务端间隔、45 秒和真实位置前进量的最小值。过大前进不增加 `coverage_ms`，只把下一拍锚点移到新位置。paused/buffering/background 不计时；重复观看可增加 `credited_ms`，合并后的覆盖区间不重复增加。`state=ended` 同拍结算合法区间后关闭会话。
 
-完成条件是 `coverage_ms / duration_ms ≥ 0.95`。课程分母只包含当前账号类别下已上架课程的必学课时当前版本；external、停用、无类别或零必学课程返回 `required=0,completed=0,completion_rate=null`，不会自动完成。视频替换后旧版本记录保留，但不计入新版本完成；课程下架、当前版本替换或学员来源/类别变化会关闭后续视频计时。`GET /me/video-records` 只按令牌本人查询历史记录，不按当前课程/来源/类别重新过滤，不返回媒体 URL，也不重开会话；账号停用仍由全局认证守卫拒绝。该 API 证明服务端协议与恢复能力，不证明真实注意力、移动端全屏/锁屏/微信或弱网体验。
+完成条件是 `coverage_ms / duration_ms ≥ 0.95`。课程分母按当前published课程的required video lessons当前版本计算，不再以institution/同类别分配筛选；external、无类别、跨类别适用同一口径，零必学课时返回 `required=0,completed=0,completion_rate=null,lessons=[]`。每个进度项携带稳定 `lesson_id/version_id`，移动端按ID映射目录完成态和断点，不按数组下标猜测。视频替换后旧版本记录保留但不计入新版本完成；下架、当前版本替换、账号停用或播放资格失效会关闭后续计时，单独source/category变化不撤销课程资格。`GET /me/video-records`只按本人读取不可变版本历史，不按当前来源、类别、课程状态或current version隐藏记录，不返回媒体URL、不重开会话。该learner进度口径不改写3.8的C6管理统计既有分母。
+
+客户端使用uni-app原生video；play/pause/waiting/ended映射到五态协议，error仅UI反馈，不能上报为后端state。waiting自然恢复后在仍有播放意图且前台未暂停时，以首个位置前进的timeupdate仅重建一次playing锚点，其余timeupdate不逐次请求。onHide暂停、立即报background并停止周期心跳，不close；前台恢复保持暂停，onUnload尽力close。断网沿用原生buffering/loading，最终失败简单重试，无离线缓存、补时队列或历史心跳重放。close与90秒回收只收口。播放器start/close串行，心跳同seq不并发；切课时/切账号/卸载按session/revision/登录epoch丢弃迟到响应，未知start结果不自动并发重发。真实全屏、拖动、微信合法域名/Range及真机仍须另验。
 
 ---
 
@@ -929,68 +1056,80 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 }
 ```
 
-### 4.7.1 C3 确认草稿与结果（字符串 ID）
+### 4.7.1 Exam Contract v1：Attempt、Submit与Result（字符串ID）
 
-`PUT /api/v1/me/exam-records/9001/draft` 请求：
+以下是信封`data`的DTO；完整受限Tiptap结构见03册§4.0。start与GET record使用同一模型，终态不返回题目：
 
-```json
-{
-  "revision": 3,
-  "answers": [
-    { "item_id": "9101", "selected": [0] },
-    { "item_id": "9104", "selected": [0, 2] }
-  ]
+```ts
+interface AttemptQuestionV2 {
+  item_id: string
+  type: 'single' | 'multiple' | 'judgment'
+  score: number
+  stem: ReadonlyTiptapDoc
+  options: Array<{ id: string; content: ReadonlyTiptapDoc }>
 }
+type AttemptRecordViewV2 = {
+  record_id: string
+  paper_id: string
+  release_id: string | null
+  deadline_at: string
+  server_now: string
+} & (
+  | { status: 'in_progress'; questions: AttemptQuestionV2[] }
+  | { status: 'submitted' | 'passed' | 'failed' | 'timeout'; questions: [] }
+)
+interface SubmitAttemptRequest {
+  record_id: string
+  answers: Array<{ item_id: string; option_ids: string[] }>
+}
+interface FinalResultItemV2 extends AttemptQuestionV2 {
+  selected_option_ids: string[]
+  correct_option_ids: string[]
+  analysis: ReadonlyTiptapDoc | null
+  gained_score: number
+}
+interface FinalResultV2 {
+  record_id: string
+  status: 'passed' | 'failed' | 'timeout'
+  grading_state: 'finalized' | 'not_submitted'
+  submission_method: 'manual' | 'timeout' | null
+  legacy: boolean
+  submitted_at: string | null
+  graded_at: string | null
+  score: number
+  passed: boolean
+  correct_rate: number | null
+  items: FinalResultItemV2[]
+}
+interface LegacySubmittedResult {
+  record_id: string
+  status: 'submitted'
+  grading_state: 'not_submitted'
+  submission_method: null
+  legacy: true
+  submitted_at: string | null
+  graded_at: null
+  score: null
+  passed: null
+  correct_rate: null
+  items: []
+}
+type FinalResultView = FinalResultV2 | LegacySubmittedResult
 ```
 
-确认响应：
+`POST /api/v1/me/exam-records/9001/submit`示例（示意整份题单共两题）：
 
 ```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "revision": 3,
-    "saved_at": "2026-10-22T01:30:15.123Z",
-    "answered_count": 2
-  }
-}
+{"record_id":"9001","answers":[{"item_id":"9101","option_ids":["A"]},{"item_id":"9104","option_ids":[]}]}
 ```
 
-`POST /api/v1/me/exam-records/9001/submit` 可不带 body，或携带同一 `DraftInput` 作为最后确认稿。客观题即时结果示例（`items` 仅节选一题，真实响应包含冻结题单全部项）：
+新纯timeout的结果data固定如下；主动manual/finalized与历史已评分timeout结果可返回已知冻结答案/解析：
 
 ```json
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "record_id": "9001",
-    "grading_state": "finalized",
-    "submission_method": "manual",
-    "legacy": false,
-    "submitted_at": "2026-10-22T01:31:00.000Z",
-    "graded_at": "2026-10-22T01:31:00.000Z",
-    "score": 62.5,
-    "passed": true,
-    "correct_rate": 0.5,
-    "items": [
-      {
-        "item_id": "9101",
-        "type": "single",
-        "stem": "示例题干",
-        "options": [{ "key": "B", "text": "乙" }, { "key": "A", "text": "甲" }],
-        "score": 25,
-        "answer": { "item_id": "9101", "selected": [0] },
-        "correct_answer": [0],
-        "analysis": "示例解析",
-        "gained_score": 25
-      }
-    ]
-  }
-}
+{"record_id":"9001","status":"timeout","grading_state":"not_submitted","submission_method":null,"legacy":false,"submitted_at":null,"graded_at":null,"score":0,"passed":false,"correct_rate":null,"items":[]}
 ```
 
-三类客观题提交后均由服务端自动进入 `grading_state="finalized"`。C2 历史结果的 `submission_method/graded_at` 可为 NULL，并以 `legacy=true` 明示元数据遗留。
+`ExamHistoryItemV2`含record_id/paper_id/paper_title/attempt_no/status/grading_state/submission_method/legacy/source/difficulty/score/started_at/submitted_at/graded_at；后两时间可空，score为number或null。`WrongItemV2`扩展FinalResultItemV2，另含record_id、非空submitted_at和legacy。两列表都返回`Page.items`。
 
 ### 4.8 单项制度统计概览 GET /api/v1/statistics/regulations/12/overview
 
@@ -1076,6 +1215,7 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 | 40940 | 409 | 题目当前版本已变化或不存在 | 编辑/审核/重生成的显式 expected_version_id 与锁内 current_version_id 不一致，或 identity/current_version 指针损坏；不写新 revision，客户端刷新后重试 |
 | 40950 | 409 | 视频学习会话已结束或被替换 | 心跳指向已关闭、已被阅读/视频新会话取代或不属于当前活动所有者的会话 |
 | 40951 | 409 | 课程或视频版本当前不可学习 | 课程下架、课时当前版本替换，或会话后续范围检查失败；服务端先关闭活动视频所有权再返回 |
+| 40960 | 409 | 当前账号已完成实名认证 | POST 核验会话遇既有实名事实；data 固定含 status=verified、reason_code=null、clear_materials=[]，随后 GET 权威实名视图 |
 | 40970 | 409 | 试卷发布状态已变化 | 非 draft 修改/发布、非 published 撤回，或锁内类别/模式与预读不一致 |
 | 40971 | 409 | 候选题池容量不足 | 随机卷初级或高级任一题型的不重复考点数小于 required；data.deficits 返回 type/required/available |
 | 40972 | 409 | 试卷规则不合法 | 总分非 10000、固定题存在重复考点/非当前审核版本/越类别或制度筛选，或随机题型规则非法 |
@@ -1099,12 +1239,15 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 | 模块 | 公开 | 员工（本人范围） | 制度管理 | 管理 |
 |---|---|---|---|---|
 | /auth | login、refresh | profile、password、logout | 同左 | 同左 |
+| /mobile/auth | sms/send、sms/login；refresh/logout 由独立 mobile Cookie 驱动；debug-login 仅显式开启的 test/development | 登录/刷新后仅允许启用、无有效管理权限的 employee | 不签发 mobile 会话 | 不签发 mobile 会话 |
 | /admin/training-categories | — | — | — | A2 候选实现全部 6 个；A3 映射 training_categories:read/write |
 | /admin/students | — | — | — | A2/A4 实现全部 11 个；A3 映射 students:read/write |
 | /admin/question-materials | — | — | `ai:read/write` | 资料创建、上传、状态与重试；不绑定类别 |
 | /admin/questions | — | — | questions:write | B4 模板、预检、状态和确认均使用同一写权限；owner/kind 由服务端收口 |
 | /me | — | GET/PATCH 本人资料；GET `/me/home` 按本人身份返回公开配置与可见课程 | — | 同左 |
-| /me/courses | — | 同类别已上架课程分页/详情；external 默认空 | — | 同左（仍按本人类别收口） |
+| /me/courses | — | 全部已发布课程分页/详情；source/category/实名不限制浏览，视频播放另须mobile本人实名及published/current引用 | — | 保留既有课程浏览；不由此取得learner视频短票 |
+| /me/video-sessions、/me/video-records、/me/courses/{id}/progress | — | 仅当前mobile employee本人；历史/进度可只读，start及后续播放按3.10校验 | — | 不接受PC password会话或管理角色旁路 |
+| /me/exams、/me/exam-records、/me/wrong-questions | — | 仅当前mobile employee本人；开考/恢复进行中题面/主动交卷须实名，列表及终态读取不额外要求实名 | — | 不接受PC会话；管理端另用exam_records:read |
 | /media | — | 本人头像上传/所有权范围读取 | 非头像上传需 `media:write` | 同左 |
 | /admin 权限/会话 | — | — | 按 `roles/administrators/sessions:*` | 按各接口注册权限 |
 | /admin 系统配置 | — | — | `system_settings:read/write` | 同左；导航树为登录用户自身权限视图 |
@@ -1118,7 +1261,7 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 | /exams | — | 全部 7 个 | — | — |
 | /statistics | — | — | 全部 6 个 | 同左 |
 
-说明：`super_admin` 天然拥有 `regulation_admin` 全部能力；学习/考试面向发布范围内的用户开放、不按角色排除（管理员被纳入范围时同样应学应考，05 册 2.4.2）。
+说明：`super_admin`天然拥有 `regulation_admin`全部能力；旧制度学习/固定卷继续按原发布范围兼容（05册2.4.2）。Task 12移动视频接口及learner短票另要求当前mobile employee与独立播放资格，不以管理权限取得旁路；PC `courses:read`受控视频预览仍保留。
 
 ### 6.2 限流与幂等约定
 
@@ -1126,13 +1269,14 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 |---|---|---|
 | POST /auth/captcha | source_ip 每分钟最多 10 次；答案 120 秒 TTL 且一次消费；刷新只消费 `previous_captcha_id` | Redis 短期键；生产响应不返回答案 |
 | POST /auth/login | username 维度：连续失败 5 次锁定 10 分钟（40106，message 含剩余秒数）；source_ip 维度：10 次/分钟 | 双计数防爆破（07 册 2.2.2）；Redis 故障时降级为仅 IP 维度进程内计数 + 登录接口 sys_user.status 校验兜底 |
+| POST /mobile/auth/sms/send | 默认同手机号 60 秒重发间隔；手机号/IP 在 86400 秒计数窗口最多 10/100 次 | HMAC 手机号/IP 键与原子计数；新发码替换旧挑战，不保存验证码或完整手机号 |
+| POST /mobile/auth/sms/login | 默认挑战 300 秒有效、最多 5 次尝试；成功后一次消费 | challenge 与手机号 HMAC 绑定，供应商验码通过后原子消费；过期/错误 40001，频率或次数限制 42901，供应商不可用 50004 |
 | POST /learning/heartbeat | 节拍窗口限流：30 秒周期内异常高频丢弃（42901） | 丢弃不影响时长正确性（服务端时钟差结算、credited 封顶 45 秒，天然幂等） |
 | POST /learning/heartbeat/pause、resume | 同一 session_id 每分钟最多 60 次；重复 pause / 重复 resume 幂等（第二次直接返回当前状态，不重复结算） | 事件驱动端点不适用 30 秒节拍窗口——丢弃 pause/resume 会破坏失焦语义（resume 被丢弃 → 下拍 diff 含整段失焦时间、pause 被丢弃 → 失焦期间照常计费，虚增最多 45 秒/次，故单独限流） |
 | POST /me/video-sessions/{id}/heartbeat | 客户端默认 30 秒；序号必须递增，单次最多确认 45 秒 | DB session→record 行锁；重放/乱序返回当前进度，暂停/缓冲/后台零累计，跳播不写覆盖 |
 | POST /exams/records/{id}/heartbeat | 30 秒节拍窗口限流 | 作答暂存幂等（覆盖写） |
 | POST /exams/records/{id}/submit | 幂等：重复交卷返回首次结果 | 三层幂等（05 册 6.4.5） |
-| PUT /me/exam-records/{id}/draft | revision 单调且 payload 哈希一致 | current+1 写入；当前 revision 同 payload 回放原 ACK，异 payload/旧版/跳号拒绝 |
-| POST /me/exam-records/{id}/submit | 主动/超时/并发统一幂等 | user→record 或 timeout-only record 行锁；同事务可选保存+终结，终态返回首次 FinalResult |
+| POST /me/exam-records/{id}/submit | 严格整卷；同record终态幂等 | 锁后accepted_at严格早于deadline才受理；manual/finalized评分与写答案同事务，纯timeout不评分；终态重复返回首次结果 |
 | POST /admin/question-materials/{id}/versions | 并发上传同一资料串行化（版本号唯一） | 事务 + uk_regulation_version；响应版本 `id` 为字符串 |
 | POST /admin/courses/{id}/publish | 上架与下架后重上架均重新校验类别和必学视频；发布中间态不对学员可见 | 课程行悲观锁 + 同事务 readiness 校验 |
 | POST /admin/courses/{id}/lessons/{lessonId}/versions | 同一课时版本号顺序追加，旧行不修改 | 课程/课时行悲观锁 + uk_lesson_version_number |
@@ -1143,7 +1287,7 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 ### 6.3 传输与敏感信息
 
 - 生产环境经 nginx TLS 终止提供 HTTPS（07 册 4.1）；密码仅在登录/改密报文中出现，存储一律 bcrypt。
-- 响应体永不返回 `password_hash`或明文 `api_key`。在考 payload 及普通预览不返回标准 `answer/analysis`；答案版是单独授权的管理接口，不与学员下发契约共用。只有终态结果可向本人下发冻结标准答案与解析。
+- 响应体永不返回 `password_hash`或明文 `api_key`。在考 payload 及普通预览不返回标准 `answer/analysis`；答案版是单独授权的管理接口，不与学员下发契约共用。只有已评分冻结结果（含历史已评分timeout）可向本人下发答案/解析；新纯timeout与历史submitted均无逐题结果。
 - `trace_id`：50001 错误响应 `data.trace_id` 供日志排查。
 - 题库管理预览可读取答案与解析，但富文本图片只存 media id 并经 Bearer 鉴权内容接口换取 Blob URL，不暴露私有路径或外链。新培训在考 payload 不返回标准答案或解析；终态题图按 3.7.1 分阶段授权。不存在答题图片资源。
 
@@ -1154,8 +1298,8 @@ start 每轮先用短事务锁定 `sys_user`，重新检查账号启用、`sourc
 | 校验项 | 结果 |
 |---|---|
 | 当前路由前缀与 README 3.4 模块映射 | 一致；现行新增 `/admin/question-materials`、`/admin/questions`、`/admin/papers`、`/me/exams*` 与 `/admin/exam-records`，旧学习/考试/统计只读兼容 |
-| 当前表名/字段名（snake_case）与 03 册 | 一致：36 张业务表、三类客观题、客观答案列和无监控采集字段 |
+| 当前表名/字段名（snake_case）与 03 册 | 一致：38 张业务表 + 1 张迁移元数据表（共 39 张物理表）、三类客观题、客观答案列和无监控采集字段；Gate G 实名/票据自动化与独立代码审查已通过 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
-| 心跳/失焦/乱序/草稿/超时行为与 05 册 | 一致；考试心跳只校时，不采集监考数据 |
+| 心跳/失焦/乱序/草稿/超时行为与05册 | 新/me无考试draft/heartbeat，仅本地草稿/主动整卷；到期纯timeout；旧/exams心跳只为legacy协议兼容，不采集监考数据 |
 | 统计口径与 05 册 7.4.1 | 一致（七项指标逐字对齐） |
 | 错误码分段与 README（40xxx/50xxx） | 一致 |

@@ -1,14 +1,14 @@
 # 学员端架构讨论决策记录
 
-更新日期：2026-10-22。用途：长讨论续接与压缩后的上下文恢复。
-本文是讨论记录，尚不是已批准的完整设计、实施计划或验收记录。
+更新日期：2026-10-23。用途：长讨论续接与压缩后的上下文恢复。
+本文是持续决策与实施状态记录，不替代完整设计、实施计划和正式验收记录。
 
 ## 恢复指引
 
 1. 主代理每次上下文压缩后，先读本文件，再结合最新用户消息继续。
 2. 已确认的决定不重复提问；需要调整时明确指出受影响的 D 编号及原因。
 3. 以用户最新显式指令为准；建议、需求基线和已实施事实不能冒充用户新决定。
-4. 当前是架构讨论。记录讨论获授权，不等于创建工程、安装业务依赖或实现业务获授权。
+4. 讨论认可本身不等于实施授权；Task 1—15 实施及 Task 16/Gate J 自动化、桌面 Chrome 验收已收口；按下文未验边界和最新授权恢复工作，不自行扩大任务。
 5. 后续复用 `mobile_decision_recorder` 子代理，只更新本文件，保持 D 编号稳定。
 6. 主代理负责架构取舍；记录员只记录和核对，不替用户作决定。
 7. 保留工作区其他并行改动，不提交、不读取 `.env` 或真实凭据。
@@ -19,11 +19,15 @@
 - 需求输入：`docs/design/00-旧系统-学员移动端H5需求分析.md`；用户最新补充再次明确以此为需求基准，并要求继续 `brainstorming`。
 - 设计输入：`docs/ui/gemini.pen` 及本轮用户提供的答题页截图（Image #1）；用户明确要求使用 `brainstorming`、`pencil-design`。
 - 参考题库：`/Users/caogj/Downloads/聊天记录_20261022_094057/聊天记录内的图片、视频和文件/0915-产业工人质量安全培训考题题库（120题）.docx`；仅用于核对题目结构，不复制题库正文。
-- 讨论已覆盖技术栈、工程布局、部署构建、登录隔离及主要业务边界；用户已要求停止继续提问并完成完整设计，当前转为设计交付与审阅。
-- 完整设计：`docs/superpowers/specs/2026-10-22-learner-mobile-architecture-design.md`，主代理已生成；待用户审阅，不代表实施授权。
+- 讨论已覆盖技术栈、工程布局、部署构建、登录隔离及主要业务边界；按 D38 在当前 main 工作区完成 Task 1—15，Task 16/Gate J 自动化与桌面 Chrome 验收已完成。
+- 完整设计：`docs/superpowers/specs/2026-10-22-learner-mobile-architecture-design.md`，已生成并完成设计检查，作为后续分阶段实施输入；早期“待审阅”不再代表当前实施停留在讨论阶段。
+- 配套计划：`docs/superpowers/plans/2026-10-22-learner-mobile-h5.md`，已按分阶段授权执行至 Gate J；自动化与桌面 Chrome 范围已收口，真实供应商、真机、容器运行及生产部署仍未执行。
+- 用户补充 `gooodwork` 有网易云信短信、腾讯实名认证的代码参考及现有密钥来源；计划仅记录参考代码、配置名和交接边界，不读取或记录真实密钥。
 - 用户曾提醒“你这么快接入做什么，我们不是在讨论h5的架构吗”，之后说“接入就算了，继续讨论架构方案”。
 
 ## 已确认决定
+
+以下 D01—D38 保留用户确认时的原文与上下文；其中“尚未实现/待设计”等是当时状态，不是当前实施结论。例如 D06 的根构建脚本已于 Task 15/Gate I 落地，现状以下文实施事实和 Gate J 收口记录为准。
 
 ### D01：交付优先级与平台
 
@@ -318,6 +322,41 @@
 - 请求结果不明时，mobile 先按 `record_id` 查状态：已提交则展示结果，仍进行且未截止可重试相同整卷 payload，已超时则不再提交。
 - 确认原话：“可以”，确认上一轮交卷幂等和结果不明处理方案。
 
+### D36：业务 E2E 使用受限 Debug Login，真实短信由用户验收
+
+- 参考 `gooodwork/server/interfaces/http/modules/users/debug_login/routes.py` 与 `gooodwork/server/tests/integration/test_debug_login_routes.py` 的 Debug Login 实现、测试。
+- 自动化业务 E2E 不走真实短信，测试环境 Debug Login 直接经正常 session issuer 获取真实 mobile Token/session。
+- Debug Login 默认关闭，仅允许 `test/development`；生产环境若启用必须 fail-fast，并仍执行普通学员角色、停用状态及权限校验。
+- Debug Login 只建立真实 mobile 会话，不直接放行实名认证；新建测试学员仍为 `unverified`，未实名时视频、考试门槛继续拒绝。
+- 实名自动化实际经过三图上传、媒体归属校验、identity session、轮询和数据库绑定，仅腾讯 OCR/FaceID 外部调用由测试模块 `FakeIdentityProvider` 替换；替身通过不代表腾讯真实核验通过。
+- 当前计划/开发阶段不需要用户提供真实身份证或正脸材料，不得通过聊天、仓库、测试产物或截图将这些材料交给 Agent。
+- 自动化使用不含真实姓名、证件号、人脸信息的合成图片，仅验证上传、状态机和业务门槛，不作为真实腾讯核验材料或通过证据。
+- 真实腾讯 OCR/FaceID 验收待功能、密钥就绪后，由用户或明确授权的测试人员在 H5 页面亲自选择身份证正反面、现场拍摄正脸。
+- Agent 不接收、下载或保存真实原图、个人身份信息（PII），只记录脱敏验收结果。
+- 真实 H5 短信验收由用户亲自输入手机号、收到的验证码；Agent 不索要、接收、保存或代填，只记录用户给出的验收结论。
+- 确认依据：用户最新明确补充上述参考实现、自动化登录入口和真实短信人工验收边界。
+- 此为对先前禁止测试通过入口的明确修订，不开放运行时 mock provider、`SMS_MOCK_CODE` 或其他未经确认的放行分支。
+
+### D37：Astra 按同步门与依赖队列并行编排实施
+
+- 实施必须按 `astra-workflow` 编排，不能把 T1—T16 全部串行执行。
+- 原 worktree 隔离安排已被最新 D38 替代；每模块仍由 root 先记录最小契约，再派前后端 lane。
+- 保留外层同步门：官方底座 → 全部静态页/Pencil Gate → 模块联调 → 构建/E2E；门内无依赖的 lane 并行。
+- 具体并行关系：T4 ∥ T5；Auth T7-backend ∥ T8-mobile；T9 server ∥ mobile；T10 ∥ T11。
+- Gate G 后，视频 T12 server ∥ mobile 与考试 T13 ∥ T14 四个 lane 进入动态 ready queue，最多同时运行三个子代理，不强行四并发。
+- root 独占共享文件、Git index 和 commit；worker 不提交，避免并行工作交叉改写共享入口或提交其他人的改动。
+- 冻结候选后交 tester 验证；认证、实名、考试、构建及最终门使用独立 reviewer，返修后重跑相关验证证据。
+- 采用两次交接：implementation receipt → root 合入共享文件 → scoped candidate commit / 独立 tester-reviewer 核对候选 → final receipt / reviewer gate；不再为此创建 worktree。
+- 测试数据库、端口和构建输出须隔离；无法隔离的相关工作串行执行，不能让并行验证相互覆盖或污染。
+- 确认原话：“能同步的同步，同步和并行”。实施编排继续有效，共享工作区约束及当前执行状态见 D38。
+
+### D38：不使用 worktree，直接在当前 main 分支集成
+
+- 用户最新明确要求不使用 worktree，直接在当前 `main` 分支集成，覆盖 D37 原有 integration/worker/verification worktree 隔离安排。
+- Astra 仍可并行，所有代理共享当前工作区，必须按严格不重叠的文件归属执行；同文件有重叠时串行。
+- root 独占共享文件、Git index 和本地提交，worker 不提交；保留现有用户脏改动，不纳入无关并行任务。
+- 确认依据：用户明确决定“不使用 worktree，直接在当前 main 分支集成”。
+
 ## 已实施事实与验证边界
 
 以下只区分现状，不自动扩大实施授权；2026-10-22 对列出的配置、目录和文档进行了窄范围只读核对。
@@ -328,22 +367,109 @@
 - `.agents/skills/` 已有 `wot-ui-v2`、`wot-ui-cli`、`create-wot-ui-theme`、`wot-ui-unocss-preset-guide`。
 - Wot 来源、使用与边界见 `tools/wot-ui/README.md`；`AGENTS.md` 已登记按需入口及不使用 MCP 的约束。
 - 前序主代理报告已离线验证组件列表、API、Demo、CSS 变量查询；本轮记录员没有重复运行。
-- `web/vite.config.ts` 现为 `outDir: '../dist'`、`emptyOutDir: true`。
-- `web/Dockerfile` 构建工作目录为 `/app/web`，镜像复制来源为 `/app/dist`。
+- 早期直构建配置记录：`web/vite.config.ts` 使用 `outDir: '../dist'`、`emptyOutDir: true`；现行正式发布入口已改为 Task 15 的统一脚本。
+- Task 15 前的 Dockerfile 配置记录：构建工作目录 `/app/web`、镜像复制来源 `/app/dist`；不把该早期静态核对当作现行镜像运行证据。
 - `.gitignore` 已忽略根 `/dist/`，相关说明已更新；本地 PC build 由前序主代理报告通过，Docker 构建未验。
-- **实施差距：直接运行现有 PC build 仍清空整个根 `dist/`，尚不满足 D07 单端互保。**
-- `AGENTS.md`、`README.md` 当前仍描述“PC 构建后复制 H5”的旧实现顺序；未来实现统一脚本时需同步。
+- 旧实施差距是 PC 直构建清空根 `dist/`、不满足 D07；Task 15 已实现带构建锁、同盘暂存和原子切换的 `scripts/build.mjs`，支持单端互保及失败保留。PC 直构建只作本地检查，不能替代正式统一发布。
+- `AGENTS.md`、`README.md` 已同步 `node scripts/build.mjs web|h5|web h5|mp-weixin` 入口及保护边界；“PC 构建后手工复制 H5”是已替代的旧状态。
 - 主代理已在根 `AGENTS.md` 增加本记录入口与压缩后恢复规则；记录员不编辑该文件。
-- 当前无 `mobile/` 工程、无 `scripts/build.mjs`；PC/H5 隔离登录方案尚未实现。
+- Task 1 启动前无 `mobile/` 工程、无 `scripts/build.mjs` 是历史状态；底座、PC/H5 隔离登录和统一构建现已分别完成 Gate A、Gate E、Gate I。
 - 本文件创建不包含业务代码、依赖安装或 Git 提交；工作区存在其他并行改动。
 - 主代理只读核对参考 DOCX：373 段、无表格、4 个图片关系；标题为产业工人质量安全培训考题题库，单选约 100 题、判断 20 题，总计 120，未发现独立多选章节。
 - Word 渲染环境中文字体显示不完整；结构文字已通过 OOXML / python-docx 成功核对，不影响题型结论。未修改 DOCX，也未把全部题库正文写入本记录。
-- 主代理本轮核对：RuleExam server 当前只有 PC 管理员图片验证码 `CaptchaService`，4 位、TTL 120 秒、每 scope/IP 每 60 秒最多 10 次，Redis 一次消费。
-- server 中尚无 SMS 实现，`deploy/.env.example` 无 SMS 配置；图片验证码已存在不能作为 H5 短信通道已接入的证据。
-- 主代理本轮核对：`JwtAuthGuard` 只接受 access Bearer；`AuthService.login/refresh` 已签发 access + refresh 并创建 session，SMS 登录入口尚未实施。
+- Gate E 前的历史核对：RuleExam server 仅有 PC 图片验证码 `CaptchaService`，4 位、TTL 120 秒、每 scope/IP 每 60 秒最多 10 次，Redis 一次消费。
+- Gate E 前 server 无 SMS 实现、`deploy/.env.example` 无 SMS 配置；该旧实施差距已由 Task 7/8 更新，图片验证码与真实短信验收仍须区分。
+- Gate E 前核对的 `JwtAuthGuard` 接受 access Bearer，`AuthService.login/refresh` 已签 access + refresh 并创建 session；新增 mobile 短信入口及隔离的当前证据见 Gate E。
 - 完整设计已生成并经过独立 builder check；检查仅发现首期验收范围歧义，主代理已修正。
 - 首期只交付 H5，`MP-WEIXIN` 首期仅要求编译兼容；微信小程序真机业务闭环属于后续交付阶段，不是首期 H5 交付门槛。
-- 上述检查是设计可实施性检查，不是业务代码、浏览器、真机或真实供应商验收；设计仍待用户审阅。
+- 上述 builder check 只是设计阶段的可实施性检查；后续实现、自动化和桌面 Chrome 证据见各 Gate，真机或真实供应商验收不能由设计检查替代。
+- 实施计划 `docs/superpowers/plans/2026-10-22-learner-mobile-h5.md` 已按分阶段授权执行；早期“尚未实施”已由 Task 1—15 实施及 Task 16/Gate J 自动化、桌面 Chrome 完成更新，不推定未验项完成。
+- 计划编码用户确认的顺序：官方 CLI 底座 → 跑通/打开 → 安装依赖 → 全部静态页及 Pencil 逐页验收 → 按短信登录、课程、实名、视频、考试逐模块联调 → 组合构建和关键链路 E2E。
+- 上述顺序是外层同步门；D37 的并行 lane、最多三个子代理的 ready queue、root 共享文件/Git 所有权、最小契约和两次交接继续有效，worktree 隔离由 D38 替换为共享工作区文件归属约束。
+- 计划已列明 `gooodwork` 短信/实名参考路径、复用配置名与 Provider 边界；当前短信实施证据见 Gate E，测试替身自动化与真实供应商验收仍分级记录。
+- 用户质疑“Mock 自动化”后，计划仍禁止运行时 mock provider、`SMS_MOCK_CODE`；短信运行时仅 `disabled/yunxin`，实名仅 `disabled/tencent`。测试登录入口按用户最新 D36 改为默认关闭的受限 Debug Login。
+- 供应商调用的测试替身仅在 Nest 测试模块通过 provider override 注入 `FakeSmsProvider` / `FakeIdentityProvider`；业务 E2E 登录改用 D36 的 Debug Login，获取正常签发的真实 mobile Token/session。
+- 除第三方调用外，自动化运行真实 H5、API、Redis 和隔离数据库；认证阶段已通过 Gate E，实名/媒体阶段已通过 Gate G。真实 H5 短信由用户手动验收，Agent 只记录用户结论。
+- 实名自动化边界：Debug Login 不把新建测试学员改成已实名，三图、私有媒体归属、核验会话、轮询和绑定链路实际运行，仅替换腾讯外部调用；当时的验收要求已有 Gate G/Gate J 自动化证据，但仍不是腾讯真实核验结论。
+- 本轮物料边界：当前无需用户交付真实证件或正脸，自动化仅用无真实个人信息的合成图片；真实供应商材料由用户/授权测试人员日后在 H5 中亲自操作，Agent 仅记录脱敏结果。
+- 真实供应商继续单独受控验收；测试替身自动化通过不能代表真实短信送达或腾讯核验通过，真实供应商验收仍未执行。
+- 执行开始时已核对分支为 `main`；`web/src/layouts/MainLayout.vue`、`web/tests/admin-shell-regression.test.mjs` 及日报文件属于既存并行改动，不纳入学员端任务。
+- Task 1 已完成并通过独立 Gate A，实施范围为 `mobile/**`；记录员仅记录收到的交付及验证结果，没有重复执行构建或浏览器检查。
+- 官方来源：`dcloudio/uni-preset-vue#vite-ts`，commit `e5a5f0539416a0f012c919cc77949d140542a367`；当前执行分支为 `main`。
+- Gate A 证据：`type-check`、`build:h5`、`build:mp-weixin`、`npm ls` 均通过，H5 dev HTTP 200；worker 另核对 390×844 页面，无 console 错误。
+- Gate A 时产物目录为 `mobile/dist/build/h5` 和 `mobile/dist/build/mp-weixin`，H5 资源当时从 `/assets/` 加载；Task 15 已完成 `/mobile/` 子路径及统一 `dist/mobile/` 发布，旧路径描述不再代表现状。
+- 官方模板的 `npm audit` 报告共 101 项（22 low、23 moderate、56 high），未自动修复；这是已记录的依赖风险，不能视为安全验收通过。
+- 微信小程序仅编译通过，微信真机未验；本次 Gate A 不代表 Wot UI/Pinia、业务模块或最终发布已经完成。
+- Task 2/Gate B 已完成：Wot UI 2.3.2、Pinia 2.2.2、Vue/运行时 3.4.21、TypeScript 5.9.3、vue-tsc 3.2.4、Vitest 4.1.12；Pinia 注册、easycom、平台接口、tokens 和存储 key 基座已落地。
+- Task 2 验证先 RED 后 18 项测试全绿；type-check、H5 构建、MP-WEIXIN 编译及 `npm ls --all` 均通过。记录员未重复执行这些已交付检查。
+- Task 2 浏览器证据：390×844 下 Wot Button、Toast 与 Pinia 交互正常，无 console 错误或横向溢出；微信真机仍未验。
+- Task 2 最新 audit 为 98 项（20 low、20 moderate、58 high、0 critical），未修复；与 Task 1 的 101 项基线分开记录，不代表依赖风险已消除。
+- Task 3 所需 Pencil 只读映射已完成，Pencil MCP 证据齐备；`frontend-design` Skill 当前不可用，不能声称已加载或使用该 Skill。
+- Task 3/Gate C 已完成：覆盖 24 个 Pencil 场景、9 条路径与 4 项交互；单测 26 项、type-check、H5/MP-WEIXIN 构建通过，Chrome E2E 28/28。
+- Task 3 静态验证无 API 请求、console 错误、pageerror、失败资源或横向溢出；已修复 favicon 404 与目录 `aria-expanded`，姓名、手机号只读。
+- Task 3 Pencil 画板人工抽查匹配，但不是像素级对比验收；微信真机未验，不以静态 Chrome E2E 替代真实业务或设备验收。
+- Task 4 实名静态、Task 5 考试静态及 Task 6 视觉门 / Gate D 已完成：新增实名 18 场景、考试 33 场景，加原有静态页总计 75 个路由场景。
+- Gate D 最终证据：unit 74/74、type-check、H5 build、MP-WEIXIN build 均通过；`PLAYWRIGHT_CHANNEL=chrome npm run test:e2e:static` 单 worker 91/91 通过。
+- 首次 4 workers 的全量命令因 dev server 退出出现 `ERR_CONNECTION_REFUSED`，属于测试编排失败；改为单 worker 后全量通过，不将最初失败隐藏或当成业务通过证据。
+- 独立视觉审查覆盖 75 场景，在 320/390/430 宽度无横向溢出；独立代码复审最初提出 4 项 P2、1 项 P3，返修后 Gate D 复审通过。
+- 返修包括弹层层级、阻止背景 Tab 焦点且实测确认/取消、考试 79 分及 16/3/1 汇总与逐题/解析卡/判断题解析一致、scenario fresh copy、课程/解析/错题返回及静态 E2E 单 worker 配置。
+- Gate D 通过只证明本阶段静态页面与所列交互、视觉/代码检查完成；真实短信、真实供应商和微信真机仍未验。
+- Task 7 backend SMS/auth、Task 8 mobile auth 与 Gate E 已完成；迁移 018 落地手机号唯一约束及 session `client/auth_method`，已实现网易云信短信、受限 Debug Login 和 PC/mobile Cookie、会话隔离。
+- 前端已落地 session epoch 与 Cookie 写操作串行，退出使用公开的、按 Cookie 幂等处理的 mobile logout，避免退出及并发响应恢复旧会话。
+- Gate E 验证证据：server 418、migration 38、mobile 119、browser 39 项通过；`mobile-auth`、`training-identity`、`training-access` 隔离测试通过。记录员仅记录交付证据，未重复执行。
+- 独立 reviewer 发现的大小写路径绕过、PC profile phone 回归及前端 4 项并发/退出问题均已修复并关闭，Gate E 通过。
+- 02/03/04/07 设计分册已同步本阶段架构、数据库、API 与安全边界；这些文档同步不能代替真实短信、实名或微信真机验收。
+- Gate E 真实短信、实名认证和微信真机仍未验；不能把认证自动化通过扩大为真实供应商或完整学员业务验收。
+- Task 9 / Gate F 已通过，Course/Profile Contract v1 已实现；独立审查提出的保存竞态、静态 scenario 返程、0.995 完成误判三项均已返修。
+- Gate F 独立验证证据：server 450、migration 38、mobile unit 139、browser 107、web 54 项通过；两套 ephemeral E2E、H5/MP-WEIXIN build 和 web type-check 均通过。
+- MP 构建仍有循环 chunk 提示；微信真机、真实短信及其他真实供应商仍未验，构建与自动化通过不替代这些验收。
+- Gate G 时 Identity/Media Contract v1 和迁移 020 已落地，考试迁移 021 当时尚待 Task 13/14；该旧状态已由 Gate H2 的考试实现更新，现行迁移范围为 000—021。
+- gooodwork 只读参考研究已完成，未读取 `.env`；仅复用代码、契约及配置名参考，不记录或复制真实凭据。
+- Task 10/11 / Gate G 已通过：020 两表、实名/媒体接口、Tencent `ImageRecognitionV2`、仅测试模块 override 的 Fake 已实现；运行时不提供 mock/test-pass。
+- mobile 三图实名、头像及课程封面已接入，离页清理临时材料；媒体票据在签发和读取时二次核对授权，不能把票据读取等同于永久访问权。
+- 独立 reviewer 的 3 项 P2 已关闭：Tencent 非生产环境稳定密钥、停用/删除账号的旧票失效、disabled 下 409 / `provider_verified` 恢复处理。
+- Gate G 独立证据：server 43 文件 502 项、migration 39 项、mobile unit 177 项、browser 静态 92 项通过；`mobile-identity`、`mobile-media-ticket`、`training-media`、`mobile-auth`、`student-boundary` 隔离测试及 H5/MP 构建、web 回归通过。
+- Gate G 并发证据是单 API 进程配合真实 MySQL 并发测试，不是双 API 进程或多实例验收；记录员未重复执行交付检查。
+- 真实腾讯、真实短信、H5 真机相机、微信真机和生产部署均未验；Fake、浏览器、构建及单进程并发通过不替代上述证据。
+- Task 12/Gate H1 已完成，Video Contract v1 已实现；mobile `employee` 与实名门槛有效，`external` / `institution` / 无 category 场景采用相同学习资格规则。
+- 视频实现包括 start 短票、`paused` 锚点、30 秒心跳/45 秒封顶/2 秒容差/95% 去重覆盖、原生 video 简单断网处理、稳定 lesson/version 进度、ended 后显式重播及 session 隔离心跳。
+- Gate H1 server 证据：build 及 44 文件 526 项通过，`training-video-learning`、`mobile-media-ticket`、`training-media` E2E 通过；server/mobile 独立审查无未关闭 P0—P3。
+- Gate H1 mobile 证据：26 文件 245 项、type-check、H5/MP 构建、video browser 8 项、static 92 项通过；web 163 项及 type-check/build 回归通过。记录员仅记录交付证据，未重复执行。
+- 默认 Playwright bundled Chromium 缺失后改用本机 Chrome 验证通过；`training-media` 警告来自故障注入，不将其误报为常规环境故障或忽略测试上下文。
+- 真实视频解码、真实断网、微信开发者工具/微信真机、真实短信与腾讯核验仍未验；浏览器测试和构建通过不替代这些证据。
+- Task 13 backend/PC 与 Task 14 mobile 已完成，Gate H2 已通过；实现、隔离 E2E 与独立 review 均完成，无未关闭 P0—P3。记录员仅记录 root 交付状态，未重复执行、未补造测试数量。
+- Task 15 统一构建已完成并通过独立 review（PASS）；构建/Compose/CSP 自动化 20/20，以及 web、h5、web+h5、mp 四种真实构建均通过。记录员记录 root 交付证据，未重复执行。
+- 本机无 Docker，Docker/Nginx 运行验证未执行；Compose/CSP 自动化与真实前端构建通过，不代表容器已运行、生产部署或真机/真实供应商已验。
+- Task 16/Gate J 的自动化与桌面 Chrome 验收已完成，root 最终 receipt 确认 `node tests/run-e2e.mjs --ephemeral --suite all` 为 21/21 PASS、退出码 0；课程旧测试、question-import 重复指纹及媒体 URL 修复后的独立 review 均 PASS。
+- 最终媒体 URL 修复包含拒绝 `.` / `..` token；重建 H5 并移除测试服务器 `/mobile/api/v1` 兼容别名后，`mobile-h5` timeout 1/1、main 1/1 均通过。覆盖真实 API/隔离数据库/Redis、三张合成实名图片、本地草稿恢复、主动交卷、到期零 submit、记录/错题及浏览器实际题图请求；不代表真实腾讯、短信或视频解码验收。
+- Gate J 最终矩阵：mobile unit 34 文件/313 项、server 47 文件/574 项、web 177 项通过，相关类型检查、H5/MP/PC 与组合构建通过；详细分级见 [H5 验收记录](../../../review/2026-10-22-learner-mobile-h5-acceptance.md)，最终计数及全量状态以 root 本次 receipt 为准。记录员未重跑这些业务验证。
+- 真实短信、腾讯 OCR/FaceID、iOS Safari、Android Chrome、微信内置浏览器及微信开发者工具/真机均未执行；真实视频解码、全屏、断网/弱网及相机权限未执行；Docker/Nginx 运行、生产部署、HTTPS 和真实 Cookie/反向代理环境验收未执行。
+- Gate J 收口时未创建 Git 提交、未部署；实施与自动化收口不能解释为已提交、已上线或未验项已通过。
+- 2026-10-23 已对 `docs/ui/gemini.pen` 的 60 个唯一画板完整 JSON 做只读核对，并将 mobile 18 条路由、75 个 scenario 与画板逐一映射，以 Chrome 414×844 稳定业务视口逐屏对照。
+- 本次原静态场景回归 92/92 通过，额外关闭动画、等待稳定后的视口截图 75/75 通过；这些证明场景可访问、稳定截图与设计对照完成，不是像素级还原率或视觉交付通过。记录员未重复执行上述审计。
+- 结论是不通过“像素级还原”验收；严重差异集中在考试须知、考试弹窗、答题卡/解析卡、资料选择器、实名错误态和通用状态，图片题、错题本等亦有明显差异；本次核对不代表这些差异已修复。
+- `Static*` / `Live*` 组件分离，登录表单、真实首页轮播、课程媒体及考试生产组件不能由静态 scenario 截图代替；真实接口页面尚未完成全量视觉验收。Gate J 的功能/自动化通过不覆盖该视觉缺口。
+- Pencil 的超时“自动交卷”仍是过时设计，应继续遵守 D16 的到期不自动提交，不能为视觉对齐恢复旧行为；解析中的答错、未答、漏选也尚未完成同状态对照。
+- 详细范围、逐路由结论与基准限制见 [Pencil 视觉核对报告](../../../review/2026-10-23-learner-mobile-pencil-visual-audit.md)；临时审计数据仅放 `/tmp`、不入库，收尾须清理。记录员不执行删除，也不以形成报告代替清理确认。
+
+## 已冻结实施契约（独立审查已通过，非新增用户决定）
+
+- root 已在 [Exam Contract v1](../../../review/2026-10-22-learner-mobile-contract-freezes.md) 冻结 Task 13/14 的实施消歧输入；本节不是用户新确认的产品决定，不新增 D 编号。D12—D17、D20—D22、D29—D36 仍是用户决定基线，冲突不得由技术摘要静默覆盖。
+- Exam Contract v1 已通过独立审查（PASS，无未关闭 P0—P3）；Task 13 backend/PC 与 Task 14 mobile 已按 D37/D38 完成并行实施、隔离 E2E 和独立 review，Gate H2 已通过。
+- 新移动考试使用 `/me/exams`、start、`/me/exam-records/:recordId` 状态/submit/result、本人记录及错题接口；只允许启用中的 mobile employee。未实名可浏览列表，新开考、恢复进行中题面及主动交卷须有权威实名事实；终态查询不再要求实名，Debug Login 不绕过实名。
+- 恢复 active attempt 必须保持原 `record_id`、不可变快照和 `deadline_at`，不因来源/类别、撤卷或题库变化重抽或延时；状态读取在事务锁内先处理到期。PC 学员答题菜单和深链接已随 Gate H2 关闭，管理端题库、组卷、只读记录保留；旧 `/exams/*` 仅作历史兼容且不得访问 training release。
+- 新链路不提供服务端 draft/heartbeat；倒计时、恢复、状态读取、清扫或 Redis 事件均不得触发交卷、评分或写入答案。`server_now` 仅用于校准原期限；前端归零只锁定编辑并查状态，不调用 submit。
+- 题面使用受限 Tiptap JSON：仅 `doc/paragraph/text/hardBreak` 与受控 `image`，图片 attrs 仅十进制字符串 `asset_id`；禁止任意 src、marks、HTML、脚本、样式或未知字段。单文档最多 2,000 节点、100,000 文本字符、深度 4，非法内容整题拒绝；在考投影递归白名单重建，不泄露答案、解析或管理元数据。
+- 迁移 021 已随 Gate H2 实现 question/question_version 的 schema/version JSON 兼容列及 `exam_answer.selected_option_ids`；v2 按稳定 option ID 冻结、评分，乱序不改变 ID。旧导题/PC 编辑输入经统一适配形成新 v2 版本；legacy 只按当时冻结快照的原始下标/key 适配，不改历史快照、checksum 或成绩，不给 mobile 转换展示下标。
+- 主动整卷 body 严格为 D34 的 `record_id + answers[{item_id,option_ids}]`，路径与 body 记录一致；完整题目集合、空答数组、题/选项归属、唯一性及数量均须校验，未知字段和旧 selected/revision 等输入拒绝。首次提交在本人记录悲观锁后取唯一 `accepted_at`，仅 `< deadline_at` 可接受；同事务写答案、评分和 manual/finalized 终态。
+- 幂等继续以 record 与权威状态为界：`passed/failed` 返回第一次冻结结果并忽略后续答案，timeout 返回超时终态；并发不同答案、submit/timeout 竞争和回滚重试必须只产生一个终态及一组副作用，不另增 submission_id。
+- 纯 timeout 是实施层对 D15/D16 的状态消歧：不评分、不生成答案或逐题得分，`score=0`、`submission_method/submitted_at/graded_at=null`、`grading_state=not_submitted`，释放 active 关联并清草稿元数据；升级前 active 草稿答案仅作清理，不改历史终态和成绩。
+- 主动交卷结果为 `passed/failed + finalized + manual`，才可返回本人选择、正确选项及解析；新 timeout 展示“超时未交卷”，`correct_rate=null/items=[]`，不开放解析、不进错题或 finalized 成绩/排名分母，但保留历史列表记录。旧已评分 timeout 只读兼容，legacy 不能仅靠 submission_method 为空推断。
+- 题图按冻结契约沿用 `exam_record_question/item_id` 精确引用，签票与读取均重查当前归属和阶段权限；进行中仅题干/选项，主动交卷结果可含解析，timeout 不开放题图。管理员 Bearer 预览与 learner 短票隔离，不把 JWT 放入媒体 URL。
+- 草稿 key 冻结为 `ruleexam:mobile:<userId>:exam-draft:<recordId>`，值仍仅 answers/currentIndex/savedAt；同 key 串行快照写、成功后才显示已保存，失败可见但不阻止内存答题。用户草稿索引配合 generation/tombstone 防止清理后迟到写复活；主动登出/成功提交/确认终态清理，普通 401 保留所属草稿，换号不读取前用户 key。
+- 重进仍先联网读取原 attempt，整份草稿合法才合并；缺失、损坏或含任何未知 item/option ID 时整份按损坏处理，以空答案继续同一 attempt，不做部分恢复、不重抽题或延时。root 已将契约修正为与 D30 一致；离线刷新不能仅靠草稿渲染整卷。
+- 提交确认后冻结整卷 payload，submitting 禁止改答；结果不明先查 record，仍进行且未截止最多自动重试一次相同 payload，再不明则保留草稿/冻结 payload 并继续查证，不冒报成绩。此为 D35 的请求重试消歧，不是到期自动交卷。
+- Gate H2 契约验收范围包括真实数据库争锁与跨 deadline、回滚/副作用幂等、无自动交卷、稳定 ID/反泄漏/legacy 兼容、草稿写入与身份隔离、主动提交/结果不明/timeout、记录错题/题图、PC 管理回归，以及 33 个静态考试 scenario 零 API；Gate H2 已通过的交付状态见上，本范围摘要不充当逐项新执行日志。真实短信、腾讯实名、弱网和微信开发者工具/真机仍另验。
 
 ## 需求基线，不是本轮新增决定
 
@@ -355,28 +481,31 @@
 - 主代理本轮核对：旧需求 §2.2 第 5 项、FR-H5-25、UC-H5-04 明确退出答题页或刷新后恢复本地草稿；主动退出登录的清理边界另见 §4.8。
 - 现网静态证据为答案变化时保存、离页只清计时器；旧需求没有要求绝对禁止退出，答题页还列有返回入口，新 H5 的防误退出决定见 D14。
 - 弱网恢复要求见 §6.2；退出、401、损坏和过期草稿的细节应回查原文，不靠摘要重写。
-- 原设计中的 Vant 组件名与 JSON→VNode 映射需要在后续完整设计中核对 Wot/小程序兼容，尚未改造。
-- H5 短信仍为需求：网易云信、6 位、300 秒有效、60 秒重发、每挑战最多 5 次校验、手机号每日 10 次/IP 每日 100 次，阈值通过环境配置。
-- 上述短信方案尚未迁移或通过真实信道验收；不在记录中保存密钥值，不读取 `.env`。
+- 原设计中的 Vant 组件名与 JSON→VNode 映射属于旧设计输入；现行 mobile 使用 Wot UI 与独立受限只读渲染器，已通过相应自动化与 MP 编译，不能由此推定小程序真机兼容通过。
+- H5 短信参数基线：网易云信、6 位、300 秒有效、60 秒重发、每挑战最多 5 次校验、手机号每日 10 次/IP 每日 100 次，阈值通过环境配置。
+- 短信方案已在 Gate E 落地迁移与认证自动化，真实信道验收仍未完成；不在记录中保存密钥值，不读取 `.env`。
+- 供应商安全交接边界：不读取、不复制、不记录 `gooodwork` 的 `.env` 或真实 Key；真实值由用户/运维在 RuleExam 运行环境安全注入，不进入计划、源码、提交、日志或验收输出。
 
-## 尚待讨论与当前断点
+## 当前断点与未验边界
 
-- 当前断点：主代理已完成完整设计及独立 builder check，当前应交付 `2026-10-22-learner-mobile-architecture-design.md` 供用户审阅。
-- 用户已要求停止继续提问；本阶段不再按原待讨论清单逐项追问，完整设计待审阅，尚无开始业务实施的授权。
+- 当前断点：Task 1—15 实施及 Task 16/Gate J 自动化、桌面 Chrome 验收收口（全量 21/21 PASS）继续有效；2026-10-23 Pencil 全路由视觉核对已完成，但未达到像素级还原，真实接口页面视觉覆盖及已发现差异仍未收口。后续视觉修正、真实供应商/设备/容器/生产环境验收均按最新授权推进，不自行扩大任务。
+- 用户已要求停止继续提问；不重开已确认问题，也不把 Gate J 自动化与桌面 Chrome 通过扩大为真实供应商、真机或生产部署完成。
 - D12 的页面内断网继续作答与 D31 的离线刷新/重进边界均已确定，不再把完整题目离线缓存作为待决方案。
-- 其余实现细节进入完整设计审阅或后续实施计划，不自动升级为新增已确认决定；既有 D01—D35 继续作为讨论决策基线。
+- 其余实现细节按设计/计划处理，不自动升级为新增已确认产品决定；既有 D01—D38 继续作为决策基线，冲突时采用最新明确决定。
 - 首期验收范围已澄清为 H5 交付、`MP-WEIXIN` 编译兼容；小程序真机闭环后续再验。
-- 完整设计已经生成，当前记录与设计文档均不能被当作业务已实现、已验收或已获实施批准的依据。
+- 完整设计、计划与本记录不能代替分级验收证据；真实短信、腾讯 OCR/FaceID、iOS Safari/Android Chrome/微信内置浏览器及开发者工具/真机、真实视频解码/弱网/相机、Docker/Nginx 运行和生产部署仍未执行。
 
 ## 被后续决定替代或澄清
 
 - `web/dist/mobile/` 发布布局被 D05 的根 `dist/mobile/` 替代。
-- “最终目录先清空再 PC 构建再复制 H5”不能用于 D07 单端更新；未来入口应使用临时编译与保护合并。
+- “最终目录先清空再 PC 构建再复制 H5”不能用于 D07 单端更新；已由 Task 15 的暂存编译、单端互保和原子切换入口替代。
 - 只靠前端缓存前缀隔离登录的理解由 D09 补全：HttpOnly 刷新 Cookie 也必须按端区分。
 - pnpm workspace 仅为讨论过的可选项；D06 已收敛为保留 npm、使用 Node.js 构建入口。
 - D13 取代上一轮推荐的服务端持续草稿同步与有限补交宽限路径；原先比较“最后同步版本”的问题不再作为当前讨论入口。
 - D15 作废“超期回来用最后本地草稿交卷”的建议；逾期未成功提交按服务端超时/失败终态收口。
-- D16 作废“自动交卷成功”的描述；旧需求到期自动提交条款已被本轮最新用户决定覆盖，尚待完整设计回写。
-- D19 替代“视频上报周期、容差、完成阈值待确认”的旧表述，统一复用 05 册现行规则，00 册正文尚待完整设计同步。
+- D16 作废“自动交卷成功”的描述；需求现行增量、FR-H5-26 等已同步到期只锁定/查询、纯 timeout 不提交不评分，旧站自动提交内容仅保留为历史取证。
+- D19 替代“视频上报周期、容差、完成阈值待确认”的旧表述；00 册 §4.8 等已同步 05 册现行 30/45/2 秒及 95% 规则，真实播放器/弱网仍须另验。
 - D33 否决为兼容旧 `selected: number[]` 而把选项 ID 转换成展示下标的未确认建议，前后端应统一使用稳定 ID 语义。
-- Wot 工具已接入这一例外不能延伸为学员端开发授权，讨论仍继续。
+- D36 修订先前“运行时代码不提供……测试通过入口”的计划边界，允许默认关闭、仅限 test/development 的 Debug Login；运行时 mock provider 和 `SMS_MOCK_CODE` 仍不允许。
+- D38 覆盖 D37 的 worktree 隔离要求，直接在当前 main 工作区按不重叠文件归属并行、重叠处串行，保留既存用户改动。
+- 早期 Wot 工具接入例外本身不构成学员端业务授权；后续实施按用户明确授权和分阶段 Gate 推进，现已收口至 Gate J 的自动化与桌面 Chrome 范围。

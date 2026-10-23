@@ -429,6 +429,16 @@ export async function run(ctx) {
   const videoBytes = await ffmpegFixture();
   const video = await upload(ctx, admin, { purpose: 'video' }, videoBytes, '课程.mp4', 'video/mp4');
   assert(video.status === 200 && video.data.status === 'ready' && video.data.duration_ms > 0, `real video probe failed: ${video.status}`);
+  const unboundVideo = await ctx.request(admin, 'GET', `/media/${video.data.asset_id}`);
+  assert(unboundVideo.code === 40302, 'video uploader bypassed the lesson-version reference policy');
+  const videoCourse = await ctx.request(admin, 'POST', '/admin/courses', { title: '媒体受控预览课程', category_id: String(category.data.id) });
+  assert(videoCourse.status === 200 && videoCourse.data?.id, 'video preview course fixture failed');
+  const videoChapter = await ctx.request(admin, 'POST', `/admin/courses/${videoCourse.data.id}/chapters`, { title: '媒体预览章节' });
+  assert(videoChapter.status === 200 && videoChapter.data?.id, 'video preview chapter fixture failed');
+  const videoLesson = await ctx.request(admin, 'POST', `/admin/courses/${videoCourse.data.id}/lessons`, {
+    chapter_id: String(videoChapter.data.id), title: '媒体预览课时', lesson_type: 'video', asset_id: String(video.data.asset_id),
+  });
+  assert(videoLesson.status === 200 && videoLesson.data?.id, 'video lesson-version binding fixture failed');
   const videoOwner = await ctx.request(admin, 'GET', `/media/${video.data.asset_id}`);
   assert(videoOwner.status === 200 && videoOwner.data.duration_ms > 0 && videoOwner.data.original_name === '课程.mp4', 'video API metadata lost the Chinese original filename');
   const storedVideoName = await ctx.queryTestDb('SELECT original_name FROM media_asset WHERE id = ?', [String(video.data.asset_id)]);

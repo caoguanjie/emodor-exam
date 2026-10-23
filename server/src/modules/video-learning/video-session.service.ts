@@ -4,12 +4,17 @@ import type { Id, Page } from '../../common/training-contracts';
 import { Errors } from '../../common/errors';
 import { CourseLesson } from '../../entities/course-lesson.entity';
 import { LessonVersion } from '../../entities/lesson-version.entity';
+import { LearnerIdentity } from '../../entities/learner-identity.entity';
+import { IdentityVerificationSession } from '../../entities/identity-verification-session.entity';
+import { MediaAsset } from '../../entities/media-asset.entity';
+import { MediaReference } from '../../entities/media-reference.entity';
 import { SysUser } from '../../entities/sys-user.entity';
 import { TrainingCourse } from '../../entities/training-course.entity';
 import { VideoLearningRecord } from '../../entities/video-learning-record.entity';
 import { VideoLearningSession } from '../../entities/video-learning-session.entity';
 import { CourseService } from '../courses/course.service';
 import { LearningSessionService } from '../learning/learning-session.service';
+import { MediaTicketService } from '../media/media-ticket.service';
 import {
   courseCompletionRate,
   creditVideoInterval,
@@ -41,6 +46,7 @@ export class VideoSessionService {
     private readonly dataSource: DataSource,
     private readonly learning: LearningSessionService,
     private readonly courses: CourseService,
+    private readonly tickets: MediaTicketService,
   ) {}
 
   private async lockUser(manager: EntityManager, userId: Id): Promise<SysUser> {
@@ -106,22 +112,38 @@ export class VideoSessionService {
     lessonId: Id,
   ): Promise<{ user: SysUser; lesson: CourseLesson; version: LessonVersion }> {
     const user = await this.lockUser(manager, userId);
-    if (Number(user.status) !== 1 || user.source !== 'institution' || !user.categoryId) {
-      throw Errors.dataForbidden('当前学员不在课程应学范围');
+    if (Number(user.status) !== 1 || user.role !== 'employee') throw Errors.dataForbidden();
+    const identity = await manager.getRepository(LearnerIdentity).findOne({ where: { userId: String(userId) } });
+    if (!identity) {
+      const latest = await manager.getRepository(IdentityVerificationSession).findOne({
+        where: { userId: String(userId) }, order: { createdAt: 'DESC' },
+      });
+      const pending = latest && !['verified', 'rejected', 'expired'].includes(latest.status)
+        && latest.expiresAt.getTime() > Date.now();
+      throw Errors.dataForbidden('请先完成实名认证', { reason_code: pending ? 'IDENTITY_PENDING' : 'IDENTITY_REQUIRED' });
     }
     const lesson = await manager.getRepository(CourseLesson).findOne({ where: { id: String(lessonId) } });
     if (!lesson || lesson.lessonType !== 'video') throw Errors.notFound('视频课时不存在');
     const course = await manager.getRepository(TrainingCourse).findOne({ where: { id: String(lesson.courseId) } });
     if (!course) throw Errors.notFound('课程不存在');
-    if (course.status !== 'published' || String(course.categoryId) !== String(user.categoryId)) {
-      throw Errors.videoUnavailable('课程未上架或不属于当前培训类别');
+    if (course.status !== 'published') {
+      throw Errors.videoUnavailable('课程未上架');
     }
     if (!lesson.currentVersionId) throw Errors.videoUnavailable('课时当前视频不可用');
     const version = await manager.getRepository(LessonVersion).findOne({
       where: { id: String(lesson.currentVersionId), lessonId: String(lesson.id) },
     });
     if (!version || numberValue(version.durationMs) <= 0) throw Errors.videoUnavailable('课时当前视频不可用');
+    if (!await this.versionMediaAvailable(manager, version)) throw Errors.videoUnavailable('课时当前视频不可用');
     return { user, lesson, version };
+  }
+
+  private async versionMediaAvailable(manager: EntityManager, version: LessonVersion): Promise<boolean> {
+    const asset = await manager.getRepository(MediaAsset).findOne({ where: { id: String(version.assetId) } });
+    if (!asset || asset.status !== 'ready' || asset.purpose !== 'video') return false;
+    return Boolean(await manager.getRepository(MediaReference).findOne({
+      where: { assetId: String(version.assetId), ownerType: 'lesson_version_video', ownerId: String(version.id) },
+    }));
   }
 
   async start(userId: Id, lessonId: Id): Promise<VideoSessionView> {
@@ -153,17 +175,30 @@ export class VideoSessionService {
           endedAt: null,
           lastSeq: 0,
           anchorPositionMs: String(record.confirmedPositionMs || '0'),
-          anchorState: 'playing',
+          anchorState: 'paused',
           creditedMs: '0',
         }));
         return {
           session_id: String(session.id),
           version_id: String(version.id),
-          heartbeat_interval_ms: VIDEO_HEARTBEAT_INTERVAL_MS,
+          heartbeat_interval_ms: VIDEO_HEARTBEAT_INTERVAL_MS as 30_000,
+          asset_id: String(version.assetId),
           progress: this.progressView(record, session.lastSeq),
-        } as VideoSessionView;
+        };
       });
-      if (outcome) return outcome;
+      if (outcome) {
+        try {
+          const ticket = await this.tickets.issue(String(userId), outcome.asset_id, 'lesson_version_video', outcome.version_id);
+          return { session_id: outcome.session_id, version_id: outcome.version_id,
+            heartbeat_interval_ms: outcome.heartbeat_interval_ms,
+            media: { asset_id: outcome.asset_id, ticket }, progress: outcome.progress };
+        } catch (error) {
+          // Compensate only this session; a newer start must keep its ownership.
+          await this.close(userId, outcome.session_id);
+          if ([40301, 40302, 40401].includes(Number((error as any)?.code))) throw Errors.videoUnavailable('课时当前视频不可用');
+          throw error;
+        }
+      }
       if (retries === ACTIVITY_START_MAX_RETRIES) {
         throw Errors.videoSessionConflict('学习会话竞争，请重试');
       }
@@ -178,11 +213,12 @@ export class VideoSessionService {
   ): Promise<boolean> {
     const user = await manager.getRepository(SysUser).findOne({ where: { id: String(session.userId) } });
     const version = await manager.getRepository(LessonVersion).findOne({ where: { id: String(session.lessonVersionId) } });
-    if (!user || Number(user.status) !== 1 || user.source !== 'institution' || !user.categoryId || !version) return false;
+    if (!user || Number(user.status) !== 1 || user.role !== 'employee' || !version || numberValue(version.durationMs) <= 0) return false;
+    if (!await manager.getRepository(LearnerIdentity).findOne({ where: { userId: String(session.userId) } })) return false;
     const lesson = await manager.getRepository(CourseLesson).findOne({ where: { id: String(version.lessonId) } });
-    if (!lesson || String(lesson.currentVersionId) !== String(version.id)) return false;
+    if (!lesson || lesson.lessonType !== 'video' || String(lesson.currentVersionId) !== String(version.id)) return false;
     const course = await manager.getRepository(TrainingCourse).findOne({ where: { id: String(lesson.courseId) } });
-    return Boolean(course && course.status === 'published' && String(course.categoryId) === String(user.categoryId));
+    return Boolean(course && course.status === 'published' && await this.versionMediaAvailable(manager, version));
   }
 
   async heartbeat(userId: Id, sessionId: Id, input: VideoHeartbeat): Promise<VideoProgress> {
@@ -205,15 +241,15 @@ export class VideoSessionService {
         .getOne();
       if (!record) throw Errors.videoSessionConflict('视频学习记录不存在');
 
-      if (input.seq <= session.lastSeq) {
-        return { progress: this.progressView(record, session.lastSeq), unavailable: false };
-      }
       if (!(await this.sessionStillAvailable(manager, session))) {
         const now = new Date();
         session.activeUserId = null;
         session.endedAt = now;
         await sessionRepo.save(session);
         return { progress: this.progressView(record, session.lastSeq), unavailable: true };
+      }
+      if (input.seq <= session.lastSeq) {
+        return { progress: this.progressView(record, session.lastSeq), unavailable: false };
       }
 
       const now = new Date();
@@ -258,7 +294,7 @@ export class VideoSessionService {
       await sessionRepo.save(session);
       return { progress: this.progressView(record, session.lastSeq), unavailable: false };
     });
-    if (outcome.unavailable) throw Errors.videoUnavailable('课程已下架、学员范围已变化或视频版本已替换');
+    if (outcome.unavailable) throw Errors.videoUnavailable('课程已下架、播放授权已变化或视频版本已替换');
     return outcome.progress;
   }
 
@@ -296,7 +332,11 @@ export class VideoSessionService {
       const byVersion = new Map(records.map((record) => [String(record.lessonVersionId), record]));
       const lessons = required.lessons.map((lesson) => {
         const record = byVersion.get(String(lesson.versionId));
-        return record ? this.progressView(record) : this.emptyProgress(lesson.durationMs);
+        return {
+          ...(record ? this.progressView(record) : this.emptyProgress(lesson.durationMs)),
+          lesson_id: String(lesson.lessonId),
+          version_id: String(lesson.versionId),
+        };
       });
       const completed = lessons.filter((lesson) => lesson.completed).length;
       return {

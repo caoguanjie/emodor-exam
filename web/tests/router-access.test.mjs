@@ -64,5 +64,13 @@ test('registered question routes cache imports but refresh management on return 
     assert.equal(access.routeAccessAllowed(management.meta, (code) => code === 'questions:write', false), true);
     assert.equal(access.routeAccessAllowed(importing.meta, (code) => code === 'questions:read', false), false);
     assert.equal(access.routeAccessAllowed(importing.meta, (code) => code === 'questions:write', false), true);
+    for (const path of ['/my/exams', '/my/exams/42']) {
+      const retired = router.resolve(path);
+      assert.equal(retired.meta.title, '页面未找到', path);
+      assert.ok(retired.matched.every((route) => !route.path.startsWith('/my/exams')), path);
+    }
+    for (const path of ['/admin/papers', '/admin/papers/42', '/admin/exam-records', '/admin/exam-records/42']) {
+      assert.equal(router.resolve(path).meta.admin, true, path);
+    }
   } finally { await vite.close(); }
 });

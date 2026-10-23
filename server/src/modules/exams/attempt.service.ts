@@ -29,6 +29,7 @@ import {
 } from './paper-release.service';
 import { SamplingService } from './sampling.service';
 import { ShuffleService } from './shuffle.service';
+import { assertExamIdentity, expireExamRecord } from './exam-state';
 
 type AttemptRecordFact = { attemptNo: number; status: string };
 
@@ -42,7 +43,7 @@ export function decideAttemptTransition(input: {
     if (new Date(input.active.deadlineAt).getTime() > input.nowMs) {
       return { kind: 'recover', recordId: String(input.active.recordId) };
     }
-    throw Errors.examInProgress('存在进行中的考试，系统正在自动交卷，请稍后刷新');
+    throw Errors.examInProgress('考试已到期，请刷新查看状态');
   }
   if (input.records.some((record) => record.status === ExamStatus.PASSED)) throw Errors.alreadyPassed();
   if (input.records.some((record) => record.status === ExamStatus.SUBMITTED)) {
@@ -255,13 +256,14 @@ export class AttemptService {
     }
   }
 
-  async start(userId: Id, paperId: Id): Promise<AttemptView> {
+  async start(userId: Id, paperId: Id, mobile = false): Promise<AttemptView> {
     const outcome = await this.dataSource.transaction(async (manager) => {
       const user = await manager.getRepository(SysUser).findOne({
         where: { id: String(userId) }, lock: { mode: 'pessimistic_write' },
       });
       if (!user) throw Errors.notFound('用户不存在');
       if (Number(user.status) !== 1) throw Errors.accountDisabled();
+      if (mobile && user.role !== 'employee') throw Errors.forbidden();
 
       const assignmentRepo = manager.getRepository(ExamAssignment);
       let assignment = await assignmentRepo.findOne({
@@ -274,9 +276,12 @@ export class AttemptService {
       // Recovery deliberately precedes paper status and the user's latest
       // category/source checks. A withdrawn paper may still finish its active attempt.
       if (active) {
+        if (mobile && active.regulationId) throw Errors.dataForbidden('请使用培训考试入口');
         if (new Date(active.deadlineAt).getTime() <= Date.now()) {
-          throw Errors.examInProgress('存在进行中的考试，系统正在自动交卷，请稍后刷新');
+          await expireExamRecord(manager, active);
+          return { record: active, recovered: true, actorName: user.username };
         }
+        if (mobile) await assertExamIdentity(manager, String(userId));
         if (!assignment || String(active.assignmentId || '') !== String(assignment.id)) {
           throw Errors.examInProgress('已有升级前进行中的考试，请先完成当前作答');
         }
@@ -286,10 +291,13 @@ export class AttemptService {
         return { record: active, recovered: true, actorName: user.username };
       }
 
+      if (mobile) await assertExamIdentity(manager, String(userId));
+
       const paper = await manager.getRepository(ExamPaper).findOne({
         where: { id: String(paperId) }, lock: { mode: 'pessimistic_write' },
       });
       if (!paper) throw Errors.notFound('试卷不存在');
+      if (mobile && paper.businessScope !== 'training') throw Errors.contentInvisible('请使用培训考试入口');
       if (paper.status !== PaperStatus.PUBLISHED) throw Errors.contentInvisible('考试未发布或已撤回');
 
       let release: PublishedPaper | null = null;
@@ -439,7 +447,7 @@ export class AttemptService {
     return this.reader.forStudent(String(userId), String(outcome.record.id));
   }
 
-  async recover(userId: Id, recordId: Id): Promise<AttemptView> {
+  async recover(userId: Id, recordId: Id, mobile = false): Promise<AttemptView> {
     await this.dataSource.transaction(async (manager) => {
       const user = await manager.getRepository(SysUser).findOne({
         where: { id: String(userId) }, lock: { mode: 'pessimistic_write' },
@@ -451,9 +459,11 @@ export class AttemptService {
       });
       if (!record) throw Errors.notFound('考试记录不存在');
       if (String(record.userId) !== String(userId)) throw Errors.dataForbidden();
-      if (record.status !== ExamStatus.IN_PROGRESS) throw Errors.submitConflict('考试已结束');
+      if (mobile && record.status === ExamStatus.IN_PROGRESS && record.regulationId) throw Errors.dataForbidden('请使用培训考试入口');
+      if (record.status !== ExamStatus.IN_PROGRESS) return;
       if (new Date(record.deadlineAt).getTime() <= Date.now()) {
-        throw Errors.examInProgress('考试已到期，系统正在自动交卷，请稍后刷新');
+        await expireExamRecord(manager, record);
+        return;
       }
       if (record.regulationId) {
         assertLegacyClientPool(await this.frozenRecordPool(manager, String(record.id)));

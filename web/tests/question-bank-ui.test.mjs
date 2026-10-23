@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
-import { computed, createRenderer, h, inject, nextTick, provide, watch } from '@vue/runtime-core';
+import { computed, createRenderer, h, inject, nextTick, provide, ref, watch } from '@vue/runtime-core';
 import TreeStore from '../node_modules/element-plus/es/components/tree/src/model/tree-store.mjs';
 
 const webRoot = resolve(fileURLToPath(new URL('../', import.meta.url)));
@@ -685,6 +685,202 @@ test('limits the real question editor to three objective types while retaining c
   )).map((node) => node.props.value);
   assert.deepEqual(typeValues, ['single', 'multiple', 'judgment']);
   assert.equal(walk(mounted.root, (node) => node.type === 'media-upload-stub').length, 1);
+  mounted.unmount();
+});
+
+function tiptap(text) {
+  return { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] };
+}
+
+test('option IDs remain available outside a secure context when randomUUID is absent', () => {
+  const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  const secureDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'isSecureContext');
+  const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues } });
+  Object.defineProperty(globalThis, 'isSecureContext', { configurable: true, value: false });
+  try {
+    const keys = [];
+    for (let index = 0; index < 1000; index += 1) {
+      const id = trainingTypes.newQuestionOptionId(keys.map((key) => ({ key, text: '' })));
+      assert.match(id, /^[A-Za-z0-9_-]{1,64}$/);
+      keys.push(id);
+    }
+    assert.equal(new Set(keys).size, 1000);
+  } finally {
+    Object.defineProperty(globalThis, 'crypto', cryptoDescriptor);
+    if (secureDescriptor) Object.defineProperty(globalThis, 'isSecureContext', secureDescriptor);
+    else delete globalThis.isSecureContext;
+  }
+});
+
+test('option ID fallback cannot collide within a page even without Web Crypto or changing clock/random values', () => {
+  const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  const originalNow = Date.now;
+  const originalRandom = Math.random;
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: undefined });
+  Date.now = () => 1792656000000;
+  Math.random = () => 0;
+  try {
+    const keys = [];
+    for (let index = 0; index < 1000; index += 1) {
+      const id = trainingTypes.newQuestionOptionId(keys.map((key) => ({ key, text: '' })));
+      assert.match(id, /^[A-Za-z0-9_-]{1,64}$/);
+      keys.push(id);
+    }
+    assert.equal(new Set(keys).size, 1000);
+  } finally {
+    Object.defineProperty(globalThis, 'crypto', cryptoDescriptor);
+    Date.now = originalNow;
+    Math.random = originalRandom;
+  }
+});
+
+for (const [name, html, expected] of [
+  ['nested div/p', '<div><p>12</p><p>34</p></div>', '<p>12</p><p>34</p>'],
+  ['list items', '<ul><li>12</li><li>34</li></ul>', '<p>12</p><p>34</p>'],
+  ['nested lists and inline breaks', '<div>开头<ul><li>12<br>34<ul><li>56</li></ul>78</li></ul>结尾</div>', '<p>开头</p><p>12<br>34</p><p>56</p><p>78</p><p>结尾</p>'],
+]) {
+  test(`restricted question content preserves ${name} boundaries through repeated edit/save roundtrips`, () => {
+    const originalDocument = globalThis.document;
+    globalThis.document = controlledMediaDocument();
+    try {
+      const first = trainingTypes.questionHtmlToReadonlyDoc(html);
+      const output = trainingTypes.readonlyQuestionDocToHtml(first);
+      assert.equal(output, expected);
+      assert.deepEqual(trainingTypes.questionHtmlToReadonlyDoc(output), first);
+    } finally {
+      if (originalDocument === undefined) delete globalThis.document;
+      else globalThis.document = originalDocument;
+    }
+  });
+}
+
+test('v2 editing derives editable content and correctness from stable IDs instead of stale legacy projections', async () => {
+  const draft = trainingTypes.questionDraftFromView(legacyRow({
+    stem: '过期投影', answer: [0],
+    content_schema_version: 2,
+    content_json: {
+      stem: tiptap('冻结题干'),
+      options: [{ id: 'stable_B', content: tiptap('乙') }, { id: 'stable_A', content: tiptap('甲') }],
+      answer_option_ids: ['stable_A'], analysis: tiptap('解析'),
+    },
+  }));
+  assert.equal(draft.stem, '<p>冻结题干</p>');
+  assert.deepEqual(draft.options, [{ key: 'stable_B', text: '<p>乙</p>' }, { key: 'stable_A', text: '<p>甲</p>' }]);
+  assert.deepEqual(draft.answer, [1]);
+  const mounted = mount(QuestionEditor, { modelValue: draft });
+  await nextTick();
+  await click(button(mounted.root, '下移'));
+  const moved = mounted.instance.$.setupState.local;
+  assert.deepEqual(moved.options.map((option) => option.key), ['stable_A', 'stable_B']);
+  assert.deepEqual(moved.answer, [0]);
+  await click(button(mounted.root, '添加选项'));
+  const addedKey = moved.options[2].key;
+  assert.match(addedKey, /^opt_[A-Za-z0-9_-]+$/);
+  assert.equal(new Set(moved.options.map((option) => option.key)).size, 3);
+  await click(walk(mounted.root, (node) => node.type === 'button' && nodeText(node).trim() === '上移' && !node.props.disabled)[0]);
+  assert.deepEqual(moved.options.map((option) => option.key), ['stable_B', 'stable_A', addedKey]);
+  assert.deepEqual(moved.answer, [1]);
+  const payload = trainingTypes.questionDraftWithContent(moved);
+  assert.equal(payload.content_schema_version, 2);
+  assert.deepEqual(payload.content_json.answer_option_ids, ['stable_A']);
+  assert.deepEqual(payload.content_json.options.map((option) => option.id), ['stable_B', 'stable_A', addedKey]);
+  assert.equal(JSON.stringify(payload).includes('checked'), false);
+  mounted.unmount();
+});
+
+test('v2 preview labels only authoritative correct IDs and never treats learner selections or checked as correctness', async () => {
+  const mounted = mount(QuestionPreview, { question: {
+    type: 'single', stem: '旧投影', options: [{ key: 'A', text: '旧选项' }], answer: [0],
+    selected_option_ids: ['wrong'], checked: true,
+    content_schema_version: 2,
+    content_json: {
+      stem: tiptap('v2题干'), options: [{ id: 'wrong', content: tiptap('错误选项') }, { id: 'right', content: tiptap('正确选项') }],
+      answer_option_ids: ['right'], analysis: tiptap('v2解析'),
+    },
+  } });
+  await waitFor(() => walk(mounted.root, (node) => String(node.props.innerHTML || '').includes('v2题干')).length > 0, 'v2 preview');
+  const options = walk(mounted.root, (node) => node.props.class === 'question-preview__option');
+  assert.equal(options.length, 2);
+  assert.doesNotMatch(nodeText(options[0]), /正确答案/);
+  assert.match(nodeText(options[1]), /正确答案/);
+  const html = walk(mounted.root, (node) => Object.hasOwn(node.props, 'innerHTML')).map((node) => node.props.innerHTML);
+  assert.ok(html.some((value) => value === '<p>v2题干</p>'));
+  assert.ok(html.some((value) => value === '<p>v2解析</p>'));
+  mounted.unmount();
+});
+
+test('v2 readonly rendering rejects forbidden nested properties instead of falling back to HTML', () => {
+  assert.throws(() => trainingTypes.readonlyQuestionDocToHtml({
+    type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '题干', marks: [{ type: 'bold' }] }] }],
+  }), /题目内容/);
+  assert.throws(() => trainingTypes.readonlyQuestionDocToHtml({
+    type: 'doc', content: [{ type: 'image', attrs: { asset_id: '42', src: 'https://outside.invalid/x' } }],
+  }), /题目内容/);
+});
+
+test('manual question save sends restricted v2 content with unchanged option IDs and a numeric compatibility projection', async () => {
+  const originalDocument = globalThis.document;
+  globalThis.document = controlledMediaDocument();
+  try {
+    const mounted = mount(Questions);
+    await waitFor(() => button(mounted.root, '人工录题'), 'question list');
+    await click(button(mounted.root, '人工录题'));
+    const state = mounted.instance.$.setupState;
+    state.editorForm.stem = '<p onclick="steal()">安全<strong>题干</strong><br><img data-media-id="42" src="https://outside.invalid/x"></p>';
+    state.editorForm.options = [{ key: 'keep_b', text: '乙' }, { key: 'keep_a', text: '甲' }];
+    state.editorForm.answer = [1];
+    await click(button(mounted.root, '保存并确认可用'));
+    const call = context.calls.find((item) => item.method === 'post' && item.url === '/ai/questions');
+    assert.ok(call);
+    assert.equal(call.body.content_schema_version, 2);
+    assert.deepEqual(call.body.content_json.stem, {
+      type: 'doc', content: [{ type: 'paragraph', content: [
+        { type: 'text', text: '安全' }, { type: 'text', text: '题干' }, { type: 'hardBreak' }, { type: 'image', attrs: { asset_id: '42' } },
+      ] }],
+    });
+    assert.deepEqual(call.body.content_json.options, [
+      { id: 'keep_b', content: tiptap('乙') }, { id: 'keep_a', content: tiptap('甲') },
+    ]);
+    assert.deepEqual(call.body.content_json.answer_option_ids, ['keep_a']);
+    assert.deepEqual(call.body.answer, [1]);
+    assert.deepEqual(call.body.options, [{ key: 'keep_b', text: '乙' }, { key: 'keep_a', text: '甲' }]);
+    assert.equal(JSON.stringify(call.body.content_json).includes('checked'), false);
+    mounted.unmount();
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+  }
+});
+
+test('invalid stable option IDs retain the editable question and show an error without sending a write', async () => {
+  const mounted = mount(Questions);
+  await waitFor(() => button(mounted.root, '人工录题'), 'question list');
+  await click(button(mounted.root, '人工录题'));
+  const state = mounted.instance.$.setupState;
+  state.editorForm.options = [{ key: 'duplicate', text: '甲' }, { key: 'duplicate', text: '乙' }];
+  await state.saveQuestion();
+  assert.equal(context.calls.some((item) => item.method === 'post' && item.url === '/ai/questions'), false);
+  assert.equal(state.editorVisible, true);
+  assert.ok(context.messages.some((item) => /题目内容/.test(item.message)));
+  mounted.unmount();
+});
+
+test('readonly preview loads analysis only after the answer toggle is explicitly enabled', async () => {
+  const reveal = ref(false);
+  const question = {
+    type: 'single', content_schema_version: 2,
+    content_json: { stem: tiptap('题干'), options: [{ id: 'a', content: tiptap('甲') }, { id: 'b', content: tiptap('乙') }],
+      answer_option_ids: ['b'], analysis: tiptap('仅答案预览可见的解析') },
+  };
+  const parent = { setup() { return () => h(QuestionPreview, { question, revealAnswer: reveal.value }); } };
+  const mounted = mount(parent);
+  await waitFor(() => walk(mounted.root, (node) => String(node.props.innerHTML || '').includes('题干')).length > 0, 'ordinary preview');
+  assert.doesNotMatch(nodeText(mounted.root), /正确答案|解析/);
+  reveal.value = true;
+  await nextTick();
+  await waitFor(() => walk(mounted.root, (node) => String(node.props.innerHTML || '').includes('仅答案预览可见的解析')).length > 0, 'answer preview');
+  assert.match(nodeText(mounted.root), /正确答案/);
   mounted.unmount();
 });
 

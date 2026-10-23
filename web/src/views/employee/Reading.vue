@@ -18,7 +18,6 @@
         <el-tag v-else-if="timeMet" type="info">学习时长已达标：离开本页完成登记后即可参加考试</el-tag>
         <el-tag v-else-if="paused" type="warning">已暂停（页面未聚焦）</el-tag>
       </div>
-      <el-button v-if="isValid" type="primary" @click="goExam">参加考试<el-icon style="margin-left:4px"><ArrowRight /></el-icon></el-button>
     </div>
 
     <div v-if="regInfo?.file_type === 'pdf'" ref="pdfHost" class="pdf-host"></div>
@@ -32,7 +31,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import axios from 'axios';
 import { ElMessage } from 'element-plus';
-import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue';
+import { ArrowLeft } from '@element-plus/icons-vue';
 import http from '../../api/http';
 import { useAuthStore } from '../../stores/auth';
 
@@ -271,11 +270,6 @@ async function renderPdf(url: string) {
 async function leaveReading() {
   await endSession();
   router.push('/my/regulations');
-}
-
-async function goExam() {
-  await endSession();
-  router.push(`/my/exams`);
 }
 
 // 路由级守卫：侧边栏跳转 / 浏览器返回 / 登出等一切 SPA 内离开路径统一等待收口落库，

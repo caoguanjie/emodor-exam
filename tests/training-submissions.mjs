@@ -1,273 +1,213 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { assertAttemptView, assertPureTimeout, assertTimeoutFacts, examLearner, wholeAnswers } from './support/exam-mobile-fixtures.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
-const bcrypt = require('bcryptjs');
-const Redis = require('ioredis');
+const mysql = require('mysql2/promise');
 
-function suffix() { return randomBytes(5).toString('hex'); }
-function password(label) { return `A9-${label}-${randomBytes(8).toString('hex')}`; }
-async function redisFor(ctx) {
-  const redis = new Redis({
-    host: ctx.env.REDIS_HOST || '127.0.0.1',
-    port: Number(ctx.env.REDIS_PORT || 6379),
-    password: ctx.env.REDIS_PASSWORD || undefined,
-  });
-  await redis.ping();
-  return redis;
+async function connection(ctx) {
+  assert.match(ctx.env.DB_DATABASE, /^ruleexam_test_[A-Za-z0-9_]+$/);
+  return mysql.createConnection({ host: ctx.env.DB_HOST, port: Number(ctx.env.DB_PORT), user: ctx.env.DB_USERNAME, password: ctx.env.DB_PASSWORD, database: ctx.env.DB_DATABASE });
 }
 
-async function login(ctx, username, userPassword, label) {
-  const headers = { 'X-Forwarded-For': `203.0.113.${(login.sequence = (login.sequence || 20) + 1)}` };
-  const captcha = await ctx.request(null, 'POST', '/auth/captcha', undefined, headers);
-  assert.equal(captcha.status, 200, `${label} captcha: ${JSON.stringify(captcha)}`);
-  const redis = await redisFor(ctx);
-  let answer;
-  try {
-    answer = await redis.get(`${ctx.env.REDIS_KEY_PREFIX || ''}auth:captcha:${captcha.data.captcha_id}`);
-  } finally {
-    await redis.quit();
+async function fixture(ctx) {
+  const [admin] = await ctx.queryTestDb("SELECT id FROM sys_user WHERE username='admin'");
+  const category = await ctx.queryTestDb('INSERT INTO training_category(name,status,created_by) VALUES (?,1,?)', [`H2 提交 ${randomBytes(4).toString('hex')}`, admin.id]);
+  const categoryId = String(category.insertId);
+  const pool = [];
+  for (const [type, scoreCents, answer, options] of [
+    ['single', 3000, [0], [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }]],
+    ['multiple', 3000, [0, 1], [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }, { key: 'C', text: '丙' }]],
+    ['judgment', 4000, [0], [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]],
+  ]) {
+    const question = await ctx.queryTestDb('INSERT INTO question(category_id,difficulty,type,stem,options,answer,analysis,score,status,source,created_by) VALUES (?,\'easy\',?,?,?,?,?,?,\'approved\',\'manual\',?)', [categoryId, type, `<p>${type}</p>`, JSON.stringify(options), JSON.stringify(answer), '<p>冻结解析</p>', scoreCents / 100, admin.id]);
+    const version = await ctx.queryTestDb('INSERT INTO question_version(question_id,revision,category_id,difficulty,type,stem,options,answer,analysis,score_cents,source,status,created_by) VALUES (?,1,?,\'easy\',?,?,?,?,?,?,\'manual\',\'approved\',?)', [question.insertId, categoryId, type, `<p>${type}</p>`, JSON.stringify(options), JSON.stringify(answer), '<p>冻结解析</p>', scoreCents, admin.id]);
+    await ctx.queryTestDb('UPDATE question SET current_version_id=? WHERE id=?', [version.insertId, question.insertId]);
+    // Intentionally retain a v1 frozen snapshot to prove the server adapter maps
+    // original key A/B/C to stable IDs regardless of displayed option order.
+    pool.push({ questionId: String(question.insertId), versionId: String(version.insertId), revision: 1, categoryId, difficulty: 'easy', type, stem: `<p>${type}</p>`, options, answer, analysis: '<p>冻结解析</p>', scoreCents, source: 'manual', approvedBy: String(admin.id), approvedAt: new Date().toISOString() });
   }
-  const actor = {};
-  const response = await ctx.request(actor, 'POST', '/auth/login', {
-    username, password: userPassword, captcha_id: captcha.data.captcha_id, captcha_code: answer,
-  }, headers);
-  assert.equal(response.status, 200, `${label} login: ${JSON.stringify(response)}`);
-  actor.accessToken = response.data.access_token;
-  return actor;
+  const rule = { totalCents: 10000, passCents: 6000, durationMinutes: 30, maxAttempts: 3, partialCreditRatio: 0.5, rules: pool.map((item) => ({ type: item.type, count: 1, scoreCents: item.scoreCents })) };
+  const paper = await ctx.queryTestDb('INSERT INTO exam_paper(business_scope,mode,category_id,requires_learning,regulation_ids,course_ids,rule_config,title,total_score,pass_score,duration_minutes,max_attempts,partial_credit_ratio,status,created_by) VALUES (\'training\',\'random\',?,0,\'[]\',\'[]\',?,?,100,60,30,3,0.5,\'published\',?)', [categoryId, JSON.stringify(rule), 'H2 三题型整卷', admin.id]);
+  const release = await ctx.queryTestDb('INSERT INTO paper_release(paper_id,version_no,business_scope,mode,category_id,requires_learning,rule_snapshot,regulation_ids,course_ids,created_by) VALUES (?,1,\'training\',\'random\',?,0,?,\'[]\',\'[]\',?)', [paper.insertId, categoryId, JSON.stringify(rule), admin.id]);
+  for (const [position, item] of pool.entries()) await ctx.queryTestDb('INSERT INTO paper_release_question(release_id,question_id,question_version_id,type,difficulty,score_cents,position,snapshot_json) VALUES (?,?,?,?,\'easy\',?,?,?)', [release.insertId, item.questionId, item.versionId, item.type, item.scoreCents, position, JSON.stringify(item)]);
+  return { categoryId, paperId: String(paper.insertId) };
 }
 
-async function createUser(ctx, input) {
-  const hash = await bcrypt.hash(input.password, 4);
-  const inserted = await ctx.queryTestDb(
-    'INSERT INTO sys_user (username, password_hash, real_name, category_id, source, role, status, force_password_change) VALUES (?, ?, ?, ?, ?, ?, 1, 0)',
-    [input.username, hash, input.realName, input.categoryId, input.source, input.role || 'employee'],
-  );
-  return String(inserted.insertId);
+async function start(ctx, actor, paperId) {
+  const result = await ctx.request(actor, 'POST', `/me/exams/${paperId}/start`);
+  assert.equal(result.status, 200, JSON.stringify(result));
+  assertAttemptView(result.data);
+  assert.equal(result.data.questions.length, 3);
+  return result.data;
 }
 
-async function createQuestionVersion(ctx, input) {
-  const question = await ctx.queryTestDb(
-    'INSERT INTO question (regulation_id, version_id, category_id, difficulty, concept_id, current_version_id, type, stem, options, answer, analysis, score, status, source, created_by) VALUES (NULL, NULL, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [input.categoryId, 'easy', input.type, input.stem, JSON.stringify(input.options), JSON.stringify(input.answer),
-      input.analysis ?? '<p>解析</p>', ((input.scoreCents || 2500) / 100).toFixed(2), 'approved', 'manual', input.actorId],
-  );
-  const questionId = String(question.insertId);
-  const version = await ctx.queryTestDb(
-    'INSERT INTO question_version (question_id, revision, category_id, difficulty, type, stem, options, answer, analysis, score_cents, concept_id, regulation_id, regulation_version_id, source_page_group, source_page_start, source_page_end, source, status, approved_by, approved_at, reviewed_by, reviewed_at, review_reason, created_by, legacy_captured_at) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, NOW(3), ?, NOW(3), NULL, ?, NULL)',
-    [questionId, input.categoryId, 'easy', input.type, input.stem, JSON.stringify(input.options), JSON.stringify(input.answer),
-      input.analysis ?? '<p>解析</p>', input.scoreCents || 2500, 'manual', 'approved', input.actorId, input.actorId, input.actorId],
-  );
-  const versionId = String(version.insertId);
-  await ctx.queryTestDb('UPDATE question SET current_version_id = ? WHERE id = ?', [versionId, questionId]);
-  return {
-    questionId, versionId, revision: 1, categoryId: String(input.categoryId), difficulty: 'easy', type: input.type,
-    stem: input.stem, options: input.options, answer: input.answer, analysis: input.analysis ?? '<p>解析</p>',
-    scoreCents: input.scoreCents || 2500, source: 'manual', approvedBy: String(input.actorId),
-    approvedAt: new Date().toISOString(),
-  };
-}
-
-async function createPaper(ctx, { categoryId, actorId, pool, title }) {
-  const rule = {
-    totalCents: 10000, passCents: 6000, durationMinutes: 30, maxAttempts: 3, partialCreditRatio: 0.5,
-    rules: pool.map((item) => ({ type: item.type, count: 1, scoreCents: item.scoreCents })),
-  };
-  const paper = await ctx.queryTestDb(
-    'INSERT INTO exam_paper (regulation_id, business_scope, mode, category_id, requires_learning, regulation_ids, course_ids, rule_config, title, total_score, pass_score, duration_minutes, max_attempts, partial_credit_ratio, status, created_by) VALUES (NULL, ?, ?, ?, 0, ?, ?, ?, ?, 100.00, 60.00, 30, 3, 0.50, ?, ?)',
-    ['training', 'random', categoryId, JSON.stringify([]), JSON.stringify([]), JSON.stringify(rule), title, 'published', actorId],
-  );
-  const paperId = String(paper.insertId);
-  const release = await ctx.queryTestDb(
-    'INSERT INTO paper_release (paper_id, version_no, business_scope, mode, category_id, requires_learning, rule_snapshot, regulation_ids, course_ids, created_by) VALUES (?, 1, ?, ?, ?, 0, ?, ?, ?, ?)',
-    [paperId, 'training', 'random', categoryId, JSON.stringify(rule), JSON.stringify([]), JSON.stringify([]), actorId],
-  );
-  const releaseId = String(release.insertId);
-  for (let index = 0; index < pool.length; index += 1) {
-    const item = pool[index];
-    await ctx.queryTestDb(
-      'INSERT INTO paper_release_question (release_id, question_id, question_version_id, concept_id, type, difficulty, score_cents, position, snapshot_json) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)',
-      [releaseId, item.questionId, item.versionId, item.type, item.difficulty, item.scoreCents, index, JSON.stringify(item)],
-    );
-  }
-  return { paperId, releaseId };
-}
-
-function displayedIndex(question, key) {
-  const index = question.options.findIndex((option) => option.key === key);
-  assert.notEqual(index, -1, `missing displayed option ${key}`);
-  return index;
-}
-
-function sortedAnswers(answers) {
-  return answers.map((answer) => ({
-    item_id: String(answer.item_id),
-    ...(answer.selected ? { selected: [...answer.selected] } : {}),
-  })).sort((left, right) => BigInt(left.item_id) < BigInt(right.item_id) ? -1 : 1);
-}
-
-async function runSubmissions(ctx) {
-  let stage = 'fixtures';
-  const runSuffix = suffix();
-  try {
-    const adminPassword = password('admin');
-    const adminId = await createUser(ctx, {
-      username: `c3_admin_${runSuffix}`, password: adminPassword, realName: 'C3 管理员',
-      categoryId: null, source: null, role: 'super_admin',
-    });
-    const category = await ctx.queryTestDb(
-      'INSERT INTO training_category (name, description, status, created_by) VALUES (?, NULL, 1, ?)',
-      [`C3 类别 ${runSuffix}`, adminId],
-    );
-    const categoryId = String(category.insertId);
-    const actors = {};
-    for (const label of ['alpha', 'beta', 'gamma']) {
-      const userPassword = password(label);
-      const userId = await createUser(ctx, {
-        username: `c3_${label}_${runSuffix}`, password: userPassword, realName: `C3 ${label}`,
-        categoryId, source: 'institution',
-      });
-      actors[label] = { userId, actor: await login(ctx, `c3_${label}_${runSuffix}`, userPassword, label) };
-    }
-    const pool = [
-      await createQuestionVersion(ctx, { categoryId, actorId: adminId, type: 'single', stem: '<p>单选</p>', options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }], answer: [0], scoreCents: 3000 }),
-      await createQuestionVersion(ctx, { categoryId, actorId: adminId, type: 'multiple', stem: '<p>多选</p>', options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }, { key: 'C', text: '丙' }], answer: [0, 1], scoreCents: 3000 }),
-      await createQuestionVersion(ctx, { categoryId, actorId: adminId, type: 'judgment', stem: '<p>判断</p>', options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], answer: [0], scoreCents: 4000 }),
-    ];
-    const paper = await createPaper(ctx, { categoryId, actorId: adminId, pool, title: `C3 三题型 ${runSuffix}` });
-
-    stage = 'start three real attempts';
-    for (const value of Object.values(actors)) {
-      value.started = await ctx.request(value.actor, 'POST', `/me/exams/${paper.paperId}/start`);
-      assert.equal(value.started.status, 200, JSON.stringify(value.started));
-      assert.equal(value.started.data.questions.length, 3);
-      value.byType = Object.fromEntries(value.started.data.questions.map((question) => [question.type, question]));
-    }
-
-    stage = 'heartbeat persists server timing facts';
-    const heartbeat = await ctx.request(actors.alpha.actor, 'POST', `/me/exam-records/${actors.alpha.started.data.record_id}/heartbeat`, {});
-    assert.equal(heartbeat.status, 200, JSON.stringify(heartbeat));
-    assert.match(heartbeat.data.server_time, /^\d{4}-\d{2}-\d{2}T/);
-    assert.equal(typeof heartbeat.data.remaining_seconds, 'number');
-    assert.equal(heartbeat.data.draft_revision, 0);
-
-    stage = 'acknowledged full draft survives real restart';
-    const alphaAnswers = [
-      { item_id: actors.alpha.byType.single.item_id, selected: [displayedIndex(actors.alpha.byType.single, 'A')] },
-      { item_id: actors.alpha.byType.multiple.item_id, selected: [displayedIndex(actors.alpha.byType.multiple, 'A')] },
-      { item_id: actors.alpha.byType.judgment.item_id, selected: [displayedIndex(actors.alpha.byType.judgment, 'B')] },
-    ];
-    const saved = await ctx.request(actors.alpha.actor, 'PUT', `/me/exam-records/${actors.alpha.started.data.record_id}/draft`, {
-      revision: 1, answers: alphaAnswers,
-    });
-    assert.equal(saved.status, 200, JSON.stringify(saved));
-    assert.equal(saved.data.revision, 1);
-    assert.equal(saved.data.answered_count, 3);
-    const durable = await ctx.queryTestDb(
-      'SELECT (SELECT draft_revision FROM exam_record WHERE id = ?) AS revision, COUNT(*) AS answer_count FROM exam_answer WHERE exam_record_id = ?',
-      [actors.alpha.started.data.record_id, actors.alpha.started.data.record_id],
-    );
-    assert.equal(Number(durable[0].revision), 1);
-    assert.equal(Number(durable[0].answer_count), 3);
-    await ctx.restartApi();
-    const recovered = await ctx.request(actors.alpha.actor, 'GET', `/me/exam-records/${actors.alpha.started.data.record_id}`);
-    assert.equal(recovered.status, 200, JSON.stringify(recovered));
-    assert.equal(recovered.data.draft_revision, 1);
-    assert.deepEqual(sortedAnswers(recovered.data.answers), sortedAnswers(alphaAnswers));
-    const replay = await ctx.request(actors.alpha.actor, 'PUT', `/me/exam-records/${actors.alpha.started.data.record_id}/draft`, {
-      revision: 1, answers: alphaAnswers,
-    });
-    assert.equal(replay.status, 200, JSON.stringify(replay));
-    assert.deepEqual(replay.data, saved.data);
-    const staleRevision = await ctx.request(actors.alpha.actor, 'PUT', `/me/exam-records/${actors.alpha.started.data.record_id}/draft`, {
-      revision: 1, answers: [{ item_id: actors.alpha.byType.single.item_id, selected: [displayedIndex(actors.alpha.byType.single, 'B')] }],
-    });
-    assert.equal(staleRevision.status, 409, JSON.stringify(staleRevision));
-
-    stage = 'manual submit saves latest draft atomically and finalizes objective score';
-    const savedResult = await ctx.request(actors.alpha.actor, 'POST', `/me/exam-records/${actors.alpha.started.data.record_id}/submit`, {
-      revision: 2, answers: alphaAnswers,
-    });
-    assert.equal(savedResult.status, 200, JSON.stringify(savedResult));
-    assert.equal(savedResult.data.grading_state, 'finalized');
-    assert.equal(savedResult.data.submission_method, 'manual');
-    assert.equal(savedResult.data.score, 45);
-    assert.equal(savedResult.data.legacy, false);
-    const manualRetry = await ctx.request(actors.alpha.actor, 'POST', `/me/exam-records/${actors.alpha.started.data.record_id}/submit`, {
-      revision: 99, answers: [],
-    });
-    assert.equal(manualRetry.status, 200, JSON.stringify(manualRetry));
-    assert.deepEqual(manualRetry.data, savedResult.data);
-
-    stage = 'objective draft submit finalizes automatically';
-    const betaAnswers = [
-      { item_id: actors.beta.byType.single.item_id, selected: [displayedIndex(actors.beta.byType.single, 'A')] },
-      { item_id: actors.beta.byType.multiple.item_id, selected: [displayedIndex(actors.beta.byType.multiple, 'A')] },
-      { item_id: actors.beta.byType.judgment.item_id, selected: [displayedIndex(actors.beta.byType.judgment, 'A')] },
-    ];
-    const betaSaved = await ctx.request(actors.beta.actor, 'PUT', `/me/exam-records/${actors.beta.started.data.record_id}/draft`, {
-      revision: 1, answers: betaAnswers,
-    });
-    assert.equal(betaSaved.status, 200, JSON.stringify(betaSaved));
-    const betaResult = await ctx.request(actors.beta.actor, 'POST', `/me/exam-records/${actors.beta.started.data.record_id}/submit`);
-    assert.equal(betaResult.status, 200, JSON.stringify(betaResult));
-    assert.equal(betaResult.data.grading_state, 'finalized');
-    assert.equal(betaResult.data.score, 85);
-
-    stage = 'deadline rejection and concurrent idempotent timeout finalization';
-    const gammaAnswers = [{
-      item_id: actors.gamma.byType.single.item_id,
-      selected: [displayedIndex(actors.gamma.byType.single, 'A')],
-    }];
-    const gammaSaved = await ctx.request(actors.gamma.actor, 'PUT', `/me/exam-records/${actors.gamma.started.data.record_id}/draft`, {
-      revision: 1, answers: gammaAnswers,
-    });
-    assert.equal(gammaSaved.status, 200, JSON.stringify(gammaSaved));
-    await ctx.queryTestDb('UPDATE exam_record SET deadline_at = DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 SECOND) WHERE id = ?', [actors.gamma.started.data.record_id]);
-    const afterDeadlineSave = await ctx.request(actors.gamma.actor, 'PUT', `/me/exam-records/${actors.gamma.started.data.record_id}/draft`, {
-      revision: 2,
-      answers: [{ item_id: actors.gamma.byType.single.item_id, selected: [displayedIndex(actors.gamma.byType.single, 'B')] }],
-    });
-    assert.equal(afterDeadlineSave.status, 409, JSON.stringify(afterDeadlineSave));
-    const timeoutResults = await Promise.all(Array.from({ length: 8 }, () => ctx.request(
-      actors.gamma.actor, 'POST', `/me/exam-records/${actors.gamma.started.data.record_id}/submit`, {
-        revision: 2,
-        answers: [{ item_id: actors.gamma.byType.single.item_id, selected: [displayedIndex(actors.gamma.byType.single, 'B')] }],
-      },
-    )));
-    for (const response of timeoutResults) assert.equal(response.status, 200, JSON.stringify(response));
-    for (const response of timeoutResults.slice(1)) assert.deepEqual(response.data, timeoutResults[0].data);
-    assert.equal(timeoutResults[0].data.submission_method, 'timeout');
-    assert.equal(timeoutResults[0].data.score, 30);
-    const finalFacts = await ctx.queryTestDb(
-      'SELECT submission_method, grading_state, score, active_assignment_id FROM exam_record WHERE id = ?',
-      [actors.gamma.started.data.record_id],
-    );
-    assert.equal(finalFacts[0].submission_method, 'timeout');
-    assert.equal(finalFacts[0].grading_state, 'finalized');
-    assert.equal(Number(finalFacts[0].score), 30);
-    assert.equal(finalFacts[0].active_assignment_id, null);
-    const finalizationRows = await ctx.queryTestDb(
-      'SELECT COUNT(*) AS row_count, COUNT(DISTINCT record_question_id) AS unique_items FROM exam_answer WHERE exam_record_id = ?',
-      [actors.gamma.started.data.record_id],
-    );
-    assert.equal(Number(finalizationRows[0].row_count), 3);
-    assert.equal(Number(finalizationRows[0].unique_items), 3);
-
-    console.log(JSON.stringify({
-      suite: 'training-submissions',
-      restart_record_id: actors.alpha.started.data.record_id,
-      finalized_record_id: actors.alpha.started.data.record_id,
-      timeout_record_id: actors.gamma.started.data.record_id,
-      assertions: 'persistent-draft,restart,revision,objective-auto-score,manual-timeout-idempotency',
-    }));
-  } catch (error) {
-    error.message = `[training-submissions stage=${stage}] ${error.message}`;
-    throw error;
-  }
+async function submit(ctx, actor, attempt, body) {
+  return ctx.request(actor, 'POST', `/me/exam-records/${attempt.record_id}/submit`, body);
 }
 
 export async function run(ctx) {
-  await runSubmissions(ctx);
+  let stage = 'fixtures';
+  try {
+    const { categoryId, paperId } = await fixture(ctx);
+    const alpha = await examLearner(ctx, { categoryId });
+    const beta = await examLearner(ctx, { categoryId });
+    const gamma = await examLearner(ctx, { categoryId });
+    const alphaAttempt = await start(ctx, alpha, paperId);
+    const betaAttempt = await start(ctx, beta, paperId);
+    const gammaAttempt = await start(ctx, gamma, paperId);
+
+    stage = 'local-only draft and immutable recovery';
+    for (const [method, route, body] of [['PUT', 'draft', { revision: 1, answers: [] }], ['POST', 'heartbeat', {}]]) {
+      assert.equal((await ctx.request(alpha, method, `/me/exam-records/${alphaAttempt.record_id}/${route}`, body)).status, 404);
+    }
+    const [untouched] = await ctx.queryTestDb('SELECT draft_revision,(SELECT COUNT(*) FROM exam_answer WHERE exam_record_id=?) AS count FROM exam_record WHERE id=?', [alphaAttempt.record_id, alphaAttempt.record_id]);
+    assert.equal(Number(untouched.draft_revision), 0);
+    assert.equal(Number(untouched.count), 0);
+    await ctx.restartApi();
+    const recovered = await ctx.request(alpha, 'GET', `/me/exam-records/${alphaAttempt.record_id}`);
+    assert.equal(recovered.status, 200);
+    assertAttemptView(recovered.data);
+    assert.deepEqual(recovered.data.questions, alphaAttempt.questions);
+    assert.equal(recovered.data.deadline_at, alphaAttempt.deadline_at);
+
+    stage = 'identity is required for active recovery and submit';
+    // Preserve the real encrypted fact while temporarily hiding it, without
+    // inventing any synthetic verified row or production bypass.
+    await ctx.queryTestDb('UPDATE learner_identity SET user_id=? WHERE user_id=?', ['9223372036854775000', alpha.userId]);
+    try {
+      for (const request of [ctx.request(alpha, 'GET', `/me/exam-records/${alphaAttempt.record_id}`), submit(ctx, alpha, alphaAttempt, wholeAnswers(alphaAttempt))]) {
+        const denied = await request;
+        assert.equal(denied.status, 403, JSON.stringify(denied));
+        assert.equal(denied.data.reason_code, 'IDENTITY_REQUIRED');
+      }
+    } finally { await ctx.queryTestDb('UPDATE learner_identity SET user_id=? WHERE user_id=?', [alpha.userId, '9223372036854775000']); }
+
+    stage = 'strict complete stable-ID envelope rejects old and malformed input';
+    const valid = wholeAnswers(alphaAttempt, { single: ['A'], multiple: ['A'], judgment: ['B'] });
+    const single = valid.answers.find((answer) => alphaAttempt.questions.find((item) => item.item_id === answer.item_id).type === 'single');
+    const badBodies = [
+      undefined,
+      { ...valid, record_id: betaAttempt.record_id },
+      { ...valid, revision: 1 },
+      { ...valid, answers: valid.answers.slice(1) },
+      { ...valid, answers: [valid.answers[0], valid.answers[0], valid.answers[2]] },
+      { ...valid, answers: valid.answers.map((answer, index) => index ? answer : { ...answer, item_id: '999999999' }) },
+      { ...valid, answers: valid.answers.map((answer) => answer === single ? { ...answer, option_ids: ['unknown'] } : answer) },
+      { ...valid, answers: valid.answers.map((answer) => answer === single ? { ...answer, option_ids: ['A', 'A'] } : answer) },
+      { ...valid, answers: valid.answers.map((answer) => answer === single ? { ...answer, option_ids: ['A', 'B'] } : answer) },
+      { ...valid, answers: valid.answers.map((answer) => ({ ...answer, selected: [0] })) },
+      { ...valid, answers: valid.answers.map((answer) => ({ ...answer, asset_ids: [] })) },
+      { ...valid, answers: valid.answers.map((answer) => ({ ...answer, option_ids: [0] })) },
+    ];
+    for (const body of badBodies) {
+      const rejected = await submit(ctx, alpha, alphaAttempt, body);
+      assert.equal(rejected.status, 400, `invalid body: ${JSON.stringify(body)} -> ${JSON.stringify(rejected)}`);
+      assert.equal(rejected.code, 40001);
+    }
+    const foreign = await submit(ctx, beta, alphaAttempt, valid);
+    assert.equal(foreign.status, 403);
+
+    stage = 'manual whole-exam grading and different-payload idempotence';
+    const result = await submit(ctx, alpha, alphaAttempt, valid);
+    assert.equal(result.status, 200, JSON.stringify(result));
+    assert.equal(result.data.status, 'failed');
+    assert.equal(result.data.score, 45);
+    assert.equal(result.data.submission_method, 'manual');
+    assert.equal(result.data.grading_state, 'finalized');
+    assert.equal(result.data.legacy, true, 'the frozen v1 snapshot is adapted without rewriting history');
+    assert.ok(result.data.submitted_at);
+    assert.equal(result.data.items.length, 3);
+    assert.deepEqual((await submit(ctx, alpha, alphaAttempt, { arbitrary: 'ignored after first success' })).data, result.data);
+    const persisted = await ctx.queryTestDb('SELECT selected_option_ids,gained_score FROM exam_answer WHERE exam_record_id=?', [alphaAttempt.record_id]);
+    assert.equal(persisted.length, 3);
+    assert.ok(persisted.every((row) => row.selected_option_ids !== null));
+
+    stage = 'every item including explicit empty answers is persisted once';
+    const betaResult = await submit(ctx, beta, betaAttempt, wholeAnswers(betaAttempt, { single: ['A'], multiple: ['A'] }));
+    assert.equal(betaResult.status, 200, JSON.stringify(betaResult));
+    assert.equal(betaResult.data.score, 45);
+    const judgment = betaResult.data.items.find((item) => item.type === 'judgment');
+    assert.deepEqual(judgment.selected_option_ids, []);
+    const wrong = await ctx.request(beta, 'GET', '/me/wrong-questions');
+    assert.equal(wrong.status, 200, JSON.stringify(wrong));
+    assert.equal(wrong.data.total, 2, 'partial multiple and blank judgment remain reviewable wrong items');
+    assert.deepEqual(wrong.data.items.find((item) => item.type === 'judgment').selected_option_ids, []);
+    assert.deepEqual(wrong.data.items.find((item) => item.type === 'multiple').selected_option_ids, ['A']);
+
+    stage = 'read lazily finalizes pure timeout without submit';
+    // Simulate an active draft left by the previous server-draft version. It
+    // must be removed on expiry rather than treated as an implicit submission.
+    const [oldItem] = await ctx.queryTestDb('SELECT id,question_id FROM exam_record_question WHERE record_id=? LIMIT 1', [gammaAttempt.record_id]);
+    await ctx.queryTestDb('INSERT INTO exam_answer(exam_record_id,record_question_id,question_id,selected) VALUES (?,?,?,\'[0]\')', [gammaAttempt.record_id, oldItem.id, oldItem.question_id]);
+    await ctx.queryTestDb('UPDATE exam_record SET draft_revision=1,draft_saved_at=UTC_TIMESTAMP(3) WHERE id=?', [gammaAttempt.record_id]);
+    await ctx.queryTestDb('UPDATE exam_record SET deadline_at=DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 SECOND) WHERE id=?', [gammaAttempt.record_id]);
+    const timeoutView = await ctx.request(gamma, 'GET', `/me/exam-records/${gammaAttempt.record_id}`);
+    assert.equal(timeoutView.status, 200, JSON.stringify(timeoutView));
+    assertAttemptView(timeoutView.data, { status: 'timeout' });
+    await assertTimeoutFacts(ctx, gammaAttempt.record_id);
+    const timeoutResults = await Promise.all(Array.from({ length: 8 }, () => submit(ctx, gamma, gammaAttempt, wholeAnswers(gammaAttempt, { single: ['A'], multiple: ['A', 'B'], judgment: ['A'] }))));
+    for (const reply of timeoutResults) {
+      assert.equal(reply.status, 200, JSON.stringify(reply));
+      assertPureTimeout(reply.data);
+      assert.deepEqual(reply.data, timeoutResults[0].data);
+    }
+
+    stage = 'real MySQL concurrent different submissions freeze one result';
+    const concurrent = await start(ctx, beta, paperId);
+    const full = wholeAnswers(concurrent, { single: ['A'], multiple: ['A', 'B'], judgment: ['A'] });
+    const empty = wholeAnswers(concurrent);
+    const raced = await Promise.all(Array.from({ length: 16 }, (_, index) => submit(ctx, beta, concurrent, index % 2 ? full : empty)));
+    for (const reply of raced) {
+      assert.equal(reply.status, 200, JSON.stringify(reply));
+      assert.deepEqual(reply.data, raced[0].data);
+    }
+    assert.ok([0, 100].includes(raced[0].data.score));
+    const [rows] = await ctx.queryTestDb('SELECT COUNT(*) AS count,COUNT(DISTINCT record_question_id) AS distinct_count FROM exam_answer WHERE exam_record_id=?', [concurrent.record_id]);
+    assert.equal(Number(rows.count), 3);
+    assert.equal(Number(rows.distinct_count), 3);
+
+    stage = 'transaction rollback leaves no answers and permits a clean retry';
+    const rollback = await start(ctx, alpha, paperId);
+    const db = await connection(ctx);
+    try {
+      await db.query("CREATE TRIGGER exam_test_insert_failure BEFORE INSERT ON exam_answer FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='synthetic exam insert failure'");
+      try {
+        assert.equal((await submit(ctx, alpha, rollback, wholeAnswers(rollback))).status, 500);
+        const [facts] = await ctx.queryTestDb('SELECT status,(SELECT COUNT(*) FROM exam_answer WHERE exam_record_id=?) AS count FROM exam_record WHERE id=?', [rollback.record_id, rollback.record_id]);
+        assert.equal(facts.status, 'in_progress');
+        assert.equal(Number(facts.count), 0);
+      } finally { await db.query('DROP TRIGGER exam_test_insert_failure'); }
+    } finally { await db.end(); }
+    assert.equal((await submit(ctx, alpha, rollback, wholeAnswers(rollback))).status, 200);
+
+    stage = 'accepted time is taken after the record lock across deadline';
+    const crossing = await start(ctx, gamma, paperId);
+    const held = await connection(ctx);
+    let pending;
+    try {
+      await held.beginTransaction();
+      await held.execute('UPDATE exam_record SET deadline_at=DATE_ADD(UTC_TIMESTAMP(3),INTERVAL 1 SECOND) WHERE id=?', [crossing.record_id]);
+      pending = submit(ctx, gamma, crossing, wholeAnswers(crossing, { single: ['A'], multiple: ['A', 'B'], judgment: ['A'] }));
+      const observer = await connection(ctx);
+      try {
+        const until = Date.now() + 8000;
+        let waiting = false;
+        while (Date.now() < until) {
+          const [locks] = await observer.query('SELECT COUNT(*) AS count FROM performance_schema.data_lock_waits');
+          if (Number(locks[0].count) > 0) { waiting = true; break; }
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.equal(waiting, true, 'submission must reach the held MySQL record lock');
+      } finally { await observer.end(); }
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await held.commit();
+    } finally { await held.end(); }
+    const crossed = await pending;
+    assert.equal(crossed.status, 200, JSON.stringify(crossed));
+    assertPureTimeout(crossed.data);
+    await assertTimeoutFacts(ctx, crossing.record_id);
+    console.log('[training-submissions] mobile identity, strict stable-ID whole submission, local-only drafts, restart, real MySQL idempotence/rollback/deadline and pure timeout passed');
+  } catch (error) { error.message = `[training-submissions stage=${stage}] ${error.message}`; throw error; }
 }

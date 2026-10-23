@@ -19,8 +19,6 @@ const routes: RouteRecordRaw[] = [
       // ---- 学习端 ----
       { path: 'my/regulations', component: () => import('../views/employee/MyRegulations.vue'), meta: { title: '我的制度' } },
       { path: 'my/regulations/:id/read', component: () => import('../views/employee/Reading.vue'), meta: { title: '在线学习' } },
-      { path: 'my/exams', component: () => import('../views/employee/Exams.vue'), meta: { title: '我的考试' } },
-      { path: 'my/exams/:paperId', component: () => import('../views/employee/ExamRoom.vue'), meta: { title: '考试' } },
       { path: 'my/scores', component: () => import('../views/employee/MyScores.vue'), meta: { title: '我的成绩' } },
       { path: 'my/scores/:recordId', component: () => import('../views/employee/ScoreDetail.vue'), meta: { title: '成绩明细' } },
       // ---- 管理端 ----

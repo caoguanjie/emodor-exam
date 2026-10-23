@@ -10,6 +10,10 @@ export interface BusinessTab {
 
 const STORAGE_KEY = 're_admin_tabs';
 
+function retiredTabPath(path: string): boolean {
+  return isRetiredAdminPath(path) || /^\/my\/exams(?:\/|[?#]|$)/.test(path);
+}
+
 function restoreTabs(): BusinessTab[] {
   try {
     const parsed = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '[]');
@@ -17,7 +21,7 @@ function restoreTabs(): BusinessTab[] {
     const valid = parsed.filter((item): item is BusinessTab => (
       item && typeof item.path === 'string' && typeof item.title === 'string' && typeof item.closable === 'boolean'
     ));
-    const active = valid.filter((item) => !isRetiredAdminPath(item.path));
+    const active = valid.filter((item) => !retiredTabPath(item.path));
     if (active.length !== valid.length) sessionStorage.setItem(STORAGE_KEY, JSON.stringify(active));
     return active;
   } catch {
@@ -32,7 +36,7 @@ export const useTabsStore = defineStore('tabs', {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(this.tabs));
     },
     visit(path: string, title: string) {
-      if (!path || path.startsWith('/login') || path === '/change-password' || isRetiredAdminPath(path)) return;
+      if (!path || path.startsWith('/login') || path === '/change-password' || retiredTabPath(path)) return;
       const existing = this.tabs.find((tab) => tab.path === path);
       if (existing) existing.title = title || existing.title;
       else this.tabs.push({ path, title: title || '未命名页面', closable: true });

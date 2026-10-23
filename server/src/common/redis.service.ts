@@ -164,6 +164,19 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  /** Release only the reservation we own; a slow request must not delete its successor. */
+  async compareAndDelete(key: string, expected: string): Promise<boolean> {
+    const scoped = this.scopedKey(key);
+    return this.withFallback(
+      () => this.client!.eval('if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end', 1, scoped, expected).then((n) => Number(n) === 1),
+      () => {
+        if (this.memGet(scoped)?.value !== expected) return false;
+        this.mem.delete(scoped);
+        return true;
+      },
+    );
+  }
+
   async incr(key: string, ttlSeconds?: number): Promise<number> {
     const scoped = this.scopedKey(key);
     return this.withFallback(

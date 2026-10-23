@@ -91,8 +91,8 @@ const errorMessage = ref('');
 const query = reactive({ page: 1, page_size: 20, keyword: '', paper_id: '', source: '', difficulty: '', status: '', grading_state: '' });
 const requestScope = createLatestRequestScope();
 const statusOptions = [
-  { value: 'in_progress', label: '进行中' }, { value: 'submitted', label: '已交卷' },
-  { value: 'passed', label: '已通过' }, { value: 'failed', label: '未通过' }, { value: 'timeout', label: '超时交卷' },
+  { value: 'in_progress', label: '进行中' }, { value: 'submitted', label: '历史结果待确认' },
+  { value: 'passed', label: '已通过' }, { value: 'failed', label: '未通过' }, { value: 'timeout', label: '超时未交卷' },
 ];
 const gradingOptions = [
   { value: 'not_submitted', label: '未交卷' }, { value: 'finalized', label: '已出分' },

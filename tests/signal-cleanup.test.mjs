@@ -65,8 +65,8 @@ async function assertExited(pids) {
   assert.fail(`owned processes still alive: ${pids.join(', ')}`);
 }
 
-function startRunE2e(probeStage = undefined) {
-  const child = spawn(process.execPath, ['tests/run-e2e.mjs', '--ephemeral', '--suite', 'smoke'], {
+function startRunE2e(probeStage = undefined, suite = 'smoke') {
+  const child = spawn(process.execPath, ['tests/run-e2e.mjs', '--ephemeral', '--suite', suite], {
     cwd: ROOT,
     env: { ...process.env, ...(probeStage ? { A1_LIFECYCLE_PROBE: probeStage } : {}) },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
@@ -100,6 +100,23 @@ test('run-e2e SIGTERM during suite startup exits 143 and releases every owned pr
   const run = startRunE2e();
   try {
     const metadata = await waitForMessage(run.child, (message) => message?.type === 'owned-runtime' && message.stage === 'suite-child-started');
+    assert.ok(metadata.apiPid > 0);
+    assert.ok(metadata.mysqlPid > 0);
+    assert.ok(metadata.redisPid > 0);
+    assert.ok(metadata.suitePid > 0);
+    await stopAndAssertOwnedRuntime({ child: run.child, metadata, signal: 'SIGTERM', expectedCode: 143, output: run.getOutput });
+  } finally {
+    if (run.child.exitCode === null) {
+      run.child.kill('SIGKILL');
+      await waitForChildExit(run.child, 2_000).catch(() => undefined);
+    }
+  }
+});
+
+test('run-e2e SIGTERM during mobile-h5 Playwright exits 143 and releases the browser child', { concurrency: false }, async () => {
+  const run = startRunE2e(undefined, 'mobile-h5');
+  try {
+    const metadata = await waitForMessage(run.child, (message) => message?.type === 'owned-runtime' && message.stage === 'suite-child-started' && message.suiteFile === 'e2e/critical-timeout.spec.ts', 60_000);
     assert.ok(metadata.apiPid > 0);
     assert.ok(metadata.mysqlPid > 0);
     assert.ok(metadata.redisPid > 0);

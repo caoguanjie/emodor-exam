@@ -1,6 +1,6 @@
 -- =====================================================================
 -- EmodorRuleExam 制度学习及考试系统 · 数据库初始化脚本
--- 依据 docs/design/03-数据库设计.md 建表（当前 36 张业务表 + 1 张迁移元数据表，InnoDB + utf8mb4）
+-- 依据 docs/design/03-数据库设计.md 建表（当前 38 张业务表 + 1 张迁移元数据表，InnoDB + utf8mb4）
 -- 时间字段 DATETIME(3)；无数据库级外键（03 册 1.6 节，应用层维护）
 -- 枚举字段 VARCHAR + 应用层校验（03 册 1.7 节）
 -- 种子数据（根部门 / 超级管理员）由 database/seed.mjs 按环境变量生成，
@@ -42,18 +42,22 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   `phone`         VARCHAR(20)  NULL,
   `email`         VARCHAR(128) NULL,
   `avatar_id`     BIGINT UNSIGNED NULL COMMENT '受控媒体头像资源 id',
+  `occupation`    VARCHAR(64)  NULL COMMENT '学员自维护工种展示字段',
+  `gender`        VARCHAR(16)  NULL COMMENT 'male / female',
+  `birthday`      DATE         NULL COMMENT '学员自维护生日；不得晚于服务端业务日期',
   `status`        TINYINT      NOT NULL DEFAULT 1 COMMENT '1=启用（在职），0=停用',
   `auth_version`  INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '认证世代；密码/身份/管理权限变更递增',
   `force_password_change` TINYINT NOT NULL DEFAULT 0 COMMENT '1=当前口令必须改密；与登录统计分离',
   `login_count`   INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '真实密码成功登录次数；refresh 不计入',
-  `last_login_at` DATETIME(3)  NULL COMMENT '最后一次真实密码登录时间',
-  `last_login_ip` VARCHAR(64)  NULL COMMENT '最后一次真实密码登录来源 IP',
+  `last_login_at` DATETIME(3)  NULL COMMENT '最后一次成功登录时间；refresh 不更新',
+  `last_login_ip` VARCHAR(64)  NULL COMMENT '最后一次成功登录来源 IP',
   `roles_configured` TINYINT NOT NULL DEFAULT 0 COMMENT '1=已显式配置业务角色（含清空）',
   `created_at`    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at`    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_username` (`username`),
   UNIQUE KEY `uk_employee_no` (`employee_no`),
+  UNIQUE KEY `uk_sys_user_phone` (`phone`),
   KEY `idx_department_status` (`department_id`, `status`),
   KEY `idx_training_identity` (`category_id`, `source`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='员工账号';
@@ -104,6 +108,8 @@ CREATE TABLE IF NOT EXISTS `auth_session` (
   `id`           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `sid`          VARCHAR(64) NOT NULL COMMENT 'JWT 会话标识',
   `user_id`      BIGINT UNSIGNED NOT NULL COMMENT '会话用户',
+  `client`       VARCHAR(16) NOT NULL DEFAULT 'pc' COMMENT 'pc / mobile',
+  `auth_method`  VARCHAR(16) NOT NULL DEFAULT 'password' COMMENT 'password / sms / debug',
   `user_agent`   VARCHAR(255) NULL,
   `ip_address`   VARCHAR(64) NULL,
   `last_seen_at` DATETIME(3) NOT NULL,
@@ -116,6 +122,44 @@ CREATE TABLE IF NOT EXISTS `auth_session` (
   KEY `idx_auth_session_user_active` (`user_id`, `revoked_at`),
   KEY `idx_auth_session_last_seen` (`last_seen_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='认证会话';
+
+CREATE TABLE IF NOT EXISTS `learner_identity` (
+  `id`                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id`             BIGINT UNSIGNED NOT NULL COMMENT '实名学员（sys_user.id），应用层维护引用',
+  `id_fingerprint`      CHAR(64) NOT NULL COMMENT '证件号 HMAC 指纹；不保存明文',
+  `identity_encrypted`  TEXT NOT NULL COMMENT 'AES-256-GCM 加密的姓名与证件号',
+  `session_id`          CHAR(36) NOT NULL COMMENT '完成绑定的实名会话',
+  `provider_request_id` VARCHAR(128) NOT NULL COMMENT '脱敏供应商请求标识',
+  `verified_at`         DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_learner_identity_user` (`user_id`),
+  UNIQUE KEY `uk_learner_identity_fingerprint` (`id_fingerprint`),
+  UNIQUE KEY `uk_learner_identity_session` (`session_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='学员实名权威事实';
+
+CREATE TABLE IF NOT EXISTS `identity_verification_session` (
+  `id`                       CHAR(36) NOT NULL,
+  `user_id`                  BIGINT UNSIGNED NOT NULL COMMENT '当前学员（sys_user.id）',
+  `face_asset_id`            BIGINT UNSIGNED NOT NULL,
+  `id_card_portrait_asset_id` BIGINT UNSIGNED NOT NULL,
+  `id_card_emblem_asset_id`  BIGINT UNSIGNED NOT NULL,
+  `material_fingerprint`     CHAR(64) NOT NULL COMMENT '用户与三项资产的稳定摘要',
+  `status`                   VARCHAR(24) NOT NULL COMMENT 'created/provider_pending/provider_unknown/provider_verified/verified/rejected/expired',
+  `provider`                 VARCHAR(32) NOT NULL,
+  `provider_request_id`      VARCHAR(128) NULL,
+  `provider_result_encrypted` TEXT NULL COMMENT '先持久化的加密供应商结果；绑定恢复不重复调用供应商',
+  `provider_lease_until`     DATETIME(3) NULL COMMENT '跨实例调用 claim 到期时间',
+  `reason_code`              VARCHAR(64) NULL,
+  `expires_at`               DATETIME(3) NOT NULL,
+  `bound_at`                 DATETIME(3) NULL,
+  `bound_event_id`           CHAR(36) NULL COMMENT '事务性脱敏绑定审计事实',
+  `created_at`               DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at`               DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  KEY `idx_identity_session_user_created` (`user_id`, `created_at`),
+  KEY `idx_identity_session_material` (`user_id`, `material_fingerprint`),
+  UNIQUE KEY `uk_identity_session_bound_event` (`bound_event_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='学员实名核验会话';
 
 -- ---------------------------------------------------------------------
 -- 2. 培训身份与可恢复导入域（2 张）
@@ -261,6 +305,8 @@ CREATE TABLE IF NOT EXISTS `question` (
   `options`            JSON         NOT NULL COMMENT '选项数组 [{key,text}]',
   `answer`             JSON         NOT NULL COMMENT '正确答案（选项下标数组）',
   `analysis`           TEXT         NULL COMMENT '答案解析',
+  `content_schema_version` TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  `content_json`       JSON NULL,
   `score`              DECIMAL(5,2) NOT NULL COMMENT '题库建议分值；考试实际分值另存',
   `status`             VARCHAR(16)  NOT NULL DEFAULT 'pending' COMMENT 'pending / approved / rejected',
   `source`             VARCHAR(16)  NOT NULL COMMENT 'ai / manual / import',
@@ -298,6 +344,8 @@ CREATE TABLE IF NOT EXISTS `question_version` (
   `options`               JSON NOT NULL,
   `answer`                JSON NOT NULL,
   `analysis`              TEXT NULL,
+  `content_schema_version` TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  `content_json`          JSON NULL,
   `score_cents`           INT UNSIGNED NOT NULL COMMENT '题库建议分值，整数分；考试实际分值另存',
   `concept_id`            BIGINT UNSIGNED NULL,
   `regulation_id`         BIGINT UNSIGNED NULL,
@@ -472,6 +520,7 @@ CREATE TABLE IF NOT EXISTS `exam_answer` (
   `question_id`    BIGINT UNSIGNED NOT NULL COMMENT '来源题目；C2 临时 item ID 经 010 恢复',
   `record_question_id` BIGINT UNSIGNED NULL COMMENT '个人题单项；legacy 无题单记录为 NULL',
   `selected`       JSON         NULL COMMENT '考生所选选项（原始下标数组）；NULL/空=未作答',
+  `selected_option_ids` JSON NULL COMMENT 'v2 稳定选项 ID；旧记录保持 NULL',
   `is_correct`     TINYINT(1)   NULL COMMENT '1=全对，0=非全对（含漏选），NULL=未作答',
   `gained_score`   DECIMAL(5,2) NULL DEFAULT NULL COMMENT '客观题自动得分；未交卷为 NULL',
   `created_at`     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),

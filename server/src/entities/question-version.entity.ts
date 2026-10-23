@@ -1,5 +1,5 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
-import type { QuestionOption } from '../common/training-contracts';
+import type { QuestionContentV2, QuestionOption } from '../common/training-contracts';
 
 @Entity('question_version')
 @Index('uk_question_version_revision', ['questionId', 'revision'], { unique: true })
@@ -35,6 +35,12 @@ export class QuestionVersion {
 
   @Column({ type: 'text', nullable: true })
   analysis: string | null;
+
+  @Column({ name: 'content_schema_version', type: 'tinyint', unsigned: true, default: 1 })
+  contentSchemaVersion: number;
+
+  @Column({ name: 'content_json', type: 'json', nullable: true })
+  contentJson: QuestionContentV2 | null;
 
   @Column({ name: 'score_cents', type: 'int', unsigned: true })
   scoreCents: number;

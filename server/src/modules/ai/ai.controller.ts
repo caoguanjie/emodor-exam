@@ -259,7 +259,7 @@ export class AiController {
     assertRequestKeys(req.body, QUESTION_CREATE_KEYS, '题目请求');
     assertOptionKeys(req.body);
     return this.review.createManual(
-      { ...dto, options: dto.options.map((o, i) => ({ key: o.key || String.fromCharCode(65 + i), text: o.text })) },
+      { ...dto, options: dto.options?.map((o, i) => ({ key: o.key || String.fromCharCode(65 + i), text: o.text })) || [] },
       { id: user.id, name: user.username },
       req.ip || null,
     );

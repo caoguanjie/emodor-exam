@@ -80,6 +80,64 @@ function flattenNavigation(nodes, output = []) {
   return output;
 }
 
+async function assertLegacyPureTimeoutStatistics(ctx, admin, adminId) {
+  const tag = randomBytes(4).toString('hex');
+  const department = await ctx.queryTestDb('INSERT INTO sys_department(parent_id,name) VALUES (1,?)', [`超时统计隔离 ${tag}`]);
+  const regulation = await ctx.queryTestDb("INSERT INTO regulation(title,category,status,required_minutes,created_by) VALUES (?,'legacy','published',1,?)", [`旧制度超时口径 ${tag}`, adminId]);
+  const regulationId = String(regulation.insertId);
+  await ctx.queryTestDb('INSERT INTO regulation_scope(regulation_id,department_id,is_all) VALUES (?,?,0)', [regulationId, department.insertId]);
+  const paper = await ctx.queryTestDb("INSERT INTO exam_paper(regulation_id,business_scope,mode,title,total_score,pass_score,duration_minutes,max_attempts,partial_credit_ratio,status,created_by) VALUES (?,'regulation','fixed',?,100,60,30,3,0.5,'published',?)", [regulationId, `旧制度统计卷 ${tag}`, adminId]);
+  const users = [];
+  for (const [label, status, score, submittedAt, method, gradingState] of [
+    ['manual', 'passed', 70, '2026-10-21 08:10:00.000', 'manual', 'finalized'],
+    ['old_timeout', 'timeout', 80, '2026-10-21 08:31:00.000', 'timeout', 'finalized'],
+    ['pure_timeout', 'timeout', 0, null, null, 'not_submitted'],
+  ]) {
+    const user = await createUser(ctx, { label, name: `${label}_${tag}`, categoryId: null, source: 'institution', status: 1 });
+    users.push(user);
+    await ctx.queryTestDb('UPDATE sys_user SET department_id=? WHERE id=?', [department.insertId, user.id]);
+    await ctx.queryTestDb("INSERT INTO learning_record(user_id,regulation_id,version_id,total_seconds,max_scroll_percent,scroll_coverage,is_valid,valid_at) VALUES (?,?,1,60,100,'[1,1,1,1,1,1,1,1,1,1]',1,NOW(3))", [user.id, regulationId]);
+    await insertRecord(ctx, { paperId: paper.insertId, releaseId: null, categoryId: null, rule: null, userId: user.id, source: null, difficulty: null, attemptNo: 1, status, score, startedAt: '2026-10-21 08:00:00.000', deadlineAt: '2026-10-21 08:30:00.000', submittedAt, method, gradingState, gradedAt: submittedAt });
+  }
+  await ctx.queryTestDb("UPDATE exam_record SET regulation_id=?,snapshot_origin='legacy_unavailable' WHERE paper_id=?", [regulationId, paper.insertId]);
+  const overview = await ctx.request(admin.actor, 'GET', `/statistics/regulations/${regulationId}/overview`);
+  assert.equal(overview.status, 200, JSON.stringify(overview));
+  assert.equal(overview.data.assigned_count, 3);
+  assert.equal(overview.data.exam.participant_count, 2, 'pure timeout must not inflate the scored participant denominator');
+  assert.equal(overview.data.exam.passed_count, 2);
+  assert.equal(overview.data.exam.pass_rate, 1);
+  assert.equal(overview.data.exam.average_score, 75, 'historical graded timeout 80 remains; pure timeout placeholder 0 is excluded');
+  assert.deepEqual(overview.data.exam.score_distribution, { '[0,60)': 0, '[60,70)': 0, '[70,80)': 1, '[80,90)': 1, '[90,100]': 0 });
+  const departments = await ctx.request(admin.actor, 'GET', `/statistics/regulations/${regulationId}/departments`);
+  assert.equal(departments.status, 200);
+  assert.equal(departments.data.list.length, 1);
+  assert.equal(departments.data.list[0].participant_count, 2);
+  assert.equal(departments.data.list[0].average_score, 75);
+  const uncompleted = await ctx.request(admin.actor, 'GET', `/statistics/regulations/${regulationId}/uncompleted`);
+  assert.equal(uncompleted.status, 200);
+  assert.equal(uncompleted.data.list.length, 1);
+  assert.equal(String(uncompleted.data.list[0].user_id), String(users[2].id));
+  assert.equal(uncompleted.data.list[0].best_score, null, 'pure timeout is not a zero-score submitted result');
+  assert.equal(uncompleted.data.list[0].exam_status, null);
+  for (const [user, expected] of [[users[1], 80], [users[2], null]]) {
+    const personal = await ctx.request(admin.actor, 'GET', `/statistics/users/${user.id}`);
+    assert.equal(personal.status, 200);
+    const row = personal.data.exams.find((item) => String(item.paper_id) === String(paper.insertId));
+    assert.equal(row.best_score, expected);
+    assert.equal(row.attempts, 1, 'timeout history is retained even when excluded from scores');
+    assert.equal(row.records[0].status, 'timeout');
+  }
+  const exported = await ctx.request(admin.actor, 'GET', `/statistics/export?type=user_detail&regulation_id=${regulationId}`);
+  assert.equal(exported.status, 200);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(exported.body);
+  const rows = new Map();
+  workbook.getWorksheet('个人明细').eachRow((row, index) => { if (index > 1) rows.set(row.getCell('A').value, row); });
+  assert.equal(rows.get(users[2].real_name).getCell('J').value, '—');
+  assert.equal(rows.get(users[2].real_name).getCell('K').value, '未参考');
+  assert.equal(rows.get(users[1].real_name).getCell('J').value, 80, 'legacy graded timeout keeps its original frozen score in export');
+}
+
 export async function run(ctx) {
   ctx.reportOwnedRuntime?.({ stage: 'training-statistics-start', database: ctx.env.DB_DATABASE });
   const admin = await readyAdmin(ctx);
@@ -273,4 +331,5 @@ export async function run(ctx) {
   const routes = flattenNavigation(navigation.data).map((item) => item.route_path).filter(Boolean);
   assert.ok(routes.includes('/admin/dashboard'));
   assert.ok(routes.includes('/admin/training-statistics'));
+  await assertLegacyPureTimeoutStatistics(ctx, admin, adminRow.id);
 }

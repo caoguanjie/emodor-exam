@@ -1,6 +1,6 @@
 # 制度学习及考试系统（EmodorRuleExam）设计方案 · 总览索引
 
-> **一句话定位**：本文档是 EmodorRuleExam（制度学习及考试系统）全套设计方案的入口与一致性基准。2026-10-22 演示版已按批准的瘦身方案收口为三类客观题、自动评分、服务端计时/草稿/超时交卷和考试记录；图片作答、人工阅卷、实时监控、切屏采集，以及制度/员工/部门管理入口不再属于现行产品。题干、选项和解析中的受控图片仍保留。旧制度阅读、旧固定卷自动评分和原统计依赖的共享表与只读服务继续兼容。
+> **一句话定位**：本文档是 EmodorRuleExam（制度学习及考试系统）全套设计方案的入口与一致性基准。2026-10-22 演示版已按批准的瘦身方案收口为三类客观题、自动评分、服务端期限、本地最小草稿、主动整卷交卷及纯timeout和考试记录；图片作答、人工阅卷、实时监控、切屏采集，以及制度/员工/部门管理入口不再属于现行产品。题干、选项和解析中的受控图片仍保留。旧制度阅读、旧固定卷自动评分和原统计依赖的共享表与只读服务继续兼容。
 >
 > **权威链接**：现行范围以[演示版瘦身实施计划](../superpowers/plans/2026-10-22-training-demo-slimming.md)为准；此前的[融合设计](../superpowers/specs/2026-10-21-training-admin-integration-design.md)和[实施总计划](../superpowers/plans/2026-10-21-training-admin-integration.md)仅保留未被瘦身裁决否定的部分。源码、自动验证、PC 操作、真实设备和生产部署仍按不同证据等级登记。
 >
@@ -16,7 +16,7 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 
 管理端考试管理依次为“试题管理、试卷管理、试题导入、考试记录”。试题管理承载列表、人工录题、修改、审核、预览和已有单题重新生成；独立试题导入页提供“文件导入 / AI 生成”两个 Tab。普通文件导入沿用九列 Excel/TXT 预检与 approved 确认；AI Tab 上传一次性参考题，每题最多生成 easy/hard 两题，预览修改并选行确认后才创建 pending 版本，人工审核后入卷。参考文件与参考正文不留存，生成题以 `source=ai` 且无制度版本入库。
 
-资料管理和资料 AI 的兼容后端仍以“资料/资料版本”提供 PDF/Word 解析，并通过 `material_id + material_version_id` 生成 single/multiple；底层复用 `regulation/regulation_version` 保存真实来源与旧数据，试题列表已移除相应整批操作入口。旧制度固定卷仍要求「有效学习」双条件；新培训考试默认关闭学习门槛。学习侧继续以心跳、失焦暂停、服务端容差和滚动位图计时；考试侧继续以服务端截止时间、持久草稿、题目/选项乱序、幂等主动交卷和超时终结保障一致性。training 最终成绩由 `SubmissionService.gradeSubmissionSnapshot` 在终结事务内自动计算并保存；旧固定卷继续使用 `GradingService`。记录列表、详情和结果保持只读。
+资料管理和资料 AI 的兼容后端仍以“资料/资料版本”提供 PDF/Word 解析，并通过 `material_id + material_version_id` 生成 single/multiple；底层复用 `regulation/regulation_version` 保存真实来源与旧数据，试题列表已移除相应整批操作入口。旧制度固定卷仍要求「有效学习」双条件；新培训考试默认关闭学习门槛。学习侧继续以心跳、失焦暂停、服务端容差和滚动位图计时；新培训移动考试以权威实名、稳定item/option ID、受限Tiptap题面、不可变题单/期限、本地草稿及幂等主动整卷保障一致性；不提供服务端draft/heartbeat。仅锁后accepted_at严格早于deadline的主动交卷由SubmissionService按冻结快照同事务评分；到期统一纯timeout，不提交、不评分、不生成答案。旧/exams数字及暂存协议只作制度固定卷兼容，到期同样纯timeout；历史已评分timeout保持只读。记录列表、详情和结果保持只读。
 
 系统底层仍识别 super_admin、regulation_admin、employee 三类兼容身份；现行管理端通过 `POST /admin/administrators` 创建管理员并显式提交 `role_ids`，通过学员管理维护无部门学员。部门、员工和制度 CRUD 不再提供菜单或控制器。
 
@@ -25,28 +25,28 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 1. **制度数字化**：文件「上传即可读」，版本可追溯，发布范围可按部门圈定或面向全员。
 2. **出题低成本、质量可控**：AI 解读制度自动生成题目，管理员审核通过后才可入卷发布。
 3. **学习真实性可保障**：以「时长 + 滚动覆盖」双条件判定有效学习，辅以心跳、失焦暂停、容差校验、分段位图四道防线防止刷时长。
-4. **考试公平可量化**：资格校验、试题与选项乱序、服务端限时、超时自动交卷与规则化自动评分。
+4. **考试公平可量化**：实名/资格、冻结题单与乱序、稳定选项ID、服务端期限、主动整卷及规则化评分；到期只收口未交卷timeout。
 5. **落实情况可运营**：制度 / 部门 / 个人三维统计与 Excel 导出，未完成人员清单直达跟进闭环。
 
 ### 1.3 当前基线与批准增量
 
 | 范围 | 当前实现基线 | 已批准目标（计划，非当前部署声明） |
 |---|---|---|
-| 业务边界 | 制度学习、AI 出题审核、旧固定卷员工考试、原制度/部门/个人统计；A1—C6 已有源码证据的培训管理增量 | 单家机构 PC 管理端与完整后端；C7 自动验收收口、手动边界单列；不迁移旧站数据，独立 H5 下一期；不建设租户、班级、支付或证书平台 |
-| 学习 | 制度阅读双条件；B1 课程/章节/视频课时与不可变内容版本；B2 视频 30 秒心跳、完整服务端 elapsed 跳播校验、45 秒单次确认上限、2 秒位置容差、95% 去重覆盖、DB 断点恢复、本人历史与当前应学汇总 | 独立 H5 与真实手机播放下一期；新培训考试默认无学习门槛 |
+| 业务边界 | 制度学习、AI 出题审核、旧固定卷员工考试、原制度/部门/个人统计；A1—C6 已有源码证据的培训管理增量 | 单家机构 PC 管理端与完整后端；C7 自动验收收口、手动边界单列；不迁移旧站数据，学员H5已实现至Gate I，最终验收分级登记；不建设租户、班级、支付或证书平台 |
+| 学习 | 制度阅读双条件；B1 课程/章节/视频课时与不可变内容版本；B2 视频 30 秒心跳、完整服务端 elapsed 跳播校验、45 秒单次确认上限、2 秒位置容差、95% 去重覆盖、DB 断点恢复、本人历史与当前应学汇总 | mobile H5课程/视频已实现并完成Gate H1自动验证；真实手机/微信播放另验，新培训考试默认无学习门槛 |
 | 学员与题库 | A2 学员类别与 `institution/external` 来源；三类客观题、三难度、可选考点与不可变版本；Excel/TXT 模板、预检与幂等确认；发布候选版本与个人题单 | 试题导入双 Tab；参考题 AI 只生成 easy/hard，确认后 pending，无永久资料来源；兼容资料 AI 仍使用 `material_id + material_version_id`；题干/选项/解析可使用受控图片 |
-| 考试与成绩 | 旧固定卷执行链保持；发布/个人快照；持久草稿及主动/超时统一终结器；三类客观题自动评分、统一结果、历史与错题 | 最终总分只读，不提供图片答案或人工改分 |
+| 考试与成绩 | legacy数字执行协议兼容；发布/个人快照、稳定ID、本地草稿、主动整卷评分及纯timeout；统一结果、历史与错题 | 最终总分只读，不提供图片答案或人工改分 |
 | 统计与记录 | 原统计后端继续兼容但管理菜单隐藏；考试记录列表、详情与结果保留；培训统计不再含待人工评分或切屏指标 | 不提供实时监控、连接状态或切屏采集 |
 
-**实现状态规则**：未具备源码与验收证据的能力不得写成已验收。当前源码定义 36 张业务表，另有 `schema_migration`，合计 37 张物理表；`exam_review_event` 已从现行 schema 删除。迁移 `015_demo_slimming.sql` 以保留历史数据的方式收缩字段、枚举、权限和菜单；旧迁移仍作为不可变升级历史保留。版本化迁移用于升级当前 RuleExam 数据，不是旧站数据搬迁。
+**实现状态规则**：未具备源码与验收证据的能力不得写成已验收。当前源码定义38张业务表，另有schema_migration，合计39张物理表；迁移000—021，021增5兼容列、不增表；`exam_review_event` 已从现行 schema 删除。迁移 `015_demo_slimming.sql` 以保留历史数据的方式收缩字段、枚举、权限和菜单；旧迁移仍作为不可变升级历史保留。版本化迁移用于升级当前 RuleExam 数据，不是旧站数据搬迁。
 
 菜单前向迁移 `017_exam_question_navigation.sql` 按 route_path 复用试题管理、试卷管理、试题导入、考试记录的既有 ID，考试目录按语义定位，不假定为 ID 3；只规范四个标准入口的名称、权限和排序，保留其它自定义菜单及历史 checksum。试题管理路由允许 `questions:read OR questions:write`，试题导入要求 `questions:write`；只缓存导入页，试题管理返回时重新加载，确保新导入题可见。
 
 ### 1.4 A1—C7 模块与验收进度映射
 
-当前进度：A1—A5、B1—B4、C1/C2 中未被瘦身裁决取消的共享基础继续保留。考试侧保留发布快照、原子开考、个人题单、补考冻结归属、旧固定客户端适配、确认草稿、主动/超时统一终结、自动评分、统一结果、本人历史与错题；管理侧保留 `/admin/exam-records`、`/admin/exam-records/{id}` 与 `/admin/exam-records/{id}/result` 三个只读入口。原统计服务继续作为兼容后端存在，但不在五个根菜单中展示。
+当前进度：A1—A5、B1—B4、C1/C2 中未被瘦身裁决取消的共享基础继续保留。考试侧保留发布快照、原子开考、稳定ID个人题单、补考冻结归属、旧固定客户端适配、本地草稿、主动整卷评分、纯timeout、统一结果/历史/错题；管理侧保留 `/admin/exam-records`、`/admin/exam-records/{id}` 与 `/admin/exam-records/{id}/result` 三个只读入口。原统计服务继续作为兼容后端存在，但不在五个根菜单中展示。
 
-瘦身后的自动证据单独登记：smoke 当前为 85/85；隔离 full-flow 已走通资料上传解析、Mock AI 生成审核、三类客观题发布开考、草稿恢复、主动/超时终结与自动评分。此前 C7 的图片阅卷、监控等结果只属于瘦身前历史，不再作为现行验收项。自动回归、真实 PC、独立 H5、外部 AI 与部署验收继续分开登记，不把自动证据写成全场景人工验收或已部署。
+自动证据按阶段登记：此前C7/full-flow是当时协议的历史验收，不再用旧服务端草稿或超时评分证明现行行为。Task13/14 / Gate H2已完成稳定ID、本地草稿、主动整卷、纯timeout的自动验证、隔离数据库竞争与独立审查；Task15 / Gate I已完成原子组合构建及独立审查。Task16最终链验收另记；真实后端浏览器全链、真实短信/腾讯、真实弱网、微信开发者工具/真机及Docker/Nginx/生产部署不得由本册同步推定通过。
 
 | owner 任务 | 目标模块/链路 | 必须留下的验收证据 |
 |---|---|---|
@@ -58,11 +58,11 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | B1—B2 | 课程/视频课时与可恢复学习 | 版本、下架、重放/乱序/跳播、95% 覆盖、零必学课时口径 |
 | B3—B4 | 三类客观题版本题库与 Excel/TXT 导题 | 难度/题型/考点校验；资料 AI 绑定真实版本，参考题 AI 无永久来源且确认后 pending；预览确认与批次幂等 |
 | C1—C2 | 固定/随机发布、抽题、个人题单、旧卷适配 | 本机构初级/外来高级；同考点不重复；发布/开考快照不可变；三次机会含首次 |
-| C3 | 持久草稿、主动/超时交卷 | 截止前确认稿恢复；不下发答案解析；主动/超时只结算一次 |
+| C3 / Task13/14 | 本地草稿、主动整卷与纯timeout | 联网核验同attempt后恢复本地稳定ID答案；截止前主动受理才评分，到期不提交/不评分；终态幂等 |
 | C4 | 自动评分、历史结果、错题 | 三类客观题自动结算；最终总分只读；本人和管理员结果口径一致 |
 | C5 | 考试记录 | 管理员只读列表、详情和结果；不采集连接、设备或切屏数据 |
 | C6 | 培训统计与兼容统计 | 只统计 finalized 记录；移除待人工评分与切屏指标；原统计后端保留但隐藏菜单 |
-| C7 | 瘦身后自动验证 | smoke 84/84 与 full-flow 分开登记；手动、真机、外部 AI 和部署边界不虚构 |
+| C7 | 瘦身后自动验证 | smoke与full-flow按实际执行证据分开登记；手动、真机、外部 AI 和部署边界不虚构 |
 
 ---
 
@@ -75,12 +75,12 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | — | README.md（本文档） | 总览索引与全套文档的一致性基准（技术栈 / 术语 / 表名 / 枚举 / 模块名） | 全体读者 |
 | 01 | [01-需求分析.md](01-需求分析.md) | 业务背景、角色用例与功能 / 非功能需求的完整定义，是全部设计的源头 | 管理者、产品、评审者 |
 | 02 | [02-系统架构.md](02-系统架构.md) | 总体架构分层、技术栈落地方式与 Docker Compose 部署拓扑 | 开发人员、架构评审者 |
-| 03 | [03-数据库设计.md](03-数据库设计.md) | 当前 36 张业务表、迁移元数据表、完整字段/索引，以及共享兼容层边界 | 后端开发、评审者 |
+| 03 | [03-数据库设计.md](03-数据库设计.md) | 当前38张业务表、1张迁移元数据表、完整字段/索引，以及共享兼容层边界 | 后端开发、评审者 |
 | 04 | [04-API设计.md](04-API设计.md) | `/api/v1` REST 接口（含课程/视频、三类客观题题库、作答、自动评分、考试记录和培训统计）、统一信封与错误码 | 前后端开发 |
 | 05 | [05-模块设计.md](05-模块设计.md) | 六大模块的职责边界、内部组成，以及自动评分、记录与统计链路 | 开发人员 |
 | 06 | [06-关键流程.md](06-关键流程.md) | 端到端关键流程（解析、AI 出题审核、学习判定、考试、评分统计）的时序与状态流转 | 开发人员、评审者 |
 | 07 | [07-安全与非功能设计.md](07-安全与非功能设计.md) | 认证授权、防作弊纵深、数据安全，以及性能 / 可用性等非功能指标 | 评审者、运维 |
-| 旧证据 | [00-旧系统-培训机构端需求分析.md](00-旧系统-培训机构端需求分析.md)<br>[00-旧系统-学员移动端H5需求分析.md](00-旧系统-学员移动端H5需求分析.md) | 旧系统培训机构端与学员移动端 H5 的需求/证据盘点；作为本期融合和下一期 H5 的参考，不代表本期已实现 | 产品、前端、测试 |
+| 旧证据 | [00-旧系统-培训机构端需求分析.md](00-旧系统-培训机构端需求分析.md)<br>[00-旧系统-学员移动端H5需求分析.md](00-旧系统-学员移动端H5需求分析.md) | 旧站取证与新增学员目标分开标记；学员H5现行范围按用户决定/Exam Contract执行，历史观察不冒充验收 | 产品、前端、测试 |
 
 ---
 
@@ -119,22 +119,22 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | 视频学习记录与会话 | video_learning_record 按用户+不可变课时版本保存有效时长、去重覆盖、断点与完成；video_learning_session 保存递增序号及服务端锚点，重启可恢复。 |
 | 心跳上报 | 默认每 30 秒上报。制度阅读携带滚动段位并用 Redis 累计；视频携带递增 seq、position_ms 与播放状态并逐拍落库。视频先按完整服务端间隔 +2 秒判断跳播，再把单次确认封顶 45 秒；暂停/后台不计。 |
 | 滚动覆盖率 | 阅读内容按固定 10 段划分、以 JSON 位图记录的已读到位情况（learning_record.scroll_coverage）；其中底部段必须被覆盖，是「有效学习」的必要条件之一。 |
-| 考试资格 | legacy 制度固定卷仍必须完成有效学习并返回原差距详情。培训卷 C2 首次开考校验账号、发布、启用类别及首次来源/类别匹配，默认不检查学习门槛；有效 active 恢复优先，撤回只阻新开。 |
+| 考试资格 | legacy 制度固定卷仍必须完成有效学习并返回原差距详情。新training移动首次开考校验mobile employee/权威实名、发布、启用类别及首次来源/类别匹配，默认不检查学习门槛；有效 active 恢复优先，撤回只阻新开。 |
 | 试题 | 题库稳定身份（question）与不可变 question_version。支持 single/multiple/judgment、三难度、可选考点及 `ai/manual/import` 来源；普通文件导入直接 approved，参考题 AI 只产生 easy/hard 并在确认时 pending、无制度版本，不伪造审核人/时间。发布冻结真实 current approved version，后续修订不改写 release；旧题未知类别、难度与审核事实保持未知。 |
 | 试卷 | `exam_paper.business_scope` 区分制度 `regulation` 与新 `training`。培训卷支持 fixed/random、类别、可选制度筛选、课程说明关联和 10000 整数分规则；升级后新发布的制度卷和培训卷都通过 paper_release/paper_release_question 不可变冻结，所有新 fixed 发布按 `concept_id ?? question_id` 禁止重复考点，改动需复制新草稿。真正升级前 published 无 release 的制度卷保持兼容。 |
 | 试卷发布版本 | `paper_release` 冻结 RuleSnapshot、类别及关联条件；`paper_release_question` 冻结真实题目版本、考点、实际分值与完整内容。制度旧题可保留 `categoryId=null/difficulty=unknown`。撤回/归档或复制不删除、不改写源快照；题图读取按固定草稿、发布快照或随机草稿完整校验后的当前候选池做精确版本与字段授权，不回读替代版本，也不为预览伪造发布引用。 |
 | 个人考试归属与题单 | `exam_assignment` 冻结首次 release/source/category/difficulty/rule；补考沿用。`exam_record_question` 按每次作答冻结题面、实际分值、显示顺序和显示到原始选项映射；新答题主键是 `item_id`。 |
-| 考试记录 | 用户对某试卷的一次完整作答过程（exam_record），保存服务端截止、确认草稿版本、交卷方式、自动结算状态与得分。主动与超时入口共用同一 finalizer；`ExamRecordsService` 只投影管理端记录列表和详情。 |
-| 答题明细 | `exam_answer` 保存客观题确认答案及自动判分结果；不保存答题附件、人工评语或评分版本，最终结算后只读。 |
-| 自动评分 | training 的 single/multiple/judgment 按冻结规则由 `SubmissionService.gradeSubmissionSnapshot` 在终结事务内评分并保存；旧固定卷继续使用 `GradingService`。提交成功即进入 finalized，不存在待人工评分状态。 |
+| 考试记录 | 用户对某试卷的一次完整作答过程（exam_record），保存冻结期限、交卷方式、评分状态与得分；draft_*仅旧兼容列。主动受理才评分，到期进入不评分的纯timeout；`ExamRecordsService` 只投影管理端记录列表和详情。 |
+| 答题明细 | exam_answer只在新移动主动受理评分时保存稳定selected_option_ids及逐题得分，新纯timeout不创建答案；selected保留legacy兼容；不保存答题附件、人工评语或评分版本，最终结算后只读。 |
+| 自动评分 | training 的 single/multiple/judgment 按冻结规则由 `SubmissionService.gradeSubmissionSnapshot` 在终结事务内评分并保存；旧固定卷继续使用 `GradingService`。仅主动受理成功进入manual/finalized；新纯timeout为not_submitted且方式/提交时间/评分时间均NULL。不存在待人工评分状态。 |
 | 统一结果、历史与错题 | `ExamHistoryService` 从冻结题单投影交卷回执、本人/管理员结果与历史；错题仅包含 finalized 记录中的非满分题。 |
 | 培训统计与分榜 | C6 实时读取当前应考集合和历史开考事实；成绩只取当前 release、相同冻结规则、指定难度、finalized 的个人最高分，同分并列；排名 Excel 使用同一筛选与当前分页。 |
-| 试题与选项乱序 | 同一试卷对每位考生呈现时，题目顺序与选项顺序均随机打乱以防抄袭；判分始终以题目原始答案语义为准。 |
+| 试题与选项乱序 | 同一试卷对每位考生呈现时，题目顺序与选项顺序均随机打乱以防抄袭；新v2按冻结稳定answer_option_ids评分，乱序不改变ID；legacy数字下标仅按旧冻结快照适配。 |
 | 补考 | 员工未通过考试后的再次作答机制；次数受试卷 max_attempts 限制（默认 3 次），同一试卷多次作答取最高分作为最终成绩。 |
 
 ### 3.3 核心实体清单
 
-当前源码有 36 张业务表，表名及其字段必须与 migration、`database/init.sql`、entities 和 [03-数据库设计.md](03-数据库设计.md) 同步；另有不计入业务表清单的 `schema_migration` 元数据表，合计 37 张物理表。旧制度、学习和固定卷依赖的共享表继续保留，瘦身迁移删除 `exam_review_event` 并收缩考试/题库专用字段。
+当前源码有38张业务表，表名及其字段必须与 migration、`database/init.sql`、entities 和 [03-数据库设计.md](03-数据库设计.md) 同步；另有不计入业务表清单的 `schema_migration` 元数据表，合计39张物理表。旧制度、学习和固定卷依赖的共享表继续保留，瘦身迁移删除 `exam_review_event` 并收缩考试/题库专用字段。
 
 **组织权限域（2 张）**
 
@@ -142,6 +142,13 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 |---|---|
 | sys_department | 部门树结构（parent_id 自关联），是员工归属、发布范围与统计维度的组织基础。 |
 | sys_user | 员工账号与身份（用户名、密码哈希、姓名、工号、部门、角色、状态等），承载登录认证与 RBAC 角色信息。 |
+
+**学员实名域（2张，020）**
+
+| 表名 | 一句话职责 |
+|---|---|
+| learner_identity | 已验证的学员实名事实；姓名/证件加密，证件HMAC查重，不改变来源、类别或历史考试。 |
+| identity_verification_session | 三图持久核验会话、claim/lease、受控Provider结果与恢复绑定；不提供运行时mock/test-pass。 |
 
 **制度域（3 张）**
 
@@ -162,7 +169,7 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 
 | 表名 | 一句话职责 |
 |---|---|
-| question | 试题稳定身份及 legacy 兼容投影：三类客观题、难度、类别、可选考点、当前版本指针，并保留旧固定卷仍读取的题干/选项/答案/分值等字段。 |
+| question | 试题稳定身份及 legacy 兼容投影：三类客观题、难度、类别、可选考点、当前版本指针与021的content_schema_version/content_json，并保留旧固定卷兼容投影。 |
 | question_concept | 考点目录：在培训类别与题型范围内名称唯一，可被试题版本选择性关联。 |
 | question_version | 不可变试题版本：保存题型、难度、题干、选项、答案、解析、分值、考点、制度/制度版本来源、页组与审核快照；同题修订只追加 revision。 |
 | exam_paper | 试卷配置：保留 legacy 制度固定卷；新增 business_scope/mode/category/requires_learning、可选制度筛选、课程说明关联与随机规则。 |
@@ -170,9 +177,9 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | paper_release | 不可变发布主档：按试卷递增版次，冻结业务范围、类别、模式、规则、学习门槛与条件关联。 |
 | paper_release_question | 不可变发布题池：冻结题目/版本/考点、题型/难度、实际整数分与完整内容 JSON。 |
 | exam_assignment | 同一试卷同一学员的冻结归属：首次 release、来源、类别、难度及规则；补考不重算。 |
-| exam_record | 考试记录：用户第 N 次作答、冻结归属/规则、唯一活动 assignment、状态、确认草稿版本、服务端截止、交卷方式、自动结算状态与得分。 |
+| exam_record | 考试记录：用户第 N 次作答、冻结归属/规则、唯一活动 assignment、状态、服务端截止、交卷方式、自动结算状态与得分；draft_*只作legacy兼容。 |
 | exam_record_question | 本次个人题单：冻结题目版本内容、实际分值、显示位置与选项映射；题干/选项题图按 item 精确授权。 |
-| exam_answer | 持久确认答案与自动判分快照：保存客观选择、判对和得分。 |
+| exam_answer | 主动整卷最终答案与评分：v2保存selected_option_ids；legacy selected兼容；新纯timeout不创建行。 |
 
 **培训身份与导入域（2 张，A2）**
 
@@ -275,12 +282,12 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | exam_paper.business_scope | regulation / training | 制度专项 legacy 卷 / 新培训发布卷 |
 | exam_paper.mode | fixed / random | 固定题单 / 按规则随机题池 |
 | exam_paper.status | draft / published / withdrawn / archived | 试卷状态；legacy 不使用 withdrawn |
-| exam_record.status | in_progress / submitted / passed / failed / timeout | 考试状态：进行中 / 已交卷 / 已通过 / 未通过 / 超时自动交卷 |
+| exam_record.status | in_progress / submitted / passed / failed / timeout | 进行中 / 历史已交卷待确认 / 已通过 / 未通过 / 超时未交卷；旧已评分timeout保留历史事实 |
 | exam_record.grading_state | not_submitted / finalized | 未交卷 / 已自动最终结算 |
-| exam_record.submission_method | manual / timeout / NULL | 主动交卷 / 服务端超时终结 / legacy 历史未知 |
+| exam_record.submission_method | manual / timeout / NULL | 主动交卷 / 历史已评分超时方式 / 新纯timeout未交卷或legacy历史方式未知 |
 | media_asset.status | processing / ready / failed / deleting | 媒体状态；`deleting` 仅供物理删除失败重试，公开 API 按不存在处理 |
 
-> 上表登记当前 schema 枚举；固定字典只是显示镜像，不是新的语义来源。assignment/record 的 `mixed/unknown` 是历史冻结展示事实，不扩展题库可维护难度。新终结记录的 `status` 只写 passed/failed，主动/超时由 `submission_method` 区分；submitted/timeout status 仅兼容历史值。
+> 上表登记当前 schema 枚举；固定字典只是显示镜像，不是新的语义来源。assignment/record 的 `mixed/unknown` 是历史冻结展示事实，不扩展题库可维护难度。新主动交卷写passed/failed + manual + finalized；新纯timeout写timeout + submission_method=NULL + not_submitted，score=0且submitted_at/graded_at=NULL，不评分、不生成答案、不进finalized成绩/排名分母。NULL不能单独判断legacy。历史submitted待确认，历史已评分timeout只读兼容并保留冻结结果/题图权限；其判据为finalized且score与submitted_at已知。
 
 ---
 

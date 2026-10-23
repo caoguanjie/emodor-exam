@@ -232,22 +232,100 @@ describe('course lifecycle', () => {
     expect(service.dataSource.transaction).not.toHaveBeenCalled();
   });
 
-  it('returns an empty assigned page for an external learner without querying courses', async () => {
-    const createQueryBuilder = vi.fn();
+  it.each([
+    { source: 'institution', categoryId: '7' },
+    { source: 'external', categoryId: '7' },
+    { source: 'institution', categoryId: null },
+    { source: null, categoryId: null },
+  ])('lets an enabled learner browse every published category: %j', async (profile) => {
+    const rows = [
+      { id: '1', title: '普通课程', categoryId: '7', status: 'published', isRecommended: 0, sortOrder: 0 },
+      { id: '2', title: '其他类别推荐', categoryId: '8', status: 'published', isRecommended: 1, sortOrder: 9 },
+      { id: '3', title: '草稿', categoryId: '7', status: 'draft', isRecommended: 1, sortOrder: 0 },
+      { id: '4', title: '下架', categoryId: '8', status: 'offline', isRecommended: 1, sortOrder: 0 },
+      { id: '5', title: '同排序新课程', categoryId: '8', status: 'published', isRecommended: 0, sortOrder: 0 },
+    ];
+    const conditions: Record<string, unknown> = {};
+    const order: [string, string][] = [];
+    let offset = 0;
+    let limit = 20;
+    const filtered = () => rows.filter((row) => (!conditions.status || row.status === conditions.status)
+      && (!conditions.categoryId || row.categoryId === conditions.categoryId));
+    const qb: any = {
+      where: (_sql: string, params: object) => { Object.assign(conditions, params); return qb; },
+      andWhere: (_sql: string, params: object) => { Object.assign(conditions, params); return qb; },
+      orderBy: (field: string, direction: string) => { order.push([field, direction]); return qb; },
+      addOrderBy: (field: string, direction: string) => { order.push([field, direction]); return qb; },
+      skip: (value: number) => { offset = value; return qb; },
+      take: (value: number) => { limit = value; return qb; },
+      getCount: async () => filtered().length,
+      getMany: async () => filtered().sort((a, b) => {
+        for (const [field, direction] of order) {
+          const key = ({ 'course.is_recommended': 'isRecommended', 'course.sort_order': 'sortOrder', 'course.id': 'id' } as const)[field];
+          const delta = Number(a[key]) - Number(b[key]);
+          if (delta) return direction === 'DESC' ? -delta : delta;
+        }
+        return 0;
+      }).slice(offset, offset + limit),
+    };
+    const user = { id: '31', status: 1, role: 'employee', identityStatus: 'unverified', ...profile };
     const service = courseService({
-      userRepo: { findOne: vi.fn().mockResolvedValue({ id: '31', status: 1, source: 'external', categoryId: '7' }) },
-      courseRepo: { createQueryBuilder },
+      userRepo: { findOne: async () => user },
+      courseRepo: { createQueryBuilder: () => qb, findOne: async () => rows[1] },
+      chapterRepo: { find: async () => [] },
+      lessonRepo: { find: async () => [], createQueryBuilder: () => ({
+        select() { return this; }, addSelect() { return this; }, where() { return this; },
+        andWhere() { return this; }, groupBy() { return this; }, getRawMany: async () => [],
+      }) },
     });
-    await expect(service.visibleCourses('31', 2, 20)).resolves.toEqual({ items: [], total: 0, page: 2, page_size: 20 });
-    expect(createQueryBuilder).not.toHaveBeenCalled();
+
+    const page = await service.visibleCourses('31', 1, 2);
+    expect(page).toMatchObject({ total: 3, page: 1, page_size: 2 });
+    expect(page.items.map((item) => item.id)).toEqual(['2', '5']);
+    await expect(service.learnerDetail('31', '2')).resolves.toMatchObject({ id: '2', status: 'published', category_id: '8' });
   });
 
-  it('rejects a published course from another training category', async () => {
+  it.each(['draft', 'offline'])('does not expose a %s course detail', async (status) => {
     const service = courseService({
-      userRepo: { findOne: vi.fn().mockResolvedValue({ id: '31', status: 1, source: 'institution', categoryId: '7' }) },
-      courseRepo: { findOne: vi.fn().mockResolvedValue({ id: '1', status: 'published', categoryId: '8' }) },
+      userRepo: { findOne: async () => ({ id: '31', status: 1, source: 'external', categoryId: null }) },
+      courseRepo: { findOne: async () => ({ id: '1', status, categoryId: '8' }) },
     });
     await expect(service.learnerDetail('31', '1')).rejects.toMatchObject({ httpStatus: 403 });
+  });
+
+  it('keeps disabled learners out of course list and detail', async () => {
+    const service = courseService({
+      userRepo: { findOne: async () => ({ id: '31', status: 0, source: 'institution', categoryId: '7' }) },
+      courseRepo: { findOne: async () => ({ id: '1', status: 'published', categoryId: '7' }) },
+    });
+    await expect(service.visibleCourses('31')).resolves.toEqual({ items: [], total: 0, page: 1, page_size: 20 });
+    await expect(service.learnerDetail('31', '1')).rejects.toMatchObject({ httpStatus: 403 });
+  });
+
+  it('uses published required videos as the external learner progress denominator', async () => {
+    const service = courseService({
+      userRepo: { findOne: async () => ({ id: '31', status: 1, source: 'external', categoryId: '7' }) },
+      courseRepo: { findOne: async () => ({ id: '1', status: 'published', categoryId: '7' }) },
+      lessonRepo: { find: async () => [] },
+    });
+    await expect(service.requiredVideoLessons('31', '1')).resolves.toEqual({ assigned: true, lessons: [] });
+  });
+
+  it('allows published course cover reads without broadening video authorization', async () => {
+    const policies = new Map<string, any>();
+    const service = courseService({
+      access: { permissions: async () => [] },
+      media: { registerOwnerPolicy: (owner: string, policy: any) => policies.set(owner, policy) },
+      userRepo: { findOne: async () => ({ id: '31', status: 1, source: 'external', categoryId: null }) },
+      courseRepo: { findOne: async () => ({ id: '1', status: 'published', categoryId: '7' }) },
+      versionRepo: { findOne: async () => ({ id: '51', lessonId: '11' }) },
+      lessonRepo: { findOne: async () => ({ id: '11', courseId: '1' }) },
+    });
+    service.onModuleInit();
+    await expect(policies.get('training_course_cover').authorizeRead('31', '1')).resolves.toBe(true);
+    await expect(policies.get('lesson_version_video').authorizeRead('31', '51')).resolves.toBe(false);
+    service.access.permissions = async () => { throw new Error('permission lookup unavailable'); };
+    await expect(policies.get('lesson_version_video').authorizeRead('31', '51')).resolves.toBe(false);
   });
 
   it('returns the immutable current lesson version with string IDs', async () => {

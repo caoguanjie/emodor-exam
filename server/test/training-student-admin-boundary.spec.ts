@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { UsersService } from '../src/modules/users/users.service';
-import { StudentsController } from '../src/modules/users/users.controller';
+import { MeProfileController, StudentsController } from '../src/modules/users/users.controller';
 import { SysUser } from '../src/entities/sys-user.entity';
 import { SysUserRole } from '../src/entities/sys-user-role.entity';
 import { RoleEnum } from '../src/common/errors';
+import { RequestMethod } from '@nestjs/common';
+import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 
 type UserFixture = SysUser & { id: string };
 
@@ -20,6 +22,10 @@ function makeUser(id: string, username: string): UserFixture {
     role: RoleEnum.EMPLOYEE,
     phone: null,
     email: null,
+    avatarId: null,
+    occupation: null,
+    gender: null,
+    birthday: null,
     status: 1,
     authVersion: 3,
     forcePasswordChange: 0,
@@ -92,7 +98,7 @@ function makeService(roleIdsByUser: Record<string, string[]> = {}) {
   };
   const txUserRepo: any = {
     createQueryBuilder: queryBuilder,
-    findOne: async (_entity: typeof SysUser, { where, lock }: { where: Record<string, unknown>; lock?: unknown }) => {
+    findOne: async ({ where, lock }: { where: Record<string, unknown>; lock?: unknown }) => {
       if (lock) events.push('user-lock:findOne');
       return findByWhere(where);
     },
@@ -139,7 +145,84 @@ function makeService(roleIdsByUser: Record<string, string[]> = {}) {
 
 const actor = { id: 1, name: 'admin' };
 
+afterEach(() => vi.useRealTimers());
+
 describe('training student/admin boundary', () => {
+  it('persists optional self-profile fields while retaining authoritative account fields', async () => {
+    const { service, users } = makeService();
+    await expect(service.selfProfile('1')).resolves.toMatchObject({ occupation: null, gender: null, birthday: null });
+    const saved = await service.updateSelfProfile('1', {
+      occupation: '  架子工  ', gender: 'male', birthday: '2000-02-29',
+      real_name: 'PC兼容姓名', email: 'learner@example.test',
+    } as any);
+    expect(saved).toMatchObject({
+      id: '1', occupation: '架子工', gender: 'male', birthday: '2000-02-29',
+      real_name: 'PC兼容姓名', email: 'learner@example.test',
+      source: 'institution', category_id: '7', role: 'employee', status: 1, phone: null,
+    });
+    expect(users.get('1')).toMatchObject({ occupation: '架子工', gender: 'male', birthday: '2000-02-29' });
+    await expect(service.selfProfile('1')).resolves.toMatchObject({ occupation: '架子工', gender: 'male', birthday: '2000-02-29' });
+    await expect(service.updateSelfProfile('1', { occupation: null, gender: null, birthday: null } as any))
+      .resolves.toMatchObject({ occupation: null, gender: null, birthday: null });
+  });
+
+  it.each([
+    { occupation: '' }, { occupation: '  ' }, { occupation: 'a'.repeat(65) }, { occupation: 123 },
+    { gender: 'other' }, { gender: '' }, { gender: 1 },
+    { birthday: '2023-02-29' }, { birthday: '2026-02-30' }, { birthday: '2026-13-01' },
+    { birthday: '2026-1-01' }, { birthday: '2026-01-01T00:00:00Z' }, { birthday: 20260101 },
+    { birthday: '0000-01-01' },
+  ])('rejects invalid self-profile value without writes: %j', async (patch) => {
+    const { service, saves } = makeService();
+    await expect(service.updateSelfProfile('1', patch as any)).rejects.toMatchObject({ code: 40001 });
+    expect(saves).toHaveLength(0);
+  });
+
+  it('uses the server Asia/Shanghai business date for the birthday upper boundary', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-21T16:30:00.000Z'));
+    const { service, saves } = makeService();
+    await expect(service.updateSelfProfile('1', { birthday: '2026-10-22' } as any))
+      .resolves.toMatchObject({ birthday: '2026-10-22' });
+    await expect(service.updateSelfProfile('1', { birthday: '2026-10-23' } as any)).rejects.toMatchObject({ code: 40001 });
+    expect(saves).toHaveLength(1);
+  });
+
+  it.each(['phone', 'source', 'category_id', 'role', 'status', 'identity_status', 'username'])
+  ('rejects controlled self-profile field %s at both controller and service boundaries', async (field) => {
+    const { service, saves } = makeService();
+    const controller = new MeProfileController(service);
+    const patch = { [field]: field === 'status' ? 0 : 'forged' };
+    expect(() => controller.update(patch, { id: 1 } as any, { body: patch } as any))
+      .toThrow('包含不支持的字段');
+    await expect(service.updateSelfProfile('1', patch as any)).rejects.toMatchObject({ code: 40001 });
+    expect(saves).toHaveLength(0);
+  });
+
+  it('accepts new self-profile fields through the controller whitelist', async () => {
+    const { service } = makeService();
+    const controller = new MeProfileController(service);
+    const patch = { occupation: '电工', gender: 'female', birthday: '2001-01-01' };
+    await expect(controller.update(patch as any, { id: 1 } as any, { body: patch } as any))
+      .resolves.toMatchObject(patch);
+  });
+
+  it('provides POST profile compatibility with the same strict save contract', async () => {
+    const { service } = makeService();
+    const controller = new MeProfileController(service);
+    const handler = Object.getOwnPropertyNames(MeProfileController.prototype)
+      .map((key) => (controller as any)[key])
+      .find((method) => Reflect.getMetadata(PATH_METADATA, method) === 'profile'
+        && Reflect.getMetadata(METHOD_METADATA, method) === RequestMethod.POST);
+    expect(handler).toBeTypeOf('function');
+    const patch = { occupation: '油漆工', gender: 'female', birthday: '2000-02-29' };
+    await expect(handler.call(controller, patch, { id: 1 }, { body: patch })).resolves.toMatchObject(patch);
+    for (const field of ['phone', 'source', 'category_id', 'role', 'status', 'identity_status', 'username']) {
+      const forged = { [field]: 'forged' };
+      expect(() => handler.call(controller, forged, { id: 1 }, { body: forged })).toThrow('包含不支持的字段');
+    }
+  });
+
   it('excludes every employee with a sys_user_role link from list and detail', async () => {
     const { service } = makeService({ '2': ['empty-permission-role'], '3': ['inactive-role'] });
 

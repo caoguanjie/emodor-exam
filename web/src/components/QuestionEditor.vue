@@ -51,10 +51,12 @@
     </el-form-item>
 
     <template v-if="local.type === 'single' || local.type === 'multiple'">
-      <el-form-item v-for="(option, index) in local.options" :key="index" :label="`选项 ${String.fromCharCode(65 + index)}`">
+      <el-form-item v-for="(option, index) in local.options" :key="option.key" :label="`选项 ${String.fromCharCode(65 + index)}`">
         <div class="question-editor__option">
           <el-input v-model="option.text" :disabled="disabled" />
           <el-checkbox :model-value="local.answer.includes(index)" :disabled="disabled" @update:model-value="(value: boolean | string | number) => toggleAnswer(index, value)">正确</el-checkbox>
+          <el-button v-if="!disabled" text :disabled="index === 0" @click="moveOption(index, -1)">上移</el-button>
+          <el-button v-if="!disabled" text :disabled="index === local.options.length - 1" @click="moveOption(index, 1)">下移</el-button>
           <el-button v-if="!disabled && local.options.length > 2" text type="danger" @click="removeOption(index)">删除</el-button>
         </div>
       </el-form-item>
@@ -78,7 +80,7 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue';
 import MediaUpload from './MediaUpload.vue';
-import type { Id, QuestionDraftPayload, QuestionOption, QuestionType } from '../api/training-types';
+import { newQuestionOptionId, questionDraftFromView, type Id, type QuestionDraftPayload, type QuestionOption, type QuestionType } from '../api/training-types';
 
 type CategoryOption = { id: Id; name: string };
 type ConceptOption = { id: Id; name: string };
@@ -101,7 +103,10 @@ const pendingMediaId = ref<string | null>(null);
 let syncing = false;
 
 function clone(value: QuestionDraftPayload): QuestionDraftPayload {
-  return JSON.parse(JSON.stringify(value));
+  const draft = value.content_schema_version === 2 ? questionDraftFromView(value) : value;
+  // HTML fields are the active form state; saving explicitly rebuilds v2 JSON.
+  const { content_schema_version: _schema, content_json: _content, ...editable } = draft;
+  return JSON.parse(JSON.stringify(editable));
 }
 
 function fixedJudgmentOptions(): QuestionOption[] {
@@ -110,11 +115,10 @@ function fixedJudgmentOptions(): QuestionOption[] {
 
 function normalizeType(type: QuestionType) {
   if (type === 'judgment') {
-    local.options = fixedJudgmentOptions();
+    if (local.options.length !== 2) local.options = fixedJudgmentOptions();
     local.answer = local.answer[0] === 1 ? [1] : [0];
   } else {
     if (local.options.length < 2) local.options = [{ key: 'A', text: '' }, { key: 'B', text: '' }];
-    local.options = local.options.map((option, index) => ({ key: String.fromCharCode(65 + index), text: option.text }));
     local.answer = type === 'single' ? [local.answer[0] ?? 0] : [...new Set(local.answer)].filter((index) => index < local.options.length);
   }
 }
@@ -122,6 +126,7 @@ function normalizeType(type: QuestionType) {
 function onTypeChange(value: QuestionType) {
   local.type = value;
   local.concept_id = undefined;
+  if (value === 'judgment') local.options = fixedJudgmentOptions();
   normalizeType(value);
   onScopeChange();
 }
@@ -148,13 +153,21 @@ function toggleAnswer(index: number, checked: unknown) {
 
 function addOption() {
   if (local.options.length >= 26) return;
-  local.options.push({ key: String.fromCharCode(65 + local.options.length), text: '' });
+  local.options.push({ key: newQuestionOptionId(local.options), text: '' });
 }
 
 function removeOption(index: number) {
   local.options.splice(index, 1);
-  local.options = local.options.map((option, optionIndex) => ({ ...option, key: String.fromCharCode(65 + optionIndex) }));
   local.answer = local.answer.filter((answer) => answer !== index).map((answer) => answer > index ? answer - 1 : answer);
+}
+
+function moveOption(index: number, direction: -1 | 1) {
+  const target = index + direction;
+  if (target < 0 || target >= local.options.length) return;
+  const correctIds = new Set(local.answer.map((answer) => local.options[answer]?.key));
+  const [option] = local.options.splice(index, 1);
+  local.options.splice(target, 0, option);
+  local.answer = local.options.flatMap((option, position) => correctIds.has(option.key) ? [position] : []);
 }
 
 function insertMedia() {
@@ -164,7 +177,7 @@ function insertMedia() {
 }
 
 watch(() => props.modelValue, (value) => {
-  if (JSON.stringify(value) === JSON.stringify(local)) return;
+  if (JSON.stringify(clone(value)) === JSON.stringify(local)) return;
   syncing = true;
   Object.keys(local).forEach((key) => delete (local as any)[key]);
   Object.assign(local, clone(value));

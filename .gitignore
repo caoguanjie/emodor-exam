@@ -17,7 +17,13 @@ node_modules/
 server/dist/
 web/dist/
 web/.vite/
+mobile/dist/
 tests/mysql-data/
+
+# 统一构建的锁、临时编译和原子发布备份
+.build.lock/
+.build-*/
+.build-backup-*/
 
 # 运行期数据（上传文件 / 加密配置 / 日志）
 server/data/

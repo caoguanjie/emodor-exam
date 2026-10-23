@@ -2,83 +2,24 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { assertTimeoutStartRace } from './training-attempts-race.mjs';
 
-const expected = {
-  recordId: '303',
-  userId: '101',
-  paperId: '202',
-  assignmentId: '404',
-};
+const expected = { recordId: '303', userId: '101', paperId: '202', assignmentId: '404' };
+const active = Object.freeze({ record_id: '303', user_id: '101', paper_id: '202', assignment_id: '404', active_assignment_id: '404', attempt_no: 3, status: 'in_progress', score: null, submitted_at: null, is_expired: 1, record_count: 3, max_attempt_no: 3, fourth_count: 0, assignment_count: 1 });
+const timeout = Object.freeze({ ...active, status: 'timeout', score: '0.00', active_assignment_id: null });
+const recovered = { status: 200, data: { status: 'timeout', record_id: '303', questions: [] } };
+const exhausted = { status: 409, code: 40902 };
 
-const active = Object.freeze({
-  record_id: '303',
-  user_id: '101',
-  paper_id: '202',
-  assignment_id: '404',
-  active_assignment_id: '404',
-  attempt_no: 3,
-  status: 'in_progress',
-  score: null,
-  submitted_at: null,
-  is_expired: 1,
-  record_count: 3,
-  max_attempt_no: 3,
-  fourth_count: 0,
-  assignment_count: 1,
+test('expired active start returns its pure timeout record while swept max-attempt start rejects', () => {
+  assert.equal(assertTimeoutStartRace({ pre: active, response: recovered, post: timeout, expected }), 'finalized-before-start');
+  assert.equal(assertTimeoutStartRace({ pre: active, response: exhausted, post: timeout, expected }), 'finalized-before-start');
+  assert.equal(assertTimeoutStartRace({ pre: timeout, response: exhausted, post: timeout, expected }), 'finalized-before-pre');
 });
 
-const failed = Object.freeze({
-  ...active,
-  status: 'failed',
-  score: '0.00',
-  submitted_at: '2026-10-22T00:00:00.000Z',
-  active_assignment_id: null,
-});
-
-const response = (code) => ({ status: 409, code });
-
-test('accepts every lawful ordering of the timeout sweeper around start', () => {
-  assert.equal(assertTimeoutStartRace({
-    pre: active, response: response(40904), post: active, expected,
-  }), 'active');
-  assert.equal(assertTimeoutStartRace({
-    pre: failed, response: response(40902), post: failed, expected,
-  }), 'finalized-before-pre');
-  assert.equal(assertTimeoutStartRace({
-    pre: active, response: response(40902), post: failed, expected,
-  }), 'finalized-before-start');
-  assert.equal(assertTimeoutStartRace({
-    pre: active, response: response(40904), post: failed, expected,
-  }), 'finalized-after-start');
-});
-
-test('rejects responses that do not match a lawful timeout transition', () => {
-  const rejected = [
-    { pre: active, response: { status: 200, code: 0 }, post: active },
-    { pre: active, response: response(40905), post: active },
-    { pre: failed, response: response(40904), post: failed },
-    { pre: active, response: response(40902), post: active },
-  ];
-  for (const value of rejected) {
-    assert.throws(() => assertTimeoutStartRace({ ...value, expected }));
-  }
-});
-
-test('rejects identity, count, active-marker, and failed-state inconsistencies', () => {
-  const rejected = [
-    { pre: { ...active, record_id: '999' }, response: response(40904), post: active },
-    { pre: active, response: response(40904), post: { ...active, user_id: '999' } },
-    { pre: active, response: response(40904), post: { ...active, paper_id: '999' } },
-    { pre: active, response: response(40904), post: { ...active, assignment_id: '999' } },
-    { pre: active, response: response(40904), post: { ...active, attempt_no: 1 } },
-    { pre: active, response: response(40904), post: { ...active, record_count: 4, fourth_count: 1 } },
-    { pre: active, response: response(40904), post: { ...active, assignment_count: 2 } },
-    { pre: active, response: response(40904), post: { ...active, active_assignment_id: null } },
-    { pre: active, response: response(40902), post: { ...failed, submitted_at: null } },
-    { pre: active, response: response(40902), post: { ...failed, score: null } },
-    { pre: active, response: response(40902), post: { ...failed, score: '60.00' } },
-    { pre: active, response: response(40902), post: { ...failed, status: 'passed' } },
-  ];
-  for (const value of rejected) {
-    assert.throws(() => assertTimeoutStartRace({ ...value, expected }));
-  }
+test('rejects active leftovers, old auto-submitted timeout facts, or inconsistent ownership/counts', () => {
+  for (const value of [
+    { pre: active, response: recovered, post: active },
+    { pre: timeout, response: recovered, post: timeout },
+    { pre: active, response: { status: 409, code: 40904 }, post: timeout },
+    ...['record_id', 'user_id', 'paper_id', 'assignment_id'].map((key) => ({ pre: active, response: recovered, post: { ...timeout, [key]: '999' } })),
+    ...[{ status: 'failed' }, { score: '60.00' }, { score: null }, { submitted_at: '2026-10-22T00:00:00Z' }, { active_assignment_id: '404' }, { record_count: 4 }, { fourth_count: 1 }, { assignment_count: 2 }].map((change) => ({ pre: active, response: recovered, post: { ...timeout, ...change } })),
+  ]) assert.throws(() => assertTimeoutStartRace({ ...value, expected }));
 });

@@ -12,11 +12,11 @@
 ## 目录
 
 - `docs/design/` 设计方案 8 册（01 需求 … 07 安全与非功能、README 对照表）
-- `database/` `init.sql`（36 张业务表 + 1 张迁移元数据表，与 03 册一致）+ `seed.mjs`（口令经环境变量注入）；表变更必须同步迁移、`init.sql`、entities 与设计分册
+- `database/` `init.sql`（38 张业务表 + 1 张迁移元数据表，共 39 张物理表，与 03 册一致）+ `seed.mjs`（口令经环境变量注入）；当前迁移 000—021，018 移动认证、019 学员资料、020 实名事实与核验会话、021 考试稳定选项 ID；表变更必须同步迁移、`init.sql`、entities 与设计分册
 - `server/` NestJS API：`src/common/`（信封/错误码/守卫链/Redis/审计）、`src/entities/`、`src/modules/`（auth/access/users/training/courses/question-materials/ai/questions/exams/statistics 等）；departments/regulations 只保留共享存储与历史只读依赖，不恢复旧管理 CRUD
 - `web/` Vue 3 + TS + Vite + Element Plus；`src/views/employee/` 学习端、`src/views/admin/` 管理端
 - `deploy/` nginx 配置与 `.env.example`（环境变量权威清单）
-- `tests/` `run-e2e.mjs` 启动器（16 个独立套件）+ `e2e-smoke.mjs`（85 项断言，内置 Mock AI）；`tests/gui-test-env/`（`mock-ai.mjs`、`seed-material.mjs` 预置出题资料）
+- `tests/` `run-e2e.mjs` 启动器（21 个注册套件）+ `e2e-smoke.mjs`（85 项断言，内置 Mock AI）；`tests/gui-test-env/`（`mock-ai.mjs`、`seed-material.mjs` 预置出题资料）
 - `review/` 代码评审报告与修复记录（新增评审/修复记录写入此目录）
 
 ## 常用命令
@@ -25,7 +25,11 @@
 cd server && npm run build        # tsc 构建到 dist/
 cd server && npm test             # vitest 单元测试（评分/乱序/心跳/位图）
 cd web && npm run dev             # Vite :5173，/api/v1 代理到 :3000
-npm --prefix web run build       # 仓库根执行：PC 产物输出到根目录 dist/，构建前清空该目录
+npm --prefix web run build       # 本地直构建：输出根 dist/，非原子；正式组合发布用下方脚本
+node scripts/build.mjs web       # 原子更新 PC，保留 dist/mobile/
+node scripts/build.mjs h5        # 原子更新 dist/mobile/，保留 PC
+node scripts/build.mjs web h5    # 两端都成功后原子发布组合 dist/
+node scripts/build.mjs mp-weixin # 独立构建小程序，不修改网站 dist/
 node tests/run-e2e.mjs --ephemeral --suite smoke   # 仓库根：自有临时服务、密钥运行期随机、Mock AI
 node tests/run-e2e.mjs --ephemeral --suite all     # 注册套件逐个隔离；all 必须使用 ephemeral
 DB_PASSWORD=... ADMIN_INITIAL_PASSWORD=... node database/seed.mjs   # 种子：根部门 + admin（口令 ≥8 位且含字母+数字）
@@ -52,16 +56,20 @@ API 启动后监听 :3000，全局前缀 `api/v1`。本机开发用宿主 MySQL 
 - 响应统一信封 `{code,message,data}`（`server/src/common/response.interceptor.ts`），错误码表见 `common/errors.ts`（40xxx/50xxx）；DTO 校验一律走 `DtoValidationPipe`。
 - 数据库**无外键**，引用完整性由应用层维护；`database/init.sql`、entities、设计分册和迁移须一致。`schema_migration` 只保留一套可续跑协议（03 册 1.10）；不得改写既有迁移 checksum。015 删除专用结构前须阻断待保留历史数据，不能清零成绩或伪造题型。
 - 学习时长全部服务端结算（30s 心跳、单次 ≤45s、失焦锚点、10 段位图、单活跃会话）；不要在前端"补"时长逻辑。
-- 考试仅支持单选、多选、判断，下发 payload 不含答案与解析；乱序 seed 由 `EXAM_SHUFFLE_SECRET` HMAC 派生；最终总分不可直接修改。草稿与自动评分按事务结算，终结后只读；题干/选项/解析的受控图片继续保留。
+- 考试仅支持单选、多选、判断，下发 payload 不含答案与解析；乱序 seed 由 `EXAM_SHUFFLE_SECRET` HMAC 派生；最终总分不可直接修改。新培训移动考试只保存本地最小草稿，学员主动整卷提交后由服务端事务评分；到期只收口为未交卷 timeout，不自动提交、不评分、不生成答案。题干/选项/解析的受控图片继续保留，旧已评分 timeout 只读兼容。
 - 旧制度固定卷继续按有效学习双条件取得资格；新培训考试默认不以课程/制度学习完成作为开考门槛，视频课程学习与制度阅读分开，服务端计时、空白答案、反答案泄露与令牌规则不放宽。
 - 令牌吊销靠 Redis 封禁键（改密/重置/停用即吊销）；refresh token 走 HttpOnly Cookie。
+- 实名运行时仅 `IDENTITY_PROVIDER=disabled|tencent`，腾讯 FaceID 使用 `ImageRecognitionV2`；Fake 只允许测试模块 override，不提供运行时 mock/test-pass。实名与媒体票据实现按 Gate G 契约验收，文档同步不等于真实供应商或真机已通过。
+- Task 12 / Gate H1 已完成自动化与独立代码审查：视频只接受 mobile employee，开播/短票要求实名，课程学习不按来源/类别额外拦截；服务端继续按 30 秒心跳、45 秒封顶、2 秒容差和 95% 去重覆盖结算。真实视频解码、弱网、全屏、微信开发者工具和真机仍须另验。
+- Task 13/14 / Gate H2 已完成自动化、真实隔离数据库竞争验证与独立代码审查：新考试使用稳定 option ID、整卷主动提交、本地草稿和纯 timeout；PC 无学员答题入口。Task 15 / Gate I 已完成原子组合构建与独立审查；Task 16 / Gate J 的自动化与桌面 Chrome 关键链已完成，全量隔离 E2E 21/21 PASS。真实短信、腾讯实名、真机/微信、视频解码/弱网、Docker/Nginx 运行与生产部署仍未验，详见 [H5 验收记录](review/2026-10-22-learner-mobile-h5-acceptance.md)。
+- 实名材料私有存储；姓名/证件号 AES-256-GCM 加密，证件 HMAC 查重。短期媒体票据签发和读取都须核对精确 `media_reference` 与当前业务授权；不得把 JWT 放入媒体 URL。
 - AI 模块出网有 SSRF 白名单校验（仅 http/https、拒绝内网/环回），本地 Mock AI 需 `AI_EGRESS_ALLOW_HOSTS=127.0.0.1`。
 - 所有敏感值（DB/JWT/加密密钥/管理员初始口令）只经环境变量运行期注入，仓库与测试不得含可用凭据字面量。
 
 ## 已知坑
 
 - `web` 的 `npm run build` 只跑 `vite build`，**无类型检查**；需要类型把关时手动执行 `npx vue-tsc --noEmit`。
-- PC 构建输出为根目录 `dist/`。后续合包须在 PC 构建完成后将学员 H5 产物复制到 `dist/mobile/`；不要先合入 H5 再运行 PC 构建，后者会清空整个发布目录。
+- 发布构建统一走根命令 `node scripts/build.mjs web|h5|web h5|mp-weixin`。脚本用同盘临时目录、构建锁和原子切换保护 `dist/`；不要再手工复制 H5，也不要用 `npm --prefix web run build` 代替组合发布。
 - `server` 没有 lint 脚本；改动后以 `npm run build` 作为编译校验。
 - e2e 会重建测试数据库，勿对准开发库跑。
 - `.trae/` 目录已 gitignore，不要把其中文件提交进仓库。
@@ -71,7 +79,7 @@ API 启动后监听 :3000，全局前缀 `api/v1`。本机开发用宿主 MySQL 
 ## 培训融合文档状态（2026-10-22）
 
 - 当前范围以[已批准瘦身计划](docs/superpowers/plans/2026-10-22-training-demo-slimming.md)覆盖融合设计的冲突条款；保留培训管理、题库与 AI、三客观题考试、记录和统计。实际验证与未验边界见[瘦身验收记录](review/2026-10-22-training-demo-slimming-acceptance.md)，本地实现不代表已部署。
-- 本期边界是单家机构、PC 管理端与完整后端；不迁移旧站数据，独立学员 H5 下一期，课程/视频学习不替代制度阅读；不建设租户、班级、支付或证书平台。
+- 本期仍是单家机构，不迁移旧站数据，也不建设租户、班级、支付或证书平台。独立学员 H5 已在当前工作区完成至 Gate J 的自动化与桌面 Chrome 验收，课程/视频学习不替代制度阅读；真实短信、腾讯实名、真机/微信、视频解码/弱网、Docker/Nginx 运行与生产部署均未验收。
 - A1—C7 的 owner 与验收门如下，未标“已验收”的能力只能写成计划：
 
 | 任务 | owner 范围 | 文档验收关注 |

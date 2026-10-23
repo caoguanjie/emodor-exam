@@ -26,6 +26,9 @@ export const SUITE_REGISTRY = Object.freeze({
   'e2e-smoke': join(ROOT, 'tests', 'suites', 'e2e-smoke-adapter.mjs'),
   'training-identity': join(ROOT, 'tests', 'training-identity.mjs'),
   'training-access': join(ROOT, 'tests', 'training-access.mjs'),
+  'mobile-auth': join(ROOT, 'tests', 'mobile-auth.mjs'),
+  'mobile-identity': join(ROOT, 'tests', 'mobile-identity.mjs'),
+  'mobile-media-ticket': join(ROOT, 'tests', 'mobile-media-ticket.mjs'),
   'training-student-admin-boundary': join(ROOT, 'tests', 'training-student-admin-boundary.mjs'),
   'training-media': join(ROOT, 'tests', 'training-media.mjs'),
   'training-system': join(ROOT, 'tests', 'training-system.mjs'),
@@ -40,6 +43,7 @@ export const SUITE_REGISTRY = Object.freeze({
   'training-records': join(ROOT, 'tests', 'training-records.mjs'),
   'training-statistics': join(ROOT, 'tests', 'training-statistics.mjs'),
   'training-full-flow': join(ROOT, 'tests', 'training-full-flow.mjs'),
+  'mobile-h5': join(ROOT, 'tests', 'mobile-h5.mjs'),
 });
 
 export function resolveSuitePaths(selector, registry = SUITE_REGISTRY) {
@@ -49,9 +53,35 @@ export function resolveSuitePaths(selector, registry = SUITE_REGISTRY) {
 }
 
 export function suiteRuntimeEnvOverrides(suitePath) {
-  return suitePath === SUITE_REGISTRY['training-video-learning']
-    ? { DB_POOL_SIZE: '2' }
-    : {};
+  if (suitePath === SUITE_REGISTRY['training-video-learning']) {
+    return {
+      DB_POOL_SIZE: '2',
+      NODE_ENV: 'test',
+      SERVER_DEBUG_LOGIN_ENABLED: 'true',
+      SMS_PROVIDER: 'disabled',
+      IDENTITY_PROVIDER: 'disabled',
+    };
+  }
+  if (['mobile-auth', 'training-courses'].some((name) => SUITE_REGISTRY[name] === suitePath)) {
+    return { NODE_ENV: 'test', SERVER_DEBUG_LOGIN_ENABLED: 'true', SMS_PROVIDER: 'disabled' };
+  }
+  if (['mobile-identity', 'mobile-media-ticket', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5'].some((name) => SUITE_REGISTRY[name] === suitePath)) {
+    return {
+      NODE_ENV: 'test',
+      SERVER_DEBUG_LOGIN_ENABLED: 'true',
+      SMS_PROVIDER: 'disabled',
+      IDENTITY_PROVIDER: 'disabled',
+    };
+  }
+  return {};
+}
+
+export function suiteRuntimeApi(suitePath) {
+  if (!['mobile-identity', 'mobile-media-ticket', 'training-video-learning', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5'].some((name) => SUITE_REGISTRY[name] === suitePath)) return {};
+  return {
+    apiEntry: join(ROOT, 'server', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    apiArgs: [join(ROOT, 'server', 'test', 'identity-e2e-main.ts')],
+  };
 }
 
 export async function runSelectedSuites(suitePaths, { isInterrupted = () => false, runSuite } = {}) {
@@ -274,6 +304,7 @@ export async function runSuiteInRuntime(suitePath, ephemeral, runState = { inter
         ...(ephemeral ? { MOCK_AI_PORT: '0', MOCK_AI_PORT_MODE: 'ephemeral' } : {}),
         ...suiteRuntimeEnvOverrides(suitePath),
       },
+      ...suiteRuntimeApi(suitePath),
     });
     await waitForLifecycleProbe('harness-created', { harnessRoot: createdHarness.root });
     harness = createdHarness;

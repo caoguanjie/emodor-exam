@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { normalizeOptionalChinaMobile } from '../auth/phone';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { createHash } from 'node:crypto';
@@ -220,7 +221,7 @@ export class ImportBatchService {
   }
 
   /** Match the schema's utf8mb4_0900_ai_ci equality, including case/accent rules. */
-  private async duplicateRowsByDbCollation(rows: StudentRow[], field: 'username' | 'employee_no'): Promise<Set<number>> {
+  private async duplicateRowsByDbCollation(rows: StudentRow[], field: 'username' | 'employee_no' | 'phone'): Promise<Set<number>> {
     const candidates = rows.filter((row) => Boolean(row[field]));
     if (candidates.length < 2) return new Set();
     const selects = candidates.map(() => 'SELECT CAST(? AS CHAR CHARACTER SET utf8mb4) AS candidate_value, CAST(? AS UNSIGNED) AS row_no').join(' UNION ALL ');
@@ -238,8 +239,14 @@ export class ImportBatchService {
     const validRows: number[] = [];
     const normalizedRows: Record<string, unknown>[] = [];
     const studentRows = rows.map((raw, index) => this.toStudentRow(raw, index));
+    const invalidPhones = new Set<number>();
+    for (const row of studentRows) {
+      try { row.phone = normalizeOptionalChinaMobile(row.phone); }
+      catch { invalidPhones.add(row.row); }
+    }
     const duplicateUsernames = await this.duplicateRowsByDbCollation(studentRows, 'username');
     const duplicateEmployeeNos = await this.duplicateRowsByDbCollation(studentRows, 'employee_no');
+    const duplicatePhones = await this.duplicateRowsByDbCollation(studentRows, 'phone');
 
     for (const row of studentRows) {
       const reasons: string[] = [];
@@ -248,6 +255,7 @@ export class ImportBatchService {
       if (!row.real_name) reasons.push('姓名必填');
       else if (row.real_name.length > 64) reasons.push('姓名超长');
       if (row.employee_no && row.employee_no.length > 32) reasons.push('工号超长');
+      if (invalidPhones.has(row.row)) reasons.push('手机号格式不正确');
       if (!SOURCES.has(row.source)) reasons.push('来源必须是 institution 或 external');
       if (!row.category_id) reasons.push('培训类别必填');
       if (!row.password) reasons.push('初始密码必填');
@@ -264,7 +272,8 @@ export class ImportBatchService {
       }
       if (duplicateUsernames.has(row.row)) reasons.push('用户名在文件内重复');
       if (duplicateEmployeeNos.has(row.row)) reasons.push('工号在文件内重复');
-      if ((duplicateUsernames.has(row.row) || duplicateEmployeeNos.has(row.row)) && !duplicates.includes(row.row)) duplicates.push(row.row);
+      if (duplicatePhones.has(row.row)) reasons.push('手机号在文件内重复');
+      if ((duplicateUsernames.has(row.row) || duplicateEmployeeNos.has(row.row) || duplicatePhones.has(row.row)) && !duplicates.includes(row.row)) duplicates.push(row.row);
 
       let category: TrainingCategory | null = null;
       if (row.category_id) {
@@ -281,6 +290,7 @@ export class ImportBatchService {
         const existingEmployee = await this.userRepo.findOne({ where: { employeeNo: row.employee_no } });
         if (existingEmployee) reasons.push('工号已存在');
       }
+      if (!reasons.length && row.phone && await this.userRepo.findOne({ where: { phone: row.phone } })) reasons.push('手机号已存在');
 
       if (reasons.length) {
         errors.push({ row: row.row, message: reasons.join('；') });
@@ -363,7 +373,7 @@ export class ImportBatchService {
           categoryId: String(row.category_id),
           source: String(row.source) as LearnerSource,
           role: 'employee',
-          phone: row.phone ? String(row.phone) : null,
+          phone: normalizeOptionalChinaMobile(row.phone ? String(row.phone) : null),
           email: row.email ? String(row.email) : null,
           status: 1,
           forcePasswordChange: 1,
