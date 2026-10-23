@@ -19,8 +19,8 @@
         <video v-else-if="previewUrl && isVideo" class="el-upload-list__item-thumbnail" :src="previewUrl" preload="metadata" muted />
         <span v-else class="media-upload__card-placeholder"><el-icon><VideoCamera v-if="isVideo" /><Picture v-else /></el-icon></span>
         <span class="el-upload-list__item-actions">
-          <button type="button" class="media-upload__card-action" aria-label="预览文件" :disabled="!previewUrl"
-            :title="isVideo && !previewUrl ? '选择本地视频后可预览' : '预览文件'" @click.stop="previewVisible = true"><el-icon><ZoomIn /></el-icon></button>
+          <button type="button" class="media-upload__card-action" aria-label="预览文件" :disabled="!previewUrl && !currentPreviewAssetId"
+            title="预览文件" @click.stop="openPreview"><el-icon><ZoomIn /></el-icon></button>
           <button type="button" class="media-upload__card-action" aria-label="移除文件" :disabled="disabled" @click.stop="clearSelection"><el-icon><Delete /></el-icon></button>
         </span>
       </template>
@@ -58,7 +58,14 @@
 
     <p v-if="!compact" class="media-upload__hint">{{ limitHint }}</p>
 
-    <img v-if="previewUrl && listType !== 'picture-card'" class="media-upload__preview" :src="previewUrl" alt="媒体预览" />
+    <img v-if="previewUrl && !isVideo && listType !== 'picture-card'" class="media-upload__preview" :src="previewUrl" alt="媒体预览" />
+    <button v-if="isVideo && listType !== 'picture-card' && (previewUrl || currentPreviewAssetId)"
+      type="button" class="media-upload__video-preview" aria-label="播放预览" :disabled="previewLoading" @click="openPreview">
+      <video v-if="previewUrl" class="media-upload__video-thumbnail" :src="previewUrl" preload="metadata" muted playsinline
+        aria-label="视频缩略图" @loadedmetadata="showVideoFrame" />
+      <span v-else class="media-upload__video-placeholder"><el-icon><VideoCamera /></el-icon><span>当前视频</span></span>
+      <span class="media-upload__video-preview-label">{{ previewLoading ? '加载预览中…' : '播放预览' }}</span>
+    </button>
 
     <div v-if="!compact && (displayName || state.status !== 'idle')" class="media-upload__summary">
       <span class="media-upload__filename" :title="displayName">{{ displayName || '媒体文件' }}</span>
@@ -72,17 +79,21 @@
     <p v-if="state.status === 'uploading'" class="media-upload__progress-label">上传中 {{ state.progress }}%</p>
     <p v-if="state.error" class="media-upload__error" role="alert">{{ state.error }}</p>
     <el-image-viewer v-if="previewVisible && previewUrl && !isVideo" :url-list="[previewUrl]" teleported @close="previewVisible = false" />
-    <el-dialog v-if="previewVisible && previewUrl && isVideo" v-model="previewVisible" title="视频预览" width="min(900px, 92vw)" append-to-body destroy-on-close>
-      <video class="media-upload__video-player" :src="previewUrl" controls preload="metadata" />
+    <el-dialog v-if="previewVisible && isVideo" v-model="previewVisible" title="视频预览" width="min(900px, 92vw)"
+      class="re-form-dialog" append-to-body destroy-on-close :before-close="beforePreviewClose">
+      <p v-if="previewLoading" role="status">正在加载视频预览，大文件可能需要一些时间，可关闭取消。</p>
+      <div v-else-if="previewError"><p role="alert">{{ previewError }}</p><button type="button" class="media-upload__button" @click="openPreview">重试预览</button></div>
+      <video v-else-if="previewUrl" ref="videoPlayer" class="media-upload__video-player" :src="previewUrl" controls preload="metadata" />
+      <template #footer><el-button @click="previewVisible = false">关闭</el-button></template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { ElDialog, ElIcon, ElImageViewer, ElUpload, type UploadFile, type UploadInstance, type UploadUserFile } from 'element-plus';
+import { ElButton, ElDialog, ElIcon, ElImageViewer, ElUpload, type UploadFile, type UploadInstance, type UploadUserFile } from 'element-plus';
 import { Delete, Picture, Plus, UploadFilled, VideoCamera, ZoomIn } from '@element-plus/icons-vue';
-import { getMediaImageContent, getMediaLimits, getMediaMetadata, uploadMedia, type MediaMetadata, type MediaUploadResponse } from '../api/media';
+import { getMediaImageContent, getMediaVideoContent, getMediaLimits, getMediaMetadata, uploadMedia, type MediaMetadata, type MediaUploadResponse } from '../api/media';
 import {
   createMediaUploadState,
   mediaKindForPurpose,
@@ -105,6 +116,7 @@ const props = withDefaults(defineProps<{
   modelValue?: string | null;
   purpose?: MediaPurpose;
   ownerId?: string;
+  currentAssetId?: string | null;
   disabled?: boolean;
   listType?: 'text' | 'picture-card' | 'drag';
   compact?: boolean;
@@ -112,6 +124,7 @@ const props = withDefaults(defineProps<{
   modelValue: null,
   purpose: 'avatar',
   ownerId: undefined,
+  currentAssetId: null,
   disabled: false,
   listType: 'text',
   compact: false,
@@ -137,6 +150,11 @@ watch(() => state.value.status === 'uploading' || state.value.status === 'proces
   pending => emit('pending', pending), { immediate: true, flush: 'sync' });
 const metadata = ref<MediaMetadata | null>(null);
 const previewUrl = ref<string | null>(null);
+const videoPlayer = ref<HTMLVideoElement>();
+const previewLoading = ref(false);
+const previewError = ref('');
+let previewSerial = 0;
+let previewController: AbortController | null = null;
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
 let pollAttempts = 0;
 let requestSerial = 0;
@@ -144,6 +162,7 @@ let uploadController: AbortController | null = null;
 
 const disabled = computed(() => props.disabled);
 const isVideo = computed(() => mediaKindForPurpose(props.purpose) === 'video');
+const currentPreviewAssetId = computed(() => isVideo.value && !state.value.file ? props.currentAssetId || props.modelValue : null);
 const pictureFiles = computed<UploadUserFile[]>(() => state.value.file || state.value.assetId || props.modelValue ? [{
   uid: 1,
   name: displayName.value || '媒体文件',
@@ -204,9 +223,57 @@ function clearPoll(resetAttempts = true) {
 
 function revokePreview() {
   previewVisible.value = false;
+  closeVideoPreview();
+  previewError.value = '';
   if (previewUrl.value) {
     URL.revokeObjectURL(previewUrl.value);
     previewUrl.value = null;
+  }
+}
+
+function closeVideoPreview() {
+  previewSerial += 1;
+  previewController?.abort();
+  previewController = null;
+  previewLoading.value = false;
+  videoPlayer.value?.pause();
+}
+
+// The dialog is conditionally mounted: its transition close event can be
+// skipped on unmount, so cancel immediately when the model becomes false.
+watch(previewVisible, visible => { if (!visible) closeVideoPreview(); }, { flush: 'sync' });
+
+function beforePreviewClose(done: () => void) {
+  closeVideoPreview();
+  done();
+}
+
+function showVideoFrame(event: Event) {
+  const video = event.target as HTMLVideoElement;
+  if (Number.isFinite(video.duration) && video.duration > 0) video.currentTime = Math.min(0.1, video.duration / 2);
+}
+
+async function openPreview() {
+  previewVisible.value = true;
+  if (previewUrl.value || !isVideo.value) return;
+  const assetId = currentPreviewAssetId.value;
+  if (!assetId || previewLoading.value) return;
+  const serial = ++previewSerial;
+  const controller = new AbortController();
+  previewController = controller;
+  previewLoading.value = true;
+  previewError.value = '';
+  try {
+    // Saved videos may be large. Download only on a deliberate preview click,
+    // with the existing Authorization header; closing aborts the request.
+    const blob = await getMediaVideoContent(assetId, { signal: controller.signal });
+    if (serial !== previewSerial || controller.signal.aborted || assetId !== currentPreviewAssetId.value) return;
+    previewUrl.value = URL.createObjectURL(blob);
+  } catch (error) {
+    if (serial === previewSerial && !controller.signal.aborted) previewError.value = safeErrorMessage(error);
+  } finally {
+    if (serial === previewSerial) previewLoading.value = false;
+    if (previewController === controller) previewController = null;
   }
 }
 
@@ -323,6 +390,10 @@ async function startUpload(file: File, serial = ++requestSerial) {
     if (!result.asset_id) throw new Error('上传响应缺少媒体标识');
     if (result.status === 'ready') {
       markAssetReady(result.asset_id, result.duration_ms);
+      // New videos are intentionally unreadable until a lesson version owns
+      // them. The ready upload receipt is authoritative; preview the local
+      // File instead of issuing a GET that the server correctly rejects.
+      if (isVideo.value) return;
       try {
         const detail = await getMediaMetadata(result.asset_id);
         if (serial !== requestSerial) return;
@@ -380,7 +451,7 @@ function selectFile(file: File) {
     resetInput();
     return;
   }
-  if (props.listType === 'picture-card') previewUrl.value = URL.createObjectURL(file);
+  if (props.listType === 'picture-card' || isVideo.value) previewUrl.value = URL.createObjectURL(file);
   void startUpload(file, serial);
 }
 
@@ -478,6 +549,8 @@ watch(() => [props.ownerId, props.purpose, props.modelValue] as const, ([ownerId
   if (assetId) void loadBoundAsset(assetId);
 }, { immediate: true });
 
+watch(() => props.currentAssetId, () => { if (!state.value.file) revokePreview(); });
+
 onBeforeUnmount(() => {
   requestSerial += 1;
   clearPoll();
@@ -504,6 +577,12 @@ onBeforeUnmount(() => {
 .media-upload__progress { width: 100%; height: 8px; }
 .media-upload__error { margin: 0; color: #b42318; font-size: 13px; line-height: 1.5; }
 .media-upload__preview { width: 72px; height: 72px; border-radius: 8px; object-fit: cover; border: 1px solid #e2e8f0; }
+.media-upload__video-preview { position: relative; width: 176px; height: 100px; padding: 0; overflow: hidden; border: 1px solid var(--el-border-color); border-radius: 8px; background: #151923; color: #fff; cursor: pointer; }
+.media-upload__video-thumbnail { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.media-upload__video-placeholder { display: grid; justify-items: center; gap: 4px; padding-bottom: 14px; font-size: 12px; }
+.media-upload__video-placeholder .el-icon { font-size: 26px; }
+.media-upload__video-preview-label { position: absolute; inset: auto 0 0; padding: 4px; background: rgb(0 0 0 / 65%); font-size: 12px; }
+.media-upload__video-preview:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
 .media-upload__drag { width: 100%; }
 .media-upload__drag :deep(.el-upload) { display: block; width: 100%; }
 .media-upload__drag :deep(.el-upload-dragger) { width: 100%; padding: 24px 12px; }

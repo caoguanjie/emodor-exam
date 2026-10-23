@@ -1,7 +1,8 @@
 <template>
   <el-alert v-if="loadError" :title="loadError" type="error" :closable="false"><el-button link @click="retryLoad">重试</el-button></el-alert>
   <el-skeleton v-if="!course && !loadError" :rows="5" animated />
-  <div v-if="course" class="course-editor">
+  <el-alert v-if="course?.status === 'published'" title="课程已上架，请先下架后再修改" type="warning" :closable="false" />
+  <div v-if="course && course.status !== 'published'" class="course-editor">
     <div v-if="mode === 'chapters'" class="course-editor__heading">
       <span>{{ course.title }}</span>
       <el-tag :type="statusType(course.status)">{{ statusLabel(course.status) }}</el-tag>
@@ -9,8 +10,6 @@
 
     <el-alert v-if="mode === 'chapters' && course.missing_required_lesson_ids?.length" type="warning" :closable="false" style="margin-bottom:16px"
       :title="`发布前仍有 ${course.missing_required_lesson_ids.length} 个必学课时缺少可用视频`" />
-    <el-alert v-if="mode === 'chapters' && course.status === 'published'" type="info" :closable="false" style="margin-bottom:16px"
-      title="已上架课程的章节和课时结构已锁定；替换视频会追加内容版本，不覆盖旧版本。" />
 
       <el-form v-if="mode === 'info'" label-width="96px">
         <el-form-item label="课程名称"><el-input v-model="form.title" maxlength="255" :disabled="!auth.can('courses:write')" /></el-form-item>
@@ -86,7 +85,8 @@
         </el-form-item>
         <el-form-item v-if="lessonAssetDraftVisible" label="视频">
           <div style="width:100%">
-            <MediaUpload v-model="lessonForm.asset_id" purpose="video" list-type="drag" :disabled="!canUploadMedia" @pending="lessonMediaPending = $event" />
+            <MediaUpload v-model="lessonForm.asset_id" purpose="video" list-type="drag" :current-asset-id="editingLesson?.current_version?.asset_id"
+              :disabled="!canUploadMedia" @pending="lessonMediaPending = $event" />
             <div v-if="editingLessonId" class="muted" style="margin-top:8px">不选新文件则保留当前视频；选择后点击“保存”生成新版本，历史视频和学习记录保留。</div>
           </div>
         </el-form-item>
@@ -127,7 +127,7 @@ const courseId = props.courseId;
 const loadError = ref('');
 const course = ref<CourseDetail | null>(null);
 const categories = ref<CategoryOption[]>([]);
-const ready = computed(() => course.value !== null && !loadError.value);
+const ready = computed(() => course.value !== null && course.value.status !== 'published' && !loadError.value);
 const lessonCount = computed(() => course.value?.chapters.reduce((count, chapter) => count + chapter.lessons.length, 0) ?? 0);
 const saving = ref(false);
 const pendingWrites = ref(0);
@@ -146,8 +146,8 @@ const editingLessonId = ref<Id | null>(null);
 const form = reactive<CourseDraft>({ title: '', category_id: '', description: '', cover_asset_id: null, is_recommended: false, sort_order: 0 });
 const chapterForm = reactive<ChapterDraft>({ title: '', sort_order: 0 });
 const lessonForm = reactive<LessonDraft>({ chapter_id: '', title: '', required: true, sort_order: 0, asset_id: null });
-const structureEditable = computed(() => auth.can('courses:write') && course.value?.status !== 'published');
-const canUploadMedia = computed(() => auth.can('courses:write') && auth.can('media:write'));
+const structureEditable = computed(() => ready.value && auth.can('courses:write'));
+const canUploadMedia = computed(() => structureEditable.value && auth.can('media:write'));
 const editingLesson = computed(() => editingLessonId.value ? courseLesson(editingLessonId.value) : undefined);
 let courseBaseline: CourseDraft = copyCourseDraft(form);
 let chapterBaseline = { editingId: null as Id | null, form: { ...chapterForm } };
@@ -326,6 +326,7 @@ async function retryLoad() {
   }
 }
 async function saveCourse() {
+  if (!ready.value || !auth.can('courses:write')) return;
   if (!form.title.trim() || !form.category_id) { ElMessage.warning('请填写标题并选择培训类别'); return; }
   const operation = ++courseOperationSequence;
   courseLatestOperation = operation;
@@ -349,6 +350,7 @@ async function saveCourse() {
   if (!courseDirty.value) emit('saved');
 }
 function openChapter(chapter?: CourseChapterView) {
+  if (!structureEditable.value) return;
   chapterContextToken += 1;
   chapterSaving.value = false;
   editingChapterId.value = chapter?.id || null;
@@ -361,7 +363,7 @@ function openChapter(chapter?: CourseChapterView) {
   chapterVisible.value = true;
 }
 async function saveChapter() {
-  if (chapterSaving.value) return;
+  if (!structureEditable.value || chapterSaving.value) return;
   if (!chapterForm.title.trim()) { ElMessage.warning('请填写章节标题'); return; }
   const contextToken = chapterContextToken;
   const operation = ++chapterOperationSequence;
@@ -397,6 +399,7 @@ async function saveChapter() {
   }
 }
 function openLesson(chapterId: Id, lesson?: CourseLessonView) {
+  if (!structureEditable.value) return;
   lessonContextToken += 1;
   lessonSaving.value = false;
   lessonMediaPending.value = false;
@@ -449,7 +452,7 @@ async function removeLesson(lesson: CourseLessonView) {
   }
 }
 async function saveLesson() {
-  if (lessonSaving.value) return;
+  if (!structureEditable.value || lessonSaving.value) return;
   if (lessonMediaPending.value) { ElMessage.warning('请先完成或清除当前视频上传'); return; }
   if (!lessonForm.title.trim()) { ElMessage.warning('请填写课时标题'); return; }
   const contextToken = lessonContextToken;

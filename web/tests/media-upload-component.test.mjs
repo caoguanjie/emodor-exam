@@ -26,6 +26,7 @@ const testContext = {
   metadata: null,
   calls: [],
   httpConfig: null,
+  httpResponse: null,
 };
 let clientComponentCode = '';
 
@@ -38,6 +39,7 @@ const mediaStubCode = `
   }
   export async function getMediaMetadata(assetId) { return context.metadata(assetId); }
   export async function getMediaImageContent() { throw new Error('image preview not used by this test'); }
+  export async function getMediaVideoContent() { throw new Error('remote video preview not used by this test'); }
 `;
 
 const httpStubCode = `
@@ -47,7 +49,10 @@ const httpStubCode = `
       context.httpConfig = { url, form, config };
       return { asset_id: 'asset-timeout', status: 'ready', duration_ms: null };
     },
-    async get() { return context.limits; },
+    async get(url, config) {
+      context.httpConfig = { url, config };
+      return context.httpResponse ?? context.limits;
+    },
   };
 `;
 
@@ -210,6 +215,7 @@ beforeEach(() => {
   testContext.metadata = null;
   testContext.calls = [];
   testContext.httpConfig = null;
+  testContext.httpResponse = null;
 });
 
 test('emits model binding when processing media becomes ready', async () => {
@@ -305,4 +311,20 @@ test('uses an upload-specific unlimited timeout while preserving cancellation', 
   assert.equal(testContext.httpConfig.config.signal, controller.signal);
   const httpSource = await readFile(httpPath, 'utf8');
   assert.match(httpSource, /timeout:\s*60000/);
+});
+
+test('previews video through authenticated content with cancellation, not a token-bearing URL', async () => {
+  const mediaApi = await vite.ssrLoadModule(`${apiPath}?video-preview-test`);
+  const blob = new Blob(['video'], { type: 'video/mp4' });
+  const controller = new AbortController();
+  testContext.httpResponse = { data: blob };
+  assert.equal(await mediaApi.getMediaVideoContent('asset/12', { signal: controller.signal }), blob);
+  assert.equal(testContext.httpConfig.url, '/media/asset%2F12/content');
+  assert.equal(testContext.httpConfig.config.responseType, 'blob');
+  assert.equal(testContext.httpConfig.config.timeout, 0);
+  assert.equal(testContext.httpConfig.config.signal, controller.signal);
+  testContext.httpResponse = blob;
+  assert.equal(await mediaApi.getMediaVideoContent('12'), blob);
+  testContext.httpResponse = new Blob(['{"code":40302}'], { type: 'application/json' });
+  await assert.rejects(mediaApi.getMediaVideoContent('12'), /视频预览响应不是 MP4 文件流/);
 });

@@ -3,20 +3,22 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import ElementPlus from 'element-plus';
 import MediaUpload from '../MediaUpload.vue';
 
-const mocks = vi.hoisted(() => ({ limits: vi.fn(), metadata: vi.fn(), image: vi.fn(), upload: vi.fn(), createUrl: vi.fn(), revokeUrl: vi.fn() }));
-vi.mock('../../api/media', () => ({ getMediaLimits: mocks.limits, getMediaMetadata: mocks.metadata, getMediaImageContent: mocks.image, uploadMedia: mocks.upload }));
+const mocks = vi.hoisted(() => ({ limits: vi.fn(), metadata: vi.fn(), image: vi.fn(), video: vi.fn(), upload: vi.fn(), createUrl: vi.fn(), revokeUrl: vi.fn() }));
+vi.mock('../../api/media', () => ({ getMediaLimits: mocks.limits, getMediaMetadata: mocks.metadata, getMediaImageContent: mocks.image, getMediaVideoContent: mocks.video, uploadMedia: mocks.upload }));
 const wrappers: VueWrapper[] = [];
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
   mocks.limits.mockResolvedValue({ image_max_bytes: 10485760, video_max_bytes: 536870912, allowed_image_types: ['image/png'], allowed_video_types: ['video/mp4'] });
   mocks.metadata.mockImplementation(async (assetId: string) => ({ asset_id: assetId, purpose: 'course_cover', media_kind: 'image', original_name: '课程封面.png', status: 'ready', duration_ms: null }));
   mocks.image.mockResolvedValue(new Blob(['cover'], { type: 'image/png' }));
+  mocks.video.mockResolvedValue(new Blob(['video'], { type: 'video/mp4' }));
   mocks.upload.mockResolvedValue({ asset_id: '22', status: 'ready', duration_ms: null });
   mocks.createUrl.mockReturnValue('blob:preview');
   const BrowserUrl = globalThis.URL;
   vi.stubGlobal('URL', class extends BrowserUrl { static createObjectURL = mocks.createUrl; static revokeObjectURL = mocks.revokeUrl; });
 });
-afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.unstubAllGlobals(); });
+afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 async function render(props: Record<string, unknown> = {}) {
   const wrapper = mount(MediaUpload, { props: { purpose: 'course_cover', listType: 'picture-card', ...props }, attachTo: document.body, global: { plugins: [ElementPlus] } });
   wrappers.push(wrapper);
@@ -29,6 +31,98 @@ async function select(wrapper: VueWrapper, file: File) {
   await input.trigger('change'); await flushPromises();
 }
 describe('MediaUpload picture cards', () => {
+  it('keeps a ready unbound video previewable without issuing a forbidden metadata read', async () => {
+    mocks.upload.mockResolvedValue({ asset_id: '15', status: 'ready', duration_ms: 12000 });
+    mocks.metadata.mockRejectedValue(Object.assign(new Error('无权访问该数据'), { code: 40302 }));
+    const wrapper = await render({ purpose: 'video', listType: 'drag' });
+    await select(wrapper, new File(['video'], '课程.mp4', { type: 'video/mp4' }));
+    expect(wrapper.text()).toContain('课程.mp4');
+    expect(wrapper.text()).toContain('已就绪');
+    expect(wrapper.text()).toContain('时长 0:12');
+    expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual(['15']);
+    expect(mocks.metadata).not.toHaveBeenCalled();
+    expect(wrapper.get('video.media-upload__video-thumbnail').attributes('src')).toBe('blob:preview');
+    expect(wrapper.find('img.media-upload__preview').exists()).toBe(false);
+    await wrapper.get('button[aria-label="播放预览"]').trigger('click');
+    await flushPromises();
+    expect(document.body.querySelector('.media-upload__video-player')?.getAttribute('src')).toBe('blob:preview');
+    expect(mocks.video).not.toHaveBeenCalled();
+  });
+
+  it('loads an existing course video only when preview is requested and never changes the form binding', async () => {
+    const wrapper = await render({ purpose: 'video', listType: 'drag', currentAssetId: '12' });
+    expect(mocks.video).not.toHaveBeenCalled();
+    await wrapper.get('button[aria-label="播放预览"]').trigger('click');
+    await flushPromises();
+    expect(mocks.video).toHaveBeenCalledWith('12', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(document.body.querySelector('.media-upload__video-player')?.getAttribute('src')).toBe('blob:preview');
+    expect(wrapper.get('video.media-upload__video-thumbnail').attributes('src')).toBe('blob:preview');
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined();
+  });
+
+  it('does not adopt a late existing-video response after the user selects a replacement', async () => {
+    let resolveVideo!: (blob: Blob) => void;
+    mocks.video.mockImplementation(() => new Promise<Blob>(resolve => { resolveVideo = resolve; }));
+    const wrapper = await render({ purpose: 'video', listType: 'drag', currentAssetId: '12' });
+    await wrapper.get('button[aria-label="播放预览"]').trigger('click');
+    await flushPromises();
+    const signal = mocks.video.mock.calls[0][1].signal as AbortSignal;
+    mocks.upload.mockResolvedValue({ asset_id: '15', status: 'ready', duration_ms: 12000 });
+    await select(wrapper, new File(['replacement'], 'new.mp4', { type: 'video/mp4' }));
+    expect(signal.aborted).toBe(true);
+    const createdBeforeLateResponse = mocks.createUrl.mock.calls.length;
+    resolveVideo(new Blob(['old video'], { type: 'video/mp4' }));
+    await flushPromises();
+    expect(mocks.createUrl).toHaveBeenCalledTimes(createdBeforeLateResponse);
+    expect(wrapper.text()).toContain('new.mp4');
+    expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual(['15']);
+    expect(wrapper.get('video.media-upload__video-thumbnail').attributes('src')).toBe('blob:preview');
+  });
+
+  it('cancels a loading preview when closed and ignores its late response', async () => {
+    let resolveVideo!: (blob: Blob) => void;
+    mocks.video.mockImplementation(() => new Promise<Blob>(resolve => { resolveVideo = resolve; }));
+    const wrapper = await render({ purpose: 'video', listType: 'drag', currentAssetId: '12' });
+    await wrapper.get('button[aria-label="播放预览"]').trigger('click');
+    await flushPromises();
+    const signal = mocks.video.mock.calls[0][1].signal as AbortSignal;
+    const close = document.body.querySelector('.el-dialog__headerbtn') as HTMLButtonElement;
+    close.click();
+    await flushPromises();
+    expect(signal.aborted).toBe(true);
+    resolveVideo(new Blob(['late'], { type: 'video/mp4' }));
+    await flushPromises();
+    expect(mocks.createUrl).not.toHaveBeenCalled();
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined();
+  });
+
+  it('pauses playback and releases the video URL when the uploader is destroyed', async () => {
+    const wrapper = await render({ purpose: 'video', listType: 'drag' });
+    await select(wrapper, new File(['video'], '课程.mp4', { type: 'video/mp4' }));
+    await wrapper.get('button[aria-label="播放预览"]').trigger('click');
+    await flushPromises();
+    wrapper.unmount();
+    wrappers.splice(wrappers.indexOf(wrapper), 1);
+    expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
+    expect(mocks.revokeUrl).toHaveBeenCalledWith('blob:preview');
+    expect(document.body.querySelector('.media-upload__video-player')).toBeNull();
+  });
+
+  it('shows a preview failure without clearing the current video and permits a deliberate retry', async () => {
+    mocks.video.mockRejectedValueOnce(new Error('视频预览加载失败'));
+    const wrapper = await render({ purpose: 'video', listType: 'drag', currentAssetId: '12' });
+    await wrapper.get('button[aria-label="播放预览"]').trigger('click');
+    await flushPromises();
+    expect(document.body.textContent).toContain('视频预览加载失败');
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined();
+    const retry = [...document.body.querySelectorAll('button')].find(button => button.textContent?.includes('重试预览'));
+    expect(retry).toBeDefined();
+    retry!.click();
+    await flushPromises();
+    expect(document.body.querySelector('.media-upload__video-player')?.getAttribute('src')).toBe('blob:preview');
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined();
+  });
+
   it('uses an Element Plus drag area and the existing validated upload flow for course videos', async () => {
     mocks.upload.mockResolvedValue({ asset_id: '32', status: 'ready', duration_ms: 12000 });
     mocks.metadata.mockResolvedValue({ asset_id: '32', purpose: 'video', media_kind: 'video', original_name: 'lesson.mp4', status: 'ready', duration_ms: 12000 });

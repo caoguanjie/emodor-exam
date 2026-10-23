@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import ElementPlus, { ElDialog, ElMessageBox } from 'element-plus';
 import Courses from '../../views/admin/Courses.vue';
+import CourseEditor from '../../views/admin/CourseEditor.vue';
 import MediaUpload from '../MediaUpload.vue';
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), post: vi.fn(), delete: vi.fn(), image: vi.fn(), push: vi.fn(), createUrl: vi.fn(), revokeUrl: vi.fn() }));
@@ -74,6 +75,54 @@ function useDetail(detail: ReturnType<typeof lessonFixture>) {
 }
 
 describe('course presentation', () => {
+  it.each([
+    ['draft', ['修改课程', '章节管理', '上架']],
+    ['offline', ['修改课程', '章节管理', '上架']],
+    ['published', ['下架']],
+  ])('shows only the permitted row actions for a %s course', async (status, actions) => {
+    rows = [{ ...course, status: status as string }];
+    const wrapper = await render();
+    const row = wrapper.find('.el-table__body-wrapper tbody tr');
+    expect(row.findAll('button').map(item => item.text())).toEqual(actions);
+  });
+
+  it('removes editing after publishing and restores it only after confirmed offline refresh', async () => {
+    rows = [{ ...course }];
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never);
+    mocks.post.mockImplementation(async (url: string) => {
+      if (url === '/admin/courses/11/publish') rows[0]!.status = 'published';
+      else if (url === '/admin/courses/11/offline') rows[0]!.status = 'offline';
+      else throw new Error(`Unexpected POST ${url}`);
+      return { ...rows[0] };
+    });
+    const wrapper = await render();
+    await button(wrapper, '上架').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.el-table__body-wrapper tbody tr').findAll('button').map(item => item.text())).toEqual(['下架']);
+    await button(wrapper, '下架').trigger('click');
+    await flushPromises();
+    const row = wrapper.find('.el-table__body-wrapper tbody tr');
+    expect(row.text()).toContain('已下架');
+    expect(row.findAll('button').map(item => item.text())).toEqual(['修改课程', '章节管理', '上架']);
+  });
+
+  it.each(['修改课程', '章节管理'])('blocks a stale %s entry when the latest detail is already published', async entry => {
+    const detail = { ...lessonFixture(), status: 'published' };
+    useDetail(detail);
+    const wrapper = await render();
+    await button(wrapper, entry).trigger('click');
+    await flushPromises();
+    const dialog = activeDialog(wrapper);
+    expect(dialog.text()).toContain('请先下架后再修改');
+    expect(dialog.find('.el-form').exists()).toBe(false);
+    expect(dialog.find('.chapter-manager').exists()).toBe(false);
+    if (entry === '修改课程') {
+      expect(button(dialog, '保存课程资料').attributes('disabled')).toBeDefined();
+      await wrapper.findComponent(CourseEditor).vm.saveCourse();
+      expect(mocks.put).not.toHaveBeenCalled();
+    }
+  });
+
   it('shows covers, required lesson counts, explicit homepage recommendation and creation time without sorting controls', async () => {
     const wrapper = await render();
     expect(wrapper.findAll('.el-table__header th').map(item => item.text())).toEqual([
@@ -193,6 +242,8 @@ describe('course presentation', () => {
     const lessonDialog = document.body.querySelector('[aria-label="修改课时"]');
     expect(lessonDialog?.textContent).toContain('当前视频');
     const upload = wrapper.findAllComponents(MediaUpload).find(item => item.props('purpose') === 'video')!;
+    expect(upload.props('currentAssetId')).toBe('61');
+    expect(upload.props('modelValue')).toBeNull();
     expect(upload.props('listType')).toBe('drag');
     upload.vm.$emit('pending', true);
     await flushPromises();
@@ -226,7 +277,7 @@ describe('course presentation', () => {
     expect(activeDialog(wrapper).text()).not.toContain('施工现场安全防护');
   });
 
-  it('keeps lesson rows when deletion fails and hides deletion after publication', async () => {
+  it('keeps lesson rows when deletion fails and blocks the editor after publication', async () => {
     const detail = lessonFixture();
     useDetail(detail);
     vi.spyOn(ElMessageBox, 'confirm').mockImplementation(async () => 'confirm' as never);
@@ -243,7 +294,8 @@ describe('course presentation', () => {
     detail.status = 'published';
     await button(wrapper, '章节管理').trigger('click');
     await flushPromises();
-    expect(activeDialog(wrapper).findAll('.el-table__body-wrapper tbody tr button').map(item => item.text())).toEqual(['修改', '修改']);
+    expect(activeDialog(wrapper).text()).toContain('请先下架后再修改');
+    expect(activeDialog(wrapper).find('.chapter-manager').exists()).toBe(false);
   });
 
   it('reconciles an uncertain deletion through the catalog instead of resending it', async () => {

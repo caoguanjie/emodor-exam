@@ -68,10 +68,22 @@ export async function getMediaMetadata(assetId: string): Promise<MediaMetadata> 
   return await http.get(mediaPath(assetId)) as MediaMetadata;
 }
 
-/** Fetch only image bytes for a preview; video callers should use metadata. */
+/** Fetch image bytes through the authenticated content policy for a preview. */
 export async function getMediaImageContent(assetId: string): Promise<Blob> {
   const response: any = await http.get(mediaPath(assetId, '/content'), { responseType: 'blob' });
   const blob = typeof Blob !== 'undefined' && response instanceof Blob ? response : response?.data;
   if (!(typeof Blob !== 'undefined' && blob instanceof Blob)) throw new Error('图片预览响应不是文件流');
+  return blob;
+}
+
+/** Authoring preview only: use the existing authenticated content policy, never a JWT URL. */
+export async function getMediaVideoContent(assetId: string, options: { signal?: AbortSignal } = {}): Promise<Blob> {
+  const response: any = await http.get(mediaPath(assetId, '/content'), {
+    responseType: 'blob', timeout: 0, signal: options.signal,
+  });
+  const blob = typeof Blob !== 'undefined' && response instanceof Blob ? response : response?.data;
+  if (!(typeof Blob !== 'undefined' && blob instanceof Blob) || blob.type !== 'video/mp4') {
+    throw new Error('视频预览响应不是 MP4 文件流');
+  }
   return blob;
 }

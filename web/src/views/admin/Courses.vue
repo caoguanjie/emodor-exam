@@ -52,8 +52,8 @@
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <FitsTableActions>
-              <FitsTableAction v-if="canWrite" type="primary" @click="openEditor(row.id, 'info')">修改课程</FitsTableAction>
-              <FitsTableAction type="primary" @click="openEditor(row.id, 'chapters')">章节管理</FitsTableAction>
+              <FitsTableAction v-if="canWrite && row.status !== 'published'" type="primary" @click="openEditor(row.id, 'info')">修改课程</FitsTableAction>
+              <FitsTableAction v-if="row.status !== 'published'" type="primary" @click="openEditor(row.id, 'chapters')">章节管理</FitsTableAction>
               <FitsTableAction v-if="row.status !== 'published' && auth.can('courses:publish')" type="success" @click="publish(row)">上架</FitsTableAction>
               <FitsTableAction v-if="row.status === 'published' && auth.can('courses:publish')" type="warning" @click="offline(row)">下架</FitsTableAction>
             </FitsTableActions>
@@ -222,6 +222,10 @@ async function load() {
 }
 function search() { query.page = 1; void load(); }
 function openEditor(id: Id, mode: 'info' | 'chapters') {
+  if (items.value.find(item => item.id === id)?.status === 'published') {
+    ElMessage.warning('课程已上架，请先下架后再修改');
+    return;
+  }
   editorCourseId.value = id;
   editorMode.value = mode;
   editorVisible.value = true;
