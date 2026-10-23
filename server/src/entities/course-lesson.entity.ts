@@ -1,4 +1,4 @@
-import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, CreateDateColumn, DeleteDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
 @Entity('course_lesson')
 @Index('idx_course_lesson_course', ['courseId'])
@@ -33,4 +33,7 @@ export class CourseLesson {
 
   @UpdateDateColumn({ name: 'updated_at', precision: 3 })
   updatedAt: Date;
+
+  @DeleteDateColumn({ name: 'deleted_at', type: 'datetime', precision: 3, nullable: true })
+  deletedAt: Date | null;
 }

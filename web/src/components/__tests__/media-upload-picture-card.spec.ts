@@ -29,6 +29,35 @@ async function select(wrapper: VueWrapper, file: File) {
   await input.trigger('change'); await flushPromises();
 }
 describe('MediaUpload picture cards', () => {
+  it('uses an Element Plus drag area and the existing validated upload flow for course videos', async () => {
+    mocks.upload.mockResolvedValue({ asset_id: '32', status: 'ready', duration_ms: 12000 });
+    mocks.metadata.mockResolvedValue({ asset_id: '32', purpose: 'video', media_kind: 'video', original_name: 'lesson.mp4', status: 'ready', duration_ms: 12000 });
+    const wrapper = await render({ purpose: 'video', listType: 'drag' });
+    expect(wrapper.find('.el-upload-dragger').exists()).toBe(true);
+    expect(wrapper.text()).toContain('拖到此处');
+    expect(wrapper.text()).toContain('video/mp4');
+    const file = new File(['video'], 'lesson.mp4', { type: 'video/mp4' });
+    await wrapper.get('.el-upload-dragger').trigger('drop', { dataTransfer: { files: [file] } });
+    await flushPromises();
+    expect(mocks.upload).toHaveBeenCalledWith(file, 'video', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual(['32']);
+    expect(wrapper.emitted('pending')).toContainEqual([true]);
+    expect(wrapper.emitted('pending')?.at(-1)).toEqual([false]);
+    expect(wrapper.text()).toContain('已就绪');
+    expect(wrapper.text()).toContain('时长 0:12');
+    expect(wrapper.find('.el-upload-list--picture-card').exists()).toBe(false);
+  });
+
+  it('keeps invalid and disabled drag uploads out of the network', async () => {
+    const wrapper = await render({ purpose: 'video', listType: 'drag' });
+    await select(wrapper, new File(['bad'], 'bad.txt', { type: 'text/plain' }));
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(wrapper.get('[role="alert"]').text()).not.toBe('');
+    expect(wrapper.emitted('pending')?.at(-1)).toEqual([true]);
+    await wrapper.setProps({ disabled: true });
+    await select(wrapper, new File(['video'], 'lesson.mp4', { type: 'video/mp4' }));
+    expect(mocks.upload).not.toHaveBeenCalled();
+  });
   it('hides routine metadata in compact mode while retaining load errors and retry', async () => {
     const wrapper = await render({ purpose: 'avatar', compact: true, modelValue: '21' });
     expect(wrapper.find('.media-upload__hint').exists()).toBe(false);

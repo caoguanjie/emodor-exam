@@ -15,6 +15,8 @@ const httpStubId = '\0course-detail-state-http-test';
 const authStubId = '\0course-detail-state-auth-test';
 const mediaStubId = '\0course-detail-state-media-test';
 const unsavedStubId = '\0course-detail-state-unsaved-test';
+const editorStubId = '\0course-editor-list-test';
+const coverStubId = '\0course-cover-list-test';
 
 const initialCourse = Object.freeze({
   id: 'course-1',
@@ -44,6 +46,7 @@ const testContext = {
   unsavedSources: [],
   deferredRequests: new Map(),
   deferredResponses: new Map(),
+  discardAllowed: true,
 };
 let clientComponentCode = '';
 let courseListClientCode = '';
@@ -218,6 +221,7 @@ const unsavedStubCode = `
       markClean() { dirty.value = false; },
       async confirmDiscard() {
         if (!dirty.value) return true;
+        if (!context.discardAllowed) return false;
         await options.onDiscard?.();
         return true;
       },
@@ -232,13 +236,15 @@ function testPlugin() {
     name: 'course-detail-state-test-stubs',
     enforce: 'pre',
     resolveId(source, importer) {
-      const courseView = importer?.includes('/src/views/admin/CourseDetail.vue') || importer?.includes('/src/views/admin/Courses.vue');
+      const courseView = importer?.includes('/src/views/admin/CourseEditor.vue') || importer?.includes('/src/views/admin/Courses.vue');
       if (source === 'vue-router' && courseView) return routeStubId;
       if (source === 'element-plus' && courseView) return elementStubId;
       if (source === '@element-plus/icons-vue' && courseView) return iconsStubId;
       if (source === '../../api/http' && courseView) return httpStubId;
       if (source === '../../stores/auth' && courseView) return authStubId;
       if (source === '../../components/MediaUpload.vue' && courseView) return mediaStubId;
+      if (source === '../../components/CourseCover.vue' && courseView) return coverStubId;
+      if (source === './CourseEditor.vue' && importer?.includes('/src/views/admin/Courses.vue')) return editorStubId;
       if (source === '../../composables/useUnsavedChanges' && courseView) return unsavedStubId;
       if (source === clientComponentId || source === courseListClientId) return source;
       return undefined;
@@ -251,6 +257,8 @@ function testPlugin() {
       if (id === authStubId) return authStubCode;
       if (id === mediaStubId) return mediaStubCode;
       if (id === unsavedStubId) return unsavedStubCode;
+      if (id === editorStubId) return `export default { props: ['courseId', 'mode'], setup(_props, { expose }) { expose({ confirmClose: async () => true }); return () => null; } };`;
+      if (id === coverStubId) return `export default { props: ['assetId', 'alt'], render() { return null; } };`;
       if (id === clientComponentId) return clientComponentCode;
       if (id === courseListClientId) return courseListClientCode;
       return undefined;
@@ -321,10 +329,11 @@ function waitFor(predicate, timeoutMs = 1800, label = 'component state') {
   });
 }
 
-async function mountCourseDetail() {
+async function mountCourseDetail(mode = 'info') {
   const host = createHost();
   const root = { type: 'root', props: {}, children: [], parent: null, text: '' };
-  const app = host.createApp(CourseDetail);
+  const changedEvents = [];
+  const app = host.createApp(CourseDetail, { courseId: 'course-1', mode, onChanged: () => changedEvents.push('changed') });
   const components = {
     'el-alert': passthrough('alert'),
     'el-button': passthrough('button'),
@@ -341,7 +350,10 @@ async function mountCourseDetail() {
     'el-input-number': passthrough('input-number'),
     'el-option': passthrough('option'),
     'el-select': passthrough('select'),
+    'el-skeleton': passthrough('skeleton'),
     'el-switch': passthrough('switch'),
+    'el-radio': passthrough('radio'),
+    'el-radio-group': passthrough('radio-group'),
     'el-table': passthrough('table'),
     'el-table-column': passthrough('table-column'),
     'el-tag': passthrough('tag'),
@@ -349,9 +361,9 @@ async function mountCourseDetail() {
   for (const [name, component] of Object.entries(components)) app.component(name, component);
   app.mount(root);
   const state = app._instance.setupState;
-  await waitFor(() => state.course && state.categories.length === 1, 1800, 'course detail load');
+  await waitFor(() => state.course && (mode === 'chapters' || state.categories.length === 1), 1800, 'course editor load');
   await nextTick();
-  return { app, root, state, unmount: () => app.unmount() };
+  return { app, root, state, changedEvents, unmount: () => app.unmount() };
 }
 
 async function mountCourses() {
@@ -371,6 +383,8 @@ async function mountCourses() {
     'el-pagination': passthrough('pagination'),
     'el-select': passthrough('select'),
     'el-switch': passthrough('switch'),
+    'el-radio': passthrough('radio'),
+    'el-radio-group': passthrough('radio-group'),
     'el-table': passthrough('table'),
     'el-table-column': passthrough('table-column'),
     'el-tag': passthrough('tag'),
@@ -437,7 +451,7 @@ before(async () => {
     optimizeDeps: { noDiscovery: true },
     plugins: [testPlugin()],
   });
-  const transformed = await vite.transformRequest('/src/views/admin/CourseDetail.vue');
+  const transformed = await vite.transformRequest('/src/views/admin/CourseEditor.vue');
   assert.ok(transformed?.code, 'Vite should compile the real CourseDetail SFC');
   clientComponentCode = transformed.code
     .replace(/^import \{ createHotContext[\s\S]*?import\.meta\.hot = [^;]+;\s*/, '')
@@ -460,6 +474,7 @@ after(async () => {
 });
 
 beforeEach(() => {
+  testContext.discardAllowed = true;
   testContext.course = structuredClone(initialCourse);
   testContext.coursePage = structuredClone(initialCoursePage);
   testContext.calls = [];
@@ -470,6 +485,30 @@ beforeEach(() => {
   testContext.unsavedSources = [];
   testContext.deferredRequests = new Map();
   testContext.deferredResponses = new Map();
+});
+
+test('outer editor closure protects unsaved information and a pending video-version save', async () => {
+  const mounted = await mountCourseDetail('chapters');
+  mounted.state.form.description = '尚未保存';
+  await nextTick();
+  testContext.discardAllowed = false;
+  assert.equal(await mounted.state.confirmClose(), false);
+  assert.equal(mounted.state.form.description, '尚未保存');
+  testContext.discardAllowed = true;
+  assert.equal(await mounted.state.confirmClose(), true);
+  assert.equal(mounted.state.form.description, initialCourse.description);
+  mounted.state.openLesson('chapter-1', { id: 'lesson-1', title: '视频课时', required: true, lesson_type: 'video', sort_order: 0, current_version: null });
+  mounted.state.lessonForm.asset_id = 'video-new';
+  const receipt = deferRequest('POST', '/admin/courses/course-1/lessons/lesson-1/versions');
+  const pending = mounted.state.saveLesson();
+  await waitFor(() => testContext.calls.some(call => call.path.endsWith('/lesson-1/versions')));
+  try {
+    assert.equal(await mounted.state.confirmClose(), false, 'a version write must settle before the entire editor closes');
+  } finally {
+    receipt.resolve();
+    await pending;
+    mounted.unmount();
+  }
 });
 
 test('does not expose removed regulation management data or overwrite legacy course associations', async () => {
@@ -543,7 +582,7 @@ test('clears the missing-video summary only after the lesson version is confirme
       id: 'lesson-1', title: '第一课', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
     }],
   }];
-  const mounted = await mountCourseDetail();
+  const mounted = await mountCourseDetail('chapters');
   mounted.state.form.description = '另一份未保存简介';
   const lesson = mounted.state.course.chapters[0].lessons[0];
   mounted.state.openLesson('chapter-1', lesson);
@@ -617,36 +656,88 @@ test('an older metadata snapshot cannot restore a missing-video warning after a 
   mounted.unmount();
 });
 
-test('keeps unsaved course metadata while video replacement and status actions refresh server state', async () => {
+test('keeps unsaved course metadata while video replacement and catalog reload refresh server state', async () => {
   const mounted = await mountCourseDetail();
   mounted.state.form.description = '待保存元数据';
   mounted.state.form.cover_asset_id = 'cover-pending';
 
-  mounted.state.openVideo({
+  mounted.state.openLesson('chapter-1', {
     id: 'lesson-1', title: '第一课', lesson_type: 'video', required: true, sort_order: 1,
     current_version: { version_id: 'version-1', asset_id: 'video-1', duration_ms: 60_000 },
   });
-  mounted.state.replacementAssetId = 'video-2';
-  await mounted.state.replaceVideo();
+  mounted.state.lessonForm.asset_id = 'video-2';
+  await mounted.state.saveLesson();
   assert.equal(mounted.state.form.description, '待保存元数据');
   assert.equal(mounted.state.form.cover_asset_id, 'cover-pending');
 
-  await mounted.state.publish();
+  testContext.course.status = 'published';
+  await mounted.state.load(false);
   assert.equal(mounted.state.course.status, 'published');
   assert.equal(mounted.state.form.description, '待保存元数据');
   assert.equal(mounted.state.form.cover_asset_id, 'cover-pending');
 
-  await mounted.state.offline();
+  testContext.course.status = 'offline';
+  await mounted.state.load(false);
   assert.equal(mounted.state.course.status, 'offline');
   assert.equal(mounted.state.form.description, '待保存元数据');
   assert.equal(mounted.state.form.cover_asset_id, 'cover-pending');
   mounted.unmount();
 });
 
+test('retrying a failed catalog refresh preserves newer unsaved course input', async () => {
+  const mounted = await mountCourseDetail();
+  mounted.state.form.description = '提交的 B';
+  const receipt = deferRequest('PUT', '/admin/courses/course-1');
+  const saving = mounted.state.saveCourse();
+  mounted.state.form.description = '继续编辑的 C';
+  testContext.failRequests.add('GET /admin/courses/course-1');
+  receipt.resolve();
+  await assert.rejects(() => saving, /configured failure/);
+  testContext.failRequests.delete('GET /admin/courses/course-1');
+  const retry = findNodes(mounted.root, node => node.type === 'button' && node.props.onClick)[0];
+  await retry.props.onClick();
+  await nextTick();
+  assert.equal(mounted.state.form.description, '继续编辑的 C');
+  assert.equal(testContext.unsavedSources[0].dirty.value, true);
+  mounted.unmount();
+});
+
+test('a pending write blocks route and tab departure even when the form matches its old baseline', async () => {
+  const mounted = await mountCourseDetail();
+  mounted.state.form.description = '提交的 B';
+  const receipt = deferRequest('PUT', '/admin/courses/course-1');
+  const saving = mounted.state.saveCourse();
+  mounted.state.form.description = initialCourse.description;
+  await nextTick();
+  assert.equal(testContext.unsavedSources[0].dirty.value, false);
+  assert.ok(testContext.unsavedSources.some(source => source.dirty.value && source.options.canDiscard?.() === false));
+  receipt.resolve();
+  await saving;
+  mounted.unmount();
+});
+
+test('confirmed existing lesson metadata refreshes list counts even if the subsequent video save fails', async () => {
+  testContext.course.chapters = [{ id: 'chapter-1', title: '第一章', sort_order: 1, lessons: [{
+    id: 'lesson-1', title: '第一课', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
+  }] }];
+  const mounted = await mountCourseDetail('chapters');
+  mounted.state.openLesson('chapter-1', mounted.state.course.chapters[0].lessons[0]);
+  mounted.state.lessonForm.required = false;
+  await mounted.state.saveLesson();
+  assert.equal(mounted.changedEvents.length, 1);
+  mounted.state.openLesson('chapter-1', mounted.state.course.chapters[0].lessons[0]);
+  mounted.state.lessonForm.required = true;
+  mounted.state.lessonForm.asset_id = 'video-failed';
+  testContext.failRequests.add('POST /admin/courses/course-1/lessons/lesson-1/versions');
+  await assert.rejects(() => mounted.state.saveLesson(), /configured failure/);
+  assert.equal(mounted.changedEvents.length, 2);
+  mounted.unmount();
+});
+
 test('keeps CourseDetail persisted sections independent and retains failed-save drafts', async () => {
   const mounted = await mountCourseDetail();
-  assert.equal(testContext.unsavedSources.length, 4, 'metadata, chapter, lesson and video must register separately');
-  const [metadataSource, chapterSource, lessonSource, videoSource] = testContext.unsavedSources;
+  assert.equal(testContext.unsavedSources.length, 4, 'metadata, chapter and unified lesson/video drafts plus a pending-write route blocker');
+  const [metadataSource, chapterSource, lessonSource] = testContext.unsavedSources;
 
   mounted.state.form.description = '元数据草稿';
   testContext.failRequests.add('PUT /admin/courses/course-1');
@@ -683,16 +774,16 @@ test('keeps CourseDetail persisted sections independent and retains failed-save 
   assert.equal(lessonSource.dirty.value, false);
   assert.equal(metadataSource.dirty.value, true, 'saving a lesson must not clean metadata');
 
-  mounted.state.openVideo({
+  mounted.state.openLesson('chapter-1', {
     id: 'lesson-1', title: '第一课', lesson_type: 'video', required: true, sort_order: 1,
     current_version: { version_id: 'version-1', asset_id: 'video-1', duration_ms: 60_000 },
   });
-  mounted.state.replacementAssetId = 'video-failed';
+  mounted.state.lessonForm.asset_id = 'video-failed';
   await nextTick();
   testContext.failRequests.add('POST /admin/courses/course-1/lessons/lesson-1/versions');
-  await assert.rejects(() => mounted.state.replaceVideo(), /configured failure/);
-  assert.equal(videoSource.dirty.value, true);
-  assert.equal(mounted.state.videoVisible, true);
+  await assert.rejects(() => mounted.state.saveLesson(), /configured failure/);
+  assert.equal(lessonSource.dirty.value, true);
+  assert.equal(mounted.state.lessonVisible, true);
   assert.equal(metadataSource.dirty.value, true);
   mounted.unmount();
 });
@@ -840,7 +931,9 @@ test('a retained course create binds its returned id and saves the next draft wi
   await secondSave;
   assert.equal(mounted.state.createVisible, false);
   assert.equal(createSource.dirty.value, false);
-  assert.deepEqual(testContext.routerPushes, ['/admin/courses/course-created']);
+  assert.deepEqual(testContext.routerPushes, []);
+  assert.equal(mounted.state.editorVisible, true);
+  assert.equal(mounted.state.editorCourseId, 'course-created');
 
   testContext.routerPushes = [];
   mounted.state.openCreate();
@@ -976,7 +1069,7 @@ test('a retained lesson create saves metadata and its later asset through distin
   assert.equal(mounted.state.lessonForm.title, '响应前课时草稿 B');
   assert.equal(mounted.state.lessonForm.asset_id, 'video-draft-b');
   assert.equal(mounted.state.lessonAssetDraftVisible, true);
-  assert.equal(findNodes(mounted.root, (node) => String(node.text || '').includes('已创建课时的视频不能删除')).length, 1);
+  assert.equal(findNodes(mounted.root, (node) => String(node.text || '').includes('历史视频和学习记录保留')).length, 1);
   assert.equal(mounted.state.lessonVisible, true);
   assert.equal(lessonSource.dirty.value, true);
 
@@ -1097,45 +1190,66 @@ test('a failed retained lesson version keeps confirmed metadata in the baseline 
   mounted.unmount();
 });
 
-test('a stale video save cannot clean or close a reopened replacement draft', async () => {
+test('a stale video save cannot clean or close a reopened unified lesson draft', async () => {
   const mounted = await mountCourseDetail();
-  const videoSource = testContext.unsavedSources[3];
+  const lessonSource = testContext.unsavedSources[2];
 
-  mounted.state.openVideo({
+  mounted.state.openLesson('chapter-1', {
     id: 'lesson-same', title: '课时', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
   });
-  mounted.state.replacementAssetId = 'video-request-a';
+  mounted.state.lessonForm.asset_id = 'video-request-a';
   const sameContext = deferRequest('POST', '/admin/courses/course-1/lessons/lesson-same/versions');
-  const sameContextSave = mounted.state.replaceVideo();
+  const sameContextSave = mounted.state.saveLesson();
   await waitFor(() => testContext.calls.some((call) => call.path?.endsWith('/lessons/lesson-same/versions')), 1800, 'same-context video save');
-  mounted.state.replacementAssetId = 'video-draft-b';
+  mounted.state.lessonForm.asset_id = 'video-draft-b';
   await nextTick();
   assert.equal(testContext.calls.find((call) => call.path?.endsWith('/lessons/lesson-same/versions'))?.body?.asset_id, 'video-request-a');
   sameContext.resolve();
   await sameContextSave;
-  assert.equal(mounted.state.replacementAssetId, 'video-draft-b');
-  assert.equal(mounted.state.videoVisible, true);
-  assert.equal(videoSource.dirty.value, true);
-  await mounted.state.closeVideo();
+  assert.equal(mounted.state.lessonForm.asset_id, 'video-draft-b');
+  assert.equal(mounted.state.lessonVisible, true);
+  assert.equal(lessonSource.dirty.value, true);
+  await mounted.state.closeLesson();
 
-  mounted.state.openVideo({
+  mounted.state.openLesson('chapter-1', {
     id: 'lesson-a', title: '课时 A', lesson_type: 'video', required: true, sort_order: 1, current_version: null,
   });
-  mounted.state.replacementAssetId = 'video-a';
+  mounted.state.lessonForm.asset_id = 'video-a';
   const deferred = deferRequest('POST', '/admin/courses/course-1/lessons/lesson-a/versions');
-  const pending = mounted.state.replaceVideo();
+  const pending = mounted.state.saveLesson();
   await waitFor(() => testContext.calls.some((call) => call.path?.endsWith('/lessons/lesson-a/versions')), 1800, 'video A save');
-  await mounted.state.closeVideo();
-  mounted.state.openVideo({
+  await mounted.state.closeLesson();
+  mounted.state.openLesson('chapter-1', {
     id: 'lesson-b', title: '课时 B', lesson_type: 'video', required: true, sort_order: 2, current_version: null,
   });
-  mounted.state.replacementAssetId = 'video-b';
+  mounted.state.lessonForm.asset_id = 'video-b';
   await nextTick();
   deferred.resolve();
   await pending;
-  assert.equal(mounted.state.replacementLessonId, 'lesson-b');
-  assert.equal(mounted.state.replacementAssetId, 'video-b');
-  assert.equal(mounted.state.videoVisible, true);
-  assert.equal(videoSource.dirty.value, true);
+  assert.equal(mounted.state.editingLessonId, 'lesson-b');
+  assert.equal(mounted.state.lessonForm.asset_id, 'video-b');
+  assert.equal(mounted.state.lessonVisible, true);
+  assert.equal(lessonSource.dirty.value, true);
+  mounted.unmount();
+});
+
+test('a version save cannot close a newer video upload that has not produced an asset id yet', async () => {
+  const mounted = await mountCourseDetail('chapters');
+  mounted.state.openLesson('chapter-1', { id: 'lesson-1', title: '安全教育', lesson_type: 'video', required: true, sort_order: 1, current_version: null });
+  mounted.state.lessonForm.asset_id = 'video-a';
+  const receipt = deferRequest('POST', '/admin/courses/course-1/lessons/lesson-1/versions');
+  const saving = mounted.state.saveLesson();
+  mounted.state.lessonMediaPending = true;
+  await nextTick();
+  receipt.resolve();
+  await saving;
+  assert.equal(mounted.state.lessonVisible, true);
+  assert.equal(testContext.unsavedSources[2].dirty.value, true);
+  mounted.state.lessonMediaPending = false;
+  mounted.state.lessonForm.asset_id = 'video-b';
+  await nextTick();
+  await mounted.state.saveLesson();
+  assert.equal(mounted.state.lessonVisible, false);
+  assert.equal(testContext.calls.filter(call => call.path.endsWith('/lesson-1/versions')).at(-1).body.asset_id, 'video-b');
   mounted.unmount();
 });

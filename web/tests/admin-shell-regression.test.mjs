@@ -25,6 +25,7 @@ const clientIds = {
   dictionaries: '\0a5-dictionaries-client-test',
   users: '\0a5-users-client-test',
   courses: '\0a5-courses-client-test',
+  courseCover: '\0a5-course-cover-client-test',
   trainingCategories: '\0a5-training-categories-client-test',
   administrators: '\0a5-administrators-client-test',
   roles: '\0a5-roles-client-test',
@@ -267,6 +268,7 @@ function testPlugin() {
       if (source === '../stores/tabs' || source === '/src/stores/tabs.ts') return tabsStubId;
       if ((source === '../components/BusinessTabs.vue' || source === '/src/components/BusinessTabs.vue') && clientCode.has(clientIds.businessTabs)) return clientIds.businessTabs;
       if (source === '../components/MediaUpload.vue' || source === '../../components/MediaUpload.vue' || source === '/src/components/MediaUpload.vue') return mediaStubId;
+      if ((source === '../../components/CourseCover.vue' || source === '/src/components/CourseCover.vue') && clientCode.has(clientIds.courseCover)) return clientIds.courseCover;
       if (source === '../../components/ImportPreview.vue' || source === '/src/components/ImportPreview.vue') return importPreviewStubId;
       if ((source === '../composables/useUnsavedChanges' || source === '/src/composables/useUnsavedChanges.ts') && clientCode.has(clientIds.unsaved)) return clientIds.unsaved;
       return undefined;
@@ -334,7 +336,7 @@ const elementComponents = [
   'el-alert', 'el-aside', 'el-button', 'el-carousel', 'el-carousel-item', 'el-checkbox',
   'el-checkbox-group', 'el-container', 'el-date-picker', 'el-dialog', 'el-dropdown',
   'el-dropdown-item', 'el-dropdown-menu', 'el-empty', 'el-form', 'el-form-item',
-  'el-header', 'el-icon', 'el-image-viewer', 'el-input', 'el-input-number', 'el-main', 'el-menu',
+  'el-header', 'el-icon', 'el-image', 'el-image-viewer', 'el-input', 'el-input-number', 'el-main', 'el-menu',
   'el-menu-item', 'el-sub-menu', 'el-option', 'el-pagination', 'el-progress', 'el-radio',
   'el-radio-button', 'el-radio-group', 'el-result', 'el-scrollbar', 'el-select',
   'el-switch', 'el-table', 'el-table-column', 'el-tag', 'el-tree', 'el-tree-select', 'el-upload',
@@ -648,6 +650,7 @@ before(async () => {
   Menus = await loadClientSfc('/src/views/admin/Menus.vue', clientIds.menus);
   Dictionaries = await loadClientSfc('/src/views/admin/Dictionaries.vue', clientIds.dictionaries);
   Users = await loadClientSfc('/src/views/admin/Users.vue', clientIds.users);
+  await loadClientSfc('/src/components/CourseCover.vue', clientIds.courseCover);
   Courses = await loadClientSfc('/src/views/admin/Courses.vue', clientIds.courses);
   TrainingCategories = await loadClientSfc('/src/views/admin/TrainingCategories.vue', clientIds.trainingCategories);
   Administrators = await loadClientSfc('/src/views/admin/Administrators.vue', clientIds.administrators);

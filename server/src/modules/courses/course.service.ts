@@ -409,6 +409,7 @@ export class CourseService implements OnModuleInit {
         lesson_type: lesson.lessonType,
         required: Boolean(lesson.required),
         sort_order: lesson.sortOrder,
+        created_at: lesson.createdAt,
         current_version: version ? {
           version_id: String(version.id),
           asset_id: String(version.assetId),

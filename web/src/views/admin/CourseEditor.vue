@@ -1,73 +1,72 @@
 <template>
-  <div v-if="course" class="page-card course-detail">
-    <div class="toolbar">
-      <el-button text @click="router.push('/admin/courses')"><el-icon><ArrowLeft /></el-icon>返回课程</el-button>
-      <el-divider direction="vertical" />
-      <h2 class="detail-title">{{ course.title }}</h2>
+  <el-alert v-if="loadError" :title="loadError" type="error" :closable="false"><el-button link @click="retryLoad">重试</el-button></el-alert>
+  <el-skeleton v-if="!course && !loadError" :rows="5" animated />
+  <div v-if="course" class="course-editor">
+    <div v-if="mode === 'chapters'" class="course-editor__heading">
+      <span>{{ course.title }}</span>
       <el-tag :type="statusType(course.status)">{{ statusLabel(course.status) }}</el-tag>
-      <div style="flex:1" />
-      <el-button v-if="course.status !== 'published' && auth.can('courses:publish')" type="success" @click="publish">上架</el-button>
-      <el-button v-if="course.status === 'published' && auth.can('courses:publish')" type="warning" plain @click="offline">下架</el-button>
     </div>
 
-    <el-alert v-if="course.missing_required_lesson_ids?.length" type="warning" :closable="false" style="margin-bottom:16px"
+    <el-alert v-if="mode === 'chapters' && course.missing_required_lesson_ids?.length" type="warning" :closable="false" style="margin-bottom:16px"
       :title="`发布前仍有 ${course.missing_required_lesson_ids.length} 个必学课时缺少可用视频`" />
-    <el-alert v-if="course.status === 'published'" type="info" :closable="false" style="margin-bottom:16px"
+    <el-alert v-if="mode === 'chapters' && course.status === 'published'" type="info" :closable="false" style="margin-bottom:16px"
       title="已上架课程的章节和课时结构已锁定；替换视频会追加内容版本，不覆盖旧版本。" />
 
-    <el-card shadow="never" class="section-card">
-      <template #header><span>课程资料</span></template>
-      <el-form label-width="96px">
-        <el-form-item label="课程标题"><el-input v-model="form.title" maxlength="255" :disabled="!auth.can('courses:write')" /></el-form-item>
+      <el-form v-if="mode === 'info'" label-width="96px">
+        <el-form-item label="课程名称"><el-input v-model="form.title" maxlength="255" :disabled="!auth.can('courses:write')" /></el-form-item>
+        <el-form-item label="课程封面"><MediaUpload v-model="form.cover_asset_id" purpose="course_cover" list-type="picture-card" :disabled="!canUploadMedia" /></el-form-item>
         <el-form-item label="培训类别">
           <el-select v-model="form.category_id" filterable style="width:100%" :disabled="!auth.can('courses:write')">
             <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="课程简介"><el-input v-model="form.description" type="textarea" :rows="3" maxlength="10000" :disabled="!auth.can('courses:write')" /></el-form-item>
-        <el-form-item label="课程封面"><MediaUpload v-model="form.cover_asset_id" purpose="course_cover" :disabled="!canUploadMedia" /></el-form-item>
-        <el-form-item label="推荐 / 排序">
-          <el-switch v-model="form.is_recommended" :disabled="!auth.can('courses:write')" />
-          <el-input-number v-model="form.sort_order" :min="0" style="margin-left:16px" :disabled="!auth.can('courses:write')" />
+        <el-form-item label="首页推荐">
+          <el-radio-group v-model="form.is_recommended" :disabled="!auth.can('courses:write')"><el-radio :value="true">是</el-radio><el-radio :value="false">否</el-radio></el-radio-group>
         </el-form-item>
-        <el-form-item><el-button v-if="auth.can('courses:write')" type="primary" :loading="saving" @click="saveCourse">保存课程资料</el-button></el-form-item>
+        <el-form-item label="排序"><el-input-number v-model="form.sort_order" :min="0" :disabled="!auth.can('courses:write')" /></el-form-item>
       </el-form>
-    </el-card>
 
-    <el-card shadow="never" class="section-card">
-      <template #header>
-        <div class="card-head"><span>章节与视频课时</span><el-button v-if="structureEditable" type="primary" size="small" @click="openChapter()">新增章节</el-button></div>
-      </template>
+    <div v-if="mode === 'chapters'" class="chapter-manager">
+      <div class="chapter-manager__toolbar">
+        <span class="muted">共 {{ course.chapters.length }} 章 · {{ lessonCount }} 个课时</span>
+        <el-button v-if="structureEditable" type="primary" @click="openChapter()">新增章节</el-button>
+      </div>
       <el-empty v-if="course.chapters.length === 0" description="暂无章节" />
-      <el-collapse v-else v-model="expanded">
-        <el-collapse-item v-for="chapter in course.chapters" :key="chapter.id" :name="chapter.id">
-          <template #title>
-            <span class="chapter-title">{{ chapter.sort_order }} · {{ chapter.title }}</span>
-            <el-button v-if="structureEditable" text type="primary" size="small" @click.stop="openChapter(chapter)">编辑章节</el-button>
-            <el-button v-if="structureEditable" text type="primary" size="small" @click.stop="openLesson(chapter.id)">新增课时</el-button>
-          </template>
-          <el-table :data="chapter.lessons">
-            <el-table-column label="顺序" prop="sort_order" width="70" />
-            <el-table-column label="课时" prop="title" min-width="180" />
-            <el-table-column label="要求" width="90"><template #default="{ row }"><el-tag :type="row.required ? 'primary' : 'info'">{{ row.required ? '必学' : '选学' }}</el-tag></template></el-table-column>
-            <el-table-column label="视频状态" min-width="210">
+      <section v-for="(chapter, index) in course.chapters" :key="chapter.id" class="chapter-section" :aria-label="chapter.title">
+        <div class="chapter-section__header">
+          <div class="chapter-section__identity">
+            <span class="chapter-section__number">{{ String(index + 1).padStart(2, '0') }}</span>
+            <div><h3>{{ chapter.title }}</h3><span class="muted">顺序 {{ chapter.sort_order }} · {{ chapter.lessons.length }} 个课时</span></div>
+          </div>
+          <FitsTableActions v-if="structureEditable">
+            <FitsTableAction type="primary" @click="openChapter(chapter)">编辑章节</FitsTableAction>
+            <FitsTableAction type="primary" @click="openLesson(chapter.id)">新增课时</FitsTableAction>
+          </FitsTableActions>
+        </div>
+        <div class="chapter-section__lessons">
+          <el-table :data="chapter.lessons" class="lesson-table" row-key="id">
+            <el-table-column label="编号" width="74"><template #default="{ $index }">{{ index + 1 }}.{{ $index + 1 }}</template></el-table-column>
+            <el-table-column label="课时名称" prop="title" min-width="180" />
+            <el-table-column label="要求" width="76"><template #default="{ row }"><el-tag size="small" :type="row.required ? 'primary' : 'info'">{{ row.required ? '必学' : '选学' }}</el-tag></template></el-table-column>
+            <el-table-column label="创建时间" width="158"><template #default="{ row }">{{ formatDateTime(row.created_at) }}</template></el-table-column>
+            <el-table-column label="视频状态" width="96"><template #default="{ row }"><span :class="row.current_version ? 'lesson-table__ready' : 'lesson-table__missing'">{{ row.current_version ? '已上传' : '未上传' }}</span></template></el-table-column>
+            <el-table-column label="时长" width="80"><template #default="{ row }">{{ row.current_version ? duration(row.current_version.duration_ms) : '—' }}</template></el-table-column>
+            <el-table-column label="操作" width="146" fixed="right">
               <template #default="{ row }">
-                <span v-if="row.current_version">版本 {{ row.current_version.version_id }} · {{ duration(row.current_version.duration_ms) }}</span>
-                <el-tag v-else type="warning">缺少视频</el-tag>
+                <FitsTableActions>
+                  <FitsTableAction v-if="structureEditable || canUploadMedia" type="primary" :disabled="deletingLessonIds.includes(row.id)" @click="openLesson(chapter.id, row)">修改</FitsTableAction>
+                  <FitsTableAction v-if="structureEditable" type="danger" :loading="deletingLessonIds.includes(row.id)" :disabled="deletingLessonIds.includes(row.id)" @click="removeLesson(row)">删除</FitsTableAction>
+                </FitsTableActions>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="220" fixed="right">
-              <template #default="{ row }">
-                <el-button v-if="structureEditable" text type="primary" @click="openLesson(chapter.id, row)">编辑</el-button>
-                <el-button v-if="canUploadMedia" text type="primary" @click="openVideo(row)">{{ row.current_version ? '替换视频' : '上传视频' }}</el-button>
-              </template>
-            </el-table-column>
+            <template #empty><el-empty description="暂无课时" :image-size="64" /></template>
           </el-table>
-        </el-collapse-item>
-      </el-collapse>
-    </el-card>
+        </div>
+      </section>
+    </div>
 
-    <el-dialog v-model="chapterVisible" :title="editingChapterId ? '编辑章节' : '新增章节'" width="480px" class="re-form-dialog" :before-close="beforeChapterClose">
+    <el-dialog v-model="chapterVisible" :title="editingChapterId ? '编辑章节' : '新增章节'" width="480px" class="re-form-dialog" append-to-body :before-close="beforeChapterClose">
       <el-form label-width="82px">
         <el-form-item label="章节标题"><el-input v-model="chapterForm.title" maxlength="255" /></el-form-item>
         <el-form-item label="排序"><el-input-number v-model="chapterForm.sort_order" :min="0" /></el-form-item>
@@ -75,39 +74,39 @@
       <template #footer><el-button @click="closeChapter">取消</el-button><el-button type="primary" :loading="chapterSaving" :disabled="chapterSaving" @click="saveChapter">保存</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="lessonVisible" :title="editingLessonId ? '编辑视频课时' : '新增视频课时'" width="620px" class="re-form-dialog" destroy-on-close :before-close="beforeLessonClose">
+    <el-dialog v-model="lessonVisible" :title="editingLessonId ? '修改课时' : '新增视频课时'" width="620px" class="re-form-dialog" append-to-body destroy-on-close :before-close="beforeLessonClose">
       <el-form label-width="92px">
-        <el-form-item label="课时标题"><el-input v-model="lessonForm.title" maxlength="255" /></el-form-item>
-        <el-form-item label="必学"><el-switch v-model="lessonForm.required" /></el-form-item>
-        <el-form-item label="排序"><el-input-number v-model="lessonForm.sort_order" :min="0" /></el-form-item>
+        <el-form-item label="课时标题"><el-input v-model="lessonForm.title" maxlength="255" :disabled="!structureEditable" /></el-form-item>
+        <el-form-item label="必学"><el-switch v-model="lessonForm.required" :disabled="!structureEditable" /></el-form-item>
+        <el-form-item label="排序"><el-input-number v-model="lessonForm.sort_order" :min="0" :disabled="!structureEditable" /></el-form-item>
+        <el-form-item v-if="editingLesson" label="当前视频">
+          <div class="lesson-current-video">
+            <span>{{ editingLesson.current_version ? `已上传 · ${duration(editingLesson.current_version.duration_ms)}` : '未上传' }}</span>
+          </div>
+        </el-form-item>
         <el-form-item v-if="lessonAssetDraftVisible" label="视频">
           <div style="width:100%">
-            <MediaUpload v-model="lessonForm.asset_id" purpose="video" :disabled="!canUploadMedia" />
-            <div v-if="editingLessonId" class="muted" style="margin-top:8px">已创建课时的视频不能删除；如需调整，请选择新视频生成替换版本。</div>
+            <MediaUpload v-model="lessonForm.asset_id" purpose="video" list-type="drag" :disabled="!canUploadMedia" @pending="lessonMediaPending = $event" />
+            <div v-if="editingLessonId" class="muted" style="margin-top:8px">不选新文件则保留当前视频；选择后点击“保存”生成新版本，历史视频和学习记录保留。</div>
           </div>
         </el-form-item>
       </el-form>
-      <template #footer><el-button @click="closeLesson">取消</el-button><el-button type="primary" :loading="lessonSaving" :disabled="lessonSaving" @click="saveLesson">保存</el-button></template>
+      <template #footer><el-button @click="closeLesson">取消</el-button><el-button type="primary" :loading="lessonSaving" :disabled="lessonSaving || lessonMediaPending" @click="saveLesson">保存</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="videoVisible" title="追加视频版本" width="620px" class="re-form-dialog" destroy-on-close :before-close="beforeVideoClose">
-      <el-alert type="info" :closable="false" title="新视频将生成新版本；旧版本与已有引用不会被覆盖。" style="margin-bottom:14px" />
-      <MediaUpload v-model="replacementAssetId" purpose="video" />
-      <template #footer><el-button @click="closeVideo">取消</el-button><el-button type="primary" :disabled="!replacementAssetId" @click="replaceVideo">保存新版本</el-button></template>
-    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { ArrowLeft } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { useRoute, useRouter } from 'vue-router';
 import http from '../../api/http';
 import type { CourseChapterView, CourseDetail, CourseLessonView, CourseStatus, Id, LessonVersionView, Page } from '../../api/training-types';
 import MediaUpload from '../../components/MediaUpload.vue';
+import { FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
+import { formatDateTime } from '../../utils/format';
 
 interface CategoryOption { id: Id; name: string }
 interface CourseDraft {
@@ -121,37 +120,38 @@ interface SavedLessonMetadata {
   required: boolean; sort_order: number; current_version_id: Id | null;
 }
 
-const route = useRoute();
-const router = useRouter();
+const props = defineProps<{ courseId: Id; mode: 'info' | 'chapters' }>();
+const emit = defineEmits<{ (event: 'saved'): void; (event: 'changed'): void }>();
 const auth = useAuthStore();
-const courseId = String(route.params.id);
+const courseId = props.courseId;
+const loadError = ref('');
 const course = ref<CourseDetail | null>(null);
 const categories = ref<CategoryOption[]>([]);
-const expanded = ref<Id[]>([]);
+const ready = computed(() => course.value !== null && !loadError.value);
+const lessonCount = computed(() => course.value?.chapters.reduce((count, chapter) => count + chapter.lessons.length, 0) ?? 0);
 const saving = ref(false);
+const pendingWrites = ref(0);
+const deletingLessonIds = ref<Id[]>([]);
 const chapterSaving = ref(false);
 const lessonSaving = ref(false);
+const lessonMediaPending = ref(false);
 const chapterVisible = ref(false);
 const lessonVisible = ref(false);
-const videoVisible = ref(false);
 const lessonAssetDraftVisible = ref(false);
 const courseDirty = ref(false);
 const chapterDirty = ref(false);
 const lessonDirty = ref(false);
-const videoDirty = ref(false);
 const editingChapterId = ref<Id | null>(null);
 const editingLessonId = ref<Id | null>(null);
-const replacementLessonId = ref<Id | null>(null);
-const replacementAssetId = ref<Id | null>(null);
 const form = reactive<CourseDraft>({ title: '', category_id: '', description: '', cover_asset_id: null, is_recommended: false, sort_order: 0 });
 const chapterForm = reactive<ChapterDraft>({ title: '', sort_order: 0 });
 const lessonForm = reactive<LessonDraft>({ chapter_id: '', title: '', required: true, sort_order: 0, asset_id: null });
 const structureEditable = computed(() => auth.can('courses:write') && course.value?.status !== 'published');
 const canUploadMedia = computed(() => auth.can('courses:write') && auth.can('media:write'));
+const editingLesson = computed(() => editingLessonId.value ? courseLesson(editingLessonId.value) : undefined);
 let courseBaseline: CourseDraft = copyCourseDraft(form);
 let chapterBaseline = { editingId: null as Id | null, form: { ...chapterForm } };
 let lessonBaseline = { editingId: null as Id | null, form: { ...lessonForm } };
-let videoBaseline = { lessonId: null as Id | null, assetId: null as Id | null };
 let courseOperationSequence = 0;
 let courseLatestOperation = 0;
 let courseLastAppliedOperation = 0;
@@ -163,14 +163,12 @@ let lessonContextToken = 0;
 let lessonOperationSequence = 0;
 let lessonLatestOperation = 0;
 let lessonLastAppliedOperation = 0;
-let videoContextToken = 0;
-let videoOperationSequence = 0;
-let videoLatestOperation = 0;
-let videoLastAppliedOperation = 0;
 const courseUnsaved = useUnsavedChanges(courseDirty, { onDiscard: discardCourse });
 const chapterUnsaved = useUnsavedChanges(chapterDirty, { onDiscard: discardChapter });
 const lessonUnsaved = useUnsavedChanges(lessonDirty, { onDiscard: discardLesson });
-const videoUnsaved = useUnsavedChanges(videoDirty, { onDiscard: discardVideo });
+useUnsavedChanges(computed(() => pendingWrites.value > 0), {
+  canDiscard: () => false, onBlocked: () => ElMessage.warning('正在保存，请稍候再离开'),
+});
 
 function copyCourseDraft(value: CourseDraft): CourseDraft {
   return { ...value };
@@ -188,8 +186,8 @@ function lessonMetadata(value: LessonDraft) {
   return { title: value.title, required: value.required, sort_order: value.sort_order };
 }
 function syncLessonDraftState() {
-  lessonDirty.value = !sameDraft(snapshotLessonDraft(), lessonBaseline);
-  lessonAssetDraftVisible.value = editingLessonId.value === null || lessonForm.asset_id !== lessonBaseline.form.asset_id;
+  lessonDirty.value = lessonMediaPending.value || !sameDraft(snapshotLessonDraft(), lessonBaseline);
+  lessonAssetDraftVisible.value = lessonVisible.value;
 }
 function courseLesson(lessonId: Id) {
   return course.value?.chapters.flatMap((chapter) => chapter.lessons).find((lesson) => lesson.id === lessonId);
@@ -202,6 +200,7 @@ function syncMissingRequiredLesson(lessonId: Id, missing: boolean) {
   course.value.missing_required_lesson_ids = [...missingIds];
 }
 function syncSavedLessonMetadata(saved: SavedLessonMetadata) {
+  emit('changed');
   const row = courseLesson(saved.id);
   syncMissingRequiredLesson(saved.id, saved.required && !saved.current_version_id && !row?.current_version);
   if (!row) return;
@@ -216,9 +215,6 @@ function syncSavedLessonVersion(lessonId: Id, saved: LessonVersionView) {
     syncMissingRequiredLesson(lessonId, false);
   const row = courseLesson(lessonId);
   if (row) row.current_version = { ...saved };
-}
-function snapshotVideoDraft() {
-  return { lessonId: replacementLessonId.value, assetId: replacementAssetId.value };
 }
 function captureCourseBaseline() {
   courseBaseline = copyCourseDraft(form);
@@ -239,18 +235,12 @@ function discardChapter() {
 function discardLesson() {
   lessonContextToken += 1;
   lessonSaving.value = false;
+  lessonMediaPending.value = false;
   lessonAssetDraftVisible.value = false;
   editingLessonId.value = lessonBaseline.editingId;
   Object.assign(lessonForm, lessonBaseline.form);
   lessonDirty.value = false;
   lessonVisible.value = false;
-}
-function discardVideo() {
-  videoContextToken += 1;
-  replacementLessonId.value = videoBaseline.lessonId;
-  replacementAssetId.value = videoBaseline.assetId;
-  videoDirty.value = false;
-  videoVisible.value = false;
 }
 async function closeChapter() {
   if (!chapterDirty.value) {
@@ -290,22 +280,6 @@ async function beforeLessonClose(done: () => void) {
   }
   if (await lessonUnsaved.confirmDiscard()) done();
 }
-async function closeVideo() {
-  if (!videoDirty.value) {
-    videoContextToken += 1;
-    videoVisible.value = false;
-    return;
-  }
-  await videoUnsaved.confirmDiscard();
-}
-async function beforeVideoClose(done: () => void) {
-  if (!videoDirty.value) {
-    videoContextToken += 1;
-    done();
-    return;
-  }
-  if (await videoUnsaved.confirmDiscard()) done();
-}
 
 watch(form, () => { courseDirty.value = !sameDraft(copyCourseDraft(form), courseBaseline); }, { deep: true });
 watch(chapterForm, () => {
@@ -314,30 +288,41 @@ watch(chapterForm, () => {
 watch(lessonForm, () => {
   if (lessonVisible.value) syncLessonDraftState();
 }, { deep: true });
-watch([replacementLessonId, replacementAssetId], () => {
-  if (videoVisible.value) videoDirty.value = !sameDraft(snapshotVideoDraft(), videoBaseline);
-});
+watch(lessonMediaPending, () => { if (lessonVisible.value) syncLessonDraftState(); });
 
 function statusLabel(status: CourseStatus) { return ({ draft: '草稿', published: '已上架', offline: '已下架' })[status]; }
 function statusType(status: CourseStatus) { return status === 'published' ? 'success' : status === 'offline' ? 'warning' : 'info'; }
 function duration(ms: number) { const seconds = Math.round(ms / 1000); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`; }
 
 async function load(resetForm = true) {
-  const data = await http.get(`/admin/courses/${courseId}`) as CourseDetail;
-  course.value = data;
-  if (resetForm) {
-    Object.assign(form, {
-      title: data.title, category_id: data.category_id, description: data.description || '', cover_asset_id: data.cover_asset_id,
-      is_recommended: Boolean(data.is_recommended), sort_order: data.sort_order || 0,
-    });
-    captureCourseBaseline();
+  loadError.value = '';
+  try {
+    const data = await http.get(`/admin/courses/${courseId}`) as CourseDetail;
+    course.value = data;
+    if (resetForm) {
+      Object.assign(form, {
+        title: data.title, category_id: data.category_id, description: data.description || '', cover_asset_id: data.cover_asset_id,
+        is_recommended: Boolean(data.is_recommended), sort_order: data.sort_order || 0,
+      });
+      captureCourseBaseline();
+    }
+    if (!resetForm) emit('changed');
+  } catch (error) {
+    loadError.value = '课程加载失败，请重试';
+    throw error;
   }
-  expanded.value = data.chapters.map((item) => item.id);
 }
 async function loadOptions() {
   if (auth.can('courses:write')) {
     const data = await http.get('/admin/courses/category-options', { params: { page: 1, page_size: 100 } }) as Page<CategoryOption>;
     categories.value = data.items;
+  }
+}
+async function retryLoad() {
+  try {
+    await Promise.all([props.mode === 'info' ? loadOptions() : Promise.resolve(), load(!course.value)]);
+  } catch {
+    loadError.value = '课程加载失败，请重试';
   }
 }
 async function saveCourse() {
@@ -346,6 +331,7 @@ async function saveCourse() {
   courseLatestOperation = operation;
   const submitted = copyCourseDraft(form);
   saving.value = true;
+  pendingWrites.value += 1;
   try {
     await http.put(`/admin/courses/${courseId}`, submitted);
     if (operation > courseLastAppliedOperation) {
@@ -357,8 +343,10 @@ async function saveCourse() {
     await load(false);
   }
   finally {
+    pendingWrites.value -= 1;
     if (operation === courseLatestOperation) saving.value = false;
   }
+  if (!courseDirty.value) emit('saved');
 }
 function openChapter(chapter?: CourseChapterView) {
   chapterContextToken += 1;
@@ -380,6 +368,7 @@ async function saveChapter() {
   chapterLatestOperation = operation;
   const submitted = snapshotChapterDraft();
   chapterSaving.value = true;
+  pendingWrites.value += 1;
   try {
     let persistedId = submitted.editingId;
     if (persistedId !== null) await http.put(`/admin/courses/${courseId}/chapters/${persistedId}`, submitted.form);
@@ -403,12 +392,14 @@ async function saveChapter() {
     }
     await load(false);
   } finally {
+    pendingWrites.value -= 1;
     if (contextToken === chapterContextToken && operation === chapterLatestOperation) chapterSaving.value = false;
   }
 }
 function openLesson(chapterId: Id, lesson?: CourseLessonView) {
   lessonContextToken += 1;
   lessonSaving.value = false;
+  lessonMediaPending.value = false;
   editingLessonId.value = lesson?.id || null;
   Object.assign(lessonForm, {
     chapter_id: chapterId,
@@ -419,11 +410,47 @@ function openLesson(chapterId: Id, lesson?: CourseLessonView) {
   });
   lessonBaseline = snapshotLessonDraft();
   lessonUnsaved.markClean();
-  lessonAssetDraftVisible.value = editingLessonId.value === null;
+  lessonAssetDraftVisible.value = true;
   lessonVisible.value = true;
+}
+async function removeLesson(lesson: CourseLessonView) {
+  if (!structureEditable.value || deletingLessonIds.value.includes(lesson.id)) return;
+  deletingLessonIds.value = [...deletingLessonIds.value, lesson.id];
+  pendingWrites.value += 1;
+  let deleted = false;
+  try {
+    try {
+      await ElMessageBox.confirm(`确认删除课时“${lesson.title}”？删除后不再展示在课程目录中，历史视频版本和学习记录保留。`, '删除课时', {
+        type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
+      });
+    } catch { return; }
+    await http.delete(`/admin/courses/${courseId}/lessons/${lesson.id}`);
+    deleted = true;
+    if (course.value) {
+      for (const chapter of course.value.chapters) chapter.lessons = chapter.lessons.filter(item => item.id !== lesson.id);
+      syncMissingRequiredLesson(lesson.id, false);
+    }
+    ElMessage.success('课时已删除');
+    await load(false);
+  } catch {
+    if (deleted) {
+      emit('changed');
+      ElMessage.warning('课时已删除，目录刷新失败，请重试');
+    } else {
+      // A lost response does not prove the DELETE was rolled back. Re-read
+      // authoritative catalog state before offering another destructive action.
+      ElMessage.error('删除请求失败，正在重新核对目录');
+      try { await load(false); }
+      catch { ElMessage.warning('删除结果暂未确认，请通过“重试”重新查询目录'); }
+    }
+  } finally {
+    pendingWrites.value -= 1;
+    deletingLessonIds.value = deletingLessonIds.value.filter(id => id !== lesson.id);
+  }
 }
 async function saveLesson() {
   if (lessonSaving.value) return;
+  if (lessonMediaPending.value) { ElMessage.warning('请先完成或清除当前视频上传'); return; }
   if (!lessonForm.title.trim()) { ElMessage.warning('请填写课时标题'); return; }
   const contextToken = lessonContextToken;
   const operation = ++lessonOperationSequence;
@@ -436,6 +463,7 @@ async function saveLesson() {
     lesson_type: 'video' as const,
   };
   lessonSaving.value = true;
+  pendingWrites.value += 1;
   try {
     let persistedId = submitted.editingId;
     if (persistedId === null) {
@@ -453,7 +481,7 @@ async function saveLesson() {
         lessonBaseline = persisted;
         syncLessonDraftState();
       }
-      if (sameContext && operation === lessonLatestOperation && sameDraft(snapshotLessonDraft(), persisted)) {
+      if (sameContext && operation === lessonLatestOperation && !lessonMediaPending.value && sameDraft(snapshotLessonDraft(), persisted)) {
         lessonUnsaved.markClean();
         lessonSaving.value = false;
         lessonAssetDraftVisible.value = false;
@@ -495,6 +523,7 @@ async function saveLesson() {
           asset_id: submitted.form.asset_id,
         }) as LessonVersionView;
         syncSavedLessonVersion(persistedId, saved);
+        emit('changed');
       } catch (error) {
         if (contextToken === lessonContextToken && operation === lessonLatestOperation) {
           syncLessonDraftState();
@@ -511,7 +540,7 @@ async function saveLesson() {
       syncLessonDraftState();
     }
 
-    if (sameDraft(snapshotLessonDraft(), lessonBaseline)) {
+    if (!lessonMediaPending.value && sameDraft(snapshotLessonDraft(), lessonBaseline)) {
       lessonUnsaved.markClean();
       lessonSaving.value = false;
       lessonAssetDraftVisible.value = false;
@@ -519,55 +548,42 @@ async function saveLesson() {
       lessonVisible.value = false;
     }
   } finally {
+    pendingWrites.value -= 1;
     if (contextToken === lessonContextToken && operation === lessonLatestOperation) lessonSaving.value = false;
   }
 }
-function openVideo(lesson: CourseLessonView) {
-  videoContextToken += 1;
-  replacementLessonId.value = lesson.id;
-  replacementAssetId.value = null;
-  videoBaseline = snapshotVideoDraft();
-  videoUnsaved.markClean();
-  videoVisible.value = true;
-}
-async function replaceVideo() {
-  if (!replacementLessonId.value || !replacementAssetId.value) return;
-  const contextToken = videoContextToken;
-  const operation = ++videoOperationSequence;
-  videoLatestOperation = operation;
-  const submitted = snapshotVideoDraft();
-  await http.post(`/admin/courses/${courseId}/lessons/${submitted.lessonId}/versions`, { asset_id: submitted.assetId });
-  const sameContext = contextToken === videoContextToken;
-  if (sameContext && operation > videoLastAppliedOperation) {
-    videoLastAppliedOperation = operation;
-    videoBaseline = { ...submitted };
-    videoDirty.value = !sameDraft(snapshotVideoDraft(), videoBaseline);
+async function confirmClose() {
+  if (pendingWrites.value > 0) {
+    ElMessage.warning('正在保存，请稍候再关闭');
+    return false;
   }
-  if (sameContext && operation === videoLatestOperation && sameDraft(snapshotVideoDraft(), submitted)) {
-    videoUnsaved.markClean();
-    videoContextToken += 1;
-    videoVisible.value = false;
+  for (const [dirty, source] of [[courseDirty, courseUnsaved], [chapterDirty, chapterUnsaved], [lessonDirty, lessonUnsaved]] as const) {
+    if (dirty.value && !await source.confirmDiscard()) return false;
   }
-  ElMessage.success('视频新版本已保存');
-  await load(false);
+  return true;
 }
-async function publish() {
-  await ElMessageBox.confirm('系统将重新校验必学视频资源，确认上架？', '上架课程', { type: 'warning' });
-  await http.post(`/admin/courses/${courseId}/publish`); ElMessage.success('课程已上架'); await load(false);
-}
-async function offline() {
-  await ElMessageBox.confirm('下架会阻止学员新进入课程，历史记录保留。确认下架？', '下架课程', { type: 'warning' });
-  await http.post(`/admin/courses/${courseId}/offline`); ElMessage.success('课程已下架'); await load(false);
-}
+defineExpose({ confirmClose, saveCourse, saving, ready });
 
-onMounted(async () => { await Promise.all([loadOptions(), load()]); });
+onMounted(retryLoad);
 </script>
 
 <style scoped>
-.course-detail { display: flex; flex-direction: column; gap: 16px; }
-.detail-title { margin: 0; font-size: 18px; font-weight: 600; }
-.section-card { border-radius: var(--re-radius); border: 1px solid var(--re-border); }
-.card-head { display: flex; align-items: center; justify-content: space-between; }
-.chapter-title { margin-right: 12px; font-weight: 600; }
+.course-editor { display: flex; flex-direction: column; gap: 16px; }
+.course-editor__heading { display: flex; align-items: center; gap: 12px; font-weight: 600; }
+.chapter-manager { display: flex; flex-direction: column; gap: 20px; }
+.chapter-manager__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.chapter-section { border: 1px solid var(--re-border); border-radius: var(--re-radius-sm); overflow: hidden; }
+.chapter-section__header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; background: var(--el-fill-color-light); border-bottom: 1px solid var(--re-border); }
+.chapter-section__identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.chapter-section__number { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 8px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-weight: 600; }
+.chapter-section h3 { margin: 0; color: var(--re-text); font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
+.chapter-section__identity .muted { font-size: 12px; }
+.chapter-section__lessons { padding: 0 16px 12px; }
+.lesson-table__ready { color: var(--el-color-success); }
+.lesson-table__missing { color: var(--el-color-warning); }
+.lesson-current-video { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
 .muted { color: var(--re-text-3); }
+@media (max-width: 800px) {
+  .chapter-section__header { align-items: flex-start; flex-wrap: wrap; }
+}
 </style>

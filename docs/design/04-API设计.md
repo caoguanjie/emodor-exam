@@ -737,6 +737,7 @@ schema3题目的普通预览额外返回`content_schema_version:3`与`content_js
 | PUT | /admin/courses/{id}/chapters/{chapterId} | courses:write | 修改 `{title?,sort_order?}` |
 | GET / POST | /admin/courses/{id}/lessons | courses:read / courses:write | 获取课时 / 创建 `{chapter_id,title,lesson_type:'video',required?,sort_order?,asset_id?}` |
 | PUT | /admin/courses/{id}/lessons/{lessonId} | courses:write | 修改 `{title?,lesson_type?:'video',required?,sort_order?}` |
+| DELETE | /admin/courses/{id}/lessons/{lessonId} | courses:write | 仅 draft/offline 课时逻辑删除；返回 `{id,deleted:true}`，不提供恢复入口 |
 | POST | /admin/courses/{id}/lessons/{lessonId}/versions | courses:write | `{asset_id}`；追加视频版本并返回 `{version_id,asset_id,duration_ms,version_no}` |
 | GET | /me/courses | 登录本人 | query `page/page_size`；`Page<CourseSummary>` |
 | GET | /me/courses/{id} | 登录本人 | 可见课程目录；不返回管理员推荐/制度关联配置 |
@@ -750,14 +751,16 @@ schema3题目的普通预览额外返回`content_schema_version:3`与`content_js
     "id": "8", "title": "第一章", "sort_order": 1,
     "lessons": [{
       "id": "21", "title": "视频课时", "lesson_type": "video",
-      "required": true, "sort_order": 1,
+      "required": true, "sort_order": 1, "created_at": "2026-10-20T08:01:02.123Z",
       "current_version": { "version_id": "35", "asset_id": "50", "duration_ms": 120000 }
     }]
   }]
 }
 ```
 
-课程状态为 `draft / published / offline`。只有 draft/offline 可改变章节或课时结构；published 仍允许追加新 `lesson_version`，旧版本与媒体引用不覆盖。上架时锁定并确认类别启用，并要求每个必学课时的当前版本属于该课时、时长大于 0，且媒体为 ready 的 video；不满足返回 40930。课程的 `regulation_ids` 只是信息关联，不能进入抽题池或变成学习门槛。
+课程状态为 `draft / published / offline`。只有 draft/offline 可改变章节或课时结构；published 仍允许追加新 `lesson_version`，旧版本与媒体引用不覆盖。上架时锁定并确认类别启用，并要求每个有效必学课时的当前版本属于该课时、时长大于 0，且媒体为 ready 的 video；不满足返回 40930。课程的 `regulation_ids` 只是信息关联，不能进入抽题池或变成学习门槛。
+
+课时 `created_at` 来自持久化的 `CourseLesson.createdAt`，不以视频版本时间或当前时间替代。删除在同一事务中先锁课程、校验未上架，再锁定该课程下的课时；课程不存在、课时不存在、跨课程或已删除均返回 40401，published 返回 40930，无 `courses:write` 返回 40301。成功仅通过 TypeORM `softDelete` 设置 `deleted_at`（并维护更新时间），永久保留课时、版本、媒体引用和学习事实，提交后写审计。目录、必学数、发布校验、当前完成率/统计、媒体读/签票/票据重读、视频开播及后续心跳默认排除删除课时；旧票据不绕过现时授权。`GET /me/video-records` 仍返回本人历史版本学习记录，不由软删除隐藏，也不由历史记录取得播放权限。
 
 课程浏览集合固定为：账号启用且课程 `status=published`；`source`、`category_id` 与实名状态不作为列表/详情筛选条件，跨类别、external 或类别缺失仍可浏览，下架/草稿详情返回 40302。排序为推荐优先、`sort_order ASC,id DESC`。`GET /me/home` 直接并行组合真实 `SystemService.publicConfig()` 与 `CourseService.visibleCourses()`，站点字段仍只有 `logo_asset_id/banners`，课程集合、排序和分页与 `/me/courses` 完全相同。Task 12 Video Contract v1替换旧institution/同类别视频分配：两类来源及缺类别均可学习published课程；浏览仍不等于播放授权，后者须按3.10重查mobile employee、实名、current version与精确媒体引用。
 
@@ -1308,6 +1311,7 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | POST /admin/question-materials/{id}/versions | 并发上传同一资料串行化（版本号唯一） | 事务 + uk_regulation_version；响应版本 `id` 为字符串 |
 | POST /admin/courses/{id}/publish | 上架与下架后重上架均重新校验类别和必学视频；发布中间态不对学员可见 | 课程行悲观锁 + 同事务 readiness 校验 |
 | POST /admin/courses/{id}/lessons/{lessonId}/versions | 同一课时版本号顺序追加，旧行不修改 | 课程/课时行悲观锁 + uk_lesson_version_number |
+| DELETE /admin/courses/{id}/lessons/{lessonId} | 仅未上架课程；课时须属于路径课程；仅标记 deleted_at，保留历史事实 | 同事务先锁课程再锁课时，与发布/换版共用锁序 |
 | POST /ai/generate-questions | 同资料同时仅一个运行中任务 | Redis SETNX；category/difficulty 固定来自请求，内部 source version 固定为显式 material_version_id |
 | POST /admin/papers/{id}/publish | 重复发布已 published 卷返回现有 release_id；并发发布只生成一个版次 | 先锁培训类别、再写锁 exam_paper；uk_paper_release_version 兜底 |
 | POST /admin/papers/{id}/withdraw/archive | 状态转移串行；只阻新开考且不删 release | exam_paper 行写锁；C2 开考将消费同一行锁 |

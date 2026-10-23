@@ -6,7 +6,7 @@
     <FitsTable>
       <template v-if="canRead" #search>
         <FitsListSearch @submit.prevent>
-          <el-form-item label="课程标题"><el-input v-if="canRead" v-model="query.keyword" clearable placeholder="课程标题" style="width:220px" @keyup.enter="search" /></el-form-item>
+          <el-form-item label="课程名称"><el-input v-if="canRead" v-model="query.keyword" clearable placeholder="课程名称" style="width:220px" @keyup.enter="search" /></el-form-item>
           <el-form-item v-if="canRead && canWrite" label="培训类别">
             <el-select v-if="canRead && canWrite" v-model="query.category_id" clearable filterable placeholder="培训类别" style="width:190px" @change="search">
               <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
@@ -28,26 +28,35 @@
 
       <el-table v-if="canRead" v-loading="loading" :data="items">
         <template #empty><el-empty v-if="!loading" description="暂无课程" /></template>
-        <el-table-column prop="title" label="课程" min-width="220" />
-        <el-table-column label="培训类别" width="170">
-          <template #default="{ row }">{{ categoryName(row.category_id) }}</template>
+        <el-table-column prop="title" label="课程名称" min-width="220" show-overflow-tooltip />
+        <el-table-column label="课程封面" width="104" align="center">
+          <template #default="{ row }"><CourseCover :asset-id="row.cover_asset_id" :alt="`${row.title}的封面`" /></template>
+        </el-table-column>
+        <el-table-column label="培训类别" width="160">
+          <template #default="{ row }"><el-tag effect="light">{{ categoryName(row.category_id) }}</el-tag></template>
         </el-table-column>
         <el-table-column label="必学课时" width="100">
           <template #default="{ row }">{{ row.required_lesson_count }}</template>
         </el-table-column>
-        <el-table-column label="推荐 / 排序" width="130">
-          <template #default="{ row }">{{ row.is_recommended ? '推荐' : '普通' }} · {{ row.sort_order }}</template>
+        <el-table-column label="首页推荐" width="110" align="center">
+          <template #default="{ row }"><el-tag :type="row.is_recommended ? 'success' : 'info'">{{ row.is_recommended ? '是' : '否' }}</el-tag></template>
         </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="创建时间" width="180">
+          <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
-            <el-button text type="primary" @click="router.push(`/admin/courses/${row.id}`)">编辑内容</el-button>
-            <el-button v-if="row.status !== 'published' && auth.can('courses:publish')" text type="success" @click="publish(row)">上架</el-button>
-            <el-button v-if="row.status === 'published' && auth.can('courses:publish')" text type="warning" @click="offline(row)">下架</el-button>
+            <FitsTableActions>
+              <FitsTableAction v-if="canWrite" type="primary" @click="openEditor(row.id, 'info')">修改课程</FitsTableAction>
+              <FitsTableAction type="primary" @click="openEditor(row.id, 'chapters')">章节管理</FitsTableAction>
+              <FitsTableAction v-if="row.status !== 'published' && auth.can('courses:publish')" type="success" @click="publish(row)">上架</FitsTableAction>
+              <FitsTableAction v-if="row.status === 'published' && auth.can('courses:publish')" type="warning" @click="offline(row)">下架</FitsTableAction>
+            </FitsTableActions>
           </template>
         </el-table-column>
       </el-table>
@@ -59,15 +68,15 @@
 
     <el-dialog v-model="createVisible" title="新建课程" width="620px" class="re-form-dialog" destroy-on-close :before-close="beforeCreateClose">
       <el-form label-width="96px">
-        <el-form-item label="课程标题"><el-input v-model="form.title" maxlength="255" /></el-form-item>
+        <el-form-item label="课程名称"><el-input v-model="form.title" maxlength="255" placeholder="请输入课程名称" /></el-form-item>
+        <el-form-item label="课程封面"><MediaUpload v-model="form.cover_asset_id" purpose="course_cover" list-type="picture-card" :disabled="!canUploadMedia" /></el-form-item>
         <el-form-item label="培训类别">
           <el-select v-model="form.category_id" filterable style="width:100%">
             <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="课程简介"><el-input v-model="form.description" type="textarea" :rows="3" maxlength="10000" /></el-form-item>
-        <el-form-item label="课程封面"><MediaUpload v-model="form.cover_asset_id" purpose="course_cover" :disabled="!canUploadMedia" /></el-form-item>
-        <el-form-item label="推荐"><el-switch v-model="form.is_recommended" /></el-form-item>
+        <el-form-item label="首页推荐"><el-radio-group v-model="form.is_recommended"><el-radio :value="true">是</el-radio><el-radio :value="false">否</el-radio></el-radio-group></el-form-item>
         <el-form-item label="排序"><el-input-number v-model="form.sort_order" :min="0" /></el-form-item>
       </el-form>
       <template #footer>
@@ -75,31 +84,44 @@
         <el-button type="primary" :loading="saving" :disabled="saving" @click="create">{{ createCourseId ? '保存草稿' : '创建草稿' }}</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="editorVisible" :title="editorMode === 'info' ? '修改课程' : '章节管理'"
+      :width="editorMode === 'info' ? '620px' : 'min(1100px, 94vw)'" class="re-form-dialog"
+      destroy-on-close :close-on-click-modal="false" :before-close="beforeEditorClose">
+      <CourseEditor v-if="editorVisible && editorCourseId" ref="editor" :key="`${editorCourseId}-${editorMode}`"
+        :course-id="editorCourseId" :mode="editorMode" @saved="onEditorSaved" @changed="load" />
+      <template #footer>
+        <el-button @click="closeEditor">{{ editorMode === 'info' ? '取消' : '关闭' }}</el-button>
+        <el-button v-if="editorMode === 'info' && canWrite" type="primary" :loading="editor?.saving"
+          :disabled="!editor?.ready || editor.saving" @click="editor?.saveCourse()">保存课程资料</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onMounted, reactive, ref, watch } from 'vue';
-import { FitsTable, FitsListSearch } from '../../components/FitsTable';
+import { computed, onActivated, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
+import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { useRouter } from 'vue-router';
 import http from '../../api/http';
 import type { CourseStatus, Id, Page } from '../../api/training-types';
 import MediaUpload from '../../components/MediaUpload.vue';
+import CourseCover from '../../components/CourseCover.vue';
+import CourseEditor from './CourseEditor.vue';
+import { formatDateTime } from '../../utils/format';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 
 interface CategoryOption { id: Id; name: string }
 interface CourseRow {
   id: Id; title: string; category_id: Id; required_lesson_count: number;
-  is_recommended: boolean; sort_order: number; status: CourseStatus;
+  cover_asset_id: Id | null; is_recommended: boolean; sort_order: number; status: CourseStatus; created_at: string | null;
 }
 interface CourseDraft {
   title: string; category_id: Id | ''; description: string; cover_asset_id: Id | null;
   is_recommended: boolean; sort_order: number;
 }
 
-const router = useRouter();
 const auth = useAuthStore();
 const canRead = computed(() => auth.can('courses:read'));
 const canWrite = computed(() => auth.can('courses:write'));
@@ -122,6 +144,11 @@ let listRequestSequence = 0;
 let listLatestRequest = 0;
 let initialActivationSeen = false;
 const createCourseId = ref<Id | null>(null);
+const editorVisible = ref(false);
+const editorCourseId = ref<Id | null>(null);
+const editorMode = ref<'info' | 'chapters'>('info');
+const editor = ref<{ confirmClose(): Promise<boolean>; saveCourse(): Promise<void>; saving: boolean; ready: boolean } | null>(null);
+onDeactivated(() => { editorVisible.value = false; });
 const createUnsaved = useUnsavedChanges(createDirty, { onDiscard: discardCreate });
 
 function snapshotCreate(): CourseDraft { return { ...form }; }
@@ -194,6 +221,20 @@ async function load() {
   }
 }
 function search() { query.page = 1; void load(); }
+function openEditor(id: Id, mode: 'info' | 'chapters') {
+  editorCourseId.value = id;
+  editorMode.value = mode;
+  editorVisible.value = true;
+}
+async function beforeEditorClose(done: () => void) {
+  if (!editor.value || await editor.value.confirmClose()) done();
+}
+async function closeEditor() {
+  if (!editor.value || await editor.value.confirmClose()) editorVisible.value = false;
+}
+function onEditorSaved() {
+  editorVisible.value = false;
+}
 function openCreate() {
   createContextToken += 1;
   saving.value = false;
@@ -205,7 +246,7 @@ function openCreate() {
 }
 async function create() {
   if (saving.value) return;
-  if (!form.title.trim() || !form.category_id) { ElMessage.warning('请填写课程标题并选择培训类别'); return; }
+  if (!form.title.trim() || !form.category_id) { ElMessage.warning('请填写课程名称并选择培训类别'); return; }
   const contextToken = createContextToken;
   const operation = ++createOperationSequence;
   createLatestOperation = operation;
@@ -233,7 +274,7 @@ async function create() {
       createContextToken += 1;
       createVisible.value = false;
       createCourseId.value = null;
-      if (canRead.value) await router.push(`/admin/courses/${savedCourseId}`);
+      if (canRead.value) { openEditor(savedCourseId!, 'chapters'); await load(); }
       else ElMessage.info(`课程 ${savedCourseId} 已保存；获得查看权限后可继续维护目录`);
     }
   } finally {

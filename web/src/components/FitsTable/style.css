@@ -43,6 +43,29 @@
 .fits-table__body { min-width: 0; }
 .fits-table__body > .el-table { width: 100%; }
 
+.fits-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.fits-table-actions > .el-button + .el-button { margin-left: 0; }
+
+/* Keep the reference row layout with 14px labels and a slightly wider click area. */
+.fits-table-action.el-button,
+.fits-table-action.el-button:not(.is-disabled):hover,
+.fits-table-action.el-button:not(.is-disabled):active {
+  height: auto;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+  text-decoration: underline;
+  box-shadow: none;
+  transform: none;
+}
+
 .fits-table__pagination {
   display: flex;
   justify-content: flex-end;

@@ -26,7 +26,13 @@
       </template>
     </el-upload>
 
-    <div v-if="listType === 'text' || state.status === 'error'" class="media-upload__actions">
+    <el-upload v-if="listType === 'drag'" ref="pictureUpload" class="media-upload__drag"
+      drag :auto-upload="false" :show-file-list="false" :accept="accept" :disabled="disabled" :on-change="onPictureChange">
+      <el-icon class="media-upload__drag-icon"><UploadFilled /></el-icon>
+      <div class="el-upload__text">将文件拖到此处，或<em>点击上传</em></div>
+    </el-upload>
+
+    <div v-if="listType === 'text' || state.status === 'error' || (listType === 'drag' && (state.file || state.assetId))" class="media-upload__actions">
       <button v-if="listType === 'text'" type="button" class="media-upload__button media-upload__button--primary" :disabled="disabled" @click="chooseFile">
         选择文件
       </button>
@@ -75,7 +81,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { ElDialog, ElIcon, ElImageViewer, ElUpload, type UploadFile, type UploadInstance, type UploadUserFile } from 'element-plus';
-import { Delete, Picture, Plus, VideoCamera, ZoomIn } from '@element-plus/icons-vue';
+import { Delete, Picture, Plus, UploadFilled, VideoCamera, ZoomIn } from '@element-plus/icons-vue';
 import { getMediaImageContent, getMediaLimits, getMediaMetadata, uploadMedia, type MediaMetadata, type MediaUploadResponse } from '../api/media';
 import {
   createMediaUploadState,
@@ -100,7 +106,7 @@ const props = withDefaults(defineProps<{
   purpose?: MediaPurpose;
   ownerId?: string;
   disabled?: boolean;
-  listType?: 'text' | 'picture-card';
+  listType?: 'text' | 'picture-card' | 'drag';
   compact?: boolean;
 }>(), {
   modelValue: null,
@@ -116,6 +122,7 @@ const emit = defineEmits<{
   (event: 'uploaded', value: MediaUploadResponse): void;
   (event: 'status', value: MediaMetadata): void;
   (event: 'error', value: MediaUploadError): void;
+  (event: 'pending', value: boolean): void;
 }>();
 
 const POLL_INTERVAL_MS = 1000;
@@ -126,6 +133,8 @@ const pictureUpload = ref<UploadInstance>();
 const previewVisible = ref(false);
 const limits = ref<MediaLimits | null>(null);
 const state = ref<MediaUploadState>(createMediaUploadState());
+watch(() => state.value.status === 'uploading' || state.value.status === 'processing' || (state.value.status === 'error' && Boolean(state.value.file)),
+  pending => emit('pending', pending), { immediate: true, flush: 'sync' });
 const metadata = ref<MediaMetadata | null>(null);
 const previewUrl = ref<string | null>(null);
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
@@ -495,6 +504,10 @@ onBeforeUnmount(() => {
 .media-upload__progress { width: 100%; height: 8px; }
 .media-upload__error { margin: 0; color: #b42318; font-size: 13px; line-height: 1.5; }
 .media-upload__preview { width: 72px; height: 72px; border-radius: 8px; object-fit: cover; border: 1px solid #e2e8f0; }
+.media-upload__drag { width: 100%; }
+.media-upload__drag :deep(.el-upload) { display: block; width: 100%; }
+.media-upload__drag :deep(.el-upload-dragger) { width: 100%; padding: 24px 12px; }
+.media-upload__drag-icon { margin-bottom: 10px; color: var(--el-text-color-placeholder); font-size: 40px; }
 .media-upload__picture :deep(.el-upload--picture-card),
 .media-upload__picture :deep(.el-upload-list__item) { width: 112px; height: 112px; }
 .media-upload__picture.is-full :deep(.el-upload--picture-card) { display: none; }

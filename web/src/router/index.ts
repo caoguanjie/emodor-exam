@@ -27,7 +27,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'admin/students', component: () => import('../views/admin/Users.vue'), meta: { title: '学员管理', admin: true, permission: 'students:read', cache: true } },
       { path: 'admin/training-categories', component: () => import('../views/admin/TrainingCategories.vue'), meta: { title: '培训类别', admin: true, permission: 'training_categories:read', cache: true } },
       { path: 'admin/courses', component: () => import('../views/admin/Courses.vue'), meta: { title: '课程管理', admin: true, permissionAny: [...COURSE_ROUTE_PERMISSIONS], cache: true } },
-      { path: 'admin/courses/:id', component: () => import('../views/admin/CourseDetail.vue'), meta: { title: '课程详情', admin: true, permission: 'courses:read', cache: true } },
+      { path: 'admin/courses/:id', redirect: '/admin/courses' },
       { path: 'admin/questions', component: () => import('../views/admin/Questions.vue'), meta: { title: '试题管理', admin: true, permissionAny: [...QUESTION_ROUTE_PERMISSIONS] } },
       { path: 'admin/questions/import', component: () => import('../views/admin/QuestionImport.vue'), meta: { title: '试题导入', admin: true, permission: 'questions:write', cache: true } },
       { path: 'admin/papers', component: () => import('../views/admin/Papers.vue'), meta: { title: '试卷管理', admin: true, permission: 'papers:read', cache: true } },

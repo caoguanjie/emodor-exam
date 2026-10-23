@@ -49,6 +49,43 @@ export const FitsTable = defineComponent({
   },
 });
 
+/** Compact row operations; permission-hidden slots leave no empty group. */
+export const FitsTableActions = defineComponent({
+  name: 'FitsTableActions',
+  inheritAttrs: false,
+  setup(_props, { attrs, slots }) {
+    return () => {
+      const actions = slots.default?.() ?? [];
+      return hasContent(actions)
+        ? h('div', mergeProps(attrs, {
+          class: 'fits-table-actions',
+          role: 'group',
+          'aria-label': '行操作',
+        }), actions)
+        : null;
+    };
+  },
+});
+
+/** Element Plus keeps the semantic colors, loading state and native button behavior. */
+export const FitsTableAction = defineComponent({
+  name: 'FitsTableAction',
+  inheritAttrs: false,
+  props: {
+    type: { type: String, default: 'primary' },
+  },
+  setup(props, { attrs, slots }) {
+    return () => h(resolveComponent('el-button'), mergeProps(attrs, {
+      class: 'fits-table-action',
+      type: props.type,
+      link: true,
+      text: false,
+      bg: false,
+      tag: 'button',
+    }), slots);
+  },
+});
+
 /** Labeled, wrapping search form. Values and query/reset behavior stay in the page. */
 export const FitsListSearch = defineComponent({
   name: 'FitsListSearch',

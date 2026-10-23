@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req } from '@nestjs/common';
 import { Request } from 'express';
 import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator';
 import { Permissions } from '../../common/decorators/permissions.decorator';
@@ -163,6 +163,17 @@ export class CourseAdminController {
   ) {
     assertKeys(req.body, LESSON_UPDATE_KEYS, '课时请求');
     return this.lessons.updateLesson(id(courseId, 'course_id'), id(lessonId, 'lesson_id'), dto, this.actor(user), req.ip || null);
+  }
+
+  @Delete(':id/lessons/:lessonId')
+  @Permissions('courses:write')
+  deleteLesson(
+    @Param('id') courseId: string,
+    @Param('lessonId') lessonId: string,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.lessons.deleteLesson(id(courseId, 'course_id'), id(lessonId, 'lesson_id'), this.actor(user), req.ip || null);
   }
 
   @Post(':id/lessons/:lessonId/versions')

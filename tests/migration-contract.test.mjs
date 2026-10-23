@@ -500,6 +500,7 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
       '015_demo_slimming', '016_learning_navigation', '017_exam_question_navigation',
       '018_mobile_auth', '019_learner_profile', '020_identity_verification', '021_exam_stable_option_ids',
       '022_question_designer_storage',
+      '023_course_lesson_soft_delete',
       '024_student_age',
     ]);
 

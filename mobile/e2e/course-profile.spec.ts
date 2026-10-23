@@ -60,6 +60,25 @@ test('course load error retries and an empty response stays empty without fixtur
   await expect(page.locator('.course-card')).toHaveCount(0)
 })
 
+test('API lesson titles receive chapter.lesson codes without changing stable selection IDs', async ({ page }) => {
+  await courses(page)
+  await page.route('**/api/v1/me/courses/9007199254740995', route => route.fulfill({ json: envelope({ ...first, description: '目录测试', chapters: [
+    { id: '101', title: '第一章 安全教育', sort_order: 3, lessons: [
+      { id: '201', title: '安全防护', lesson_type: 'video', required: true, sort_order: 5, current_version: null },
+      { id: '202', title: '班前会', lesson_type: 'video', required: true, sort_order: 8, current_version: null },
+    ] },
+    { id: '102', title: '第二章 应急处置', sort_order: 8, lessons: [
+      { id: '203', title: '消防演练', lesson_type: 'video', required: false, sort_order: 2, current_version: null },
+    ] },
+  ] }) }))
+  await page.goto('/#/pages/course/detail?id=9007199254740995')
+  await expect(page.locator('.chapter-list__name')).toHaveText(['1.1 安全防护', '1.2 班前会', '2.1 消防演练'])
+  await expect(page.locator('.chapter-list__section-count')).toHaveText(['2节', '1节'])
+  await expect(page.locator('.chapter-list__number')).toHaveText(['1', '2', '3'])
+  await page.getByRole('button', { name: '消防演练', exact: true }).click()
+  await expect(page).toHaveURL(/course_id=9007199254740995&lesson_id=203$/)
+})
+
 test('returning to a populated list retries the first-page failure as page one', async ({ page }) => {
   await courses(page)
   const requestedPages: string[] = []

@@ -630,6 +630,7 @@ CREATE TABLE IF NOT EXISTS `course_lesson` (
   `current_version_id` BIGINT UNSIGNED NULL,
   `created_at`         DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at`         DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  `deleted_at`         DATETIME(3) NULL COMMENT '逻辑删除时间；版本、媒体引用和学习事实永久保留',
   PRIMARY KEY (`id`),
   KEY `idx_course_lesson_course` (`course_id`),
   KEY `idx_course_lesson_chapter_sort` (`chapter_id`, `sort_order`)

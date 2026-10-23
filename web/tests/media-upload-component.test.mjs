@@ -193,7 +193,9 @@ before(async () => {
   clientComponentCode = transformed.code
     .replace(/^import \{ createHotContext[\s\S]*?import\.meta\.hot = [^;]+;\s*/, '')
     .replace(/typeof __VUE_HMR_RUNTIME__[\s\S]*?(?=import _export_sfc)/, '')
-    .replace(/from "\/node_modules\/\.vite\/deps\/vue\.js[^\"]*"/g, 'from "vue"');
+    .replace(/from "\/node_modules\/\.vite\/deps\/vue\.js[^\"]*"/g, 'from "vue"')
+    .replace(/from "\/node_modules\/\.vite\/deps\/element-plus\.js[^\"]*"/g, 'from "element-plus"')
+    .replace(/from "\/node_modules\/\.vite\/deps\/@element-plus_icons-vue\.js[^\"]*"/g, 'from "@element-plus/icons-vue"');
   const loaded = await vite.ssrLoadModule(clientComponentId);
   MediaUpload = loaded.default;
 });

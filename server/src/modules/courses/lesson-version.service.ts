@@ -130,6 +130,22 @@ export class LessonVersionService {
     return this.lessonView(lesson);
   }
 
+  async deleteLesson(courseId: string, lessonId: string, actor: CourseActor, ip: string | null) {
+    await this.dataSource.transaction(async (manager) => {
+      const course = await manager.getRepository(TrainingCourse).findOne({ where: { id: String(courseId) }, lock: { mode: 'pessimistic_write' } });
+      if (!course) throw Errors.notFound('课程不存在');
+      this.assertStructureEditable(course);
+      const repo = manager.getRepository(CourseLesson);
+      const lesson = await repo.findOne({ where: { id: String(lessonId), courseId: String(courseId) }, lock: { mode: 'pessimistic_write' } });
+      if (!lesson) throw Errors.notFound('课时不存在');
+      // Keep the current pointer, immutable versions, media references and
+      // learning facts. The delete date only removes this lesson from live reads.
+      await repo.softDelete({ id: String(lesson.id), courseId: String(courseId) });
+    });
+    this.audit.log({ actor_id: Number(actor.id), actor_name: actor.name, action: 'course.lesson.delete', object_type: 'course_lesson', object_id: lessonId, detail: { course_id: courseId }, result: 'success', source_ip: ip });
+    return { id: String(lessonId), deleted: true };
+  }
+
   async replaceVideo(courseId: string, lessonId: string, assetId: string, actor: CourseActor, ip: string | null) {
     await this.media.assertUsable(actor.id, assetId, 'video');
     const version = await this.dataSource.transaction(async (manager) => {

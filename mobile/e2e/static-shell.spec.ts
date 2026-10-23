@@ -74,6 +74,17 @@ test('chapter headings fold and expand their lessons', async ({ page }) => {
   await expect(chapter).toHaveAttribute('aria-expanded', 'false')
 })
 
+test('course catalog shows chapter counts, continuous lesson numbers and chapter.lesson codes', async ({ page }) => {
+  await page.goto('/#/pages/course/detail?scenario=course-no-video')
+  await expect(page.locator('.chapter-list__count')).toHaveText('共6课时')
+  await expect(page.locator('.chapter-list__section-count')).toHaveText(['3节', '3节'])
+  await expect(page.locator('.chapter-list__number')).toHaveText(['1', '2', '3', '4', '5', '6'])
+  await expect(page.locator('.chapter-list__name')).toHaveText([
+    '1.1 隐患排查清单', '1.2 隐患与风险分级', '1.3 整改措施设计',
+    '2.1 责任人与整改时限', '2.2 复查销项', '2.3 隐患数据分析',
+  ])
+})
+
 test('logout confirmation stays above and blocks the fixed tab bar', async ({ page }) => {
   await page.goto('/#/pages/profile/index?scenario=profile-default')
   await page.getByText('退出登录', { exact: true }).click()

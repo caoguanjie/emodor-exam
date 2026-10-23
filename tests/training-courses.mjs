@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ import { learnerSession, randomLearnerPhone } from './support/learner-session-fi
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
+const { IdentityCrypto } = require('./dist/modules/identity/identity-crypto.js');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -348,6 +349,160 @@ async function runBody(ctx) {
   assert(offlineDetail.status === 403, `offline course detail remained browsable: ${offlineDetail.status}`);
   const republish = await ctx.request(admin, 'POST', `/admin/courses/${courseId}/publish`);
   assert(republish.status === 200 && republish.data?.status === 'published', `course republish failed: ${republish.status}`);
+
+  const historyActor = await mobileLogin(ctx, institution);
+  // This business-flow fixture seeds only the authoritative identity fact in
+  // the harness-owned test DB; it does not exercise or configure a provider.
+  assert(/^ruleexam_test_[A-Za-z0-9_]+$/.test(ctx.env.DB_DATABASE), 'identity fixture requires an isolated test database');
+  const identityCrypto = new IdentityCrypto({ identity: {
+    dataEncryptionKey: ctx.env.IDENTITY_DATA_ENCRYPTION_KEY,
+    fingerprintSecret: ctx.env.IDENTITY_FINGERPRINT_SECRET,
+  } });
+  const syntheticId = `course-deletion-${randomUUID()}`;
+  await ctx.queryTestDb(
+    'INSERT INTO learner_identity (user_id,id_fingerprint,identity_encrypted,session_id,provider_request_id) VALUES (?,?,?,?,?)',
+    [institution.id, identityCrypto.fingerprint(syntheticId),
+      identityCrypto.encrypt({ realName: institution.realName, idNumber: syntheticId }),
+      randomUUID(), 'training-courses-deletion-fixture'],
+  );
+  const identityFact = await ctx.request(historyActor, 'GET', '/me/identity-verification');
+  assert(identityFact.status === 200 && identityFact.data?.status === 'verified', 'isolated identity fact was not authoritative');
+  const currentVersionId = String(replaceVideo.data.version_id);
+  const currentAssetId = String(secondUpload.data.asset_id);
+  const ticketOwner = { owner_type: 'lesson_version_video', owner_id: currentVersionId };
+  const playback = await ctx.request(historyActor, 'POST', '/me/video-sessions', { lesson_id: lessonId });
+  assert(playback.status === 200 && playback.data?.session_id
+    && playback.data.version_id === currentVersionId && playback.data.media?.asset_id === currentAssetId
+    && typeof playback.data.media?.ticket?.content_url === 'string',
+  `published course playback fixture failed: ${playback.status}/${playback.code}`);
+  const playbackSessionId = String(playback.data.session_id);
+  const oldContentPath = playback.data.media.ticket.content_url.replace(/^\/api\/v1/, '');
+  const playableContent = await ctx.request(null, 'GET', oldContentPath, undefined, { Range: 'bytes=0-15' });
+  assert(playableContent.status === 206 && playableContent.body?.length === 16, 'pre-deletion playback ticket was not usable');
+  const signedBeforeDelete = await ctx.request(historyActor, 'POST', `/media/${currentAssetId}/tickets`, ticketOwner);
+  assert(signedBeforeDelete.status === 200 && typeof signedBeforeDelete.data?.content_url === 'string',
+    'exact current-version ticket could not be issued before deletion');
+  const playing = await ctx.request(historyActor, 'POST', `/me/video-sessions/${playbackSessionId}/heartbeat`, {
+    seq: 1, position_ms: 0, state: 'playing',
+  });
+  assert(playing.status === 200, 'playback fixture could not establish a playing anchor');
+  await ctx.queryTestDb(
+    'UPDATE video_learning_session SET last_heartbeat_at = TIMESTAMPADD(MICROSECOND, -1000000, UTC_TIMESTAMP(3)) WHERE id = ?',
+    [playbackSessionId],
+  );
+  const credited = await ctx.request(historyActor, 'POST', `/me/video-sessions/${playbackSessionId}/heartbeat`, {
+    seq: 2, position_ms: 250, state: 'playing',
+  });
+  assert(credited.status === 200 && credited.data?.credited_ms === 250 && credited.data?.coverage_ms === 250
+    && credited.data?.completed === false, 'playback fixture did not retain incomplete credited progress');
+  // Leave an eligible elapsed window so a wrongly accepted post-delete beat
+  // would increase both credit and coverage, even with the one-second video.
+  await ctx.queryTestDb(
+    'UPDATE video_learning_session SET last_heartbeat_at = TIMESTAMPADD(MICROSECOND, -1000000, UTC_TIMESTAMP(3)) WHERE id = ?',
+    [playbackSessionId],
+  );
+
+  // Safe deletion: use this suite's isolated fixtures only; never purge history.
+  const beforeDeleteDetail = await ctx.request(admin, 'GET', `/admin/courses/${courseId}`);
+  const [persistedLesson] = await ctx.queryTestDb("SELECT DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s.%f') AS created_at_utc FROM course_lesson WHERE id = ?", [lessonId]);
+  assert(beforeDeleteDetail.data?.chapters?.[0]?.lessons?.[0]?.created_at === `${persistedLesson.created_at_utc.slice(0, 23)}Z`,
+    'lesson creation time is not the persisted timestamp');
+  const publishedDelete = await ctx.request(admin, 'DELETE', `/admin/courses/${courseId}/lessons/${lessonId}`);
+  assert(publishedDelete.status === 409 && publishedDelete.code === 40930, 'published lesson deletion was not rejected');
+  const unauthorizedDelete = await ctx.request(institution.actor, 'DELETE', `/admin/courses/${courseId}/lessons/${lessonId}`);
+  assert(unauthorizedDelete.status === 403 && unauthorizedDelete.code === 40301, 'learner reached lesson deletion');
+  const crossCourseDelete = await ctx.request(admin, 'DELETE', `/admin/courses/${narrowWriterCourse.data.id}/lessons/${lessonId}`);
+  assert(crossCourseDelete.status === 404 && crossCourseDelete.code === 40401, 'cross-course lesson deletion was not rejected');
+
+  await ctx.queryTestDb(
+    'INSERT INTO video_learning_record (user_id,lesson_version_id,duration_ms,credited_ms,coverage_intervals,coverage_ms,confirmed_position_ms,is_completed) VALUES (?,?,1000,1000,?,1000,1000,1)',
+    [institution.id, oldVersionId, JSON.stringify([[0, 1000]])],
+  );
+  const historyFacts = async () => ({
+    versions: await ctx.queryTestDb('SELECT * FROM lesson_version WHERE lesson_id = ? ORDER BY id', [lessonId]),
+    references: await ctx.queryTestDb("SELECT ref.* FROM media_reference ref JOIN lesson_version v ON ref.owner_type = 'lesson_version_video' AND ref.owner_id = v.id WHERE v.lesson_id = ? ORDER BY ref.id", [lessonId]),
+    records: await ctx.queryTestDb('SELECT r.* FROM video_learning_record r JOIN lesson_version v ON r.lesson_version_id = v.id WHERE v.lesson_id = ? ORDER BY r.id', [lessonId]),
+    sessions: await ctx.queryTestDb('SELECT s.* FROM video_learning_session s JOIN lesson_version v ON s.lesson_version_id = v.id WHERE v.lesson_id = ? ORDER BY s.id', [lessonId]),
+  });
+  const beforeFacts = await historyFacts();
+  assert(beforeFacts.sessions.length === 1 && String(beforeFacts.sessions[0].id) === playbackSessionId
+    && String(beforeFacts.sessions[0].active_user_id) === institution.id && beforeFacts.sessions[0].ended_at === null,
+  'deletion history fixture must contain the active playback session');
+  assert(beforeFacts.records.length === 2
+    && beforeFacts.records.some((record) => String(record.id) === String(beforeFacts.sessions[0].record_id)
+      && String(record.lesson_version_id) === currentVersionId
+      && Number(record.credited_ms) === 250 && Number(record.coverage_ms) === 250),
+  'deletion history fixture must contain both historical and current-version progress');
+  const offlineForDelete = await ctx.request(admin, 'POST', `/admin/courses/${courseId}/offline`);
+  assert(offlineForDelete.status === 200, 'offline before lesson deletion failed');
+  const deleted = await ctx.request(admin, 'DELETE', `/admin/courses/${courseId}/lessons/${lessonId}`);
+  assert(deleted.status === 200, `lesson deletion failed: ${deleted.status}/${deleted.code}`);
+  deepStrictEqual(deleted.data, { id: lessonId, deleted: true });
+  deepStrictEqual(await historyFacts(), beforeFacts, 'lesson deletion changed versions, references or learning facts');
+  const [deletedRow] = await ctx.queryTestDb('SELECT deleted_at,current_version_id FROM course_lesson WHERE id = ?', [lessonId]);
+  assert(deletedRow.deleted_at && String(deletedRow.current_version_id) === String(replaceVideo.data.version_id),
+    'lesson was hard-deleted or its current version pointer was cleared');
+  const deletedDirectory = await ctx.request(admin, 'GET', `/admin/courses/${courseId}`);
+  assert(deletedDirectory.data?.required_lesson_count === 0
+    && deletedDirectory.data.chapters.every((item) => item.lessons.length === 0), 'deleted lesson remained in the directory/required count');
+  const deletedLessons = await ctx.request(admin, 'GET', `/admin/courses/${courseId}/lessons`);
+  deepStrictEqual(deletedLessons.data, []);
+  for (const [method, path, body] of [
+    ['DELETE', `/admin/courses/${courseId}/lessons/${lessonId}`],
+    ['PUT', `/admin/courses/${courseId}/lessons/${lessonId}`, { title: '不得恢复' }],
+    ['POST', `/admin/courses/${courseId}/lessons/${lessonId}/versions`, { asset_id: String(secondUpload.data.asset_id) }],
+  ]) {
+    const response = await ctx.request(admin, method, path, body);
+    assert(response.status === 404 && response.code === 40401, `deleted lesson remained writable: ${method}/${response.status}`);
+  }
+  const afterDeletePublish = await ctx.request(admin, 'POST', `/admin/courses/${courseId}/publish`);
+  assert(afterDeletePublish.status === 200 && afterDeletePublish.data?.required_lesson_count === 0,
+    'publication counted a deleted required lesson');
+  const afterDeleteList = await ctx.request(admin, 'GET', `/admin/courses?category_id=${categoryA}`);
+  assert(afterDeleteList.data?.items?.find((item) => String(item.id) === courseId)?.required_lesson_count === 0,
+    'list aggregate counted a deleted required lesson');
+  deepStrictEqual(await historyFacts(), beforeFacts, 'republishing after deletion changed preserved learning facts');
+  const deletedStart = await ctx.request(historyActor, 'POST', '/me/video-sessions', { lesson_id: lessonId });
+  assert(deletedStart.status === 404 && deletedStart.code === 40401,
+    `deleted lesson still allowed new playback: ${deletedStart.status}/${deletedStart.code}`);
+  // Check media before heartbeat closure: denial must follow the deleted
+  // lesson's exact owner authorization, not an ended playback session.
+  const deletedTicket = await ctx.request(historyActor, 'POST', `/media/${currentAssetId}/tickets`, ticketOwner);
+  assert(deletedTicket.status === 403 && deletedTicket.code === 40302,
+    `deleted lesson still allowed ticket issuance: ${deletedTicket.status}/${deletedTicket.code}`);
+  assert(Date.parse(playback.data.media.ticket.expires_at) > Date.now(), 'pre-deletion ticket expired before authorization regression check');
+  const deletedContent = await ctx.request(null, 'GET', oldContentPath, undefined, { Range: 'bytes=0-15' });
+  assert(deletedContent.status === 403 && deletedContent.code === 40302,
+    `pre-deletion content URL remained readable: ${deletedContent.status}/${deletedContent.code}`);
+  deepStrictEqual(await historyFacts(), beforeFacts, 'rejected playback or media requests changed preserved learning facts');
+  const deletedHeartbeat = await ctx.request(historyActor, 'POST', `/me/video-sessions/${playbackSessionId}/heartbeat`, {
+    seq: 3, position_ms: 500, state: 'playing',
+  });
+  assert(deletedHeartbeat.status === 409 && deletedHeartbeat.code === 40951,
+    `deleted lesson heartbeat expected 40951: ${deletedHeartbeat.status}/${deletedHeartbeat.code}`);
+  const afterHeartbeatFacts = await historyFacts();
+  for (const key of ['versions', 'references', 'records']) {
+    deepStrictEqual(afterHeartbeatFacts[key], beforeFacts[key], `rejected heartbeat changed preserved ${key}`);
+  }
+  assert(afterHeartbeatFacts.sessions.length === 1, 'rejected playback start created a session');
+  const { ended_at: endedAt, active_user_id: activeUserId, updated_at: _closedAt, ...closedSession } = afterHeartbeatFacts.sessions[0];
+  const { ended_at: _wasEnded, active_user_id: _wasActive, updated_at: _updatedAt, ...originalSession } = beforeFacts.sessions[0];
+  assert(endedAt && activeUserId === null, 'unavailable heartbeat did not close the old playback session');
+  deepStrictEqual(closedSession, originalSession, 'unavailable heartbeat changed session progress instead of only closing ownership');
+  const afterDeleteProgress = await ctx.request(historyActor, 'GET', `/me/courses/${courseId}/progress`);
+  deepStrictEqual(afterDeleteProgress.data, { required: 0, completed: 0, completion_rate: null, lessons: [] });
+  const preservedHistory = await ctx.request(historyActor, 'GET', '/me/video-records');
+  assert(preservedHistory.status === 200 && preservedHistory.data?.items?.some((item) => item.version_id === oldVersionId),
+    'deleted lesson hid the historical learning record');
+  assert(preservedHistory.data?.total === 2
+    && preservedHistory.data.items.some((item) => item.version_id === currentVersionId
+      && item.progress?.credited_ms === 250 && item.progress?.coverage_ms === 250 && item.progress?.completed === false),
+  'deleted lesson hid or changed the interrupted current-version learning record');
+  const deletedVideo = await ctx.request(admin, 'GET', `/media/${firstAssetId}`);
+  assert(deletedVideo.status === 403 && deletedVideo.code === 40302, 'deleted lesson still authorized media access');
+  const retainedVideo = await ctx.request(admin, 'DELETE', `/media/${firstAssetId}`);
+  assert(retainedVideo.status === 409, 'soft deletion removed the historical media reference');
+  console.log('training-courses: safe deletion preserved history and revoked playback, heartbeat and media tickets');
 
   const disableCategory = await ctx.request(admin, 'PUT', `/admin/training-categories/${categoryA}/status`, { status: 0 });
   assert(disableCategory.status === 200, `category disable failed: ${disableCategory.status}`);

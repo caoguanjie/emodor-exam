@@ -38,6 +38,7 @@ export interface CourseLessonView {
   lesson_type: 'video';
   required: boolean;
   sort_order: number;
+  created_at?: string | null;
   current_version: LessonVersionView | null;
 }
 
