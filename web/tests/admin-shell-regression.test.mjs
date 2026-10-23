@@ -94,7 +94,7 @@ const elementStubCode = `
 
 const iconNames = [
   'AlarmClock', 'ArrowLeft', 'ArrowRight', 'Back', 'Close', 'CollectionTag', 'Cpu', 'DataAnalysis',
-  'Document', 'DocumentChecked', 'EditPen', 'Grid', 'House', 'Menu', 'Medal', 'Monitor',
+  'Document', 'DocumentChecked', 'EditPen', 'Grid', 'House', 'Menu', 'Medal', 'Monitor', 'Plus',
   'MoreFilled', 'Notebook', 'OfficeBuilding', 'Picture', 'Reading', 'Refresh', 'Remove', 'Right', 'Setting',
   'SetUp', 'SwitchButton', 'Tickets', 'User', 'UserFilled',
 ];
@@ -334,7 +334,7 @@ const elementComponents = [
   'el-alert', 'el-aside', 'el-button', 'el-carousel', 'el-carousel-item', 'el-checkbox',
   'el-checkbox-group', 'el-container', 'el-date-picker', 'el-dialog', 'el-dropdown',
   'el-dropdown-item', 'el-dropdown-menu', 'el-empty', 'el-form', 'el-form-item',
-  'el-header', 'el-icon', 'el-input', 'el-input-number', 'el-main', 'el-menu',
+  'el-header', 'el-icon', 'el-image-viewer', 'el-input', 'el-input-number', 'el-main', 'el-menu',
   'el-menu-item', 'el-sub-menu', 'el-option', 'el-pagination', 'el-progress', 'el-radio',
   'el-radio-button', 'el-radio-group', 'el-result', 'el-scrollbar', 'el-select',
   'el-switch', 'el-table', 'el-table-column', 'el-tag', 'el-tree', 'el-tree-select', 'el-upload',
@@ -904,6 +904,91 @@ test('closing all confirms dirty routes once, stays atomic on cancel, and leaves
   assert.equal(testContext.confirmCalls.length, 2, 'the accepted bulk close also asks only once');
   assert.equal(testContext.settingsReads, readsBeforeClose, 'the closing page must not remount before navigation');
   mounted.unmount();
+});
+
+test('site settings uses the upload card as the empty carousel state', async () => {
+  const previousSiteConfig = testContext.siteConfig;
+  testContext.siteConfig = { logo_asset_id: null, banners: [] };
+  const siteSettingsSource = readFileSync(resolve(webRoot, 'src/views/admin/SiteSettings.vue'), 'utf8');
+  assert.match(siteSettingsSource, /<el-upload[\s\S]*list-type="picture-card"/);
+  assert.doesNotMatch(siteSettingsSource, /<el-empty[^>]*暂无轮播图/);
+  const mounted = await mountShell('/settings');
+  await flushUpdates();
+  const main = findHostNode(mounted.rootNode, (node) => node.type === 'el-main');
+  assert.ok(main);
+  assert.ok(findHostNode(main, (node) => node.type === 'el-upload'), 'carousel upload card should remain visible');
+  assert.equal(hostText(main).includes('暂无轮播图'), false, 'the upload card should be the only empty carousel state');
+  mounted.unmount();
+  testContext.siteConfig = previousSiteConfig;
+});
+
+test('site settings previews its single logo without changing the saved binding', async () => {
+  const mounted = await mountShell('/settings');
+  const settings = findInstance(mounted.app, 'saved');
+  const uploader = findHostNode(mounted.rootNode, (node) => node.type === 'el-upload' && String(node.props.class).split(/\s+/).includes('logo-uploader'));
+  assert.equal(uploader.props.limit, 1);
+  uploader.props['on-preview'](uploader.props['file-list'][0]);
+  await flushUpdates();
+  const viewer = findHostNode(mounted.rootNode, (node) => node.type === 'el-image-viewer');
+  assert.ok(viewer);
+  assert.deepEqual([...viewer.props['url-list']], ['/public/logo-saved']);
+  assert.equal(viewer.props['initial-index'], 0);
+  assert.equal(settings.setupState.form.logo_asset_id, 'logo-saved');
+  assert.equal(settings.setupState.dirty, false);
+});
+
+test('banner preview opens the whole gallery at the clicked image and can close and reopen', async () => {
+  testContext.siteConfig.banners = [
+    { asset_id: 'banner-1', sort: 10 },
+    { asset_id: 'banner-2', sort: 20 },
+    { asset_id: 'banner-3', sort: 30 },
+  ];
+  const mounted = await mountShell('/settings');
+  const uploader = findHostNode(mounted.rootNode, (node) => node.type === 'el-upload' && String(node.props.class).split(/\s+/).includes('banner-uploader'));
+  const files = uploader.props['file-list'];
+  assert.equal(typeof uploader.props['on-preview'], 'function');
+  uploader.props['on-preview'](files[1]);
+  await flushUpdates();
+  let viewer = findHostNode(mounted.rootNode, (node) => node.type === 'el-image-viewer');
+  assert.ok(viewer);
+  assert.deepEqual([...viewer.props['url-list']], ['/public/banner-1', '/public/banner-2', '/public/banner-3']);
+  assert.equal(viewer.props['initial-index'], 1);
+  assert.equal(viewer.props.teleported, true);
+  viewer.props.onClose();
+  await flushUpdates();
+  assert.equal(findHostNode(mounted.rootNode, (node) => node.type === 'el-image-viewer'), null);
+  uploader.props['on-preview'](files[2]);
+  await flushUpdates();
+  viewer = findHostNode(mounted.rootNode, (node) => node.type === 'el-image-viewer');
+  assert.equal(viewer.props['initial-index'], 2);
+  const main = findHostNode(mounted.rootNode, (node) => node.type === 'el-main');
+  assert.equal(findHostNode(main, (node) => node.type === 'el-input-number'), null);
+});
+
+test('banners retain selection order after out-of-order upload completion and append after deletion', async () => {
+  const mounted = await mountShell('/settings');
+  const settings = findInstance(mounted.app, 'saved');
+  const uploader = findHostNode(mounted.rootNode, (node) => node.type === 'el-upload' && String(node.props.class).split(/\s+/).includes('banner-uploader'));
+  const first = { uid: 101, name: 'first.png', status: 'uploading', url: '/first.png' };
+  const second = { uid: 102, name: 'second.png', status: 'uploading', url: '/second.png' };
+  settings.setupState.bannerFiles = [...settings.setupState.bannerFiles, first, second];
+  uploader.props['on-success']({ asset_id: 'second' }, second, settings.setupState.bannerFiles);
+  uploader.props['on-success']({ asset_id: 'first' }, first, settings.setupState.bannerFiles);
+  assert.deepEqual(settings.setupState.form.banners.map((banner) => banner.asset_id), ['banner-saved', 'first', 'second']);
+
+  const removed = settings.setupState.bannerFiles[1];
+  settings.setupState.bannerFiles = settings.setupState.bannerFiles.filter((file) => file.uid !== removed.uid);
+  uploader.props['on-remove'](removed, settings.setupState.bannerFiles);
+  const replacement = { uid: 103, name: 'replacement.png', status: 'success', url: '/replacement.png' };
+  settings.setupState.bannerFiles = [...settings.setupState.bannerFiles, replacement];
+  uploader.props['on-success']({ asset_id: 'replacement' }, replacement, settings.setupState.bannerFiles);
+  await settings.setupState.save();
+  const write = testContext.calls.find((call) => call.method === 'PUT' && call.path === '/admin/site-settings');
+  assert.deepEqual(write.body.banners, [
+    { asset_id: 'banner-saved', sort: 10 },
+    { asset_id: 'second', sort: 20 },
+    { asset_id: 'replacement', sort: 30 },
+  ]);
 });
 
 for (const [path, name, actions] of [
