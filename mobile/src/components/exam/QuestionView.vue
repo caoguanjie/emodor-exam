@@ -17,11 +17,11 @@ function mark(id: string) { const state = status(id); return state === 'wrong' ?
   <view class="question-view">
     <view class="question-view__heading"><view class="question-view__identity"><text class="question-view__number">{{ String(number).padStart(2, '0') }}</text><text class="question-view__total">/{{ total }}</text><text class="question-view__tag">{{ questionTypeLabels[item.type] }}</text></view><text class="question-view__score">{{ item.score }} 分</text></view>
     <view v-if="review" class="question-view__verdict" :class="areOptionIdsCorrect(review.selectedOptionIds, review.correctOptionIds) ? 'question-view__verdict--right' : ''"><text>{{ areOptionIdsCorrect(review.selectedOptionIds, review.correctOptionIds) ? '回答正确' : review.selectedOptionIds.length ? '回答错误' : '未作答' }}</text><text>得 {{ review.earnedScore }} / {{ item.score }}</text></view>
-    <view class="question-view__stem"><ReadonlyRichContent :doc="item.stem" :assets="assets" @retry-image="emit('retryImage', $event)" /></view>
+    <view class="question-view__stem"><ReadonlyRichContent :doc="item.stem" :schema-version="item.content_schema_version ?? 2" :assets="assets" @retry-image="emit('retryImage', $event)" /></view>
     <text v-if="item.type === 'multiple'" class="question-view__hint">多选题 · 请选择所有符合的选项</text>
     <text v-else-if="item.imageOptions" class="question-view__hint">单选题 · 请选择 1 张图片</text>
     <view class="question-view__options" :class="{ 'question-view__options--images': item.imageOptions }">
-      <OptionCard v-for="(option, index) in item.options" :key="option.id" :option="option" :label="label(index)" :selected="(review?.selectedOptionIds || selected).includes(option.id)" :disabled="disabled || !!review" :multiple="item.type === 'multiple'" :image="item.imageOptions" :status="status(option.id)" :mark="mark(option.id)" :assets="assets" @select="emit('select', $event)" @retry-image="emit('retryImage', $event)" />
+      <OptionCard v-for="(option, index) in item.options" :key="option.id" :option="option" :schema-version="item.content_schema_version ?? 2" :label="label(index)" :selected="(review?.selectedOptionIds || selected).includes(option.id)" :disabled="disabled || !!review" :multiple="item.type === 'multiple'" :image="item.imageOptions" :status="status(option.id)" :mark="mark(option.id)" :assets="assets" @select="emit('select', $event)" @retry-image="emit('retryImage', $event)" />
     </view>
   </view>
 </template>

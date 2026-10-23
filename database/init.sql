@@ -1,6 +1,6 @@
 -- =====================================================================
 -- EmodorRuleExam 制度学习及考试系统 · 数据库初始化脚本
--- 依据 docs/design/03-数据库设计.md 建表（当前 38 张业务表 + 1 张迁移元数据表，InnoDB + utf8mb4）
+-- 依据 docs/design/03-数据库设计.md 建表（当前 39 张业务表 + 1 张迁移元数据表，InnoDB + utf8mb4）
 -- 时间字段 DATETIME(3)；无数据库级外键（03 册 1.6 节，应用层维护）
 -- 枚举字段 VARCHAR + 应用层校验（03 册 1.7 节）
 -- 种子数据（根部门 / 超级管理员）由 database/seed.mjs 按环境变量生成，
@@ -346,6 +346,8 @@ CREATE TABLE IF NOT EXISTS `question_version` (
   `analysis`              TEXT NULL,
   `content_schema_version` TINYINT UNSIGNED NOT NULL DEFAULT 1,
   `content_json`          JSON NULL,
+  `authoring_schema_version` TINYINT UNSIGNED NULL COMMENT '作者原稿 schema；旧版本不回填',
+  `authoring_json`        JSON NULL COMMENT '单题 AuthoringBundle；仅管理端读取',
   `score_cents`           INT UNSIGNED NOT NULL COMMENT '题库建议分值，整数分；考试实际分值另存',
   `concept_id`            BIGINT UNSIGNED NULL,
   `regulation_id`         BIGINT UNSIGNED NULL,
@@ -369,6 +371,18 @@ CREATE TABLE IF NOT EXISTS `question_version` (
   KEY `idx_question_version_regulation` (`regulation_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='不可变题目内容版本及审核轨迹';
 
+-- result_json=NULL 只允许事务内占位；成功提交前必须写入完整回执。
+CREATE TABLE IF NOT EXISTS `question_authoring_commit` (
+  `id`           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `owner_id`     BIGINT UNSIGNED NOT NULL,
+  `request_id`   CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `content_hash` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `result_json`  JSON NULL,
+  `created_at`   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_question_authoring_commit_owner_request` (`owner_id`, `request_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='作者原稿提交的持久幂等回执';
+
 CREATE TABLE IF NOT EXISTS `exam_paper` (
   `id`                   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `regulation_id`        BIGINT UNSIGNED NULL COMMENT '制度专项卷所属制度；培训卷为 NULL',
@@ -379,6 +393,7 @@ CREATE TABLE IF NOT EXISTS `exam_paper` (
   `regulation_ids`       JSON NULL COMMENT '培训卷可选制度筛选；空数组表示不过滤',
   `course_ids`           JSON NULL COMMENT '课程说明关联，不参与抽题过滤',
   `rule_config`          JSON NULL COMMENT '草稿题型、题量与整数分配置',
+  `designer_layout`      JSON NULL COMMENT '管理端 DesignerLayoutV1；旧卷不回填',
   `title`                VARCHAR(128) NOT NULL COMMENT '试卷标题',
   `total_score`          DECIMAL(5,2) NOT NULL DEFAULT 100.00 COMMENT '总分，固定 100 分制',
   `pass_score`           DECIMAL(5,2) NOT NULL DEFAULT 60.00 COMMENT '及格线（(0,100]）',

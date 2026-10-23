@@ -243,7 +243,11 @@ export async function finishTrainingFlow(ctx, flow) {
   assertAttemptView(timeout, { status: 'timeout' });
   await assertTimeoutFacts(ctx, external.attempt.record_id);
   for (const [learner, expected] of [[institution, 90], [external, 0]]) {
-    const result = await ok(ctx, learner.actor, 'GET', `/me/exam-records/${learner.attempt.record_id}/result`);
+    // The administrator result reader uses the rich-content projection. Compare
+    // the same negotiated representation instead of schema-2 and schema-3 shapes.
+    const result = await ok(ctx, learner.actor, 'GET', `/me/exam-records/${learner.attempt.record_id}/result`, undefined, {
+      'X-Question-Content-Version': '3',
+    });
     assert.equal(result.grading_state, learner === institution ? 'finalized' : 'not_submitted');
     assert.equal(result.score, expected);
     assert.equal(result.passed, expected >= 60);

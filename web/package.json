@@ -6,21 +6,46 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
+    "@tiptap/core": "3.32.0",
+    "@tiptap/extension-highlight": "3.32.0",
+    "@tiptap/extension-subscript": "3.32.0",
+    "@tiptap/extension-superscript": "3.32.0",
+    "@tiptap/extension-table": "3.32.0",
+    "@tiptap/extension-text-align": "3.32.0",
+    "@tiptap/extension-text-style": "3.32.0",
+    "@tiptap/pm": "3.32.0",
+    "@tiptap/starter-kit": "3.32.0",
+    "@tiptap/vue-3": "3.32.0",
+    "@vueuse/core": "14.4.0",
     "axios": "^1.7.5",
     "element-plus": "^2.8.0",
+    "fuse.js": "7.5.0",
+    "moment": "2.31.0",
+    "nanoid": "5.1.5",
     "pdfjs-dist": "^4.6.82",
     "pinia": "^2.2.2",
+    "prosemirror-utils": "1.2.2",
+    "react-dnd-html5-backend": "16.0.1",
     "vue": "^3.4.38",
-    "vue-router": "^4.4.3"
+    "vue-datepicker-next": "1.0.3",
+    "vue-router": "^4.4.3",
+    "vue3-dnd": "2.1.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.1.2",
+    "@vue/test-utils": "2.4.6",
+    "fast-glob": "3.3.2",
+    "jsdom": "26.1.0",
+    "sass": "1.106.0",
     "typescript": "^5.5.4",
     "vite": "^5.4.2",
+    "vite-plugin-svg-icons": "2.0.1",
+    "vitest": "2.1.9",
     "vue-tsc": "^2.0.29"
   }
 }

@@ -1,0 +1,36 @@
+{
+  "stem": {
+    "type": "doc",
+    "content": [
+      { "type": "heading", "attrs": { "level": 2, "textAlign": "center", "indent": 0, "lineHeight": "1.5" }, "content": [{ "type": "text", "text": "安全操作", "marks": [{ "type": "bold" }, { "type": "italic" }, { "type": "underline" }] }] },
+      { "type": "paragraph", "attrs": { "textAlign": "justify", "indent": 2, "lineHeight": "1.75" }, "content": [
+        { "type": "text", "text": "按要求选择。", "marks": [{ "type": "textStyle", "attrs": { "fontFamily": "SimSun", "fontSize": "12pt", "color": "#aabbcc" } }, { "type": "highlight", "attrs": { "color": "rgb(255, 240, 0)" } }] },
+        { "type": "hardBreak" },
+        { "type": "text", "text": "标记", "marks": [{ "type": "strike" }, { "type": "code" }, { "type": "superscript" }] },
+        { "type": "text", "text": "下标", "marks": [{ "type": "subscript" }] },
+        { "type": "image", "attrs": { "asset_id": "42" } }
+      ] },
+      { "type": "blockquote", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "先确认环境。" }] }] },
+      { "type": "orderedList", "attrs": { "start": 3, "type": "A" }, "content": [{ "type": "listItem", "attrs": { "indent": 1, "lineHeight": "2" }, "content": [
+        { "type": "paragraph", "content": [{ "type": "text", "text": "检查" }] },
+        { "type": "bulletList", "content": [{ "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "设备" }] }] }] }
+      ] }] },
+      { "type": "codeBlock", "attrs": { "language": null }, "content": [{ "type": "text", "text": "STOP" }] },
+      { "type": "horizontalRule" },
+      { "type": "table", "content": [
+        { "type": "tableRow", "content": [
+          { "type": "tableHeader", "attrs": { "colspan": 1, "rowspan": 2, "colwidth": [80], "align": "center" }, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "项目" }] }] },
+          { "type": "tableHeader", "attrs": { "colspan": 2, "rowspan": 1, "colwidth": [100, 120], "align": null }, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "要求" }] }] }
+        ] },
+        { "type": "tableRow", "content": [
+          { "type": "tableCell", "attrs": { "colspan": 1, "rowspan": 1, "colwidth": [100], "align": "left" }, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "通风" }] }] },
+          { "type": "tableCell", "attrs": { "colspan": 1, "rowspan": 1, "colwidth": [120], "align": "right" }, "content": [{ "type": "paragraph", "content": [{ "type": "image", "attrs": { "asset_id": "43" } }] }] }
+        ] }
+      ] }
+    ]
+  },
+  "options": [
+    { "id": "A", "content": { "type": "doc", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "先通风检测", "marks": [{ "type": "bold" }] }, { "type": "image", "attrs": { "asset_id": "42" } }] }] } },
+    { "id": "B", "content": { "type": "doc", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "直接进入" }] }] } }
+  ]
+}

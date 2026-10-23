@@ -7,6 +7,8 @@
 
     <div class="notice-stack">
       <el-alert v-if="!categories.length" type="warning" show-icon :closable="false" title="暂无启用的培训类别，请先创建类别。" />
+      <el-alert v-if="catalogError" type="warning" show-icon :closable="false" :title="catalogError" />
+      <el-button v-if="catalogError" link :loading="catalogLoading" @click="loadAuthoringOptions">重试加载难度</el-button>
     </div>
     <FitsTable>
       <template #search>
@@ -22,7 +24,7 @@
           </el-form-item>
           <el-form-item label="难度">
             <el-select v-model="query.difficulty" placeholder="难度" clearable @change="load">
-              <el-option label="初级" value="easy" /><el-option label="中级" value="medium" /><el-option label="高级" value="hard" />
+              <el-option v-for="item in difficultyCatalog" :key="item.code" :label="item.label" :value="item.code" />
             </el-select>
           </el-form-item>
           <el-form-item label="题型">
@@ -115,7 +117,7 @@
         type="warning"
         show-icon
         :closable="false"
-        title="该旧题难度未知，请明确选择初级、中级或高级后再保存。"
+        title="该旧题难度当前不可用于新版本，请明确选择简单或困难后再保存；原难度不会自动改写。"
         style="margin-bottom:12px"
       />
       <QuestionEditor
@@ -124,6 +126,7 @@
         :concepts="editorConcepts"
         :concept-loading="editorConceptLoading"
         :can-upload-media="auth.can('media:write')"
+        :difficulty-options="difficultyOptions"
         @scope-change="loadEditorConcepts"
         @concept-search="searchEditorConcepts"
       />
@@ -138,10 +141,11 @@
         @current-change="loadEditorConceptPage"
       />
       <el-divider content-position="left">未保存内容预览</el-divider>
-      <QuestionPreview :question="editorForm" />
+      <el-alert v-if="editorContentError" type="warning" show-icon :closable="false" :title="editorContentError" />
+      <QuestionPreview :question="editorPreview" />
       <template #footer>
         <el-button @click="closeEditor">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="saving || !hasEditorDifficulty" @click="saveQuestion">{{ editorMode === 'create' ? '保存并确认可用' : '保存为待审核版本' }}</el-button>
+        <el-button type="primary" :loading="saving" :disabled="saving || catalogLoading || !!catalogError || !hasEditorDifficulty" @click="saveQuestion">{{ editorMode === 'create' ? '保存并确认可用' : '保存为待审核版本' }}</el-button>
       </template>
     </el-dialog>
 
@@ -174,6 +178,8 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
 import { useAuthStore } from '../../stores/auth';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
+import { useAuthoringOptions } from '../../composables/useAuthoringOptions';
+import type { AuthoringOptions } from '../../api/question-authoring';
 import { formatDateTime } from '../../utils/format';
 import QuestionEditor from '../../components/QuestionEditor.vue';
 import QuestionPreview from '../../components/QuestionPreview.vue';
@@ -182,7 +188,7 @@ import {
   questionDraftFromView,
   questionDraftWithContent,
   questionRichTextToPlainText,
-  type Id, type Page, type QuestionConcept, type QuestionDraftPayload, type QuestionType, type QuestionView,
+  type Id, type Page, type QuestionConcept, type QuestionContentFields, type QuestionDraftPayload, type QuestionType, type QuestionView,
 } from '../../api/training-types';
 
 type CategoryOption = { id: Id; name: string };
@@ -211,6 +217,8 @@ const typeOptions: Array<{ value: QuestionType; label: string }> = [
   { value: 'judgment', label: '判断题' },
 ];
 const auth = useAuthStore();
+const { catalog: difficultyCatalog, difficultyOptions, difficultyLabel: catalogDifficultyLabel, load: loadAuthoringOptions,
+  loading: catalogLoading, error: catalogError } = useAuthoringOptions(() => http.get('/admin/questions/authoring-options') as Promise<AuthoringOptions>);
 const list = ref<QuestionView[]>([]);
 const total = ref(0);
 const loading = ref(false);
@@ -231,6 +239,8 @@ const editorMode = ref<'create' | 'edit'>('create');
 const editingId = ref<Id | null>(null);
 const editingExpectedVersionId = ref<Id | null>(null);
 const editorForm = ref<QuestionDraftPayload>(emptyDraft());
+// Keep the exact version snapshot outside the editable fields. Child updates cannot replace it.
+const editorContentBase = ref<QuestionContentFields | null>(null);
 const editorDirty = ref(false);
 const editorBaseline = ref<EditorBaseline | null>(null);
 let editorContext: symbol | null = null;
@@ -240,7 +250,12 @@ const selectedQuestion = ref<QuestionView | null>(null);
 const versionHistory = ref<QuestionVersionHistory[]>([]);
 const versionHistoryPage = reactive(pageState());
 
-const hasEditorDifficulty = computed(() => ['easy', 'medium', 'hard'].includes(editorForm.value.difficulty));
+const hasEditorDifficulty = computed(() => difficultyOptions.value.some((item) => item.value === editorForm.value.difficulty));
+const editorContentError = ref('');
+const editorPreview = computed(() => {
+  try { return questionDraftWithContent({ ...editorForm.value, ...(editorContentBase.value || {}) }); }
+  catch { return editorForm.value; }
+});
 
 function emptyDraft(): QuestionDraftPayload {
   return {
@@ -310,7 +325,7 @@ async function beforeEditorClose(done: () => void) {
 
 function plainText(html: string) { return questionRichTextToPlainText(html); }
 function typeLabel(value: string) { return typeOptions.find((item) => item.value === value)?.label || value; }
-function difficultyLabel(value: string | null) { return ({ easy: '初级', medium: '中级', hard: '高级' } as Record<string, string>)[value || ''] || '未知'; }
+function difficultyLabel(value: string | null) { return value ? catalogDifficultyLabel(value) : '未知'; }
 function sourceLabel(value: string) { return ({ ai: 'AI', manual: '人工', import: '导入' } as Record<string, string>)[value] || value; }
 function statusLabel(value: string) { return ({ approved: '已通过', pending: '待审核', rejected: '已驳回' } as Record<string, string>)[value] || value; }
 function statusTag(value: string) { return (value === 'approved' ? 'success' : value === 'rejected' ? 'danger' : 'info') as any; }
@@ -442,6 +457,8 @@ function toDraft(row: QuestionView): QuestionDraftPayload {
 async function openCreate() {
   const context = Symbol('question-editor-context');
   editorContext = context;
+  editorContentBase.value = null;
+  editorContentError.value = '';
   editorMode.value = 'create'; editingId.value = null; editingExpectedVersionId.value = null; editorForm.value = emptyDraft();
   captureEditorBaseline();
   await loadEditorConcepts({ category_id: editorForm.value.category_id, type: editorForm.value.type });
@@ -452,7 +469,13 @@ async function openCreate() {
 async function openEdit(row: QuestionView) {
   const context = Symbol('question-editor-context');
   editorContext = context;
-  editorMode.value = 'edit'; editingId.value = row.question_id; editingExpectedVersionId.value = expectedVersionId(row.current_version_id); editorForm.value = toDraft(row);
+  editorContentError.value = '';
+  let draft: QuestionDraftPayload;
+  try { draft = toDraft(row); }
+  catch (error) { ElMessage.warning(error instanceof Error ? error.message : '该版本内容暂不可编辑'); return; }
+  editorContentBase.value = row.content_schema_version === 3
+    ? JSON.parse(JSON.stringify({ content_schema_version: 3, content_json: row.content_json })) : null;
+  editorMode.value = 'edit'; editingId.value = row.question_id; editingExpectedVersionId.value = expectedVersionId(row.current_version_id); editorForm.value = draft;
   captureEditorBaseline();
   await loadEditorConcepts({ category_id: editorForm.value.category_id, type: editorForm.value.type });
   if (editorContext !== context) return;
@@ -476,7 +499,7 @@ async function loadHistoryPage(page: number) {
 
 function payload(value: QuestionDraftPayload) {
   return Object.fromEntries(Object.entries({
-    ...questionDraftWithContent(value),
+    ...questionDraftWithContent({ ...value, ...(editorContentBase.value || {}) }),
     concept_id: value.concept_id || null,
     analysis: value.analysis ?? null,
   }).filter(([, item]) => item !== undefined && item !== ''));
@@ -484,18 +507,20 @@ function payload(value: QuestionDraftPayload) {
 
 async function saveQuestion() {
   if (saving.value) return;
-  if (!hasEditorDifficulty.value) {
-    ElMessage.warning('请选择题目难度后再保存');
+  if (catalogLoading.value || catalogError.value || !hasEditorDifficulty.value) {
+    ElMessage.warning(catalogError.value || '请选择当前启用的题目难度后再保存');
     return;
   }
   const requestContext = editorContext;
   if (!requestContext || !editorVisible.value) return;
   const submitted = editorSnapshot();
   let body: ReturnType<typeof payload>;
+  editorContentError.value = '';
   try {
     body = payload(submitted.form);
   } catch (error) {
-    ElMessage.warning(error instanceof Error ? error.message : '题目内容格式不正确，请检查后重试');
+    editorContentError.value = error instanceof Error ? error.message : '题目内容格式不正确，请检查后重试';
+    ElMessage.warning(editorContentError.value);
     return;
   }
   saving.value = true;
@@ -570,6 +595,7 @@ async function regenerate(row: QuestionView) {
 }
 
 onMounted(async () => {
+  if (auth.can('questions:read') || auth.can('questions:write')) await loadAuthoringOptions();
   await loadCategories();
   await load();
 });

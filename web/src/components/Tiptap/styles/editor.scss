@@ -1,0 +1,13 @@
+@use '../utils/ProseMirror.reset.css';
+
+.ruleexam-tiptap,
+.ruleexam-tiptap-tooltip-btn,
+.ruleexam-tiptap-popover-menu {
+  --fits-base-main-color: var(--re-primary, var(--el-color-primary));
+  --fits-text-color-primary: var(--re-text, var(--el-text-color-primary));
+}
+
+.ruleexam-tiptap {
+  color: var(--re-text, var(--el-text-color-primary));
+  font-family: var(--re-font, var(--el-font-family));
+}

@@ -1,5 +1,7 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 import type { QuestionContentV2, QuestionOption } from '../common/training-contracts';
+import type { AuthoringBundle } from '../common/question-authoring';
+import type { QuestionContentV3 } from '../common/question-content-v3';
 
 @Entity('question_version')
 @Index('uk_question_version_revision', ['questionId', 'revision'], { unique: true })
@@ -40,7 +42,13 @@ export class QuestionVersion {
   contentSchemaVersion: number;
 
   @Column({ name: 'content_json', type: 'json', nullable: true })
-  contentJson: QuestionContentV2 | null;
+  contentJson: QuestionContentV2 | QuestionContentV3 | null;
+
+  @Column({ name: 'authoring_schema_version', type: 'tinyint', unsigned: true, nullable: true })
+  authoringSchemaVersion: number | null;
+
+  @Column({ name: 'authoring_json', type: 'json', nullable: true })
+  authoringJson: AuthoringBundle | null;
 
   @Column({ name: 'score_cents', type: 'int', unsigned: true })
   scoreCents: number;

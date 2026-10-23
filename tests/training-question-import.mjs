@@ -483,7 +483,7 @@ async function runBody(ctx) {
 
   const correctedRows = [
     {
-      category: categoryId, type: 'multiple', difficulty: 'medium', concept: '',
+      category: categoryId, type: 'multiple', difficulty: 'easy', concept: '',
       stem: '<p>B4：哪些属于作业前检查？</p>',
       options: JSON.stringify([{ key: 'A', text: '检查防护用品' }, { key: 'B', text: '确认许可' }, { key: 'C', text: '跳过交底' }]),
       answer: '[0,1]', analysis: '<p>前两项正确。</p>', score: '10',
@@ -511,7 +511,7 @@ async function runBody(ctx) {
   );
   assert.equal(stored.length, 4);
   assert.deepEqual(new Set(stored.map((row) => row.type)), new Set(['single', 'multiple', 'judgment']));
-  assert.deepEqual(new Set(stored.map((row) => row.difficulty)), new Set(['easy', 'medium', 'hard']));
+  assert.deepEqual(new Set(stored.map((row) => row.difficulty)), new Set(['easy', 'hard']));
   for (const row of stored) {
     assert.equal(row.status, 'approved');
     assert.equal(row.version_status, 'approved');

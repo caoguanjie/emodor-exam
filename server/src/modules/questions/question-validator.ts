@@ -1,7 +1,11 @@
 import sanitizeHtml from 'sanitize-html';
 import { Errors } from '../../common/errors';
+import { assertActiveDifficulty } from '../../common/question-difficulty';
 import type { Difficulty, QuestionContentV2, QuestionOption, QuestionType } from '../../common/training-contracts';
+import type { QuestionContentV3 } from '../../common/question-content-v3';
 import { docHtml, questionContent } from './question-content';
+import { collectContentAssetIds, parseQuestionContent } from './question-content-dispatch';
+import { richCompatibilityHtml } from './question-authoring-codec';
 
 export type QuestionSource = 'ai' | 'manual' | 'import';
 
@@ -22,7 +26,7 @@ export interface QuestionDraftInput {
   sourcePageEnd?: number;
   source: QuestionSource;
   contentSchemaVersion?: number;
-  contentJson?: QuestionContentV2 | null;
+  contentJson?: QuestionContentV2 | QuestionContentV3 | null;
 }
 
 export interface ValidatedQuestionDraft extends QuestionDraftInput {
@@ -30,7 +34,6 @@ export interface ValidatedQuestionDraft extends QuestionDraftInput {
 }
 
 const TYPES: readonly QuestionType[] = ['single', 'multiple', 'judgment'];
-const DIFFICULTIES: readonly Difficulty[] = ['easy', 'medium', 'hard'];
 const SOURCES: readonly QuestionSource[] = ['ai', 'manual', 'import'];
 
 function decimalId(value: unknown, field: string, required = false): string | undefined {
@@ -145,9 +148,9 @@ export function validateAndSanitizeQuestionDraft(
   validationOptions: { allowReferenceAi?: boolean } = {},
 ): ValidatedQuestionDraft {
   const type = input?.type;
-  if (input?.contentJson != null && input.contentSchemaVersion !== 2) throw Errors.param('v2 内容必须声明 content_schema_version=2');
+  if (input?.contentJson != null && input.contentSchemaVersion !== 2 && input.contentSchemaVersion !== 3) throw Errors.param('内容必须声明 content_schema_version=2 或 3');
   if (!TYPES.includes(type)) throw Errors.param('题型非法（single / multiple / judgment）');
-  if (!DIFFICULTIES.includes(input.difficulty)) throw Errors.param('难度非法（easy / medium / hard）');
+  assertActiveDifficulty(input.difficulty);
   if (!SOURCES.includes(input.source)) throw Errors.param('题目来源非法（ai / manual / import）');
 
   const categoryId = decimalId(input.categoryId, 'category_id', true)!;
@@ -172,6 +175,19 @@ export function validateAndSanitizeQuestionDraft(
     throw Errors.param('建议分值须为 1–10000 整数分');
   }
 
+  if (input.contentSchemaVersion === 3) {
+    const parsed = parseQuestionContent(input);
+    if (parsed.schema !== 3) throw Errors.param('题目内容版本不一致');
+    const { schema, ...contentJson } = parsed;
+    return {
+      ...input, categoryId, conceptId, regulationId, regulationVersionId,
+      stem: richCompatibilityHtml(parsed.stem),
+      options: parsed.options.map((option) => ({ key: option.id, text: richCompatibilityHtml(option.content) })),
+      answer: parsed.answer_option_ids.map((id) => parsed.options.findIndex((option) => option.id === id)).sort((a, b) => a - b),
+      analysis: parsed.analysis ? richCompatibilityHtml(parsed.analysis) : null,
+      contentSchemaVersion: schema, contentJson, mediaAssetIds: collectContentAssetIds(parsed),
+    };
+  }
   const v2 = input.contentSchemaVersion === 2 ? questionContent(input) : null;
   const stem = v2 ? docHtml(v2.stem) : cleanRichText(input.stem, '题干', true)!;
   const options = v2 ? v2.options.map((option) => ({ key: option.id, text: docHtml(option.content) })) : normalizeOptions(input.options, type);

@@ -3,6 +3,8 @@
  * HTTP fields remain snake_case; services may adapt them to camelCase at the
  * boundary. IDs stay strings so BIGINT values never pass through Number.
  */
+import type { ReadonlyRichDocV3 } from './question-content-v3';
+
 export type Id = string;
 export type LearnerSource = 'institution' | 'external';
 export type Difficulty = 'easy' | 'medium' | 'hard';
@@ -94,28 +96,30 @@ export interface QuestionContentV2 {
 }
 export interface SubmitAttemptRequest { record_id: string; answers: Array<{ item_id: string; option_ids: string[] }> }
 
-export interface AttemptQuestion {
+export interface AttemptQuestion<Capability extends 2 | 3 = 2> {
+  /** Present only for clients advertising content capability 3. */
+  content_schema_version?: 2 | 3;
   item_id: Id;
   type: QuestionType;
-  stem: ReadonlyTiptapDoc;
-  options: Array<{ id: string; content: ReadonlyTiptapDoc }>;
+  stem: Capability extends 2 ? ReadonlyTiptapDoc : ReadonlyTiptapDoc | ReadonlyRichDocV3;
+  options: Array<{ id: string; content: Capability extends 2 ? ReadonlyTiptapDoc : ReadonlyTiptapDoc | ReadonlyRichDocV3 }>;
   score: number;
 }
 
-export interface AttemptView {
+export interface AttemptView<Capability extends 2 | 3 = 2> {
   status: 'in_progress' | 'submitted' | 'passed' | 'failed' | 'timeout';
   record_id: Id;
   paper_id: Id;
   release_id: Id | null;
   deadline_at: string;
   server_now: string;
-  questions: AttemptQuestion[];
+  questions: AttemptQuestion<Capability>[];
 }
 
-export interface FinalResultItem extends AttemptQuestion {
+export interface FinalResultItem extends AttemptQuestion<2 | 3> {
   selected_option_ids: string[];
   correct_option_ids: string[];
-  analysis: ReadonlyTiptapDoc | null;
+  analysis: ReadonlyTiptapDoc | ReadonlyRichDocV3 | null;
   gained_score: number;
 }
 

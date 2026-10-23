@@ -1,7 +1,10 @@
 /** HTTP mirror of server/src/common/training-contracts.ts (snake_case). */
+import type { QuestionContentV3 } from './question-document-types';
+import { applyQuestionFormChanges, toQuestionFormValue, type QuestionFormField } from '../utils/question-form-content';
 export type Id = string;
 export type LearnerSource = 'institution' | 'external';
 export type Difficulty = 'easy' | 'medium' | 'hard';
+export type ActiveDifficulty = 'easy' | 'hard';
 export type ExamDifficulty = Difficulty | 'mixed' | 'unknown';
 export type QuestionType = 'single' | 'multiple' | 'judgment';
 
@@ -220,7 +223,7 @@ export interface AiQuestionImportRow {
   row_number: number;
   category: Id;
   type: QuestionType;
-  difficulty: 'easy' | 'hard';
+  difficulty: Difficulty;
   concept: Id | '';
   stem: string;
   options: QuestionOption[];
@@ -259,8 +262,8 @@ export interface QuestionContentV2 {
   answer_option_ids: string[];
 }
 export interface QuestionContentFields {
-  content_schema_version?: 1 | 2;
-  content_json?: QuestionContentV2 | null;
+  content_schema_version?: 1 | 2 | 3;
+  content_json?: QuestionContentV2 | QuestionContentV3 | null;
 }
 
 export type QuestionSource = 'ai' | 'manual' | 'import';
@@ -301,6 +304,13 @@ export function questionDraftFromView(row: Pick<QuestionDraftPayload,
     category_id: Id | null;
     difficulty: Difficulty | '' | null;
   }): QuestionDraftPayload {
+  if (row.content_schema_version === 3) {
+    const content = JSON.parse(JSON.stringify(row.content_json)) as QuestionContentV3;
+    const fields = toQuestionFormValue({ ...content, schema: 3 });
+    return { category_id: row.category_id || '', difficulty: row.difficulty || '', type: row.type,
+      ...fields, score: Number(row.score), concept_id: row.concept_id || undefined,
+      content_schema_version: 3, content_json: content };
+  }
   const content = row.content_schema_version === 2 ? normalizeQuestionContentV2(row.content_json) : null;
   const options = content ? content.options.map((option) => ({ key: option.id, text: readonlyQuestionDocToHtml(option.content) })) : JSON.parse(JSON.stringify(row.options || []));
   return {
@@ -426,7 +436,15 @@ export function questionHtmlToReadonlyDoc(value: string | null | undefined): Rea
 }
 
 /** Save correctness by stable ID; `checked`/learner selections are never copied into this payload. */
-export function questionDraftWithContent(value: QuestionDraftPayload): QuestionDraftPayload & { content_schema_version: 2; content_json: QuestionContentV2 } {
+export function questionDraftWithContent(value: QuestionDraftPayload): Omit<QuestionDraftPayload, 'content_schema_version' | 'content_json'> & { content_schema_version: 2 | 3; content_json: QuestionContentV2 | QuestionContentV3 } {
+  if (value.content_schema_version === 3) {
+    const base = { ...value.content_json, schema: 3 as const } as QuestionContentV3 & { schema: 3 };
+    const original = toQuestionFormValue(base);
+    const changed = (['stem', 'options', 'analysis', 'answer'] as QuestionFormField[])
+      .filter((key) => JSON.stringify(original[key]) !== JSON.stringify(value[key]));
+    const { schema: _schema, ...content } = applyQuestionFormChanges(base, value, changed);
+    return { ...value, content_schema_version: 3, content_json: content };
+  }
   const content = normalizeQuestionContentV2({
     stem: questionHtmlToReadonlyDoc(value.stem),
     options: value.options.map((option) => ({ id: option.key, content: questionHtmlToReadonlyDoc(option.text) })),
@@ -732,13 +750,28 @@ export interface AttemptQuestionV2 {
 }
 
 export interface FinalResultItemV2 extends AttemptQuestionV2 {
+  content_schema_version?: 2;
   selected_option_ids: string[];
   correct_option_ids: string[];
   analysis: ReadonlyTiptapDoc | null;
   gained_score: number;
 }
 
-export type FinalResultItem = FinalResultItemV2 | LegacyFinalResultItem;
+export interface FinalResultItemV3 {
+  content_schema_version: 3;
+  item_id: Id;
+  type: QuestionType;
+  score: number;
+  stem: QuestionContentV3['stem'];
+  options: QuestionContentV3['options'];
+  selected_option_ids: string[];
+  correct_option_ids: string[];
+  analysis: QuestionContentV3['analysis'];
+  gained_score: number;
+}
+
+export type FinalResultItemCanonical = FinalResultItemV2 | FinalResultItemV3;
+export type FinalResultItem = FinalResultItemCanonical | LegacyFinalResultItem;
 
 export interface FinalResult {
   record_id: Id;

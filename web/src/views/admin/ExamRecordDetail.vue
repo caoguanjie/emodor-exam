@@ -64,7 +64,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import http from '../../api/http';
-import type { ExamRecordDetail, FinalResult, FinalResultItem, FinalResultItemV2, SubmissionMethod } from '../../api/training-types';
+import type { ExamRecordDetail, FinalResult, FinalResultItem, FinalResultItemCanonical, SubmissionMethod } from '../../api/training-types';
 import QuestionPreview from '../../components/QuestionPreview.vue';
 import { createLatestRequestScope } from '../../utils/latest-request-scope';
 
@@ -88,19 +88,25 @@ function submissionLabel(value: SubmissionMethod | null) { return value === 'man
 function statusType(value: string) { return value === 'passed' ? 'success' : value === 'failed' || value === 'timeout' ? 'danger' : value === 'in_progress' ? 'primary' : 'warning'; }
 function formatTime(value: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'; }
 function formatRate(value: number | null) { return value === null ? '待汇总' : `${Math.round(value * 10000) / 100}%`; }
-function isV2Item(item: FinalResultItem): item is FinalResultItemV2 { return typeof item.stem !== 'string'; }
+function isCanonicalItem(item: FinalResultItem): item is FinalResultItemCanonical { return typeof item.stem !== 'string'; }
 function previewQuestion(item: FinalResultItem) {
-  if (isV2Item(item)) return {
-    type: item.type, score: item.score, content_schema_version: 2 as const,
-    content_json: { stem: item.stem, options: item.options, analysis: item.analysis, answer_option_ids: item.correct_option_ids },
-  };
+  if (isCanonicalItem(item)) {
+    if (item.content_schema_version === 3) return {
+      type: item.type, score: item.score, content_schema_version: 3 as const,
+      content_json: { stem: item.stem, options: item.options, analysis: item.analysis, answer_option_ids: item.correct_option_ids },
+    };
+    return {
+      type: item.type, score: item.score, content_schema_version: 2 as const,
+      content_json: { stem: item.stem, options: item.options, analysis: item.analysis, answer_option_ids: item.correct_option_ids },
+    };
+  }
   return {
     type: item.type, stem: item.stem, options: item.options, score: item.score,
     answer: item.correct_answer || [], analysis: item.analysis,
   };
 }
 function selectedOptionLabels(item: FinalResultItem): string[] {
-  if (isV2Item(item)) return item.selected_option_ids.map((id) => {
+  if (isCanonicalItem(item)) return item.selected_option_ids.map((id) => {
     const index = item.options.findIndex((option) => option.id === id);
     return index >= 0 ? String.fromCharCode(65 + index) : '未知选项';
   });
@@ -118,6 +124,7 @@ async function load() {
     if (data.status === 'in_progress') return;
     const finalResult = await http.get(`/admin/exam-records/${encodeURIComponent(String(route.params.id))}/result`, {
       signal: ticket.signal,
+      headers: { 'X-Question-Content-Version': '3' },
     }) as FinalResult;
     if (ticket.isCurrent()) result.value = finalResult;
   } catch (error) {

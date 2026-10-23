@@ -125,7 +125,7 @@ const filters = reactive({
   difficulty: '' as ExamDifficulty | '', page: 1, page_size: 20,
 });
 const difficultyOptions: Array<{ value: ExamDifficulty; label: string }> = [
-  { value: 'easy', label: '初级' }, { value: 'medium', label: '中级' }, { value: 'hard', label: '高级' },
+  { value: 'easy', label: '简单' }, { value: 'medium', label: '中级' }, { value: 'hard', label: '困难' },
   { value: 'mixed', label: '固定混档' }, { value: 'unknown', label: '遗留未知' },
 ];
 

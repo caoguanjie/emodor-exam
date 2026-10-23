@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { AuditService } from '../../common/audit.service';
 import { Errors, ExamStatus, PaperStatus, RegulationStatus } from '../../common/errors';
+import { difficultyForSource } from '../../common/question-difficulty';
 import { RedisService } from '../../common/redis.service';
 import type {
   AttemptView, Difficulty, ExamDifficulty, Id, LearnerSource, Page, PoolRule, QuestionOption, QuestionType, RuleSnapshot,
@@ -30,6 +31,8 @@ import {
 import { SamplingService } from './sampling.service';
 import { ShuffleService } from './shuffle.service';
 import { assertExamIdentity, expireExamRecord } from './exam-state';
+import { parseQuestionContent } from '../questions/question-content-dispatch';
+import { assertContentCapability, requiredContentCapability } from './question-content-capability';
 
 type AttemptRecordFact = { attemptNo: number; status: string };
 
@@ -57,9 +60,7 @@ export function decideAttemptTransition(input: {
 export function resolveAttemptDifficulty(source: LearnerSource | null, paper: PublishedPaper): ExamDifficulty {
   if (paper.businessScope === 'regulation') return 'unknown';
   if (paper.mode === 'random') {
-    if (source === 'institution') return 'easy';
-    if (source === 'external') return 'hard';
-    throw Errors.param('学员来源未配置，不能开考');
+    return difficultyForSource(source);
   }
   const difficulties = new Set(paper.pool.map((item) => item.difficulty));
   if (!difficulties.size) throw Errors.paperReleaseConflict('固定试卷发布题单为空');
@@ -256,7 +257,9 @@ export class AttemptService {
     }
   }
 
-  async start(userId: Id, paperId: Id, mobile = false): Promise<AttemptView> {
+  start(userId: Id, paperId: Id, mobile?: boolean, contentVersion?: 2): Promise<AttemptView>;
+  start(userId: Id, paperId: Id, mobile: boolean, contentVersion: 2 | 3): Promise<AttemptView<2 | 3>>;
+  async start(userId: Id, paperId: Id, mobile = false, contentVersion: 2 | 3 = 2): Promise<AttemptView<2 | 3>> {
     const outcome = await this.dataSource.transaction(async (manager) => {
       const user = await manager.getRepository(SysUser).findOne({
         where: { id: String(userId) }, lock: { mode: 'pessimistic_write' },
@@ -285,9 +288,9 @@ export class AttemptService {
         if (!assignment || String(active.assignmentId || '') !== String(assignment.id)) {
           throw Errors.examInProgress('已有升级前进行中的考试，请先完成当前作答');
         }
-        if (active.regulationId) {
-          assertLegacyClientPool(await this.frozenRecordPool(manager, String(active.id)));
-        }
+        const frozen = await this.frozenRecordPool(manager, String(active.id));
+        if (active.regulationId) assertLegacyClientPool(frozen);
+        assertContentCapability(requiredContentCapability(frozen), contentVersion);
         return { record: active, recovered: true, actorName: user.username };
       }
 
@@ -358,17 +361,14 @@ export class AttemptService {
             pool = legacy.pool;
           }
         }
-        assignment = await assignmentRepo.save(assignmentRepo.create({
-          paperId: String(paper.id),
-          userId: String(user.id),
-          releaseId: release ? String(release.id) : null,
-          source,
-          categoryId,
-          difficulty,
-          ruleSnapshot: deepClone(rule),
-          snapshotOrigin,
-        }));
       }
+
+      if (!pool && !release) throw Errors.paperReleaseConflict('个人考试缺少冻结题池');
+      const candidates = pool || release!.pool;
+      const actualPool = release?.businessScope === 'training' && release.mode === 'random'
+        ? candidates.filter((item) => item.difficulty === difficulty && rule.rules.some((rule) => rule.type === item.type))
+        : candidates;
+      assertContentCapability(requiredContentCapability(actualPool), contentVersion);
 
       const transition = decideAttemptTransition({
         nowMs: Date.now(), active: null, records, maxAttempts: Number(rule.maxAttempts),
@@ -385,6 +385,13 @@ export class AttemptService {
         }
       }
       if (!pool.length) throw Errors.paperPoolInsufficient([], '个人题单为空');
+
+      if (!assignment) {
+        assignment = await assignmentRepo.save(assignmentRepo.create({
+          paperId: String(paper.id), userId: String(user.id), releaseId: release ? String(release.id) : null,
+          source, categoryId, difficulty, ruleSnapshot: deepClone(rule), snapshotOrigin,
+        }));
+      }
 
       const startedAt = new Date();
       const deadlineAt = new Date(startedAt.getTime() + Number(rule.durationMinutes) * 60_000);
@@ -414,7 +421,7 @@ export class AttemptService {
       const itemRepo = manager.getRepository(ExamRecordQuestion);
       const items = await itemRepo.save(ordered.map((snapshot, position) => {
         const mapping = this.shuffle.snapshotOptionMapping(
-          snapshot.type, snapshot.options.length, seed, String(snapshot.versionId),
+          snapshot.type, parseQuestionContent(snapshot).options.length, seed, String(snapshot.versionId),
         );
         return itemRepo.create({
           recordId: String(record.id),
@@ -444,10 +451,12 @@ export class AttemptService {
         result: 'success', source_ip: null,
       });
     }
-    return this.reader.forStudent(String(userId), String(outcome.record.id));
+    return this.reader.forStudent(String(userId), String(outcome.record.id), contentVersion);
   }
 
-  async recover(userId: Id, recordId: Id, mobile = false): Promise<AttemptView> {
+  recover(userId: Id, recordId: Id, mobile?: boolean, contentVersion?: 2): Promise<AttemptView>;
+  recover(userId: Id, recordId: Id, mobile: boolean, contentVersion: 2 | 3): Promise<AttemptView<2 | 3>>;
+  async recover(userId: Id, recordId: Id, mobile = false, contentVersion: 2 | 3 = 2): Promise<AttemptView<2 | 3>> {
     await this.dataSource.transaction(async (manager) => {
       const user = await manager.getRepository(SysUser).findOne({
         where: { id: String(userId) }, lock: { mode: 'pessimistic_write' },
@@ -469,7 +478,7 @@ export class AttemptService {
         assertLegacyClientPool(await this.frozenRecordPool(manager, String(record.id)));
       }
     });
-    return this.reader.forStudent(String(userId), String(recordId));
+    return this.reader.forStudent(String(userId), String(recordId), contentVersion);
   }
 
   async list(userId: Id, page = 1, pageSize = 20): Promise<Page<Record<string, unknown>>> {
@@ -497,7 +506,7 @@ export class AttemptService {
         source: assignment?.source ?? user.source,
         category_id: assignment?.categoryId ?? (user.categoryId ? String(user.categoryId) : null),
         difficulty: assignment?.difficulty ?? (paper.mode === 'random' && user.source
-          ? (user.source === 'institution' ? 'easy' : 'hard')
+          ? difficultyForSource(user.source)
           : null),
       };
     });

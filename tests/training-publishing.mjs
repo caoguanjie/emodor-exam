@@ -153,7 +153,7 @@ async function createCategory(ctx, actor, name) {
 async function insertLegacyRegulationQuestion(ctx, input) {
   const inserted = await ctx.queryTestDb(
     'INSERT INTO question (regulation_id, version_id, category_id, difficulty, concept_id, current_version_id, type, stem, options, answer, analysis, score, status, source, created_by) VALUES (?, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [input.regulationId, input.categoryId, 'medium', input.conceptId, 'single', `<p>${input.stem}</p>`,
+    [input.regulationId, input.categoryId, 'easy', input.conceptId, 'single', `<p>${input.stem}</p>`,
       JSON.stringify([{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]), JSON.stringify([0]),
       '旧题解析', '50.00', 'approved', 'manual', input.createdBy],
   );
@@ -176,7 +176,7 @@ async function runPublishing(ctx) {
   const promptMediaQuestion = await createQuestion(ctx, admin.actor, questionDraft(
     categoryId,
     'single',
-    'medium',
+    'easy',
     `题图授权 ${suffix}`,
     {
       stem: `<p>题干图<img data-media-id="${mediaIds.stem}" alt="题干图"></p>`,
@@ -192,7 +192,7 @@ async function runPublishing(ctx) {
   await createQuestion(ctx, admin.actor, questionDraft(
     categoryId,
     'single',
-    'medium',
+    'easy',
     `未引用题图 ${suffix}`,
     {
       stem: `<p>未引用图<img data-media-id="${mediaIds.unrelated}" alt="未引用图"></p>`,
@@ -260,7 +260,7 @@ async function runPublishing(ctx) {
     fixedQuestions.push(await createQuestion(
       ctx,
       admin.actor,
-      questionDraft(categoryId, type, 'medium', `固定卷 ${type} ${suffix}`),
+      questionDraft(categoryId, type, 'easy', `固定卷 ${type} ${suffix}`),
     ));
   }
   const easyManual = await createQuestion(ctx, admin.actor, questionDraft(categoryId, 'single', 'easy', `无制度初级 ${suffix}`));
@@ -335,7 +335,7 @@ async function runPublishing(ctx) {
     weightedQuestions.push(await createQuestion(
       ctx,
       admin.actor,
-      questionDraft(categoryId, 'single', 'medium', `${label}题目 ${suffix}`, { concept_id: String(concept.data.id) }),
+      questionDraft(categoryId, 'single', 'easy', `${label}题目 ${suffix}`, { concept_id: String(concept.data.id) }),
     ));
   }
   const weightedFixed = await ctx.request(admin.actor, 'POST', '/admin/papers', {
@@ -379,7 +379,7 @@ async function runPublishing(ctx) {
     bandQuestions.push(await createQuestion(
       ctx,
       admin.actor,
-      questionDraft(categoryId, 'single', 'medium', `五档题目 ${index + 1} ${suffix}`, { concept_id: String(bandConcept.data.id) }),
+      questionDraft(categoryId, 'single', 'easy', `五档题目 ${index + 1} ${suffix}`, { concept_id: String(bandConcept.data.id) }),
     ));
   }
   const fiveBands = await ctx.request(admin.actor, 'POST', '/admin/papers', {
@@ -570,13 +570,17 @@ async function runPublishing(ctx) {
   const randomWrongDifficulty = await createQuestion(ctx, admin.actor, questionDraft(
     randomMediaCategoryId,
     'single',
-    'medium',
+    'hard',
     `随机错难度 ${suffix}`,
     {
       regulation_id: randomMediaRegulationId,
       stem: `<p>错难度<img data-media-id="${randomMediaIds.wrong_difficulty}"></p>`,
     },
   ));
+  // Both enabled bands are valid random candidates. Model an already-existing
+  // disabled-band row in the isolated fixture; do not create medium via API.
+  await ctx.queryTestDb("UPDATE question SET difficulty='medium' WHERE id=?", [randomWrongDifficulty.questionId]);
+  await ctx.queryTestDb("UPDATE question_version SET difficulty='medium' WHERE id=?", [randomWrongDifficulty.versionId]);
   const randomWrongType = await createQuestion(ctx, admin.actor, questionDraft(
     randomMediaCategoryId,
     'multiple',
@@ -617,7 +621,7 @@ async function runPublishing(ctx) {
   ));
   const randomStaleRevision = await ctx.request(admin.actor, 'PUT', `/ai/questions/${randomStaleVersion.questionId}`, {
     expected_version_id: randomStaleVersion.versionId,
-    difficulty: 'medium',
+    difficulty: 'hard',
     stem: `<p>随机当前版本 ${suffix}</p>`,
   });
   assert.equal(randomStaleRevision.status, 200, JSON.stringify(randomStaleRevision));
@@ -765,7 +769,7 @@ async function runPublishing(ctx) {
   assert.equal(staleVersionState.old_status, 'approved');
   assert.notEqual(String(staleVersionState.current_version_id), randomStaleVersion.versionId);
   assert.equal(staleVersionState.current_status, 'approved');
-  assert.equal(staleVersionState.current_difficulty, 'medium');
+  assert.equal(staleVersionState.current_difficulty, 'hard');
   await assertRandomMediaHasNoPaperReferences('after preview');
 
   stage = 'regulation duplicate-concept rollback and no-concept control';
@@ -872,7 +876,33 @@ async function runPublishing(ctx) {
   const legacySet = await ctx.request(admin.actor, 'PUT', `/ai/papers/${legacyPaperId}/questions`, {
     items: [{ question_id: Number(legacyQuestionId), score: 100 }],
   });
-  assert.equal(legacySet.status, 200, JSON.stringify(legacySet));
+  assert.equal(legacySet.status, 400, JSON.stringify(legacySet));
+  assert.match(legacySet.json?.message, /难度.*未启用/);
+  // A draft selected before this policy may still contain the unknown row.
+  // Model that historical draft only in the owned fixture database.
+  await ctx.queryTestDb('INSERT INTO paper_question(paper_id,question_id,score,sort) VALUES (?,?,100,0)', [legacyPaperId, legacyQuestionId]);
+  const unknownNewPublish = await ctx.request(admin.actor, 'POST', `/ai/papers/${legacyPaperId}/publish`);
+  assert.equal(unknownNewPublish.status, 409, `unclassified historical questions cannot enter a new release: ${JSON.stringify(unknownNewPublish)}`);
+  const [unclassifiedAfter] = await ctx.queryTestDb('SELECT current_version_id,(SELECT COUNT(*) FROM question_version WHERE question_id=?) AS versions FROM question WHERE id=?', [legacyQuestionId, legacyQuestionId]);
+  assert.equal(unclassifiedAfter.current_version_id, null);
+  assert.equal(Number(unclassifiedAfter.versions), 0, 'rejected new publication cannot capture a partial legacy version');
+  const classifiedLegacy = await ctx.request(admin.actor, 'PUT', `/ai/questions/${legacyQuestionId}`, {
+    expected_version_id: null, category_id: categoryId, difficulty: 'easy',
+  });
+  assert.equal(classifiedLegacy.status, 200, JSON.stringify(classifiedLegacy));
+  const [capturedUnknown] = await ctx.queryTestDb('SELECT difficulty,approved_by,approved_at FROM question_version WHERE question_id=? AND revision=1', [legacyQuestionId]);
+  assert.equal(capturedUnknown.difficulty, null, 'the captured old revision keeps the unknown fact');
+  assert.equal(capturedUnknown.approved_by, null);
+  assert.equal(capturedUnknown.approved_at, null);
+  const approvedClassified = await ctx.request(admin.actor, 'PUT', `/ai/questions/${legacyQuestionId}/review`, {
+    expected_version_id: String(classifiedLegacy.data.saved_version_id), status: 'approved',
+  });
+  assert.equal(approvedClassified.status, 200, JSON.stringify(approvedClassified));
+  // The prior legacy selection had no version. Select the now classified exact
+  // current version before publishing; historical unknown facts stay immutable.
+  assert.equal((await ctx.request(admin.actor, 'PUT', `/ai/papers/${legacyPaperId}/questions`, {
+    items: [{ question_id: Number(legacyQuestionId), score: 100 }],
+  })).status, 200);
   const legacyPublished = await ctx.request(admin.actor, 'POST', `/ai/papers/${legacyPaperId}/publish`);
   assert.equal(legacyPublished.status, 200, `legacy publish: ${JSON.stringify(legacyPublished)}`);
   assert.equal(typeof legacyPublished.data.id, 'number');
@@ -890,12 +920,12 @@ async function runPublishing(ctx) {
   assert.equal(Number(legacyReleaseRow.requires_learning), 1);
   assert.match(String(legacyReleaseRow.question_version_id), /^\d+$/);
   assert.notEqual(String(legacyReleaseRow.question_version_id), '0');
-  assert.equal(legacyReleaseRow.difficulty, 'unknown');
+  assert.equal(legacyReleaseRow.difficulty, 'easy');
   assert.equal(Number(legacyReleaseRow.score_cents), 10000);
-  assert.equal(legacySnapshot.categoryId, null);
-  assert.equal(legacySnapshot.difficulty, 'unknown');
-  assert.equal(legacySnapshot.approvedBy, null);
-  assert.equal(legacySnapshot.approvedAt, null);
+  assert.equal(legacySnapshot.categoryId, categoryId);
+  assert.equal(legacySnapshot.difficulty, 'easy');
+  assert.equal(String(legacySnapshot.approvedBy), admin.id);
+  assert.ok(legacySnapshot.approvedAt);
   assert.equal(legacySnapshot.stem, `<p>制度发布前题干 ${suffix}</p>`);
 
   const legacyDetail = await ctx.request(admin.actor, 'GET', `/ai/papers/${legacyPaperId}`);
@@ -905,7 +935,7 @@ async function runPublishing(ctx) {
   assert.equal(legacyDetail.data.questions[0].score, 100);
   assert.equal(legacyDetail.data.questions[0].stem, `<p>制度发布前题干 ${suffix}</p>`);
   const nextVersionInsert = await ctx.queryTestDb(
-    'INSERT INTO question_version (question_id, revision, category_id, difficulty, type, stem, options, answer, analysis, score_cents, concept_id, regulation_id, regulation_version_id, source_page_group, source_page_start, source_page_end, source, status, approved_by, approved_at, reviewed_by, reviewed_at, review_reason, created_by, legacy_captured_at) SELECT question_id, 2, category_id, difficulty, type, ?, options, answer, analysis, score_cents, concept_id, regulation_id, regulation_version_id, source_page_group, source_page_start, source_page_end, source, status, approved_by, approved_at, reviewed_by, reviewed_at, review_reason, created_by, NOW(3) FROM question_version WHERE id = ?',
+    'INSERT INTO question_version (question_id, revision, category_id, difficulty, type, stem, options, answer, analysis, score_cents, concept_id, regulation_id, regulation_version_id, source_page_group, source_page_start, source_page_end, source, status, approved_by, approved_at, reviewed_by,reviewed_at,review_reason,created_by,legacy_captured_at) SELECT question_id, 3, category_id, difficulty, type, ?, options, answer, analysis, score_cents, concept_id, regulation_id, regulation_version_id, source_page_group, source_page_start, source_page_end, source, status, approved_by, approved_at, reviewed_by, reviewed_at, review_reason, created_by, NOW(3) FROM question_version WHERE id = ?',
     [`<p>制度发布后修订 ${suffix}</p>`, String(legacyReleaseRow.question_version_id)],
   );
   const nextVersionId = String(nextVersionInsert.insertId);

@@ -64,7 +64,7 @@ function referenceFile(categoryId, count = 20) {
   const rows = Array.from({ length: count }, (_unused, index) => ({
     category: categoryId,
     type: 'single',
-    difficulty: 'medium',
+    difficulty: 'easy',
     concept: '',
     stem: `一次性参考题-${index + 1}-${randomBytes(3).toString('hex')}`,
     options,

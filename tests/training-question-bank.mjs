@@ -207,7 +207,7 @@ async function runBody(ctx, mockPort) {
 
   const multiple = await ctx.request(admin.actor, 'POST', '/ai/questions', {
     ...singleDraft(categoryId, '<p>哪些属于进入前措施？</p>'),
-    difficulty: 'medium', type: 'multiple', answer: [1, 0],
+    difficulty: 'easy', type: 'multiple', answer: [1, 0],
   });
   assert.equal(multiple.status, 200);
   assert.deepEqual(multiple.data.answer, [0, 1]);
@@ -382,7 +382,7 @@ async function runBody(ctx, mockPort) {
   const legacyId = String(legacyInsert.insertId);
   const upgraded = await ctx.request(admin.actor, 'PUT', `/ai/questions/${legacyId}`, {
     expected_version_id: null,
-    category_id: categoryId, difficulty: 'medium', stem: '<p>升级后题干</p>',
+    category_id: categoryId, difficulty: 'easy', stem: '<p>升级后题干</p>',
   });
   assert.equal(upgraded.status, 200, JSON.stringify(upgraded));
   assert.equal(upgraded.data.status, 'pending');

@@ -3,6 +3,7 @@ import { attemptQuestionView } from '../src/modules/exams/attempt-reader.service
 import { projectFinalResult } from '../src/modules/exams/exam-history.service';
 import { gradeSubmissionSnapshot, validateWholeSubmission } from '../src/modules/exams/submission.service';
 import { questionContent, readonlyDoc } from '../src/modules/questions/question-content';
+import richFixture from '../../tests/fixtures/question-authoring-v3/rich-content.json';
 
 const item: any = { itemId: '501', questionId: '101', type: 'single', stem: '<p>题干<br>下一行<img data-media-id="99"></p>', options: [{ key: 'red', text: '甲' }, { key: 'blue', text: '乙' }], answer: [1], analysis: '<p>答案解析</p>', scoreCents: 10000, displayToOriginal: [1, 0], position: 0 };
 
@@ -49,6 +50,15 @@ describe('mobile exam stable ID boundary', () => {
   it('keeps stable v2 IDs when options are reordered', () => {
     const doc = (text: string) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
     expect(questionContent({ type: 'single', contentSchemaVersion: 2, contentJson: { stem: doc('题干'), options: [{ id: 'blue', content: doc('乙') }, { id: 'red', content: doc('甲') }], analysis: null, answer_option_ids: ['red'] } }).answer_option_ids).toEqual(['red']);
+  });
+
+  it('uses canonical schema 3 option count when a frozen compatibility mirror has drifted', () => {
+    const { schema, ...contentJson } = structuredClone(richFixture);
+    const rich = { ...item, contentSchemaVersion: schema, contentJson, options: [] };
+    const view = attemptQuestionView({ id: '501', snapshotJson: rich, displayToOriginal: [1, 0], scoreCents: 10000 } as any, 3);
+    expect(view.options.map((option) => option.id)).toEqual(['B', 'A']);
+    const grade = gradeSubmissionSnapshot({ recordId: '41', rule: { partialCreditRatio: 0.5 }, items: [rich] } as any, [{ recordQuestionId: '501', selectedOptionIds: ['A'] }] as any);
+    expect(grade.totalCents).toBe(10000);
   });
 
   it('rejects blank v2 prompts and options instead of creating unusable questions', () => {

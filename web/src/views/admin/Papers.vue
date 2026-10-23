@@ -37,7 +37,7 @@
           <el-table-column label="规则" min-width="230"><template #default="{ row }">{{ ruleSummary(row) }}</template></el-table-column>
           <el-table-column label="学习门槛" width="100"><template #default="{ row }">{{ row.requires_learning ? '开启' : '关闭' }}</template></el-table-column>
           <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
-          <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="openDetail(row.id, 'training')">配置</el-button></template></el-table-column>
+          <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="openDetail(row.id, 'training', row.mode === 'fixed' && row.status === 'draft' && auth.can('papers:write') && auth.can('questions:read'))">{{ row.mode === 'fixed' && row.status === 'draft' ? '编辑试卷' : '配置' }}</el-button></template></el-table-column>
         </el-table>
         <template #pagination>
           <el-pagination layout="total, prev, pager, next" :total="trainingTotal" :page-size="trainingQuery.page_size"
@@ -158,7 +158,7 @@ function statusType(status: TrainingPaperStatus | string) { return status === 'p
 function categoryName(categoryId: Id) { return categories.value.find((item) => item.id === categoryId)?.name || `类别 ${categoryId}`; }
 function ruleSummary(row: TrainingPaperSummary) { return row.mode === 'fixed' ? '手选题单 · 发布时冻结' : row.rules.map((item) => `${typeLabel(item.type)} ${item.count}×${item.score_cents / 100}分`).join('；'); }
 function legacyReleaseLabel(row: { status?: string; release_id?: string | null; rules_locked?: boolean }) { if (row.rules_locked && row.release_id) return '内容已冻结'; if (row.status === 'published') return '升级前旧卷'; return '待发布冻结'; }
-function openDetail(id: Id | number, scope: 'training' | 'regulation') { void router.push({ path: `/admin/papers/${id}`, query: { scope } }); }
+function openDetail(id: Id | number, scope: 'training' | 'regulation', designer = false) { void router.push({ path: `/admin/papers/${id}`, query: { scope, ...(designer ? { designer: '1' } : {}) } }); }
 function searchTraining() { trainingQuery.page = 1; void loadTraining(); }
 async function load() { if (activeScope.value === 'training') await loadTraining(); else await loadLegacy(); }
 function nonBlankParams(source: Record<string, unknown>) { return Object.fromEntries(Object.entries(source).filter(([, value]) => value !== '')); }
@@ -206,7 +206,7 @@ async function createTraining() {
       reconcileCompletedCreate('training');
       return;
     }
-    createUnsaved.markClean(); trainingCreateVisible.value = false; ElMessage.success('培训试卷草稿已创建'); openDetail(created.id, 'training');
+    createUnsaved.markClean(); trainingCreateVisible.value = false; ElMessage.success('培训试卷草稿已创建'); openDetail(created.id, 'training', submitted.mode === 'fixed');
   } finally { if (context === viewContext && dialogContext === createContext && operation === createOperation) creating.value = false; }
 }
 onMounted(async () => { await loadOptions(); await loadTraining(); });

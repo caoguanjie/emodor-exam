@@ -24,6 +24,8 @@
 import { computed, onBeforeUnmount, reactive, watch } from 'vue';
 import { getMediaImageContent } from '../api/media';
 import { normalizeQuestionContentV2, readonlyQuestionDocToHtml, sanitizeQuestionHtmlForPreview, type QuestionContentFields, type QuestionOption, type QuestionType } from '../api/training-types';
+import { questionRichDocToFormHtml, toQuestionFormValue } from '../utils/question-form-content';
+import type { QuestionContentV3 } from '../api/question-document-types';
 
 const props = withDefaults(defineProps<{
   question: QuestionContentFields & {
@@ -46,7 +48,7 @@ const objectUrls = new Set<string>();
 let renderSerial = 0;
 
 const typeLabel = computed(() => ({ single: '单选题', multiple: '多选题', judgment: '判断题' } as Record<string, string>)[props.question.type || ''] || '题目');
-const difficultyLabel = computed(() => ({ easy: '初级', medium: '中级', hard: '高级' } as Record<string, string>)[props.question.difficulty || ''] || '难度未知');
+const difficultyLabel = computed(() => ({ easy: '简单', medium: '中级', hard: '困难' } as Record<string, string>)[props.question.difficulty || ''] || '难度未知');
 
 function clearObjectUrls() {
   for (const url of objectUrls) URL.revokeObjectURL(url);
@@ -124,9 +126,27 @@ async function renderQuestion() {
   const serial = ++renderSerial;
   clearObjectUrls();
   let question = props.question;
-  const restricted = question.content_schema_version === 2;
+  const restricted = question.content_schema_version === 2 || question.content_schema_version === 3;
   try {
-    if (restricted) {
+    if (question.content_schema_version === 3) {
+      const content = question.content_json as Partial<QuestionContentV3> | null;
+      if (!content || typeof content !== 'object' || !Array.isArray(content.options)) throw new Error('schema 3 preview content is incomplete');
+      const ids = content.options.map((option) => option?.id);
+      if (ids.length < 2 || new Set(ids).size !== ids.length || ids.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id))) {
+        throw new Error('schema 3 preview option ids are invalid');
+      }
+      const full = Object.hasOwn(content, 'analysis') && Array.isArray(content.answer_option_ids);
+      if (props.revealAnswer && !full) throw new Error('answer preview content is incomplete');
+      const fields = full
+        ? toQuestionFormValue({ ...(content as QuestionContentV3), schema: 3 })
+        : {
+            stem: questionRichDocToFormHtml(content.stem as QuestionContentV3['stem']),
+            options: content.options.map((option) => ({ key: option.id!, text: questionRichDocToFormHtml(option.content!) })),
+            analysis: null,
+            answer: [],
+          };
+      question = { ...question, ...fields };
+    } else if (restricted) {
       const content = normalizeQuestionContentV2(question.content_json);
       question = {
         ...question, stem: readonlyQuestionDocToHtml(content.stem),
@@ -177,5 +197,10 @@ onBeforeUnmount(() => {
 .rich-content :deep(p) { margin: 0 0 8px; }
 .rich-content :deep(p:last-child) { margin-bottom: 0; }
 .rich-content :deep(img) { display: block; max-width: 100%; max-height: 360px; margin: 10px 0; border-radius: 6px; }
+.rich-content { min-width: 0; overflow-x: auto; }
+.rich-content :deep(table) { border-collapse: collapse; min-width: 100%; }
+.rich-content :deep(td), .rich-content :deep(th) { border: 1px solid #dcdfe6; padding: 6px 8px; }
+.rich-content :deep(blockquote) { border-left: 3px solid #dcdfe6; margin: 8px 0; padding-left: 12px; }
+.rich-content :deep(pre) { white-space: pre-wrap; padding: 8px; background: #f5f7fa; }
 .rich-content :deep(.question-preview__missing-media) { color: #c45656; }
 </style>

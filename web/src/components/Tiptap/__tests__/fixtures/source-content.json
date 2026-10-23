@@ -1,0 +1,31 @@
+{
+  "paragraphs": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "attrs": {
+          "lineHeight": "2"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "第一段"
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "attrs": {
+          "lineHeight": "1.5"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "第二段"
+          }
+        ]
+      }
+    ]
+  }
+}

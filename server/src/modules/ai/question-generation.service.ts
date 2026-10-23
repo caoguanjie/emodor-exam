@@ -12,6 +12,7 @@ import { PdfVisionService } from './pdf-vision.service';
 import type { PdfVisionPageGroup } from './pdf-vision.service';
 import { AppConfig } from '../../config/configuration';
 import { Errors } from '../../common/errors';
+import { assertActiveDifficulty } from '../../common/question-difficulty';
 import { RedisService } from '../../common/redis.service';
 import { AuditService } from '../../common/audit.service';
 import type { Difficulty } from '../../common/training-contracts';
@@ -102,7 +103,7 @@ export class QuestionGenerationService {
     scoreMultiple: number;
     actor: { id: number; name: string };
   }) {
-    if (!['easy', 'medium', 'hard'].includes(input.difficulty)) throw Errors.param('难度非法（easy / medium / hard）');
+    assertActiveDifficulty(input.difficulty);
     await this.categories.assertActive(input.categoryId);
 
     const material = await this.regRepo.findOne({

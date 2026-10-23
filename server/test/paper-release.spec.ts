@@ -15,6 +15,7 @@ import { paperPreviewView } from '../src/modules/exams/paper-admin.controller';
 import { SamplingService } from '../src/modules/exams/sampling.service';
 import { ExamService } from '../src/modules/exams/exam.service';
 import { PaperService } from '../src/modules/ai/paper.service';
+import richFixture from '../../tests/fixtures/question-authoring-v3/rich-content.json';
 
 const RULE: RuleSnapshot = {
   totalCents: 10000,
@@ -132,6 +133,40 @@ function releaseFixture(regulationIds: string[]) {
 }
 
 describe('immutable paper releases', () => {
+  it('preserves schema 1 publication facts without applying new content validation to legacy rows', async () => {
+    const f = releaseFixture([]);
+    f.candidates[0].options.splice(1);
+    const { releaseId } = await f.service.publish('11', '9');
+    const frozen = (await f.service.get(releaseId)).pool[0];
+    expect(frozen.options).toEqual([{ key: 'A', text: '发布时选项' }]);
+    expect(frozen.contentSchemaVersion).toBe(1);
+    expect(frozen.contentJson).toBeNull();
+  });
+
+  it('freezes validated schema 3 content without candidate authoring metadata', async () => {
+    const f = releaseFixture([]);
+    const { schema, ...content } = structuredClone(richFixture);
+    Object.assign(f.candidates[0], { contentSchemaVersion: schema, contentJson: content, authoringJson: { secret: 'author-only' } });
+    const { releaseId } = await f.service.publish('11', '9');
+    (f.candidates[0] as any).contentJson.stem.content[0].content[0].text = 'changed after publish';
+    const frozen: any = (await f.service.get(releaseId)).pool[0];
+    expect(frozen.contentSchemaVersion).toBe(3);
+    expect(frozen.contentJson.stem.content[0].content[0].text).toBe('安全操作');
+    expect(frozen).not.toHaveProperty('authoringJson');
+    expect(frozen).not.toHaveProperty('schema');
+  });
+
+  it('rejects unsafe schema 3 candidate content before writing the release', async () => {
+    const f = releaseFixture([]);
+    const { schema, ...content } = structuredClone(richFixture);
+    (content.stem.content[0] as any).attrs.onClick = 'secret';
+    Object.assign(f.candidates[0], { contentSchemaVersion: schema, contentJson: content });
+    await expect(f.service.publish('11', '9')).rejects.toMatchObject({ code: 40001 });
+    expect(f.releaseRepo.save).not.toHaveBeenCalled();
+    expect(f.releaseQuestionRepo.save).not.toHaveBeenCalled();
+    expect(f.paper.status).toBe('draft');
+  });
+
   it('registers a random-draft media lookup that reuses the fully validated candidate pool without writes', async () => {
     const {
       service,
@@ -282,6 +317,31 @@ describe('immutable paper releases', () => {
     });
     expect(Object.hasOwn(view.questions[0], 'answer')).toBe(false);
   });
+
+  it('projects schema 3 preview content without answers and restores them only for the answer view', () => {
+    const { schema: _schema, ...richContent } = richFixture;
+    const rich = {
+      ...snapshot('rich-preview', 'easy'),
+      contentSchemaVersion: 3,
+      contentJson: richContent,
+    };
+    const preview = {
+      paper_id: '11', release_id: '21', mode: 'fixed' as const, sample_kind: 'fixed_paper' as const, note: '固定卷',
+      difficulty: null, rule: RULE, capacities: [], questions: [rich],
+    };
+
+    const question = paperPreviewView(preview, false).questions[0] as any;
+    expect(question.content_schema_version).toBe(3);
+    expect(question.content_json).toEqual({ stem: richContent.stem, options: richContent.options });
+    expect(question.content_json).not.toHaveProperty('answer_option_ids');
+    expect(question.content_json).not.toHaveProperty('analysis');
+    expect(question).not.toHaveProperty('answer');
+
+    const answer = paperPreviewView(preview, true).questions[0] as any;
+    expect(answer.content_json).toEqual(richContent);
+    expect(answer.answer).toEqual(rich.answer);
+    expect(answer.analysis).toBe(rich.analysis);
+  });
 });
 
 describe('legacy exam compatibility boundary', () => {
@@ -322,7 +382,7 @@ function paperAdminFixture(paperOverride: Record<string, unknown> = {}) {
     find: vi.fn(async () => savedQuestions),
   };
   const versions = ['single', 'multiple', 'judgment', 'single'].map((type, index) => ({
-    id: String(501 + index), questionId: String(101 + index), revision: 1, categoryId: '7', difficulty: 'medium', type,
+    id: String(501 + index), questionId: String(101 + index), revision: 1, categoryId: '7', difficulty: 'easy', type,
     stem: `${type} 题`, options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }],
     answer: type === 'multiple' ? [0, 1] : [0], analysis: null,
     scoreCents: 2500, conceptId: `concept-${index + 1}`,
@@ -374,7 +434,7 @@ describe('training paper draft configuration', () => {
     expect(paper.ruleConfig).toMatchObject({ totalCents: 10000, passCents: 6000, rules: [{ scoreCents: 5000 }] });
   });
 
-  it('accepts all three approved types and medium difficulty in one fixed same-category paper across regulations', async () => {
+  it('accepts all three approved types and enabled difficulty in one fixed same-category paper across regulations', async () => {
     const { service, savedQuestions } = paperAdminFixture();
 
     const detail = await service.setTrainingQuestions('11', [

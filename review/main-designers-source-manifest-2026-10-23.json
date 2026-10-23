@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-10-23",
+  "target": {
+    "root": "/Users/caogj/Documents/emodor/RuleExam",
+    "branch": "main",
+    "head": "525790a62ac0654a2e4d91facc5cff5242ae33d9",
+    "dirty_status_sha256_before_task_writes": "aab054e1f2663ea7106791ac9faa0b74634fb2eff658ea187a9e26e8d526a2b6",
+    "notes": [
+      "The target checkout was already dirty before implementation. Existing changes are user-owned and must be preserved.",
+      "Additional SiteSettings changes appeared after the initial snapshot and are outside this integration."
+    ]
+  },
+  "source": {
+    "root": "/Users/caogj/.codex/worktrees/155a/RuleExam",
+    "branch": "feature/question-authoring-integration",
+    "head": "09ddb1f97c179b75289da9a7afec0d59bb62b645",
+    "dirty_status_sha256": "78d37132b293335867592b25579f1c727f1161e771bcfc263f6a4b1427fd9706",
+    "notes": [
+      "The designer candidate is largely uncommitted or untracked; source HEAD alone is not the candidate.",
+      "The source checkout is read-only for this integration."
+    ]
+  },
+  "key_candidate_hashes": {
+    "web/src/components/question-designers/PaperDesigner.vue": "8e4d41ffe99e0dc5783bd0c5894d3afb57df3bc5d0ca12608e870d966cfefa51",
+    "web/src/components/QuestionEditor.vue": "0c711fe2a75365259cd7cc055739947300f398f6541bf09c8fbc27be9eb8bae2",
+    "web/src/components/Tiptap/index.vue": "71c2645203c38473dbe57ac80a5ce605414b019dae54dad3585572e787200c78",
+    "web/src/composables/paper-designer-host.ts": "0fe3d8676f1146d85b98157c77b3b59e928294c0b91ed6adb6c36ee61279ac05",
+    "web/src/components/question-designers/paper-designer-state.ts": "4ec3ef0f269b920a56c73492882dcf49e383b8fea02883920bf1d481cd8cedc0",
+    "web/vitest.config.ts": "91e4a252592d42525eb6924bcb682308bf5992ac5da38c5180d894b89f0cd831"
+  },
+  "selection": {
+    "include": [
+      "PaperDesigner and its three-column shell, paper/question property panels, library sidebar, controlled layout state and styles",
+      "The PaperDesigner runtime import closure under web/src/components/Tiptap, including its SVG icon directory",
+      "The source QuestionEditor only after renaming it to question-designers/QuestionDocumentEditor so the main question form remains intact",
+      "Question authoring API/types, media upload helpers, unsaved-change support, exact build/test configuration and only actually referenced dependencies",
+      "The fixed-paper host and save controller in their later planned owner task"
+    ],
+    "exclude": [
+      "web/src/views/admin/QuestionDesigner.vue",
+      "web/src/components/question-designers/QuestionDesigner.vue",
+      "the single-question designer runtime and its routes or AI/import queue entry points",
+      "image-answer, rubric, legacy AI task manifest and template CRUD features",
+      "DataSourceSelect, TemplateLibrary, RelatedQuestions and other files not in the PaperDesigner runtime import closure"
+    ]
+  },
+  "ownership": {
+    "source_is_read_only": true,
+    "target_uses_current_checkout": true,
+    "new_worktree_allowed": false,
+    "worker_commits_allowed": false,
+    "root_integrates_shared_files": true
+  }
+}

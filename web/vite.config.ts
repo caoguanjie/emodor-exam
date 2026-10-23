@@ -1,9 +1,15 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
+import { fileURLToPath, URL } from 'node:url';
+import { createSvgIconsPlugin } from 'vite-plugin-svg-icons';
 
 // 开发期将 /api/v1 反向代理至本机 NestJS（生产由 nginx 承担，02 册 5.2 环境规划）
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), createSvgIconsPlugin({
+    iconDirs: [fileURLToPath(new URL('./src/components/Tiptap/icons', import.meta.url))],
+    symbolId: 'icon-[name]',
+  })],
+  css: { preprocessorOptions: { scss: { api: 'modern' } } },
   server: {
     // 监听所有网卡，允许局域网设备访问开发服务器
     host: '0.0.0.0',

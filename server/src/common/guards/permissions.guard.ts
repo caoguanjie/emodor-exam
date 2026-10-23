@@ -1,10 +1,10 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AccessService } from '../../modules/access/access.service';
-import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
+import { PERMISSIONS_ANY_KEY, PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 import { ROLES_KEY } from './roles.guard';
 import { PermissionCode } from '../../modules/access/permission-catalog';
-import { Errors } from '../errors';
+import { BizError, Errors } from '../errors';
 
 function requestPath(req: any): string {
   return String(req.originalUrl || req.url || '').split('?')[0].replace(/^\/api\/v1/, '') || '/';
@@ -48,14 +48,23 @@ export class PermissionsGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest<any>();
     const declared = this.reflector.getAllAndOverride<PermissionCode[]>(PERMISSIONS_KEY, [ctx.getHandler(), ctx.getClass()]);
     const mapped = legacyPermissionForRequest(req);
-    const required = declared?.length ? declared : mapped ? [mapped] : [];
     const legacyRoles = this.reflector.getAllAndOverride<unknown[]>(ROLES_KEY, [ctx.getHandler(), ctx.getClass()]);
+    const any = this.reflector.getAllAndOverride<PermissionCode[]>(PERMISSIONS_ANY_KEY, [ctx.getHandler(), ctx.getClass()]);
+    const required = declared?.length ? declared : any?.length ? [] : mapped ? [mapped] : [];
     // 带旧 @Roles 的管理接口必须在白名单中显式映射或声明权限，拒绝静默放行。
-    if (!required.length && legacyRoles?.length) throw Errors.forbidden();
-    if (!required.length) return true;
+    if (!required.length && !any?.length && legacyRoles?.length) throw Errors.forbidden();
+    if (!required.length && !any?.length) return true;
     const user = req.user as { id: number } | undefined;
     if (!user) throw Errors.unauthenticated();
     for (const code of required) await this.access.assertAllowed(String(user.id), code);
+    if (any?.length) {
+      let allowed = false;
+      for (const code of any) {
+        try { await this.access.assertAllowed(String(user.id), code); allowed = true; break; }
+        catch (error) { if (!(error instanceof BizError) || error.code !== 40301) throw error; }
+      }
+      if (!allowed) throw Errors.forbidden();
+    }
     // RolesGuard runs after this guard. Mark only successfully mapped/declared
     // fine-permission routes so custom business admins can use legacy AI,
     // regulation and statistics APIs without opening system identity APIs.

@@ -11,9 +11,10 @@ import { CategoryService } from '../training/category.service';
 import {
   CreateTrainingPaperDto, PAPER_CANDIDATE_KEYS, PAPER_CREATE_KEYS, PAPER_LIST_KEYS, PAPER_OPTION_KEYS,
   PAPER_PREVIEW_KEYS, PAPER_UPDATE_KEYS, PaperCandidateQueryDto, PaperOptionQueryDto, PaperPreviewQueryDto,
-  SetTrainingQuestionsDto, TrainingPaperListQueryDto, UpdateTrainingPaperDto,
+  SetTrainingQuestionsDto, TrainingPaperDtoValidationPipe, TrainingPaperListQueryDto, UpdateTrainingPaperDto,
 } from './paper.dto';
 import { PaperReleaseService } from './paper-release.service';
+import { parseQuestionContent, projectStudentContent } from '../questions/question-content-dispatch';
 
 function assertKeys(value: unknown, allowed: readonly string[], label: string): void {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Errors.param(`${label}必须是对象`);
@@ -42,7 +43,12 @@ export function paperPreviewView(preview: Awaited<ReturnType<PaperReleaseService
         score_cents: item.scoreCents,
       })),
     },
-    questions: preview.questions.map((item) => ({
+    questions: preview.questions.map((item) => {
+      const parsed = item.contentSchemaVersion === 3 ? parseQuestionContent(item) : null;
+      const richContent = parsed?.schema === 3
+        ? (includeAnswers ? (({ schema: _schema, ...content }) => content)(parsed) : projectStudentContent(parsed))
+        : null;
+      return ({
       question_id: String(item.questionId),
       question_version_id: String(item.versionId),
       type: item.type,
@@ -52,8 +58,10 @@ export function paperPreviewView(preview: Awaited<ReturnType<PaperReleaseService
       stem: item.stem,
       options: item.options,
       score: item.scoreCents / 100,
+      ...(richContent ? { content_schema_version: 3 as const, content_json: richContent } : {}),
       ...(includeAnswers ? { answer: item.answer, analysis: item.analysis } : {}),
-    })),
+      });
+    }),
   };
 }
 
@@ -105,7 +113,7 @@ export class PaperAdminController {
   @Post()
   @Permissions('papers:write')
   create(
-    @Body(new StrictDtoValidationPipe(PAPER_CREATE_KEYS)) dto: CreateTrainingPaperDto,
+    @Body(new TrainingPaperDtoValidationPipe(PAPER_CREATE_KEYS)) dto: CreateTrainingPaperDto,
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
@@ -123,7 +131,7 @@ export class PaperAdminController {
   @Permissions('papers:write')
   update(
     @Param('id') paperId: string,
-    @Body(new StrictDtoValidationPipe(PAPER_UPDATE_KEYS)) dto: UpdateTrainingPaperDto,
+    @Body(new TrainingPaperDtoValidationPipe(PAPER_UPDATE_KEYS)) dto: UpdateTrainingPaperDto,
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {

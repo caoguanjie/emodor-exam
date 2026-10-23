@@ -42,6 +42,7 @@
       <el-divider direction="vertical" />
       <div class="detail-head"><h2 class="detail-title">{{ paper.title }}</h2><el-tag>{{ paper.mode === 'fixed' ? '固定组卷' : '随机组卷' }}</el-tag><el-tag :type="statusType(paper.status)">{{ statusLabel(paper.status) }}</el-tag></div>
       <div style="flex:1" />
+      <el-button v-if="canDesign" type="primary" :loading="designerLoading" @click="openDesigner">编辑试卷</el-button>
       <el-button @click="openPreview(false)">预览</el-button>
       <el-button v-if="canAnswerPreview" @click="openPreview(true)">答案版</el-button>
       <el-button v-if="auth.can('papers:write')" :loading="copyingPaper" :disabled="copyingPaper" @click="copyPaper">复制</el-button>
@@ -52,6 +53,7 @@
 
     <el-alert v-if="paper.status !== 'draft'" type="info" :closable="false" style="margin-bottom:14px" title="发布版本不可修改；题库后续修订不会改写本卷。需要新规则或新题池时请复制为新试卷。" />
     <el-alert v-else-if="dirty" type="warning" :closable="false" style="margin-bottom:14px" title="存在未保存配置；发布前请分别保存考试配置与固定题单。" />
+    <el-alert v-if="designerError" :title="designerError" type="error" :closable="false" style="margin-bottom:14px"><el-button v-if="canDesign" @click="openDesigner">重试设计器</el-button></el-alert>
 
     <el-card shadow="never" class="section-card">
       <template #header><div class="card-head"><span>考试配置</span><el-button v-if="editable" type="primary" :loading="savingConfig" @click="saveConfig">保存配置</el-button></div></template>
@@ -83,11 +85,11 @@
 
     <el-card v-else shadow="never" class="section-card">
       <template #header>随机组卷说明</template>
-      <el-descriptions :column="2" border><el-descriptions-item label="本机构学员">初级题池</el-descriptions-item><el-descriptions-item label="外来学员">高级题池</el-descriptions-item><el-descriptions-item label="中级题">可用于固定卷，不参与当前随机映射</el-descriptions-item><el-descriptions-item label="课程关联">仅说明，不过滤题池</el-descriptions-item></el-descriptions>
+      <el-descriptions :column="2" border><el-descriptions-item label="本机构学员">简单题池</el-descriptions-item><el-descriptions-item label="外来学员">困难题池</el-descriptions-item><el-descriptions-item label="课程关联">仅说明，不过滤题池</el-descriptions-item></el-descriptions>
     </el-card>
 
     <el-dialog v-model="candidateVisible" title="选择当前审核通过的题目版本" width="900px">
-      <div class="toolbar"><el-select v-model="candidateQuery.type" placeholder="题型" clearable style="width:140px" @change="changeCandidateFilter"><el-option v-for="item in questionTypes" :key="item" :label="typeLabel(item)" :value="item" /></el-select><el-select v-model="candidateQuery.difficulty" placeholder="难度" clearable style="width:140px" @change="changeCandidateFilter"><el-option label="初级" value="easy" /><el-option label="中级" value="medium" /><el-option label="高级" value="hard" /></el-select></div>
+      <div class="toolbar"><el-select v-model="candidateQuery.type" placeholder="题型" clearable style="width:140px" @change="changeCandidateFilter"><el-option v-for="item in questionTypes" :key="item" :label="typeLabel(item)" :value="item" /></el-select><el-select v-model="candidateQuery.difficulty" placeholder="难度" clearable style="width:140px" @change="changeCandidateFilter"><el-option v-for="item in authoringOptions.difficultyOptions.value" :key="item.value" :label="item.label" :value="item.value" /></el-select></div>
       <el-table :key="candidateSession" :data="candidates" row-key="question_version_id" @selection-change="updateCandidateSelection"><el-table-column type="selection" width="50" :reserve-selection="true" /><el-table-column prop="question_version_id" label="版本 ID" width="100" /><el-table-column prop="stem" label="题干" min-width="280" show-overflow-tooltip /><el-table-column label="题型/难度" width="120"><template #default="{ row }">{{ typeLabel(row.type) }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column><el-table-column label="考点" width="110"><template #default="{ row }">{{ row.concept_id || '独立题' }}</template></el-table-column><el-table-column label="建议分" width="90"><template #default="{ row }">{{ row.score_cents / 100 }}</template></el-table-column></el-table>
       <div class="candidate-pagination"><span class="hint inline">已选 {{ pickedCandidates.length }} 题</span><el-pagination :current-page="candidatePage.page" :page-size="candidatePage.page_size" :total="candidatePage.total" layout="total, prev, pager, next" @current-change="changeCandidatePage" /></div>
       <template #footer><el-button @click="candidateVisible = false">取消</el-button><el-button type="primary" @click="addCandidates">加入题单</el-button></template>
@@ -106,11 +108,27 @@
       </template>
       <template #footer><el-button :loading="previewLoading" :disabled="!previewResourcesReady" @click="printPreview">打印</el-button><el-button :disabled="!preview || previewLoading" @click="exportPreview">导出 JSON</el-button><el-button type="primary" @click="closePreview">关闭</el-button></template>
     </el-dialog>
+    <el-dialog :model-value="designerVisible" fullscreen :show-close="false" :close-on-click-modal="false" :close-on-press-escape="false" class="paper-designer-dialog" destroy-on-close>
+      <el-alert v-if="designerError" :title="designerError" type="error" :closable="false" />
+      <el-alert v-if="designerHistoricalDifficulties" type="warning" :closable="false" title="当前草稿保留中级或已停用难度题目；请明确重新分类后再保存或发布。" />
+      <PaperDesigner v-if="designerValue && designerHost && designerVisible" :model-value="designerValue" mode="edit"
+        :save-draft="saveDesignerDraft" :categories="categories" :regulations="designerRegulations" :courses="designerCourses"
+        :question-library-source="designerHost.questionLibrarySource" :paper-library-source="designerHost.paperLibrarySource"
+        :difficulty-options="authoringOptions.difficultyOptions.value" :concept-options-api="designerConceptOptions"
+        :media-resolver="designerMediaResolver" :media-adapter="designerMediaAdapter"
+        @update:model-value="designerValue = $event" @dirty-change="designerDirty = $event" @close="closeDesigner" />
+    </el-dialog>
   </div>
 </template>
 
+<script lang="ts">
+// Full-path tabs own separate component instances; refresh the ordinary detail
+// when a designer instance has persisted or closed this draft.
+const designerDetailRefresh = new Set<string>();
+</script>
+
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useRoute, useRouter } from 'vue-router';
@@ -132,6 +150,12 @@ import QuestionPreview from '../../components/QuestionPreview.vue';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { resolvePaperSaveCompletion } from '../../utils/paper-editor-state';
 import { useAuthStore } from '../../stores/auth';
+import PaperDesigner from '../../components/question-designers/PaperDesigner.vue';
+import type { PaperDesignerValue, SaveContext } from '../../components/question-designers/contracts';
+import { createPaperDesignerHost } from '../../composables/paper-designer-host';
+import { useAuthoringOptions } from '../../composables/useAuthoringOptions';
+import { listQuestionConceptOptions } from '../../api/question-authoring';
+import { getMediaImageContent, uploadMedia } from '../../api/media';
 
 interface Draft {
   title: string;
@@ -160,6 +184,7 @@ const router = useRouter();
 const auth = useAuthStore();
 const paperId = String(route.params.id);
 const legacyMode = route.query.scope === 'regulation';
+const detailRouteKey = route.fullPath;
 
 const legacyPaper = ref<LegacyPaperDetailView | null>(null);
 const legacyStrategy = reactive({ pass_score: 60, duration_minutes: 30, max_attempts: 3, partial_credit_ratio: 0.5 });
@@ -235,6 +260,75 @@ let relationOptionsCategory: Id | null = null;
 
 const unsaved = useUnsavedChanges(dirty, { onDiscard: restoreDraft });
 const editable = computed(() => paper.value?.status === 'draft' && auth.can('papers:write'));
+const canDesign = computed(() => editable.value && paper.value?.mode === 'fixed' && auth.can('questions:read'));
+const designerVisible = ref(false);
+const designerLoading = ref(false);
+const designerError = ref('');
+const designerDirty = ref(false);
+const designerValue = ref<PaperDesignerValue | null>(null);
+const designerHost = shallowRef<ReturnType<typeof createPaperDesignerHost> | null>(null);
+const authoringOptions = useAuthoringOptions();
+let designerOperation = 0;
+let designerRelationOperation = 0;
+const designerRelationOptions = ref<{ category: Id; regulations: NamedOption[]; courses: NamedOption[] }>({ category: '', regulations: [], courses: [] });
+const designerHistoricalDifficulties = computed(() => Object.values(designerValue.value?.document.questions || {}).some((meta) => !authoringOptions.difficultyOptions.value.some((option) => option.value === meta.difficulty)));
+const designerRegulations = computed(() => designerRelationOptions.value.regulations.map((item) => ({ id: item.id, title: item.title || item.name || String(item.id), category_id: designerRelationOptions.value.category })));
+const designerCourses = computed(() => designerRelationOptions.value.courses.map((item) => ({ id: item.id, title: item.title || item.name || String(item.id), category_id: designerRelationOptions.value.category })));
+const designerConceptOptions = listQuestionConceptOptions;
+const designerMediaResolver = (id: string) => { if (!auth.can('media:read')) return Promise.reject(new Error('无图片读取权限')); return getMediaImageContent(id); };
+const designerMediaAdapter = computed(() => auth.can('media:write') && auth.can('questions:write') ? { upload: (file: File) => uploadMedia(file, 'question') } : undefined);
+const designerGuardDirty = computed(() => designerVisible.value && (designerDirty.value || !!designerHost.value?.busy.value || !!designerHost.value?.pending.value));
+useUnsavedChanges(designerGuardDirty, { canDiscard: () => designerHost.value?.canDiscard() !== false,
+  onBlocked: () => { designerError.value = '保存结果尚未确认，请继续保存查询原请求'; }, onDiscard: releaseDesigner });
+
+function releaseDesigner() { designerOperation += 1; designerRelationOperation += 1; designerVisible.value = false; designerDirty.value = false; designerHost.value?.dispose(); designerHost.value = null; designerValue.value = null; }
+watch(() => designerValue.value?.paper.category_id, async (category) => {
+  const operation = ++designerRelationOperation;
+  if (!category || category === designerRelationOptions.value.category) return;
+  designerRelationOptions.value = { category, regulations: [], courses: [] };
+  try {
+    const [regulations, courses] = await Promise.all([
+      http.get('/admin/papers/regulation-options', { params: { category_id: category, page: 1, page_size: 100 } }) as Promise<Page<NamedOption>>,
+      http.get('/admin/papers/course-options', { params: { category_id: category, page: 1, page_size: 100 } }) as Promise<Page<NamedOption>>,
+    ]);
+    if (operation === designerRelationOperation && designerValue.value?.paper.category_id === category) designerRelationOptions.value = { category, regulations: regulations.items, courses: courses.items };
+  } catch (failure) { if (operation === designerRelationOperation) designerError.value = failure instanceof Error ? failure.message : '关联选项载入失败'; }
+});
+async function openDesigner() {
+  if (!viewActive || route.fullPath !== detailRouteKey || !canDesign.value || designerLoading.value || designerVisible.value) return;
+  if (!await unsaved.confirmDiscard()) return;
+  if (!viewActive || route.fullPath !== detailRouteKey) return;
+  if (route.query.designer !== '1') {
+    await router.replace({ path: route.path, query: { ...route.query, designer: '1' } });
+    return;
+  }
+  const operation = ++designerOperation; const context = viewContext; designerLoading.value = true; designerError.value = '';
+  const host = createPaperDesignerHost({ api: http, paperId, access: { read: auth.can('papers:read'), write: auth.can('papers:write'), questionsRead: auth.can('questions:read'), questionsWrite: auth.can('questions:write') } });
+  try {
+    await authoringOptions.load();
+    if (authoringOptions.error.value || !authoringOptions.difficultyOptions.value.length) throw new Error(authoringOptions.error.value || '没有启用的难度，请重试设计器');
+    const value = await host.load();
+    if (operation !== designerOperation || context !== viewContext || !viewActive || !canDesign.value) { host.dispose(); return; }
+    designerRelationOptions.value = { category: form.category_id, regulations: clone(regulationOptions.value), courses: clone(courseOptions.value) };
+    designerHost.value?.dispose(); designerHost.value = host; designerValue.value = value; designerDirty.value = false; designerVisible.value = true;
+  } catch (failure) { host.dispose(); if (operation === designerOperation && context === viewContext) designerError.value = failure instanceof Error ? failure.message : '设计器载入失败'; }
+  finally { if (operation === designerOperation) designerLoading.value = false; }
+}
+async function saveDesignerDraft(value: PaperDesignerValue, context: SaveContext) {
+  if (!canDesign.value || !designerHost.value || authoringOptions.error.value || !authoringOptions.difficultyOptions.value.length) throw new Error('当前无试卷编辑权限或难度目录不可用');
+  if (Object.values(value.document.questions).some((meta) => !authoringOptions.difficultyOptions.value.some((option) => option.value === meta.difficulty))) throw new Error('请将停用难度题目明确重新分类后再保存');
+  const outcome = await designerHost.value.saveDraft(value, context);
+  if (outcome.status === 'saved') designerDetailRefresh.add(paperId);
+  return outcome;
+}
+async function closeDesigner() {
+  if (designerHost.value?.canDiscard() === false) { designerError.value = '保存结果尚未确认，请继续保存查询原请求'; return; }
+  designerDetailRefresh.add(paperId);
+  releaseDesigner();
+  const query = { ...route.query }; delete query.designer;
+  await router.replace({ path: route.path, query });
+}
+watch(() => route.query.designer, (flag) => { if (flag === '1' && canDesign.value && !designerVisible.value) void openDesigner(); });
 const canAnswerPreview = computed(() => auth.can('papers:export') || auth.can('questions:read') || auth.can('questions:export'));
 const fixedTotal = computed(() => fixedQuestions.value.reduce((sum, item) => sum + Number(item.score_cents || 0), 0));
 const ruleTotal = computed(() => form.rules.reduce((sum, item) => sum + item.count * item.score_cents, 0));
@@ -379,6 +473,12 @@ async function saveConfig() {
 
 function addRule() { const used = new Set(form.rules.map((item) => item.type)); const next = questionTypes.find((item) => !used.has(item)); if (next) form.rules.push({ type: next, count: 1, score_cents: 1000 }); }
 async function openCandidatePicker() {
+  if (!editable.value || !auth.can('questions:read') || authoringOptions.loading.value) return;
+  const context = viewContext;
+  await authoringOptions.load();
+  if (context !== viewContext || !viewActive) return;
+  if (authoringOptions.error.value || !authoringOptions.difficultyOptions.value.length) { ElMessage.error(authoringOptions.error.value || '没有启用的难度，请重试'); return; }
+  if (candidateQuery.difficulty && !authoringOptions.difficultyOptions.value.some((item) => item.value === candidateQuery.difficulty)) candidateQuery.difficulty = '';
   candidatePage.page = 1;
   candidatePage.total = 0;
   pickedCandidates.value = [];
@@ -518,7 +618,7 @@ function printPreview() {
   window.print();
 }
 
-function ordinaryPreviewExport(data: PaperPreview): PaperPreview {
+function ordinaryPreviewExport(data: PaperPreview) {
   return {
     paper_id: data.paper_id,
     release_id: data.release_id,
@@ -545,6 +645,16 @@ function ordinaryPreviewExport(data: PaperPreview): PaperPreview {
       stem: question.stem,
       options: question.options.map((option) => ({ key: option.key, text: option.text })),
       score: question.score,
+      ...((question.content_schema_version === 2 || question.content_schema_version === 3)
+        && question.content_json && typeof question.content_json === 'object'
+        ? {
+            content_schema_version: question.content_schema_version,
+            content_json: {
+              stem: clone(question.content_json.stem),
+              options: clone(question.content_json.options),
+            },
+          }
+        : {}),
     })),
   };
 }
@@ -647,6 +757,8 @@ function recordCompletedCopy() { if (viewDestroyed) return; completedCopyNotice 
 
 function invalidateView() {
   viewContext += 1;
+  designerOperation += 1;
+  designerLoading.value = false;
   trainingLoadOperation += 1;
   trainingOptionsOperation += 1;
   legacyLoadOperation += 1;
@@ -660,9 +772,12 @@ function invalidateView() {
   else invalidatePreview();
 }
 async function reloadMissingTrainingDependencies() {
-  if (!paper.value) await loadTraining(true);
+  if (route.fullPath !== detailRouteKey) return;
+  if (route.query.designer !== '1' && !dirty.value && designerDetailRefresh.delete(paperId)) await loadTraining(true);
+  else if (!paper.value) await loadTraining(true);
   if (viewDestroyed || !viewActive || !paper.value) return;
   await ensureTrainingOptions();
+  if (route.query.designer === '1' && !designerVisible.value) await openDesigner();
 }
 function reloadMissingDetail() {
   if (viewDestroyed || !viewActive) return;
@@ -679,8 +794,8 @@ onActivated(() => {
   if (wasInactive) reloadMissingDetail();
 });
 onDeactivated(() => { viewActive = false; invalidateView(); });
-onBeforeUnmount(() => { viewDestroyed = true; viewActive = false; invalidateView(); });
-onMounted(async () => { if (legacyMode) await loadLegacy(); else { await loadTraining(true); await loadTrainingOptions(); } });
+onBeforeUnmount(() => { releaseDesigner(); viewDestroyed = true; viewActive = false; invalidateView(); });
+onMounted(async () => { if (legacyMode) await loadLegacy(); else { if (route.query.designer !== '1') designerDetailRefresh.delete(paperId); await loadTraining(true); await loadTrainingOptions(); if (route.query.designer === '1') await openDesigner(); } });
 </script>
 
 <style scoped>
@@ -695,4 +810,8 @@ onMounted(async () => { if (legacyMode) await loadLegacy(); else { await loadTra
 .preview-difficulty-print { display:none; }
 .preview-question { padding:14px 0; border-bottom:1px solid var(--el-border-color-lighter); }.preview-title { font-weight:600; }.answer { margin-top:8px; padding:10px; background:var(--el-fill-color-light); color:var(--el-color-success); }
 :deep(.el-card) { border-radius:var(--re-radius); border:1px solid var(--re-border); box-shadow:var(--re-shadow-card); }
+:global(.paper-designer-dialog.el-dialog) { padding:0; }
+:global(.paper-designer-dialog .el-dialog__header) { display:none; }
+:global(.paper-designer-dialog .el-dialog__body) { padding:0; height:100%; display:flex; flex-direction:column; }
+:global(.paper-designer-dialog .paper-designer) { flex:1; }
 </style>

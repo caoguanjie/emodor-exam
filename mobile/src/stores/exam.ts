@@ -75,6 +75,11 @@ export const useExamStore = defineStore('mobile-exam', () => {
     if (same(current, epoch)) result.value = value
   }
   async function open(load: () => Promise<AttemptRecordViewV2>) {
+    const previous = attempt.value?.status === 'in_progress' ? {
+      attempt: attempt.value, questions: questions.value, answers: answers.value, assets: assets.value, mediaErrors: mediaErrors.value,
+      currentIndex: currentIndex.value, phase: phase.value, remaining: remaining.value, clock, ownerUser, frozenPayload, expiredChecked,
+      savedAt: savedAt.value, draftError: draftError.value, draftRestored: draftRestored.value, draftDiscarded: draftDiscarded.value,
+    } : null
     const current = ++revision
     mediaRevision++
     questions.value = []; assets.value = {}; answers.value = {}; result.value = null; attempt.value = null; currentIndex.value = 0
@@ -99,7 +104,15 @@ export const useExamStore = defineStore('mobile-exam', () => {
       phase.value = remaining.value > 0 ? 'answering' : 'expired'
       if (remaining.value === 0) await queryStatus()
     } catch (error) {
-      if (same(current, epoch)) { phase.value = 'error'; loadError.value = message(error); identity(error) }
+      if (same(current, epoch)) {
+        if (previous && error instanceof ApiError && error.code === 40901 && (error.data as { reason_code?: string } | null)?.reason_code === 'CONTENT_VERSION_REQUIRED') {
+          attempt.value = previous.attempt; questions.value = previous.questions; answers.value = previous.answers; assets.value = previous.assets; mediaErrors.value = previous.mediaErrors
+          currentIndex.value = previous.currentIndex; phase.value = previous.phase; remaining.value = previous.remaining; clock = previous.clock; ownerUser = previous.ownerUser
+          frozenPayload = previous.frozenPayload; expiredChecked = previous.expiredChecked; savedAt.value = previous.savedAt; draftError.value = previous.draftError
+          draftRestored.value = previous.draftRestored; draftDiscarded.value = previous.draftDiscarded
+          loadError.value = message(error)
+        } else { phase.value = 'error'; loadError.value = message(error); identity(error) }
+      }
       throw error
     }
   }

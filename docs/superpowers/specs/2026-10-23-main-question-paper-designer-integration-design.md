@@ -112,7 +112,7 @@ AI／导题队列 → main 现有处理与编辑入口
 
 服务端维护唯一权威目录，含 `code`、`label`、`enabled`、`sort`。初始为简单 `easy`、困难 `hard` 启用，历史 `medium` 可识别但停用。数据库继续使用字符串编码，不能用 `is_hard` 布尔值替代。
 
-管理端通过权限受控的只读选项接口获得启用目录，既有题目表单、试卷设计器、AI 表单、导入和抽题设置复用它。前端可保留类型／历史标签映射，但不能各自决定启用状态；服务端保存、审核入池和发布再次校验。接口位置建议为 `GET /admin/questions/authoring-options`，复用 `questions:read`。
+管理端通过权限受控的只读选项接口获得启用目录，既有题目表单、试卷设计器、AI 表单、导入和抽题设置复用它。前端可保留类型／历史标签映射，但不能各自决定启用状态；服务端保存、审核入池和发布再次校验。接口为 `GET /admin/questions/authoring-options`，接受 `questions:read OR questions:write`，且只返回非敏感目录元数据；这保留现有 write-only 录题员能力，但不授予题库内容读取权限。
 
 随机卷继续 main 当前的 `institution → easy`、`external → hard`，固定卷继续允许两档混合并记为 `mixed`。增加新档位时，集中配置、来源抽题映射、题池完备性、导入、统计和测试一起调整；仅加一个下拉选项不算完成扩展。
 

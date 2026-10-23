@@ -1,0 +1,8 @@
+{
+  "type": "single",
+  "content_schema_version": 1,
+  "stem": "<p>进入前应做什么？</p>",
+  "options": [{ "key": "A", "text": "先通风检测" }, { "key": "B", "text": "直接进入" }],
+  "analysis": "<p>先通风检测。</p>",
+  "answer": [0]
+}

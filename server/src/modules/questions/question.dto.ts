@@ -1,18 +1,28 @@
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize, IsArray, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString,
-  Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested,
+  Matches, Max, MaxLength, Min, MinLength, ValidateBy, ValidateIf, ValidateNested,
 } from 'class-validator';
 import type { Difficulty, QuestionType } from '../../common/training-contracts';
+import type { QuestionContentV2 } from '../../common/training-contracts';
+import type { QuestionContentV3 } from '../../common/question-content-v3';
+import { assertActiveDifficulty } from '../../common/question-difficulty';
 
 const IdField = () => Matches(/^[1-9]\d*$/, { message: '必须是十进制 ID 字符串' });
 const QueryNumber = () => Transform(({ value }) => value === undefined || value === null || value === '' ? undefined : Number(value));
+const ActiveDifficultyField = () => ValidateBy({
+  name: 'activeDifficulty',
+  validator: {
+    validate: (value) => { try { assertActiveDifficulty(value); return true; } catch { return false; } },
+    defaultMessage: () => '难度未启用，请从当前难度目录选择',
+  },
+});
 
 export class GenerateQuestionsDto {
   @IsString() @IdField() material_id!: string;
   @IsString() @IdField() material_version_id!: string;
   @IsString() @IdField() category_id!: string;
-  @IsIn(['easy', 'medium', 'hard']) difficulty!: Difficulty;
+  @ActiveDifficultyField() difficulty!: Difficulty;
   @IsOptional() @IsInt() @Min(1) @Max(40) question_count_single?: number;
   @IsOptional() @IsInt() @Min(0) @Max(20) question_count_multiple?: number;
   @IsOptional() @IsNumber() @Min(0.01) score_single?: number;
@@ -25,25 +35,25 @@ export class QuestionOptionDto {
 }
 
 export class CreateQuestionDto {
-  @IsOptional() @IsIn([2]) content_schema_version?: number;
-  @IsOptional() @IsObject() content_json?: any;
+  @IsOptional() @IsIn([2, 3]) content_schema_version?: number;
+  @IsOptional() @IsObject() content_json?: QuestionContentV2 | QuestionContentV3;
   @IsString() @IdField() category_id!: string;
-  @IsIn(['easy', 'medium', 'hard']) difficulty!: Difficulty;
+  @ActiveDifficultyField() difficulty!: Difficulty;
   @IsOptional() @IsString() @IdField() concept_id?: string;
   @IsIn(['single', 'multiple', 'judgment']) type!: QuestionType;
-  @ValidateIf((input) => input.content_schema_version !== 2 || input.stem !== undefined) @IsString() @MinLength(1) @MaxLength(100_000) stem!: string;
-  @ValidateIf((input) => input.content_schema_version !== 2 || input.options !== undefined) @IsArray() @ArrayMaxSize(26) @ValidateNested({ each: true }) @Type(() => QuestionOptionDto) options!: QuestionOptionDto[];
-  @ValidateIf((input) => input.content_schema_version !== 2 || input.answer !== undefined) @IsArray() @ArrayMaxSize(26) @IsInt({ each: true }) answer!: number[];
+  @ValidateIf((input) => ![2, 3].includes(input.content_schema_version) || input.stem !== undefined) @IsString() @MinLength(1) @MaxLength(100_000) stem!: string;
+  @ValidateIf((input) => ![2, 3].includes(input.content_schema_version) || input.options !== undefined) @IsArray() @ArrayMaxSize(26) @ValidateNested({ each: true }) @Type(() => QuestionOptionDto) options!: QuestionOptionDto[];
+  @ValidateIf((input) => ![2, 3].includes(input.content_schema_version) || input.answer !== undefined) @IsArray() @ArrayMaxSize(26) @IsInt({ each: true }) answer!: number[];
   @IsOptional() @IsString() @MaxLength(100_000) analysis?: string;
   @IsNumber() @Min(0.01) @Max(100) score!: number;
 }
 
 export class EditQuestionDto {
-  @IsOptional() @IsIn([2]) content_schema_version?: number;
-  @IsOptional() @IsObject() content_json?: any;
+  @IsOptional() @IsIn([2, 3]) content_schema_version?: number;
+  @IsOptional() @IsObject() content_json?: QuestionContentV2 | QuestionContentV3;
   @IsOptional() @IsString() @IdField() expected_version_id?: string | null;
   @IsOptional() @IsString() @IdField() category_id?: string;
-  @IsOptional() @IsIn(['easy', 'medium', 'hard']) difficulty?: Difficulty;
+  @IsOptional() @ActiveDifficultyField() difficulty?: Difficulty;
   @IsOptional() @IsString() @IdField() concept_id?: string | null;
   @IsOptional() @IsIn(['single', 'multiple', 'judgment']) type?: QuestionType;
   @IsOptional() @IsString() @MinLength(1) @MaxLength(100_000) stem?: string;

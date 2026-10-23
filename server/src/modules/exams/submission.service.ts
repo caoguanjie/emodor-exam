@@ -10,8 +10,9 @@ import { StatisticsService } from '../statistics/statistics.service';
 import { AttemptReaderService, type GradingSnapshot } from './attempt-reader.service';
 import { AnswerDraftService } from './answer-draft.service';
 import { ExamHistoryService } from './exam-history.service';
-import { questionContent } from '../questions/question-content';
+import { parseQuestionContent as questionContent } from '../questions/question-content-dispatch';
 import { assertExamIdentity, expireExamRecord } from './exam-state';
+import { assertContentCapability, requiredContentCapability } from './question-content-capability';
 
 export interface SubmissionGradeDetail {
   itemId: string;
@@ -135,7 +136,7 @@ export class SubmissionService {
     return outcome.result;
   }
 
-  async submit(userId: Id, recordId: Id, input?: unknown): Promise<FinalResult> {
+  async submit(userId: Id, recordId: Id, input?: unknown, contentVersion: 2 | 3 = 2): Promise<FinalResult> {
     const completed = await this.dataSource.transaction(async (manager) => {
       const user = await manager.getRepository(SysUser).findOne({
         where: { id: String(userId) }, lock: { mode: 'pessimistic_write' },
@@ -147,13 +148,14 @@ export class SubmissionService {
       if (String(record.userId) !== String(userId)) throw Errors.dataForbidden();
       record = await manager.getRepository(ExamRecord).findOne({ where: { id: String(recordId) }, lock: { mode: 'pessimistic_write' } }) as ResultRecord;
       if (record.status !== ExamStatus.IN_PROGRESS || record.gradingState !== 'not_submitted') {
-          return { outcome: { result: await this.history.resultInTransaction(manager, record), effect: null }, actorName: user.username };
+          return { outcome: { result: await this.history.resultInTransaction(manager, record, undefined, undefined, contentVersion), effect: null }, actorName: user.username };
       }
       if (record.regulationId || !record.assignmentId) throw Errors.dataForbidden('请使用培训考试入口');
       const acceptedAt = new Date();
+      const snapshot = await this.reader.forGrading(manager, String(recordId));
+      assertContentCapability(requiredContentCapability(snapshot.items), contentVersion);
       if (acceptedAt.getTime() >= new Date(record.deadlineAt).getTime()) return { outcome: await this.finalize(manager, recordId, 'timeout', record), actorName: user.username };
       await assertExamIdentity(manager, String(userId));
-      const snapshot = await this.reader.forGrading(manager, String(recordId));
       const answers = validateWholeSubmission(String(recordId), input, snapshot);
       const repo = manager.getRepository(ExamAnswer);
       await repo.delete({ examRecordId: String(recordId) });
@@ -163,7 +165,7 @@ export class SubmissionService {
         const content = questionContent(item);
         return repo.create({ examRecordId: String(recordId), recordQuestionId: answer.item_id, questionId: String(item.questionId), selectedOptionIds: answer.option_ids, selected: answer.option_ids.map((id) => content.options.findIndex((option) => option.id === id)), isCorrect: null, gainedScore: null });
       }));
-      return { outcome: await this.finalize(manager, recordId, 'manual', record, acceptedAt), actorName: user.username };
+      return { outcome: await this.finalize(manager, recordId, 'manual', record, acceptedAt, contentVersion), actorName: user.username };
     });
     return this.publishFinalization(completed.outcome, completed.actorName);
   }
@@ -258,6 +260,7 @@ export class SubmissionService {
     method: SubmissionMethod,
     alreadyLocked?: ResultRecord,
     acceptedAt = new Date(),
+    contentVersion: 2 | 3 = 2,
   ): Promise<FinalizationOutcome> {
     const recordRepo = manager.getRepository(ExamRecord);
     const record = alreadyLocked || await recordRepo.findOne({
@@ -265,7 +268,7 @@ export class SubmissionService {
     }) as ResultRecord | null;
     if (!record) throw Errors.notFound('考试记录不存在');
     if (record.status !== ExamStatus.IN_PROGRESS || record.gradingState !== 'not_submitted') {
-      return { result: await this.history.resultInTransaction(manager, record), effect: null };
+      return { result: await this.history.resultInTransaction(manager, record, undefined, undefined, contentVersion), effect: null };
     }
     if (method === 'timeout') {
       const expired = await expireExamRecord(manager, record);
@@ -302,7 +305,7 @@ export class SubmissionService {
     record.status = grade.totalCents >= Number(snapshot.rule.passCents) ? ExamStatus.PASSED : ExamStatus.FAILED;
     const saved = await recordRepo.save(record) as ResultRecord;
     return {
-      result: await this.history.resultInTransaction(manager, saved, snapshot, persisted),
+      result: await this.history.resultInTransaction(manager, saved, snapshot, persisted, contentVersion),
       effect: {
         recordId: String(saved.id),
         regulationId: saved.regulationId ? String(saved.regulationId) : null,

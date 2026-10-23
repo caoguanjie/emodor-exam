@@ -9,11 +9,12 @@ import { Regulation } from '../../entities/regulation.entity';
 import { TrainingCourse } from '../../entities/training-course.entity';
 import { PaperRelease } from '../../entities/paper-release.entity';
 import { Errors, PaperStatus, QuestionStatus } from '../../common/errors';
+import { activeDifficulties, assertActiveDifficulty } from '../../common/question-difficulty';
 import { AuditService } from '../../common/audit.service';
 import type { Difficulty, PoolRule, QuestionType, RuleSnapshot } from '../../common/training-contracts';
 import { CategoryService } from '../training/category.service';
 import { QuestionVersionService, type QuestionVersionSnapshot } from '../questions/question-version.service';
-import type { CreateTrainingPaperDto, UpdateTrainingPaperDto } from '../exams/paper.dto';
+import { defaultDesignerLayout, parseDesignerLayout, type CreateTrainingPaperDto, type UpdateTrainingPaperDto } from '../exams/paper.dto';
 import { PaperReleaseService } from '../exams/paper-release.service';
 
 type PaperActor = { id: string | number; name: string };
@@ -260,6 +261,7 @@ export class PaperService {
         const q = qMap.get(String(it.question_id));
         if (!q) throw Errors.param(`题目 ${it.question_id} 不存在`);
         this.assertLegacyFixedQuestion(q);
+        assertActiveDifficulty(q.difficulty);
         if (q.status !== QuestionStatus.APPROVED) throw Errors.param(`题目 ${it.question_id} 未审核通过，不能入卷`);
         if (q.regulationId !== paper.regulationId) throw Errors.param(`题目 ${it.question_id} 与试卷不属于同一制度`);
         if (seen.has(q.id)) throw Errors.param(`题目 ${it.question_id} 重复`);
@@ -317,6 +319,10 @@ export class PaperService {
       this.assertLegacyPaper(source);
       const release = await this.releaseService.latestForPaper(id, manager);
       const rule = release?.rule;
+      const itemRepo = manager.getRepository(PaperQuestion);
+      const links = release ? [] : await itemRepo.find({ where: { paperId: id }, order: { sort: 'ASC', id: 'ASC' } });
+      if (release) release.pool.forEach((snapshot) => assertActiveDifficulty(snapshot.difficulty));
+      else await this.assertEnabledPaperLinks(manager, links);
       const created = await paperRepo.save(paperRepo.create({
         regulationId: source.regulationId,
         businessScope: 'regulation',
@@ -335,14 +341,13 @@ export class PaperService {
         status: PaperStatus.DRAFT,
         createdBy: String(actor.id),
       }));
-      const itemRepo = manager.getRepository(PaperQuestion);
       const rows = release?.businessScope === 'regulation'
         ? release.pool.map((snapshot, index) => itemRepo.create({
           paperId: String(created.id), questionId: String(snapshot.questionId),
           questionVersionId: String(snapshot.versionId), conceptId: snapshot.conceptId || null,
           sort: index, score: (Number(snapshot.scoreCents) / 100).toFixed(2),
         }))
-        : (await itemRepo.find({ where: { paperId: id }, order: { sort: 'ASC', id: 'ASC' } })).map((item) => itemRepo.create({
+        : links.map((item) => itemRepo.create({
           paperId: String(created.id), questionId: item.questionId, questionVersionId: item.questionVersionId,
           conceptId: item.conceptId, sort: item.sort, score: item.score,
         }));
@@ -414,6 +419,7 @@ export class PaperService {
       requires_learning: Boolean(paper.requiresLearning),
       regulation_ids: (paper.regulationIds || []).map(String),
       course_ids: (paper.courseIds || []).map(String),
+      designer_layout: paper.designerLayout == null ? defaultDesignerLayout(paper.title) : parseDesignerLayout(paper.designerLayout),
       rules: (paper.ruleConfig?.rules || []).map((item) => ({
         type: item.type, count: Number(item.count), score_cents: Number(item.scoreCents),
       })),
@@ -504,6 +510,7 @@ export class PaperService {
 
   async createTraining(input: CreateTrainingPaperDto, actor: PaperActor, ip: string | null) {
     this.validateStrategy(input);
+    const designerLayout = input.designer_layout === undefined ? null : parseDesignerLayout(input.designer_layout);
     const categoryId = String(input.category_id);
     const regulationIds = (input.regulation_ids || []).map(String);
     const courseIds = (input.course_ids || []).map(String);
@@ -518,6 +525,7 @@ export class PaperService {
         requiresLearning: input.requires_learning ? 1 : 0,
         regulationIds,
         courseIds,
+        designerLayout,
         title: input.title.trim(),
         totalScore: '100.00',
         passScore: String(input.pass_score ?? 60),
@@ -539,6 +547,7 @@ export class PaperService {
 
   async updateTraining(id: string, patch: UpdateTrainingPaperDto, actor: PaperActor, ip: string | null) {
     this.validateStrategy(patch);
+    const designerLayout = patch.designer_layout === undefined ? undefined : parseDesignerLayout(patch.designer_layout);
     const current = await this.paperRepo.findOne({ where: { id: String(id) } });
     this.assertTrainingPaper(current);
     if (current.status !== 'draft') throw Errors.paperReleaseConflict('发布后不可修改规则或题池，请复制为新试卷');
@@ -563,6 +572,7 @@ export class PaperService {
       if (patch.requires_learning !== undefined) paper.requiresLearning = patch.requires_learning ? 1 : 0;
       paper.regulationIds = regulationIds;
       paper.courseIds = courseIds;
+      if (designerLayout !== undefined) paper.designerLayout = designerLayout;
       if (patch.pass_score !== undefined) paper.passScore = String(patch.pass_score);
       if (patch.duration_minutes !== undefined) paper.durationMinutes = patch.duration_minutes;
       if (patch.max_attempts !== undefined) paper.maxAttempts = patch.max_attempts;
@@ -622,6 +632,7 @@ export class PaperService {
           throw Errors.paperReleaseConflict(`题目版本 ${input.question_version_id} 已不是当前审核通过版本`);
         }
         if (String(version.categoryId) !== categoryId) throw Errors.paperRuleInvalid('固定题目必须与试卷属于同一培训类别');
+        assertActiveDifficulty(version.difficulty);
         if (regulationIds.size && (!version.regulationId || !regulationIds.has(String(version.regulationId)))) {
           throw Errors.paperRuleInvalid('固定题目不在试卷制度筛选范围内');
         }
@@ -664,7 +675,8 @@ export class PaperService {
     this.assertTrainingPaper(paper);
     if (!paper.categoryId) throw Errors.paperRuleInvalid('培训试卷缺少培训类别');
     const types = query.type ? [query.type] : ['single', 'multiple', 'judgment'] as QuestionType[];
-    const difficulties = query.difficulty ? [query.difficulty] : ['easy', 'medium', 'hard'] as Difficulty[];
+    if (query.difficulty !== undefined) assertActiveDifficulty(query.difficulty);
+    const difficulties = query.difficulty ? [query.difficulty] : activeDifficulties();
     const regulationIds = (paper.regulationIds || []).map(String);
     const snapshots: QuestionVersionSnapshot[] = [];
     for (const difficulty of difficulties) {
@@ -729,15 +741,17 @@ export class PaperService {
       if (String(locked.categoryId || '') !== String(source.categoryId || '') || locked.mode !== source.mode) {
         throw Errors.paperReleaseConflict('试卷类别或组卷模式已变化，请刷新后重试');
       }
+      const links = await manager.getRepository(PaperQuestion).find({ where: { paperId: String(id) }, order: { sort: 'ASC', id: 'ASC' } });
+      await this.assertEnabledPaperLinks(manager, links);
       const created = await paperRepo.save(paperRepo.create({
         regulationId: null, businessScope: 'training', mode: locked.mode, categoryId: locked.categoryId,
         requiresLearning: locked.requiresLearning, regulationIds: cloneJson(locked.regulationIds || []),
         courseIds: cloneJson(locked.courseIds || []), ruleConfig: locked.ruleConfig ? cloneJson(locked.ruleConfig) : null,
+        designerLayout: locked.designerLayout ? cloneJson(locked.designerLayout) : null,
         title: copyPaperTitle(locked.title), totalScore: locked.totalScore, passScore: locked.passScore,
         durationMinutes: locked.durationMinutes, maxAttempts: locked.maxAttempts,
         partialCreditRatio: locked.partialCreditRatio, status: 'draft', createdBy: String(actor.id),
       }));
-      const links = await manager.getRepository(PaperQuestion).find({ where: { paperId: String(id) }, order: { sort: 'ASC', id: 'ASC' } });
       if (links.length) await manager.getRepository(PaperQuestion).save(links.map((item) => manager.getRepository(PaperQuestion).create({
         paperId: String(created.id), questionId: item.questionId, questionVersionId: item.questionVersionId,
         conceptId: item.conceptId, sort: item.sort, score: item.score,
@@ -749,6 +763,19 @@ export class PaperService {
       object_id: String(copy.id), detail: { source_paper_id: String(id) }, result: 'success', source_ip: ip,
     });
     return this.trainingPaperView(copy);
+  }
+
+  private async assertEnabledPaperLinks(manager: EntityManager, links: PaperQuestion[]): Promise<void> {
+    const versionIds = links.flatMap((item) => item.questionVersionId ? [String(item.questionVersionId)] : []);
+    const versions = versionIds.length ? await manager.getRepository(QuestionVersion).findBy({ id: In(versionIds) }) : [];
+    const byVersion = new Map(versions.map((version) => [String(version.id), version]));
+    const legacyIds = links.filter((item) => !item.questionVersionId).map((item) => String(item.questionId));
+    const legacy = legacyIds.length ? await manager.getRepository(Question).findBy({ id: In(legacyIds) }) : [];
+    const byQuestion = new Map(legacy.map((question) => [String(question.id), question]));
+    for (const link of links) {
+      const selected = link.questionVersionId ? byVersion.get(String(link.questionVersionId)) : byQuestion.get(String(link.questionId));
+      assertActiveDifficulty(selected?.difficulty);
+    }
   }
 
   private async transitionTraining(

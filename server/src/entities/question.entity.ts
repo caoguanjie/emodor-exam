@@ -1,5 +1,6 @@
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 import type { QuestionContentV2 } from '../common/training-contracts';
+import type { QuestionContentV3 } from '../common/question-content-v3';
 
 export interface QuestionOption {
   key: string;
@@ -52,7 +53,7 @@ export class Question {
   contentSchemaVersion: number;
 
   @Column({ name: 'content_json', type: 'json', nullable: true })
-  contentJson: QuestionContentV2 | null;
+  contentJson: QuestionContentV2 | QuestionContentV3 | null;
 
   /** 题库建议分值；实际判分以 paper_question.score 为准 */
   @Column({ type: 'decimal', precision: 5, scale: 2 })

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import ReadonlyRichContent from '@/components/rich-content/ReadonlyRichContent.vue'
 import type { ExamOption } from '@/types/exam'
-withDefaults(defineProps<{ option: ExamOption; label: string; selected?: boolean; disabled?: boolean; multiple?: boolean; image?: boolean; status?: 'correct' | 'wrong' | 'missed'; mark?: string; assets?: Record<string, string> }>(), { selected: false, disabled: false, multiple: false, image: false, mark: '', assets: () => ({}) })
+withDefaults(defineProps<{ option: ExamOption; schemaVersion?: 2 | 3; label: string; selected?: boolean; disabled?: boolean; multiple?: boolean; image?: boolean; status?: 'correct' | 'wrong' | 'missed'; mark?: string; assets?: Record<string, string> }>(), { schemaVersion: 2, selected: false, disabled: false, multiple: false, image: false, mark: '', assets: () => ({}) })
 const emit = defineEmits<{ select: [id: string]; retryImage: [assetId: string] }>()
 </script>
 <template>
   <view class="option-card" :class="[{ 'option-card--selected': selected, 'option-card--image': image, 'option-card--multiple': multiple }, status && `option-card--${status}`]" :role="multiple ? 'checkbox' : 'radio'" :aria-label="`选项 ${label}`" :aria-checked="selected" :aria-disabled="disabled" @click="!disabled && emit('select', option.id)">
-    <view class="option-card__key">{{ label }}</view><view class="option-card__body"><ReadonlyRichContent :doc="option.content" :assets="assets" @retry-image="emit('retryImage', $event)" /><text v-if="mark" class="option-card__mark">{{ mark }}</text></view>
+    <view class="option-card__key">{{ label }}</view><view class="option-card__body"><ReadonlyRichContent :doc="option.content" :schema-version="schemaVersion" :assets="assets" @retry-image="emit('retryImage', $event)" /><text v-if="mark" class="option-card__mark">{{ mark }}</text></view>
   </view>
 </template>
 <style scoped>

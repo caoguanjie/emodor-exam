@@ -9,6 +9,10 @@
       <el-tab-pane name="ai" label="AI 生成" />
     </el-tabs>
 
+    <el-alert v-if="catalogError" type="error" :closable="false" :title="catalogError" show-icon>
+      <el-button link :loading="catalogLoading" @click="loadAuthoringOptions">重试加载难度</el-button>
+    </el-alert>
+
     <section v-if="mode === 'file'">
     <el-alert
       type="info"
@@ -31,8 +35,8 @@
         </el-select>
       </el-form-item>
       <el-form-item label="默认难度">
-        <el-select v-model="defaults.difficulty" clearable placeholder="文件 difficulty 为空时使用" style="width:320px" :disabled="interactionLocked">
-          <el-option label="初级" value="easy" /><el-option label="中级" value="medium" /><el-option label="高级" value="hard" />
+        <el-select v-model="defaults.difficulty" clearable placeholder="文件 difficulty 为空时使用" style="width:320px" :disabled="interactionLocked || !catalogReady">
+          <el-option v-for="item in difficultyOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="导入文件" required>
@@ -79,7 +83,7 @@
         <el-button
           type="primary"
           :loading="commitBusy"
-          :disabled="!preview.valid_rows.length || commitBusy || statusBusy || commitUnknown"
+          :disabled="!catalogReady || !preview.valid_rows.length || commitBusy || statusBusy || commitUnknown"
           @click="commitImport"
         >
           确认导入 {{ preview.valid_rows.length }} 行
@@ -103,10 +107,10 @@
             <el-button :disabled="ai.taskBusy.value || ai.rowBusy.value" @click="downloadAiTemplate">下载 {{ aiFormat.toUpperCase() }} 模板</el-button>
             <el-upload :key="aiUploadKey" :show-file-list="false" :auto-upload="false"
               :accept="aiFormat === 'xlsx' ? '.xlsx' : '.txt,text/plain'"
-              :disabled="ai.interactionLocked.value || !auth.can('ai:write') || !auth.can('ai:read')"
+              :disabled="!catalogReady || ai.interactionLocked.value || !auth.can('ai:write') || !auth.can('ai:read')"
               :on-change="generateFromFile">
               <el-button type="primary" :loading="ai.taskBusy.value || ai.generating.value"
-                :disabled="ai.interactionLocked.value || !auth.can('ai:write') || !auth.can('ai:read')">选择参考文件并生成</el-button>
+                :disabled="!catalogReady || ai.interactionLocked.value || !auth.can('ai:write') || !auth.can('ai:read')">选择参考文件并生成</el-button>
             </el-upload>
           </div>
         </el-form-item>
@@ -137,8 +141,7 @@
         <div class="preview-toolbar">
           <el-radio-group v-model="ai.difficulty.value">
             <el-radio-button value="all">全部</el-radio-button>
-            <el-radio-button value="easy">简单</el-radio-button>
-            <el-radio-button value="hard">困难</el-radio-button>
+            <el-radio-button v-for="item in difficultyOptions" :key="item.value" :value="item.value">{{ item.label }}</el-radio-button>
           </el-radio-group>
           <div class="file-actions">
             <el-button :disabled="ai.rowBusy.value || ai.commitBusy.value || ai.statusBusy.value || ai.commitUnknown.value" @click="downloadGenerated('xlsx')">下载 Excel</el-button>
@@ -154,7 +157,7 @@
             </template>
           </el-table-column>
           <el-table-column prop="row_number" label="序号" width="70" />
-          <el-table-column label="难度" width="80"><template #default="{ row }">{{ row.difficulty === 'easy' ? '简单' : '困难' }}</template></el-table-column>
+          <el-table-column label="难度" width="80"><template #default="{ row }">{{ difficultyLabel(row.difficulty) }}</template></el-table-column>
           <el-table-column label="题型" width="90"><template #default="{ row }">{{ typeLabel[row.type as QuestionType] }}</template></el-table-column>
           <el-table-column prop="stem" label="生成题题干" min-width="260" show-overflow-tooltip />
           <el-table-column label="校验" min-width="150"><template #default="{ row }">
@@ -170,7 +173,7 @@
         <div class="preview-actions">
           <el-button v-if="ai.commitUnknown.value" :loading="ai.statusBusy.value" @click="reconcileAiBatch">查询原批次状态</el-button>
           <el-button type="primary" :loading="ai.commitBusy.value"
-            :disabled="!auth.can('questions:write') || !ai.selectedRows.value.length || ai.rowBusy.value || ai.commitBusy.value || ai.statusBusy.value || ai.commitUnknown.value"
+            :disabled="!catalogReady || !auth.can('questions:write') || !ai.selectedRows.value.length || ai.rowBusy.value || ai.commitBusy.value || ai.statusBusy.value || ai.commitUnknown.value"
             @click="ai.commitImport">确认导入 {{ ai.selectedRows.value.length }} 道待审核题目</el-button>
         </div>
       </section>
@@ -208,11 +211,17 @@ import { useAuthStore } from '../../stores/auth';
 import QuestionPreview from '../../components/QuestionPreview.vue';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAiQuestionImportWorkflow, useQuestionImportWorkflow } from '../../utils/question-import-workflow';
+import { useAuthoringOptions } from '../../composables/useAuthoringOptions';
+import type { AuthoringOptions } from '../../api/question-authoring';
 
 type CategoryOption = { id: Id; name: string };
 
 const router = useRouter();
 const auth = useAuthStore();
+const { difficultyOptions, difficultyLabel, load: loadAuthoringOptions, loading: catalogLoading, error: catalogError } = useAuthoringOptions(
+  () => http.get('/admin/questions/authoring-options') as Promise<AuthoringOptions>,
+);
+const catalogReady = computed(() => !catalogLoading.value && !catalogError.value && difficultyOptions.value.length > 0);
 const mode = ref<'file' | 'ai'>('file');
 const format = ref<'xlsx' | 'txt'>('xlsx');
 const categories = ref<CategoryOption[]>([]);
@@ -241,13 +250,14 @@ const {
   preview, previewBusy, commitBusy, statusBusy, commitUnknown, interactionLocked, canReset,
 } = workflow;
 const ai = useAiQuestionImportWorkflow({
+  enabledDifficulties: () => catalogReady.value ? difficultyOptions.value.map((item) => item.value) : [],
   readTask: (id) => http.get(`/admin/questions/ai-import-tasks/${encodeURIComponent(id)}`),
   readBatch: (id) => http.get(`/admin/questions/ai-import-batches/${id}`),
   commitBatch: (id, rows) => http.post(`/admin/questions/ai-import-batches/${id}/commit`, { row_numbers: rows }),
   onCommitted: (result) => finish(result, true),
   onWarning: (message) => { ElMessage.warning(message); },
 });
-const canChangeRows = computed(() => auth.can('ai:write') && !ai.rowBusy.value && !ai.commitBusy.value
+const canChangeRows = computed(() => catalogReady.value && auth.can('ai:write') && !ai.rowBusy.value && !ai.commitBusy.value
   && !ai.statusBusy.value && !ai.commitUnknown.value);
 const dirty = computed(() => workflow.dirty.value || ai.dirty.value || editVisible.value);
 const unsaved = useUnsavedChanges(dirty, {
@@ -280,7 +290,7 @@ function downloadAiTemplate() {
 
 async function generateFromFile(value: UploadFile) {
   const file = value.raw;
-  if (!(file instanceof File) || !auth.can('ai:write') || !auth.can('ai:read')) return;
+  if (!(file instanceof File) || !catalogReady.value || !auth.can('ai:write') || !auth.can('ai:read')) return;
   const expected = aiFormat.value === 'xlsx' ? /\.xlsx$/i : /\.txt$/i;
   if (!expected.test(file.name) || file.size > 5 * 1024 * 1024) {
     ElMessage.warning(!expected.test(file.name) ? `请选择 .${aiFormat.value} 文件` : '参考文件不能超过 5MB');
@@ -394,10 +404,12 @@ async function queryBatchStatus() {
 }
 
 async function commitImport() {
+  if (!catalogReady.value) return;
   await workflow.commitImport();
 }
 
 onMounted(loadCategories);
+onMounted(loadAuthoringOptions);
 onActivated(() => { workflow.activate(); ai.activate(); });
 onDeactivated(() => { workflow.deactivate(); ai.deactivate(); });
 onBeforeUnmount(() => { workflow.deactivate(); ai.deactivate(); });

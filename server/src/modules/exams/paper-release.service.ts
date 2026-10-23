@@ -13,13 +13,16 @@ import { QuestionVersion } from '../../entities/question-version.entity';
 import { CategoryService } from '../training/category.service';
 import { QuestionVersionService, type QuestionVersionSnapshot } from '../questions/question-version.service';
 import { SamplingService } from './sampling.service';
+import type { QuestionContentV3 } from '../../common/question-content-v3';
+import { parseQuestionContent } from '../questions/question-content-dispatch';
+import { activeDifficulties, assertActiveDifficulty, difficultyCatalog } from '../../common/question-difficulty';
 
 export type PaperBusinessScope = 'regulation' | 'training';
 export type PaperMode = 'fixed' | 'random';
 
 export interface ReleaseQuestionSnapshot {
   contentSchemaVersion?: number;
-  contentJson?: QuestionContentV2 | null;
+  contentJson?: QuestionContentV2 | QuestionContentV3 | null;
   questionId: string;
   versionId: string;
   revision: number;
@@ -84,6 +87,33 @@ function decimalToCents(value: string | number): number {
 
 function questionGroupKey(version: Pick<QuestionVersion, 'conceptId' | 'questionId'>): string {
   return version.conceptId ? `concept:${version.conceptId}` : `question:${version.questionId}`;
+}
+
+/** Publication stores only examination facts, never the author's document or layout. */
+function freezePublishedQuestion(input: PublishedQuestionSnapshot): ReleaseQuestionSnapshot {
+  const contentSchemaVersion = input.contentSchemaVersion || 1;
+  // Legacy publication preserves its captured facts; its existing reader owns adaptation.
+  const parsed = contentSchemaVersion === 1 ? null : parseQuestionContent(input);
+  let content: QuestionContentV2 | QuestionContentV3 | null = null;
+  if (parsed?.schema === 3) {
+    const { schema: _schema, ...value } = parsed;
+    content = value;
+  } else if (parsed) {
+    const { schema: _schema, ...value } = parsed;
+    content = value;
+  }
+  const {
+    questionId, versionId, revision, categoryId, difficulty, type, stem, options, answer, analysis,
+    scoreCents, conceptId, regulationId, regulationVersionId, sourcePageGroup, sourcePageStart,
+    sourcePageEnd, source, approvedBy, approvedAt,
+  } = input;
+  return deepClone({
+    questionId, versionId, revision, categoryId, difficulty, type, stem, options, answer, analysis,
+    scoreCents, conceptId, regulationId, regulationVersionId, sourcePageGroup, sourcePageStart,
+    sourcePageEnd, source, approvedBy, approvedAt,
+    contentSchemaVersion,
+    contentJson: content,
+  });
 }
 
 function snapshotFromEntity(version: QuestionVersion): QuestionVersionSnapshot {
@@ -229,7 +259,7 @@ export class PaperReleaseService implements OnModuleInit {
     const rule = this.ruleForPaper(paper, configuredRules);
     const pool: QuestionVersionSnapshot[] = [];
     const regulationIds = (paper.regulationIds || []).map(String);
-    for (const difficulty of ['easy', 'hard'] as const) {
+    for (const difficulty of activeDifficulties()) {
       for (const item of rule.rules) {
         pool.push(...await this.questions.approvedCandidates({
           categoryId: String(paper.categoryId),
@@ -239,10 +269,11 @@ export class PaperReleaseService implements OnModuleInit {
         }, manager));
       }
     }
-    for (const difficulty of ['easy', 'hard'] as const) {
+    for (const difficulty of activeDifficulties()) {
       const validation = this.sampling.validatePool(pool, rule.rules, difficulty);
       if (!validation.ok) {
-        throw Errors.paperPoolInsufficient(validation.deficits, `${difficulty === 'easy' ? '初级' : '高级'}候选题池容量不足`);
+        const label = difficultyCatalog().find((option) => option.code === difficulty)?.label || difficulty;
+        throw Errors.paperPoolInsufficient(validation.deficits, `${label}候选题池容量不足`);
       }
     }
     const scoreByType = new Map(rule.rules.map((item) => [item.type, item.scoreCents]));
@@ -259,6 +290,7 @@ export class PaperReleaseService implements OnModuleInit {
   private async fixedPool(
     manager: EntityManager,
     paper: ExamPaper,
+    forPublication = true,
   ): Promise<{ rule: RuleSnapshot; pool: QuestionVersionSnapshot[] }> {
     const items = await manager.getRepository(PaperQuestion).find({
       where: { paperId: String(paper.id) },
@@ -284,6 +316,7 @@ export class PaperReleaseService implements OnModuleInit {
         throw Errors.paperReleaseConflict(`题目 ${item.questionId} 已不是当前审核通过版本`);
       }
       if (String(version.categoryId) !== String(paper.categoryId)) throw Errors.paperRuleInvalid('固定题目与试卷培训类别不一致');
+      if (forPublication) this.assertPublishDifficulty(version);
       if (regulationIds.size && (!version.regulationId || !regulationIds.has(String(version.regulationId)))) {
         throw Errors.paperRuleInvalid('固定题目不在试卷制度筛选范围内');
       }
@@ -333,6 +366,7 @@ export class PaperReleaseService implements OnModuleInit {
     for (const item of items) {
       const version = resolved.get(String(item.questionId));
       if (!version) throw Errors.paperReleaseConflict(`题目 ${item.questionId} 当前版本不存在，请重新选题`);
+      this.assertPublishDifficulty(version);
       if (version.type !== 'single' && version.type !== 'multiple') {
         throw Errors.param('legacy 固定试卷仅支持单选题和多选题；判断题/图片题须使用后续培训发布链路');
       }
@@ -354,6 +388,13 @@ export class PaperReleaseService implements OnModuleInit {
     }
     await itemRepo.save(items);
     return { rule: this.ruleForPaper(paper, [...rules.values()]), pool };
+  }
+
+  private assertPublishDifficulty(version: QuestionVersion): void {
+    try { assertActiveDifficulty(version.difficulty); }
+    catch {
+      throw Errors.paperRuleInvalid(`题目 ${version.questionId}（版本 ${version.id}）难度 ${version.difficulty || 'unknown'} 未启用，请修订并重新选题`);
+    }
   }
 
   async publish(paperId: string, actorId: string): Promise<{ releaseId: string }> {
@@ -397,6 +438,7 @@ export class PaperReleaseService implements OnModuleInit {
           : paper.mode === 'fixed'
             ? await this.fixedPool(manager, paper)
             : (() => { throw Errors.paperRuleInvalid('未知组卷模式'); })();
+      const snapshots = frozen.pool.map(freezePublishedQuestion);
       const previous = await releaseRepo.findOne({ where: { paperId: String(paperId) }, order: { versionNo: 'DESC' } });
       const release = await releaseRepo.save(releaseRepo.create({
         paperId: String(paper.id),
@@ -410,7 +452,7 @@ export class PaperReleaseService implements OnModuleInit {
         courseIds: deepClone(paper.courseIds || []),
         createdBy: String(actorId),
       }));
-      const rows = frozen.pool.map((snapshot, position) => releaseQuestionRepo.create({
+      const rows = snapshots.map((snapshot, position) => releaseQuestionRepo.create({
         releaseId: String(release.id),
         questionId: String(snapshot.questionId),
         questionVersionId: String(snapshot.versionId),
@@ -493,10 +535,10 @@ export class PaperReleaseService implements OnModuleInit {
     } else if (paper.mode === 'random') {
       ({ rule, pool } = await this.randomPool(undefined, paper));
     } else {
-      ({ rule, pool } = await this.dataSource.transaction((manager) => this.fixedPool(manager, paper)));
+      ({ rule, pool } = await this.dataSource.transaction((manager) => this.fixedPool(manager, paper, false)));
     }
     const capacities = paper.mode === 'random'
-      ? (['easy', 'hard'] as const).flatMap((poolDifficulty) => rule.rules.map((item) => ({
+      ? activeDifficulties().flatMap((poolDifficulty) => rule.rules.map((item) => ({
         difficulty: poolDifficulty,
         type: item.type,
         required: item.count,
@@ -504,9 +546,9 @@ export class PaperReleaseService implements OnModuleInit {
           .map((candidate) => candidate.conceptId ? `concept:${candidate.conceptId}` : `question:${candidate.questionId}`)).size,
       })))
       : [];
-    if (paper.mode === 'random' && difficulty === 'medium') throw Errors.paperRuleInvalid('随机组卷只提供初级或高级样例');
+    if (paper.mode === 'random' && !published) assertActiveDifficulty(difficulty);
     const questions = paper.mode === 'random'
-      ? this.sampling.draw(pool, rule.rules, difficulty as Exclude<Difficulty, 'medium'>)
+      ? this.sampling.draw(pool, rule.rules, difficulty)
       : pool;
     return {
       paper_id: String(paper.id),

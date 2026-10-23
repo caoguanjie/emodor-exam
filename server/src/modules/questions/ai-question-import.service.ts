@@ -2,6 +2,8 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import sanitizeHtml from 'sanitize-html';
 import { Errors } from '../../common/errors';
+import { activeDifficulties, assertActiveDifficulty } from '../../common/question-difficulty';
+import type { Difficulty } from '../../common/training-contracts';
 import { RedisService } from '../../common/redis.service';
 import { AppConfig } from '../../config/configuration';
 import { AiGatewayService, type ChatMessage } from '../ai/ai-gateway.service';
@@ -125,8 +127,9 @@ export class AiQuestionImportService implements OnModuleDestroy {
   }
 
   private async generatedDraft(
-    ownerId: string, reference: QuestionDraft, value: unknown, difficulty: 'easy' | 'hard',
+    ownerId: string, reference: QuestionDraft, value: unknown, difficulty: Difficulty,
   ): Promise<QuestionDraft> {
+    assertActiveDifficulty(difficulty);
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw Errors.param('AI 题目格式非法');
     const body = value as Record<string, any>;
     if (typeof body.stem !== 'string' || !body.stem.trim() || body.stem.length > 100_000
@@ -146,7 +149,8 @@ export class AiQuestionImportService implements OnModuleDestroy {
     });
   }
 
-  private async generate(ownerId: string, reference: QuestionDraft, difficulties: Array<'easy' | 'hard'>) {
+  private async generate(ownerId: string, reference: QuestionDraft, difficulties: Difficulty[]) {
+    difficulties.forEach((difficulty) => assertActiveDifficulty(difficulty));
     const raw = await this.complete(this.prompt(reference, difficulties));
     const values: unknown = JSON.parse(raw);
     if (!Array.isArray(values) || values.length > difficulties.length) throw Errors.param('AI 必须返回指定数量的 JSON 数组');
@@ -201,12 +205,12 @@ export class AiQuestionImportService implements OnModuleDestroy {
           const index = next++;
           let generated: QuestionDraft[] = [];
           try {
-            generated = (await this.generate(task.owner_id, references[index], ['easy', 'hard']))
+            generated = (await this.generate(task.owner_id, references[index], activeDifficulties()))
               .filter((draft) => !replaysReference(draft));
           } catch { /* fixed counters only */ }
           drafts.push(...generated);
           task.generated_count += generated.length;
-          task.failed_count += 2 - generated.length;
+          task.failed_count += activeDifficulties().length - generated.length;
           task.completed_count++;
           // Release each reference as soon as that request settles.
           references[index] = undefined as unknown as QuestionDraft;
@@ -239,8 +243,9 @@ export class AiQuestionImportService implements OnModuleDestroy {
 
   async regenerateRow(ownerId: string, id: string, row: number) {
     const current = await this.importer.readAiGeneratedDraft(ownerId, id, row);
+    assertActiveDifficulty(current.difficulty);
     try {
-      const generated = await this.generate(ownerId, current, [current.difficulty as 'easy' | 'hard']);
+      const generated = await this.generate(ownerId, current, [current.difficulty]);
       if (generated.length !== 1) throw new Error('invalid generation');
       const draft = generated[0];
       return await this.importer.updateAiGenerated(ownerId, id, row, {

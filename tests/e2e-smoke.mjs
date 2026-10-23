@@ -490,7 +490,7 @@ async function main() {
     const badSum = await api('POST', '/ai/generate-questions', {
       token: state.tokens.regadmin,
       body: {
-        material_id: regId, material_version_id: versionId, category_id: trainingCategoryId, difficulty: 'medium',
+        material_id: regId, material_version_id: versionId, category_id: trainingCategoryId, difficulty: 'easy',
         question_count_single: 10, question_count_multiple: 5, score_single: 5, score_multiple: 8,
       },
     });
@@ -498,7 +498,7 @@ async function main() {
     const gen = await api('POST', '/ai/generate-questions', {
       token: state.tokens.regadmin,
       body: {
-        material_id: regId, material_version_id: versionId, category_id: trainingCategoryId, difficulty: 'medium',
+        material_id: regId, material_version_id: versionId, category_id: trainingCategoryId, difficulty: 'easy',
         question_count_single: 10, question_count_multiple: 5, score_single: 6, score_multiple: 8,
       },
     });

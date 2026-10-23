@@ -17,6 +17,7 @@ const authStubId = '\0paper-management-auth-test';
 const unsavedStubId = '\0paper-management-unsaved-test';
 const mediaStubId = '\0paper-management-media-test';
 const exportHelperStubId = '\0paper-management-export-helper-test';
+const designerStubId = '\0paper-management-designer-test';
 
 const clientCode = new Map();
 const context = {
@@ -107,16 +108,21 @@ function plugin() {
         || owner.includes('/src/views/admin/PaperDetail.vue')
         || owner === papersClientId || owner === detailClientId;
       const isPreview = owner.includes('/src/components/QuestionPreview.vue') || owner === previewClientId;
+      const isAuthoringApi = owner.includes('/src/api/question-authoring.ts');
       if (source === 'vue-router' && isPaperView) return routeStubId;
       if (source === 'element-plus' && (isPaperView || isPreview)) return elementStubId;
       if (source === '@element-plus/icons-vue' && isPaperView) return iconsStubId;
       if ((source === '../../api/http' || source === '/src/api/http.ts') && isPaperView) return httpStubId;
+      if ((source === './http' || source === '/src/api/http.ts') && isAuthoringApi) return httpStubId;
       if ((source === '../../stores/auth' || source === '/src/stores/auth.ts') && isPaperView) return authStubId;
       if ((source === '../../composables/useUnsavedChanges' || source === '/src/composables/useUnsavedChanges.ts') && isPaperView) return unsavedStubId;
       if ((source === '../api/media' || source === '/src/api/media.ts') && isPreview) return mediaStubId;
       if (source.includes('__x00__paper-management-media-test')) return mediaStubId;
       if (source.includes('__x00__plugin-vue:export-helper')) return exportHelperStubId;
       if ((source === '../../components/QuestionPreview.vue' || source === '/src/components/QuestionPreview.vue') && isPaperView) return previewClientId;
+      // This Node renderer exercises page state without a DOM. The real designer
+      // and Tiptap integration is mounted in paper-host-main.spec.ts (jsdom).
+      if ((source === '../../components/question-designers/PaperDesigner.vue' || source === '/src/components/question-designers/PaperDesigner.vue') && isPaperView) return designerStubId;
       if ([papersClientId, detailClientId, previewClientId].includes(source)) return source;
       return undefined;
     },
@@ -128,6 +134,7 @@ function plugin() {
       if (id === authStubId) return authStubCode;
       if (id === unsavedStubId) return unsavedStubCode;
       if (id === mediaStubId) return mediaStubCode;
+      if (id === designerStubId) return `export default { name: 'PaperDesigner', render() { return null; } };`;
       if (id === exportHelperStubId) return `export default (sfc, props) => { for (const [key, value] of props) sfc[key] = value; return sfc; };`;
       return clientCode.get(id);
     },
@@ -358,6 +365,7 @@ function previewFixture(note, withAnswers = false, stem = '<p>预览题</p>') {
 
 function setResponder() {
   context.respond = async (method, path, body, config) => {
+    if (method === 'GET' && path === '/admin/questions/authoring-options') return { difficulties: [{ code: 'easy', label: '简单', enabled: true, sort: 1 }, { code: 'medium', label: '中级', enabled: false, sort: 2 }, { code: 'hard', label: '困难', enabled: true, sort: 3 }] };
     if (method === 'GET' && path === '/admin/papers') return { items: [context.trainingPaper], total: 1, page: 1, page_size: 20 };
     if (method === 'GET' && path === '/admin/papers/category-options') return { items: [{ id: 'category-1', name: '默认类别' }], total: 1, page: 1, page_size: 100 };
     if (method === 'GET' && path === '/admin/papers/regulation-options') return { items: [], total: 0, page: 1, page_size: 100 };
@@ -515,6 +523,17 @@ test('retains random rules in the create payload', async () => {
   await mounted.state.createTraining();
   const call = context.calls.find((item) => item.method === 'POST' && item.path === '/admin/papers');
   assert.deepEqual(call.body.rules, [{ type: 'single', count: 1, score_cents: 10000 }]);
+  assert.deepEqual(context.routerPushes, [{ path: '/admin/papers/created-paper', query: { scope: 'training' } }]);
+  mounted.unmount();
+});
+
+test('creates fixed once and opens its persisted draft in the complete designer entry', async () => {
+  const mounted = await mountPapers();
+  mounted.state.openTrainingCreate();
+  mounted.state.trainingCreate.title = '完整固定卷';
+  await Promise.all([mounted.state.createTraining(), mounted.state.createTraining()]);
+  assert.equal(context.calls.filter((call) => call.method === 'POST' && call.path === '/admin/papers').length, 1);
+  assert.deepEqual(context.routerPushes, [{ path: '/admin/papers/created-paper', query: { scope: 'training', designer: '1' } }]);
   mounted.unmount();
 });
 
@@ -723,11 +742,23 @@ test('commits preview mode atomically, invalidates close, and whitelists ordinar
   URL.createObjectURL = (blob) => { exportedBlob = blob; return 'blob:paper-export'; };
   URL.revokeObjectURL = () => {};
   try {
+    mounted.state.preview.questions[0].content_schema_version = 3;
+    mounted.state.preview.questions[0].content_json = {
+      stem: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '富文本导出' }] }] },
+      options: [{ id: 'A', content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '甲' }] }] } }],
+      analysis: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '嵌套秘密解析' }] }] },
+      answer_option_ids: ['A'],
+    };
     mounted.state.exportPreview();
     const exported = JSON.parse(await exportedBlob.text());
     assert.equal(Object.hasOwn(exported.questions[0], 'answer'), false);
     assert.equal(Object.hasOwn(exported.questions[0], 'analysis'), false);
     assert.equal(Object.hasOwn(exported.questions[0], 'rubric'), false);
+    assert.equal(exported.questions[0].content_schema_version, 3);
+    assert.equal(exported.questions[0].content_json.stem.content[0].content[0].text, '富文本导出');
+    assert.equal(Object.hasOwn(exported.questions[0].content_json, 'analysis'), false);
+    assert.equal(Object.hasOwn(exported.questions[0].content_json, 'answer_option_ids'), false);
+    assert.equal(JSON.stringify(exported).includes('嵌套秘密解析'), false);
     assert.match(downloadName, /固定卷\.json$/);
   } finally {
     if (originalDocument === undefined) delete globalThis.document;

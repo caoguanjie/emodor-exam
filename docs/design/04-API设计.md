@@ -14,6 +14,23 @@
 
 ## 1. API 总体规范
 
+### 1.0 作者文档与显示能力增量（2026-10-23）
+
+下列接口均使用现有信封和管理端权限，不建立独立单题设计器入口：
+
+| 方法 | 路径 | 权限与合同 |
+|---|---|---|
+| GET | `/admin/questions/authoring-options` | `questions:read OR questions:write`；仅非敏感目录元数据，`{difficulties:[{code,label,enabled,sort}]}`，当前 easy/hard 启用，medium 识别但停用 |
+| POST | `/admin/question-documents/assemble` | `questions:read`；`{version_ids:string[]}`，1—100个不重复精确版本，返回 `AuthoringBundle` |
+| POST | `/admin/question-documents/commit` | `questions:write`；`{request_id:UUID,bundle:AuthoringBundle}`，整个批次与回执同事务保存 |
+| GET | `/admin/question-documents/commits/{requestId}` | `questions:write`；仅当前owner回执可见，未知或其他owner为404；成功返回原精确版本结果 |
+
+`AuthoringBundle={document,option_ids,identities,layouts}`；document为schema_version=1的作者正文/题目属性；`identities[client_id]={question_id,expected_version_id}`，已版本化传字符串、真正legacy显式null；`option_ids`映射编辑器本地选项到稳定ID；`layouts`为单题布局。新题/另存副本不携带已有identity。回执是`{request_id,bundle,items:[{client_id,question_id,saved_version_id,revision}]}`。同owner/request同内容重放返回原回执；不同内容40940；失败不留题目、原稿或半回执。保存结果不明先GET原请求回执，不能换UUID重复建题。作者文档序列化上限2MiB，超限HTTP413/41301。
+
+现有 `POST /ai/questions` / `PUT /ai/questions/{id}` 接受 `content_schema_version:2|3` 与 `content_json`。schema3修订保留原格式、稳定ID、图片与布局并同事务同步作者原稿；无法无损转换返回40001且不建revision；旧schema2白名单不放宽。`POST/PUT /admin/papers` 接受完整 `designer_layout`（03册4.0.1），undefined保持，null拒绝；题单仍由独立PUT questions有序版本ID决定。
+
+`POST /me/exams/{id}/start`、`GET /me/exam-records/{id}`、`POST /me/exam-records/{id}/submit`、`GET /me/exam-records/{id}/result` 与 `GET /me/wrong-questions` 接收 `X-Question-Content-Version`：缺省或字符串`2`为原合同，仅字符串`3`声明富文能力，其他值40001。能力3题目额外返回`content_schema_version:2|3`，提交body仍为稳定ID整卷。实际题单需要3而客户端仅2时409/40901，data为`{reason_code:'CONTENT_VERSION_REQUIRED',required_content_version:3}`；首次开考在写assignment/record/题单前拒绝，在考提交同样无答案/评分写入。到期状态读取仍优先纯timeout。新旧内容均不得泄漏作者原稿、答案、解析或任意资源URL。
+
 ### 1.1 基础约定
 
 | 项 | 约定 |
@@ -471,7 +488,7 @@ interface IdentitySessionView {
 | material_id | body | string decimal ID | 是 | 题库资料 ID；新资料不绑定类别 |
 | material_version_id | body | string decimal ID | 是 | 资料版本 ID，必须属于 material_id 且已解析 |
 | category_id | body | string decimal ID | 是 | 启用培训类别；固定写入整批版本，不读取模型标签 |
-| difficulty | body | string | 是 | easy / medium / hard；固定写入整批版本 |
+| difficulty | body | string | 是 | 当前启用easy / hard；固定写入整批版本，medium仅历史可读 |
 | question_count_single | body | int | 否 | 单选题量，取值 1–40，默认 20 |
 | question_count_multiple | body | int | 否 | 多选题量，取值 0–20，默认 5 |
 | score_single | body | decimal | 否 | 单选每题分值，> 0，默认 3.00 |
@@ -481,7 +498,7 @@ interface IdentitySessionView {
 
 **GET /ai/config**（`ai_config:read`）：读取 AI 服务配置，`api_key` 掩码回显（如 `sk-****xxxx`，完整键值永不返回，07 册 4.2）。**PUT /ai/config**（`ai_config:write`）：保存 `base_url` / `api_key` / `model`——权威副本为 AES-256-GCM 加密后的配置文件，Redis 仅作缓存（07 册 4.2），并返回同样的脱敏配置结果。**POST /ai/config/test**（`ai_config:write`）：以已保存配置发起一次连通性测试，返回成功 / 失败与脱敏错误摘要（失败 → 50005）。`ai:read/write` 仅代表出题任务/题库工作流，不自动授予配置权限；管理端入口要求 `ai_config:read` 或 `ai_config:write`，但 writer-only 页面不得调用 GET、不得伪造现有配置值，只能提交空白表单并使用 PUT 返回的脱敏结果；`super_admin` 天然拥有全部注册权限。
 
-**人工题 create/edit DTO**：create 的 `category_id/difficulty/type/stem/options/answer/score` 必填，`concept_id/analysis` 可选；edit 为部分更新并必须携带 `expected_version_id`。两者都严格拒绝 `material_id`、`regulation_id`、`regulation_version_id` 和 source，防止客户端伪造 AI/资料来源。资料 AI 生成服务在校验 `material_id + material_version_id` 后把可信来源映射为内部 `regulation_id/regulation_version_id`；§3.5.3 的专用 `questions_ai` 导入确认允许 `source=ai` 且两项来源均为空，不能借人工 DTO 伪造该例外。实体字段不全局改名。single 恰一答案，multiple 至少两答案，judgment 固定正确/错误。富文本仅允许白名单标签与 `<img data-media-id="数字">`；题干、选项和解析图片经 `/media/{id}/content` 鉴权读取。
+**人工题 create/edit DTO**：create 的 `category_id/difficulty/type/score` 必填；普通表单还须 `stem/options/answer`，使用 `content_schema_version:2|3 + content_json` 时由规范化内容产生兼容投影，`concept_id/analysis` 可选；edit 为部分更新并必须携带 `expected_version_id`。两者都严格拒绝 `material_id`、`regulation_id`、`regulation_version_id` 和 source，防止客户端伪造 AI/资料来源。资料 AI 生成服务在校验 `material_id + material_version_id` 后把可信来源映射为内部 `regulation_id/regulation_version_id`；§3.5.3 的专用 `questions_ai` 导入确认允许 `source=ai` 且两项来源均为空，不能借人工 DTO 伪造该例外。实体字段不全局改名。single 恰一答案，multiple 至少两答案，judgment 固定正确/错误。HTML兼容输入仅允许白名单标签与 `<img data-media-id="数字">`，schema3使用1.0的独立白名单；题干、选项和解析图片经媒体owner链路鉴权读取。
 
 **版本与审核语义**：POST 人工题创建 revision 1 并记录录入管理员的 `approved_by/approved_at`；PUT 编辑或 regenerate 创建新的 pending revision，不覆盖旧版本。`PUT /questions/{id}`、`PUT /questions/{id}/review`、`POST /questions/{id}/regenerate` 的 body 必须显式携带 `expected_version_id`：已版本化题传用户当前看到的十进制字符串 ID，未版本化 legacy 题明确传 `null`；省略或非法值返回 40001。服务在数据库锁内比较 identity 的实际 current_version_id，长时 regenerate 在发起与提交前各校验一次；不一致返回 40940，且不得创建错误 revision 或误审新版本。`POST /ai/questions` 与 `PUT /ai/questions/{id}` 的成功响应在既有兼容 view 外额外返回十进制字符串 `saved_version_id`，它是该请求实际创建的 revision receipt；写后查询得到的 `current_version_id` 可能已被另一并发修订推进，继续编辑本地提交快照时只能把 `saved_version_id` 作为下一次 `expected_version_id`。普通 GET/list view 不返回虚假的 `saved_version_id`。列表可按 `category_id/difficulty/concept_id/type/status/regulation_id/keyword` 筛选；响应同时保留旧 `id/version_id` 兼容字段并提供字符串 `question_id/current_version_id/regulation_version_id`、revision、审核元数据。旧题首次编辑/审核才捕获 revision 1，`legacy_captured_at` 明示升级快照，未知类别/难度/历史确认人/时间均保持 null，不自动补 easy。
 
@@ -524,6 +541,8 @@ interface IdentitySessionView {
 **发布硬校验**：候选只取同培训类别、当前 approved revision、题型/难度精确匹配，制度集合可选；未选制度时无制度来源的人工/导入题可入池。课程 ID 不参与题池过滤。随机卷初级与高级两池都按 `concept_id ?? question_id` 计数，任一题型容量不足返回 40971 与 deficits；所有新发布固定卷（training 与 regulation）也按同一组键禁止重复考点，无 concept 的不同 question_id 仍各自独立。失败事务不得留下 release、published 状态或旧题版本捕获。
 
 **预览契约**：共通字段为 `paper_id/release_id/mode/sample_kind/note/difficulty/rule/capacities/questions`。`rule` 使用 snake_case：`total_cents/pass_cents/duration_minutes/max_attempts/partial_credit_ratio/rules[].score_cents`。固定卷 `sample_kind=fixed_paper`、`capacities=[]`；随机卷 `sample_kind=random_example`，显示初/高两池各题型 `required/available` 及选定难度的一次样例，`note` 必须明示“样例不代表所有考生同卷”。已发布/撤回/归档均读不可变 release，不回读题库当前内容。
+
+schema3题目的普通预览额外返回`content_schema_version:3`与`content_json:{stem,options}`，只含完整富文题面/选项；`content_json`中不含`answer_option_ids/analysis`，外层同样不含`answer/analysis`。答案版`/preview/answers`经原有答案权限校验后返回完整schema3 `content_json`（含标准答案稳定ID和富文解析）及兼容答案/解析字段。PC预览使用这个明确的无答案部分内容类型显示富文，不能为了显示格式把答案带回普通预览。
 
 **C1/C2 边界**：C1 只负责发布；C2 新增独立 `/me/exams*` 个人题单 API。`POST /exams/papers/{id}/start` 仍不接受 `business_scope=training` 或空 regulation_id，返回 40402；旧制度固定卷经快照适配器保持数字 `question_id` 与原响应形状，资格守卫和单/多选限制不变。
 
@@ -622,7 +641,7 @@ interface IdentitySessionView {
 
 恢复先于当前category/source和paper状态检查：active沿用原record/snapshot/deadline，不因改来源/类别、撤卷或改题重抽/延时。状态查询在锁内检查deadline，已到期先纯timeout再返回。新链路不提供`PUT .../draft`和`POST .../heartbeat`，不能从读状态、恢复、清扫、Redis事件触发交卷或评分。
 
-`AttemptRecordViewV2`见§4.7.1：只含status、record_id、paper_id、release_id、deadline_at、server_now和questions。进行中题目仅`item_id/type/score/stem/options[{id,content}]`，终态questions=[]。受限Tiptap递归重建白名单只允许doc/paragraph/text/hardBreak/image，图片attrs仅十进制字符串asset_id；最多2000节点、100000文本字符、深度4。拒绝marks/src/HTML/链接/样式/未知字段，任何层级不下发答案、解析、checked/correct、来源/难度或服务端草稿元数据。
+`AttemptRecordViewV2`见§4.7.1：只含status、record_id、paper_id、release_id、deadline_at、server_now和questions。能力2进行中题目仅`item_id/type/score/stem/options[{id,content}]`，能力3额外增加`content_schema_version:2|3`；终态questions=[]。schema2受限Tiptap递归重建白名单只允许doc/paragraph/text/hardBreak/image，图片attrs仅十进制字符串asset_id；最多2000节点、100000文本字符、深度4，拒绝marks/src/HTML/链接/样式/未知字段。schema3按1.0的独立白名单；任何层级均不下发答案、解析、checked/correct、来源/难度或服务端草稿元数据。
 
 提交body严格为`{record_id,answers:[{item_id,option_ids}]}`，ID是字符串，path/body相同；每题恰一次、未答[]，选项须本题存在且唯一，single/judgment最多一项。拒绝缺项/重复/未知/跨题、selected/revision/asset_ids等旧字段或未知嵌套字段，返回40001。处理先认证、查本人记录和加锁；passed/failed直接返回首次结果，历史submitted返回待确认，timeout返回超时；只有active首次提交才严格校验body。锁后唯一accepted_at严格`< deadline_at`才受理，同一时刻写submitted_at并同事务评分到manual/finalized的passed/failed。事务失败全部回滚，并发不同答案/timeout竞争只产生一个终态及一组副作用。
 
@@ -676,12 +695,17 @@ interface IdentitySessionView {
 | 方法 | 路径 | 权限 | 请求与成功 data |
 |---|---|---|---|
 | GET | `/statistics/training/options` | `statistics:read` | 统计专用窄选项 `{papers:[{id,title,category_id,status}],categories:[{id,name}]}`，不要求额外题库/试卷/类别读取权限 |
+| GET | `/statistics/training/overview` | `statistics:read` | `keyword/category_id/page/page_size` 可选；返回 `Page<TrainingExamOverviewRow>`，默认 1/20，每页最多 100 |
 | GET | `/statistics/training/summary` | `statistics:read` | `paper_id` 必填；`category_id/source/difficulty/page/page_size` 可选；返回 `TrainingExamSummary` |
 | GET | `/statistics/training/ranking` | `statistics:read` | 同查询，但 `difficulty` 必须明确；返回 `Page<RankRow>`，缺失难度返回 40001 |
 | GET | `/statistics/training/export` | `statistics:export` | 与 ranking 完全相同的筛选和分页；下载当前页 xlsx，并附独立“口径说明”Sheet |
 | GET | `/admin/dashboard` | 登录 | 返回 `{as_of,timezone:'Asia/Shanghai',metrics,exam_trend?}`；无权模块的指标键直接省略 |
 
-`TrainingExamSummary` 固定包含：`release_id:string|null`、`eligible_count/eligible_started_count/historical_started_count/historical_only_started_count/submitted_attempts/submitted_users/finalized_users`、`participation_rate:number|null`、`score_groups`、`difficulty_composition`、`course_completion`、`uncompleted_reasons`、`as_of`。`score_groups` 每项为 `{difficulty,finalized_users,average_score,pass_rate,distribution:[{lower,upper,count}]}`；空成绩的平均分/通过率为 null。`RankRow={rank,user_id,name,source,difficulty,score,duration_seconds,record_id}`，全部 ID 为字符串。
+`TrainingExamOverviewRow={paper_id,title,category_id,category_name,status,release_id,total_score,duration_minutes,pass_score,participant_count,finalized_users,average_score}`。总览只列培训试卷；名称取当前试卷标题，类别和总分/时限/及格线优先使用最新发布版本及其冻结规则。无发布版本时规则与均分为 null、人数为 0，不把草稿规则伪装成正式成绩依据。总览参考人数按最新发布版本成功开考的学员去重；均分只取该版本、相同规则的 finalized 个人最高分，跨难度仅作描述汇总，不生成混合排名。
+
+`TrainingExamSummary` 固定包含：`exam`、`release_id:string|null`、`eligible_count/eligible_started_count/historical_started_count/historical_only_started_count/submitted_attempts/submitted_users/finalized_users`、`participation_rate:number|null`、`score_groups`、`difficulty_composition`、`course_completion`、`uncompleted_reasons`、`as_of`。`exam={paper_id,title,category_id,total_score,duration_minutes,pass_score,excellent_score:null}`；规则字段取发布快照，名称不声称冻结。`score_groups` 每项为 `{difficulty,finalized_users,average_score,highest_score,lowest_score,passed_users,average_duration_seconds,excellent_users:null,pass_rate,distribution:[{lower,upper,count}]}`。成绩指标统一使用同组个人最高分代表答卷，平均用时使用这些答卷的实际用时；无成绩时平均/最高/最低/平均用时为 null。当前没有优秀分规则，优秀分与人数均为 null，界面显示未设置/—，不将其当作 0。`RankRow={rank,user_id,name,gender,source,difficulty,score,duration_seconds,record_id}`，`gender='male'|'female'|null`，全部 ID 为字符串。
+
+排名与导出新增可选 `sort_by=score|duration`、`sort_order=asc|desc`。先计算标准分数名次，再按指定字段排序，最后分页；用时排序不重编名次，同值保持稳定次序。导出沿用相同排序、筛选和页码，不扩大为全量导出。
 
 人数与成绩采用两个显式口径，页面和导出不得混称：
 
@@ -733,7 +757,7 @@ interface IdentitySessionView {
 
 课程浏览集合固定为：账号启用且课程 `status=published`；`source`、`category_id` 与实名状态不作为列表/详情筛选条件，跨类别、external 或类别缺失仍可浏览，下架/草稿详情返回 40302。排序为推荐优先、`sort_order ASC,id DESC`。`GET /me/home` 直接并行组合真实 `SystemService.publicConfig()` 与 `CourseService.visibleCourses()`，站点字段仍只有 `logo_asset_id/banners`，课程集合、排序和分页与 `/me/courses` 完全相同。Task 12 Video Contract v1替换旧institution/同类别视频分配：两类来源及缺类别均可学习published课程；浏览仍不等于播放授权，后者须按3.10重查mobile employee、实名、current version与精确媒体引用。
 
-PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可见，`/admin/courses/{id}` 仍要求 `courses:read`。这只是前端注册路由的 `permissionAny` 语义；服务端每个 API 的 `@Permissions` 仍保持 AND 守卫，不改变全局授权模型。write-only 账号可创建课程，但不会读取列表或跳转到无权详情。
+PC 路由 `/admin/courses` 以 `courses:read OR courses:write` 判断入口可见。课程资料与章节/视频课时分别在“修改课程”“章节管理”弹窗维护，不再保留独立详情页；旧 PC 链接 `/admin/courses/{id}` 重定向到列表（不影响同路径的 API）。编辑弹窗仍需先通过 `courses:read` 读取资料，修改另需 `courses:write`，上传另需 `media:write`；服务端每个 API 的 `@Permissions` 仍保持 AND 守卫。write-only 账号可创建课程，但不读取列表或打开编辑弹窗。新建成功后，兼具 read 的账号留在列表并打开章节管理。课程列表不显示排序，但新增/修改表单保留数字排序控件，继续读写 `sort_order`。
 
 ### 3.10 B2 视频学习 /me/video-sessions、/me/video-records、/me/courses/{id}/progress
 
@@ -1298,7 +1322,7 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | 校验项 | 结果 |
 |---|---|
 | 当前路由前缀与 README 3.4 模块映射 | 一致；现行新增 `/admin/question-materials`、`/admin/questions`、`/admin/papers`、`/me/exams*` 与 `/admin/exam-records`，旧学习/考试/统计只读兼容 |
-| 当前表名/字段名（snake_case）与 03 册 | 一致：38 张业务表 + 1 张迁移元数据表（共 39 张物理表）、三类客观题、客观答案列和无监控采集字段；Gate G 实名/票据自动化与独立代码审查已通过 |
+| 当前表名/字段名（snake_case）与 03 册 | 一致：39 张业务表 + 1 张迁移元数据表（共 40 张物理表）、三类客观题、客观答案列和无监控采集字段；Gate G 实名/票据自动化与独立代码审查已通过 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
 | 心跳/失焦/乱序/草稿/超时行为与05册 | 新/me无考试draft/heartbeat，仅本地草稿/主动整卷；到期纯timeout；旧/exams心跳只为legacy协议兼容，不采集监考数据 |
 | 统计口径与 05 册 7.4.1 | 一致（七项指标逐字对齐） |

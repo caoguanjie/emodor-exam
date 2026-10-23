@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { Errors } from '../../common/errors';
+import { activeDifficulties } from '../../common/question-difficulty';
 
 export type QuestionImportFormat = 'xlsx' | 'txt';
 
@@ -33,7 +34,7 @@ const TEMPLATE_ROWS: Array<Record<QuestionImportHeader, string>> = [
     answer: JSON.stringify([0]), analysis: '<p>应先完成风险确认。</p>', score: '5',
   },
   {
-    category: '', type: 'multiple', difficulty: 'medium', concept: '',
+    category: '', type: 'multiple', difficulty: 'hard', concept: '',
     stem: '<p>以下哪些属于作业前检查？</p>',
     options: JSON.stringify([{ key: 'A', text: '检查防护用品' }, { key: 'B', text: '确认作业许可' }, { key: 'C', text: '跳过交底' }]),
     answer: JSON.stringify([0, 1]), analysis: '<p>防护用品和作业许可均须确认。</p>', score: '10',
@@ -167,7 +168,10 @@ export async function parseQuestionImportFile(
 }
 
 export async function buildQuestionImportTemplate(format: QuestionImportFormat): Promise<Buffer> {
-  return buildQuestionImportFile(format, TEMPLATE_ROWS);
+  const enabled = activeDifficulties();
+  return buildQuestionImportFile(format, TEMPLATE_ROWS.map((row) => ({
+    ...row, difficulty: enabled.includes(row.difficulty as typeof enabled[number]) ? row.difficulty : enabled[0],
+  })));
 }
 
 export async function buildQuestionImportFile(

@@ -1,4 +1,5 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import type { DesignerLayoutV1 } from '../common/question-authoring';
 
 @Entity('exam_paper')
 @Index('idx_regulation_status', ['regulationId', 'status'])
@@ -31,6 +32,9 @@ export class ExamPaper {
 
   @Column({ name: 'rule_config', type: 'json', nullable: true })
   ruleConfig: import('../common/training-contracts').RuleSnapshot | null;
+
+  @Column({ name: 'designer_layout', type: 'json', nullable: true })
+  designerLayout: DesignerLayoutV1 | null;
 
   @Column({ type: 'varchar', length: 128 })
   title: string;

@@ -58,6 +58,7 @@ describe('mobile exam authority and local answering', () => {
     store.choose('101', 'stable-b'); expect(store.answers['101']).toEqual(['stable-a'])
   })
   it('unknown submission queries authority before one identical retry and never unlocks answers', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-23T10:00:00Z'))
     const { useExamStore } = await import(path); const store = useExamStore(); await store.recover('81'); store.choose('101', 'stable-a')
     let attempts = 0
     install(o => { if (o.url.endsWith('/submit')) { attempts++; throw new Error('unknown') } return ok(active()) })

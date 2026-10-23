@@ -406,6 +406,12 @@ type AttemptRecordViewV2 =
 
 ### 受限题目内容、稳定 ID 与兼容列
 
+**2026-10-23内容版本增量**：下文“文本节点不允许marks”和深度4等限制继续精确定义schema2，不能宽松解释。schema3使用独立白名单：段落、h1—h4、引用、列表、代码块、水平线、有限表格、受控图片，以及有限marks/字体/字号/颜色/对齐/缩进/行高；每字段最多2,000节点、100,000字符、16层，表格网格/跨度必须合法。作者链接和控件只静态投影可见文本，学员内容仍禁止URL、HTML、CSS字符串、事件、答案标记及管理元数据。mobile使用uni节点只读递归渲染，不安装Tiptap或执行作者控件。
+
+开考、恢复、提交、结果、错题请求支持`X-Question-Content-Version`，缺省/`2`保持schema2原响应，只有字符串`3`声明新显示能力；其题目增加`content_schema_version:2|3`。提交body不变，仍为稳定item/option ID整卷。内容需要3而客户端仅2时返回409/40901及`reason_code=CONTENT_VERSION_REQUIRED,required_content_version=3`；首次创建assignment/record/题单之前拒绝，在考提交拒绝也不写答案或评分。到期状态读取仍先纯timeout，不让升级提示阻止期限收口。前端收到升级提示保留当前attempt、答案、期限和最小本地草稿。
+
+022只追加版本作者原稿、试卷布局与owner/request唯一的提交回执，不回填旧原稿、不改旧内容/快照/答案/成绩。作者原稿、答案与幂等回执仅供管理端；既有表单修订在同事务内同步schema3与原稿，无法无损转换整次拒绝。当前新写/审核/新发布只接受easy/hard，历史medium/unknown继续读取和统计。具体验证与未验边界见[本次验收记录](main-question-designers-acceptance-2026-10-23.md)，不据文档同步宣称浏览器、微信或真机已验。
+
 `ReadonlyTiptapDoc` 首版只接受递归白名单：根节点 `doc`；块节点 `paragraph` 或受控 `image`；段落内只允许 `text`、`hardBreak`、受控 `image`。每个对象只允许该节点声明的字段，文本节点不允许 marks，图片 attrs 只允许十进制字符串 `asset_id`。禁止任意 `src`、HTML、链接、样式、事件属性、答案标记和管理元数据。单文档最多 2,000 个节点、文本合计最多 100,000 字符、最大深度 4；未知、超限或畸形内容整题拒绝，不做宽松透传。
 
 在考投影必须从冻结快照递归重建，只输出 `item_id/type/score/stem/options[{id,content}]`。任何层级都不得出现 `checked/correct/answer/correct_answer/analysis/rubric/source/difficulty/draft_revision/answers`；错误响应也不得带冻结答案或原始管理 JSON。

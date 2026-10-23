@@ -8,6 +8,7 @@ import { LearnerIdentity } from '../src/entities/learner-identity.entity';
 import { AnswerDraftService } from '../src/modules/exams/answer-draft.service';
 import { AttemptReaderService } from '../src/modules/exams/attempt-reader.service';
 import { DraftInputDto } from '../src/modules/exams/attempt.dto';
+import richFixture from '../../tests/fixtures/question-authoring-v3/rich-content.json';
 
 function draftFixture(overrides: Record<string, unknown> = {}) {
   const record: any = {
@@ -151,6 +152,25 @@ describe('AnswerDraftService persistent objective drafts', () => {
 });
 
 describe('AttemptReaderService persistent recovery', () => {
+  it('authorizes schema 3 table images only for the exact owned item and withholds analysis until finalized', async () => {
+    const f = draftFixture();
+    const { schema, ...contentJson } = structuredClone(richFixture);
+    Object.assign(f.items[0].snapshotJson, { contentSchemaVersion: schema, contentJson });
+    const reader = new AttemptReaderService(f.recordRepo, f.itemRepo, f.answerRepo, f.media,
+      { getRepository: f.manager.getRepository, manager: f.manager } as any, f.access);
+    reader.onModuleInit();
+    const policy = f.media.registerOwnerPolicy.mock.calls[0][1];
+    await expect(policy.authorizeTicket('9', '501', '43')).resolves.toBe(true);
+    await expect(policy.authorizeTicket('10', '501', '43')).resolves.toBe(false);
+    await expect(policy.authorizeTicket('9', '502', '43')).resolves.toBe(false);
+    await expect(policy.authorizeTicket('9', '501', '44')).resolves.toBe(false);
+    f.record.status = 'failed';
+    f.record.submittedAt = new Date();
+    f.record.gradingState = 'finalized';
+    await expect(policy.authorizeTicket('9', '501', '44')).resolves.toBe(true);
+    await expect(policy.validateBinding(f.manager, { id: '44' }, '501')).resolves.toBeUndefined();
+  });
+
   it('returns only the active readonly snapshot without old server draft state', async () => {
     const fixture = draftFixture({ draftRevision: 4 });
     fixture.answers.push({

@@ -8,11 +8,11 @@ import { ExamRecord } from '../../entities/exam-record.entity';
 import { ExamRecordQuestion } from '../../entities/exam-record-question.entity';
 import { MediaService } from '../media/media.service';
 import { AccessService } from '../access/access.service';
-import { controlledQuestionMediaIds } from '../questions/question-validator';
 import type { PublishedQuestionSnapshot } from './paper-release.service';
-import { contentMediaIds, questionContent } from '../questions/question-content';
+import { collectContentAssetIds, parseQuestionContent, projectStudentContent } from '../questions/question-content-dispatch';
 import { assertExamIdentity, expireExamRecord, isScoredLegacyTimeout } from './exam-state';
 import { SysUser } from '../../entities/sys-user.entity';
+import { assertContentCapability, requiredContentCapability } from './question-content-capability';
 
 export type GradingSnapshotItem = PublishedQuestionSnapshot & {
   itemId: Id;
@@ -33,25 +33,37 @@ function deepClone<T>(value: T): T {
 }
 
 export function promptMediaIds(snapshot: PublishedQuestionSnapshot): string[] {
-  const content = questionContent(snapshot);
-  return contentMediaIds([content.stem, ...content.options.map((option) => option.content)]);
+  const content = parseQuestionContent(snapshot);
+  return collectContentAssetIds({ ...content, analysis: null });
 }
 
 export function resultMediaIds(snapshot: PublishedQuestionSnapshot): string[] {
-  return contentMediaIds([questionContent(snapshot).analysis]);
+  const content = parseQuestionContent(snapshot);
+  if (!content.analysis) return [];
+  const analysisIds = new Set<string>();
+  const visit = (node: { type: string; attrs?: unknown; content?: readonly any[] }) => {
+    if (node.type === 'image') analysisIds.add((node.attrs as { asset_id: string }).asset_id);
+    node.content?.forEach(visit);
+  };
+  visit(content.analysis);
+  const assets = new Set(collectContentAssetIds(content));
+  return [...analysisIds].filter((id) => assets.has(id));
 }
 
 /** Public in-progress view. Standard answers and analysis never cross this boundary. */
-export function attemptQuestionView(row: AttemptQuestionRow): AttemptQuestion {
+export function attemptQuestionView(row: AttemptQuestionRow, contentVersion: 2 | 3 = 2): AttemptQuestion<2 | 3> {
   const snapshot = row.snapshotJson;
   const mapping = row.displayToOriginal;
-  const content = questionContent(snapshot);
+  const content = parseQuestionContent(snapshot);
+  assertContentCapability(content.schema, contentVersion);
+  const visible = projectStudentContent(content);
   if (mapping.length !== content.options.length || new Set(mapping).size !== mapping.length || mapping.some((index) => !Number.isInteger(index) || index < 0 || index >= content.options.length)) throw Errors.param('冻结选项显示映射非法');
   return {
+    ...(contentVersion === 3 ? { content_schema_version: content.schema } : {}),
     item_id: String(row.id),
     type: snapshot.type,
-    stem: content.stem,
-    options: mapping.map((originalIndex) => content.options[originalIndex]),
+    stem: visible.stem,
+    options: mapping.map((originalIndex) => visible.options[originalIndex]),
     score: Number(row.scoreCents) / 100,
   };
 }
@@ -147,7 +159,9 @@ export class AttemptReaderService implements OnModuleInit {
     return answers.sort((left, right) => BigInt(left.item_id) < BigInt(right.item_id) ? -1 : 1);
   }
 
-  async forStudent(userId: Id, recordId: Id): Promise<AttemptView> {
+  forStudent(userId: Id, recordId: Id, contentVersion?: 2): Promise<AttemptView>;
+  forStudent(userId: Id, recordId: Id, contentVersion: 2 | 3): Promise<AttemptView<2 | 3>>;
+  async forStudent(userId: Id, recordId: Id, contentVersion: 2 | 3 = 2): Promise<AttemptView<2 | 3>> {
     return this.dataSource.transaction('REPEATABLE READ', async (manager) => {
       let record = await manager.getRepository(ExamRecord).findOne({ where: { id: String(recordId) }, lock: { mode: 'pessimistic_write' } });
       if (!record) throw Errors.notFound('考试记录不存在');
@@ -163,9 +177,10 @@ export class AttemptReaderService implements OnModuleInit {
         where: { recordId: String(record.id) }, order: { position: 'ASC', id: 'ASC' },
       });
       if (!items.length) throw Errors.notFound('本次个人题单不存在');
+      assertContentCapability(requiredContentCapability(items.map((item) => item.snapshotJson)), contentVersion);
       return {
         ...base,
-        questions: items.map(attemptQuestionView),
+        questions: items.map((item) => attemptQuestionView(item, contentVersion)),
       };
     });
   }

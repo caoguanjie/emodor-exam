@@ -8,7 +8,8 @@
       </el-form-item>
       <el-form-item label="难度" required>
         <el-select v-model="local.difficulty" style="width:100%" :disabled="disabled">
-          <el-option label="初级" value="easy" /><el-option label="中级" value="medium" /><el-option label="高级" value="hard" />
+          <el-option v-if="historicalDifficulty" :label="historicalDifficulty" :value="local.difficulty" disabled />
+          <el-option v-for="item in difficultyOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </el-form-item>
       <el-form-item label="题型" required>
@@ -78,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import MediaUpload from './MediaUpload.vue';
 import { newQuestionOptionId, questionDraftFromView, type Id, type QuestionDraftPayload, type QuestionOption, type QuestionType } from '../api/training-types';
 
@@ -91,7 +92,8 @@ const props = withDefaults(defineProps<{
   disabled?: boolean;
   canUploadMedia?: boolean;
   conceptLoading?: boolean;
-}>(), { categories: () => [], concepts: () => [], disabled: false, canUploadMedia: false, conceptLoading: false });
+  difficultyOptions?: Array<{ value: string; label: string }>;
+}>(), { categories: () => [], concepts: () => [], disabled: false, canUploadMedia: false, conceptLoading: false, difficultyOptions: () => [] });
 const emit = defineEmits<{
   (event: 'update:modelValue', value: QuestionDraftPayload): void;
   (event: 'scope-change', value: { category_id: Id; type: QuestionType }): void;
@@ -101,8 +103,11 @@ const emit = defineEmits<{
 const local = reactive<QuestionDraftPayload>(clone(props.modelValue));
 const pendingMediaId = ref<string | null>(null);
 let syncing = false;
+const historicalDifficulty = computed(() => local.difficulty && !props.difficultyOptions.some((item) => item.value === local.difficulty)
+  ? `${({ easy: '简单', medium: '中级', hard: '困难' } as Record<string, string>)[local.difficulty] || local.difficulty}（历史，当前停用）` : '');
 
 function clone(value: QuestionDraftPayload): QuestionDraftPayload {
+  if (value.content_schema_version === 3) return JSON.parse(JSON.stringify(value));
   const draft = value.content_schema_version === 2 ? questionDraftFromView(value) : value;
   // HTML fields are the active form state; saving explicitly rebuilds v2 JSON.
   const { content_schema_version: _schema, content_json: _content, ...editable } = draft;

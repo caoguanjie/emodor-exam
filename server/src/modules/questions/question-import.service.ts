@@ -5,6 +5,7 @@ import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { AppConfig } from '../../config/configuration';
 import { AuditService } from '../../common/audit.service';
 import { BizError, Errors } from '../../common/errors';
+import { assertActiveDifficulty } from '../../common/question-difficulty';
 import type { Difficulty, Id, ImportPreview, ImportResult, QuestionOption, QuestionType } from '../../common/training-contracts';
 import { ImportBatch } from '../../entities/import-batch.entity';
 import { Question } from '../../entities/question.entity';
@@ -58,7 +59,6 @@ interface CandidateRow extends NormalizedQuestionImportRow {
 }
 
 const TYPES = new Set<QuestionType>(['single', 'multiple', 'judgment']);
-const DIFFICULTIES = new Set<Difficulty>(['easy', 'medium', 'hard']);
 const RAW_KEYS = new Set([
   'row', 'format_errors', 'category', 'type', 'difficulty', 'concept', 'stem',
   'options', 'answer', 'analysis', 'score',
@@ -182,9 +182,7 @@ export class QuestionImportService implements OnModuleInit {
     if (defaults.categoryId !== undefined && !/^[1-9]\d*$/.test(String(defaults.categoryId))) {
       throw Errors.param('defaults.category_id 非法');
     }
-    if (defaults.difficulty !== undefined && !DIFFICULTIES.has(defaults.difficulty)) {
-      throw Errors.param('defaults.difficulty 非法');
-    }
+    if (defaults.difficulty !== undefined) assertActiveDifficulty(defaults.difficulty);
     const rows = await parseQuestionImportFile(file, format, {
       maxBytes: this.config.upload.maxImportSizeMb * 1024 * 1024,
       maxRows: this.config.upload.maxImportRows,
@@ -270,7 +268,7 @@ export class QuestionImportService implements OnModuleInit {
   ): Promise<CandidateRow> {
     if (row.format_errors?.length) throw Errors.param(row.format_errors.join('；'));
     if (!TYPES.has(row.type as QuestionType)) throw Errors.param('题型 type 必须是 single / multiple / judgment');
-    if (!DIFFICULTIES.has(row.difficulty as Difficulty)) throw Errors.param('difficulty 必须是 easy / medium / hard');
+    assertActiveDifficulty(row.difficulty);
     if (row.stem.length > 100_000 || row.analysis.length > 100_000) {
       throw Errors.param('stem / analysis 单元格不得超过 100000 字符');
     }

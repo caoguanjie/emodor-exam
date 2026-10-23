@@ -31,6 +31,13 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       }
       return;
     }
+    if (exception && typeof exception === 'object'
+      && (('status' in exception && exception.status === 413)
+        || ('statusCode' in exception && exception.statusCode === 413)
+        || ('type' in exception && exception.type === 'entity.too.large'))) {
+      res.status(413).json({ code: 41301, message: '请求体超过大小上限', data: null });
+      return;
+    }
     if (exception instanceof BizError) {
       res.status(exception.httpStatus).json({
         code: exception.code,

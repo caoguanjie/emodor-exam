@@ -5,6 +5,9 @@ import { ElMessageBox } from 'element-plus';
 export interface UnsavedChangesOptions {
   /** Restore the last persisted baseline. The callback owns resetting dirty. */
   onDiscard?: () => void | Promise<void>;
+  /** Some pending writes cannot safely be abandoned until their receipt is known. */
+  canDiscard?: () => boolean;
+  onBlocked?: () => void;
   /** A moving route key is useful for shell-level sources such as the profile dialog. */
   routeKey?: Ref<string>;
 }
@@ -13,6 +16,8 @@ interface DirtySource {
   token: symbol;
   dirty: Ref<boolean>;
   onDiscard?: () => void | Promise<void>;
+  canDiscard?: () => boolean;
+  onBlocked?: () => void;
   approvedThisTurn: boolean;
 }
 
@@ -50,10 +55,21 @@ function routeSources(routeKeys: string[]): DirtySource[] {
   return [...result.values()];
 }
 
-async function confirmSources(sources: DirtySource[]): Promise<boolean> {
+async function confirmSources(sources: DirtySource[], isCurrent?: () => boolean): Promise<boolean> {
+  if (isCurrent && !isCurrent()) return false;
+  const blocked = () => {
+    const protectedSources = sources.filter((source) => source.dirty.value && source.canDiscard?.() === false);
+    for (const source of protectedSources) source.onBlocked?.();
+    return protectedSources.length > 0;
+  };
+  if (blocked()) return false;
   const dirtySources = sources.filter((source) => source.dirty.value && !source.approvedThisTurn);
   if (!dirtySources.length) return true;
   if (!await requestDiscard()) return false;
+  // A local async action may now belong to another route or draft. Do not
+  // approve it or run its baseline-restoring callback after it has expired.
+  if (isCurrent && !isCurrent()) return false;
+  if (blocked()) return false;
 
   for (const source of dirtySources) source.approvedThisTurn = true;
   setTimeout(() => {
@@ -84,6 +100,8 @@ export function useUnsavedChanges(dirty: Ref<boolean>, options: UnsavedChangesOp
     token: Symbol('unsaved-source'),
     dirty,
     onDiscard: options.onDiscard,
+    canDiscard: options.canDiscard,
+    onBlocked: options.onBlocked,
     approvedThisTurn: false,
   };
   let registeredRouteKey = options.routeKey?.value || route.fullPath;
@@ -119,6 +137,6 @@ export function useUnsavedChanges(dirty: Ref<boolean>, options: UnsavedChangesOp
   return {
     markClean: () => { dirty.value = false; },
     /** Local dialog cancellation confirms only this caller, not sibling dirty forms. */
-    confirmDiscard: () => confirmSources([source]),
+    confirmDiscard: (isCurrent?: () => boolean) => confirmSources([source], isCurrent),
   };
 }

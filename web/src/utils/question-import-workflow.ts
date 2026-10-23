@@ -219,6 +219,7 @@ export function useQuestionImportWorkflow(options: QuestionImportWorkflowOptions
 
 interface AiQuestionImportWorkflowOptions extends QuestionImportWorkflowOptions {
   readTask: (taskId: string) => Promise<unknown>;
+  enabledDifficulties: () => readonly string[];
 }
 
 function isAiTask(value: unknown): value is AiQuestionImportTask {
@@ -232,12 +233,12 @@ function isAiTask(value: unknown): value is AiQuestionImportTask {
     && (task.batch_id === undefined || (typeof task.batch_id === 'string' && /^\d+$/.test(task.batch_id)));
 }
 
-function isAiPreview(value: unknown): value is AiQuestionImportPreview {
+function isAiPreview(value: unknown, enabledDifficulties: readonly string[]): value is AiQuestionImportPreview {
   if (!isImportPreview(value)) return false;
   const rows = (value as AiQuestionImportPreview).rows;
   return Array.isArray(rows) && rows.every((row) => (
     Number.isInteger(row.row_number) && row.row_number > 0
-    && ['easy', 'hard'].includes(row.difficulty)
+    && enabledDifficulties.includes(row.difficulty)
     && ['single', 'multiple', 'judgment'].includes(row.type)
     && typeof row.category === 'string' && typeof row.concept === 'string'
     && typeof row.stem === 'string' && typeof row.analysis === 'string' && typeof row.score === 'string'
@@ -255,7 +256,7 @@ export function useAiQuestionImportWorkflow(options: AiQuestionImportWorkflowOpt
   const rowBusy = ref(false);
   const pollPaused = ref(false);
   const selectedRows = ref<number[]>([]);
-  const difficulty = ref<'all' | 'easy' | 'hard'>('all');
+  const difficulty = ref<string>('all');
   let active = true;
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -263,7 +264,7 @@ export function useAiQuestionImportWorkflow(options: AiQuestionImportWorkflowOpt
     ...options,
     readBatch: async (id) => {
       const response = await options.readBatch(id);
-      if (!isImportResult(response) && !isAiPreview(response)) throw new Error('invalid AI batch');
+      if (!isImportResult(response) && !isAiPreview(response, options.enabledDifficulties())) throw new Error('invalid AI batch');
       return response;
     },
   });
@@ -285,7 +286,7 @@ export function useAiQuestionImportWorkflow(options: AiQuestionImportWorkflowOpt
   function current(token: number) { return active && token === generation; }
 
   function selectable(row: AiQuestionImportRow) {
-    return !!preview.value?.valid_rows.includes(row.row_number)
+    return options.enabledDifficulties().includes(row.difficulty) && !!preview.value?.valid_rows.includes(row.row_number)
       && !preview.value.duplicates.includes(row.row_number) && row.errors.length === 0;
   }
 
@@ -324,7 +325,7 @@ export function useAiQuestionImportWorkflow(options: AiQuestionImportWorkflowOpt
       }
       await base.loadPreview(async () => {
         const batch = await options.readBatch(response.batch_id!);
-        if (!isAiPreview(batch) || batch.batch_id !== response.batch_id) throw new Error('invalid AI preview');
+        if (!isAiPreview(batch, options.enabledDifficulties()) || batch.batch_id !== response.batch_id) throw new Error('invalid AI preview');
         return batch;
       });
       if (current(token)) selectValidRows();
@@ -372,7 +373,7 @@ export function useAiQuestionImportWorkflow(options: AiQuestionImportWorkflowOpt
     try {
       const response = await request();
       if (!current(token) || preview.value?.batch_id !== id) return false;
-      if (!isAiPreview(response) || response.batch_id !== id) {
+      if (!isAiPreview(response, options.enabledDifficulties()) || response.batch_id !== id) {
         base.commitUnknown.value = true;
         options.onWarning('生成题响应无法验证，请重新查询批次');
         return false;
@@ -391,7 +392,8 @@ export function useAiQuestionImportWorkflow(options: AiQuestionImportWorkflowOpt
   }
 
   async function commitImport() {
-    if (rowBusy.value || !preview.value) return;
+    if (rowBusy.value || !preview.value || !options.enabledDifficulties().length
+      || !isAiPreview(preview.value, options.enabledDifficulties())) return;
     selectValidRows(true);
     await base.commitImport([...selectedRows.value]);
   }

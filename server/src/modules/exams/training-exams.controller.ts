@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, Max, Min } from 'class-validator';
 import { AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -9,6 +9,7 @@ import { AttemptService } from './attempt.service';
 import { SubmissionService } from './submission.service';
 import { ExamHistoryService } from './exam-history.service';
 import { HistoryPageDto } from './grading.dto';
+import { readContentCapability } from './question-content-capability';
 
 class AttemptPageDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1)
@@ -40,9 +41,9 @@ export class TrainingExamsController {
   }
 
   @Post('exams/:id/start')
-  start(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  start(@Param('id') id: string, @CurrentUser() user: AuthUser, @Headers('x-question-content-version') header?: unknown) {
     mobileLearner(user);
-    return this.attempts.start(String(user.id), decimalId(id), true);
+    return this.attempts.start(String(user.id), decimalId(id), true, readContentCapability(header));
   }
 
   @Get('exam-records')
@@ -56,19 +57,20 @@ export class TrainingExamsController {
   }
 
   @Get('wrong-questions')
-  wrongQuestions(@CurrentUser() user: AuthUser, @Query(new DtoValidationPipe()) query: HistoryPageDto) {
+  wrongQuestions(@CurrentUser() user: AuthUser, @Query(new DtoValidationPipe()) query: HistoryPageDto, @Headers('x-question-content-version') header?: unknown) {
     mobileLearner(user);
     return this.history.wrongItems(
       String(user.id),
       query.page || 1,
       query.page_size || TRAINING_DEFAULTS.pageSize,
+      readContentCapability(header),
     );
   }
 
   @Get('exam-records/:id')
-  recover(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  recover(@Param('id') id: string, @CurrentUser() user: AuthUser, @Headers('x-question-content-version') header?: unknown) {
     mobileLearner(user);
-    return this.attempts.recover(String(user.id), decimalId(id), true);
+    return this.attempts.recover(String(user.id), decimalId(id), true, readContentCapability(header));
   }
 
   @Post('exam-records/:id/submit')
@@ -76,14 +78,15 @@ export class TrainingExamsController {
     @Param('id') id: string,
     @Body() dto: unknown,
     @CurrentUser() user: AuthUser,
+    @Headers('x-question-content-version') header?: unknown,
   ) {
     mobileLearner(user);
-    return this.submissions.submit(String(user.id), decimalId(id), dto);
+    return this.submissions.submit(String(user.id), decimalId(id), dto, readContentCapability(header));
   }
 
   @Get('exam-records/:id/result')
-  result(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  result(@Param('id') id: string, @CurrentUser() user: AuthUser, @Headers('x-question-content-version') header?: unknown) {
     mobileLearner(user);
-    return this.history.result(String(user.id), decimalId(id));
+    return this.history.result(String(user.id), decimalId(id), readContentCapability(header));
   }
 }

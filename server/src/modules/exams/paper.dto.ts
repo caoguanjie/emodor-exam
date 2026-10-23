@@ -1,12 +1,85 @@
 import { Transform, Type } from 'class-transformer';
+import type { ArgumentMetadata } from '@nestjs/common';
 import {
   ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional,
-  IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested,
+  IsString, Matches, Max, MaxLength, Min, MinLength, Validate, ValidateIf, ValidateNested,
+  ValidatorConstraint, ValidatorConstraintInterface,
 } from 'class-validator';
 import type { Difficulty, QuestionType } from '../../common/training-contracts';
+import type { DesignerLayoutV1 } from '../../common/question-authoring';
+import { Errors } from '../../common/errors';
+import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 
 const ID_PATTERN = /^[1-9]\d*$/;
 const QueryNumber = () => Transform(({ value }) => value === undefined || value === null || value === '' ? undefined : Number(value));
+
+function layoutObject(value: unknown, path: string, keys: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw Errors.param(`${path} 必须是对象`);
+  const actual = Object.keys(value);
+  if (actual.length !== keys.length || actual.some((key) => !keys.includes(key))) {
+    throw Errors.param(`${path} 字段不完整或包含不支持的字段`);
+  }
+  return value as Record<string, unknown>;
+}
+
+/** Rebuild a whitelisted layout; never persist arbitrary designer JSON. */
+export function parseDesignerLayout(input: unknown): DesignerLayoutV1 {
+  const layout = layoutObject(input, 'designer_layout', ['schema_version', 'settings']);
+  if (layout.schema_version !== 1) throw Errors.param('designer_layout.schema_version 仅支持 1');
+  const settings = layoutObject(layout.settings, 'designer_layout.settings', ['templateName', 'pageSize', 'pageOrientation', 'pageSizeReduce']);
+  if (typeof settings.templateName !== 'string' || !settings.templateName.trim()
+    || Array.from(settings.templateName).length > 128) {
+    throw Errors.param('designer_layout.settings.templateName 必须为 1–128 字符');
+  }
+  if (settings.pageSize !== 'A4' && settings.pageSize !== 'A5') throw Errors.param('designer_layout.settings.pageSize 仅支持 A4/A5');
+  if (settings.pageOrientation !== 1 && settings.pageOrientation !== 2) throw Errors.param('designer_layout.settings.pageOrientation 仅支持 1/2');
+  const margins = layoutObject(settings.pageSizeReduce, 'designer_layout.settings.pageSizeReduce', ['top', 'bottom', 'left', 'right']);
+  for (const [side, value] of Object.entries(margins)) {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 99) {
+      throw Errors.param(`designer_layout.settings.pageSizeReduce.${side} 必须为 0–99 整数毫米`);
+    }
+  }
+  return {
+    schema_version: 1,
+    settings: {
+      templateName: settings.templateName,
+      pageSize: settings.pageSize,
+      pageOrientation: settings.pageOrientation,
+      pageSizeReduce: { top: margins.top as number, bottom: margins.bottom as number, left: margins.left as number, right: margins.right as number },
+    },
+  };
+}
+
+/** Read-time fallback only: old rows stay NULL until an explicit layout save. */
+export function defaultDesignerLayout(title: string): DesignerLayoutV1 {
+  return {
+    schema_version: 1,
+    settings: { templateName: title, pageSize: 'A4', pageOrientation: 1, pageSizeReduce: { top: 15, bottom: 15, left: 15, right: 15 } },
+  };
+}
+
+/** Validate raw JSON before class-transformer can strip prototype-shaped keys. */
+export class TrainingPaperDtoValidationPipe extends StrictDtoValidationPipe {
+  async transform(value: any, metadata: ArgumentMetadata) {
+    if (value && typeof value === 'object' && !Array.isArray(value)
+      && Object.prototype.hasOwnProperty.call(value, 'designer_layout')) {
+      parseDesignerLayout(value.designer_layout);
+    }
+    return super.transform(value, metadata);
+  }
+}
+
+@ValidatorConstraint({ name: 'designerLayout', async: false })
+class DesignerLayoutValidator implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    try { parseDesignerLayout(value); return true; }
+    catch { return false; }
+  }
+
+  defaultMessage(): string {
+    return 'designer_layout 必须为 schema_version=1 的完整受控布局，不允许未知字段';
+  }
+}
 
 export class PaperRuleDto {
   @IsIn(['single', 'multiple', 'judgment']) type!: QuestionType;
@@ -26,6 +99,7 @@ export class CreateTrainingPaperDto {
   @IsOptional() @IsInt() @Min(1) @Max(100) max_attempts?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(1) partial_credit_ratio?: number;
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => PaperRuleDto) rules?: PaperRuleDto[];
+  @ValidateIf((_object, value) => value !== undefined) @Validate(DesignerLayoutValidator) designer_layout?: DesignerLayoutV1;
 }
 
 export class UpdateTrainingPaperDto {
@@ -40,6 +114,7 @@ export class UpdateTrainingPaperDto {
   @IsOptional() @IsInt() @Min(1) @Max(100) max_attempts?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(1) partial_credit_ratio?: number;
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => PaperRuleDto) rules?: PaperRuleDto[];
+  @ValidateIf((_object, value) => value !== undefined) @Validate(DesignerLayoutValidator) designer_layout?: DesignerLayoutV1;
 }
 
 export class FixedQuestionDto {
@@ -80,7 +155,7 @@ export class PaperPreviewQueryDto {
 
 export const PAPER_CREATE_KEYS = [
   'title', 'mode', 'category_id', 'regulation_ids', 'course_ids', 'requires_learning',
-  'pass_score', 'duration_minutes', 'max_attempts', 'partial_credit_ratio', 'rules',
+  'pass_score', 'duration_minutes', 'max_attempts', 'partial_credit_ratio', 'rules', 'designer_layout',
 ] as const;
 export const PAPER_UPDATE_KEYS = PAPER_CREATE_KEYS;
 export const PAPER_LIST_KEYS = ['page', 'page_size', 'keyword', 'category_id', 'mode', 'status'] as const;

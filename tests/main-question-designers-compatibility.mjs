@@ -1,0 +1,116 @@
+import { randomUUID } from 'node:crypto';
+import { api, assertions, authoringBundle, CONTENT_V3, fixedPaper, prepare, writeFacts } from './main-question-designers.mjs';
+import { examLearner } from './support/exam-mobile-fixtures.mjs';
+import { assertPureTimeout, assertTimeoutFacts } from './support/exam-mobile-fixtures.mjs';
+import { flowLogin } from './training-full-flow.mjs';
+import { randomStrongPassword } from './training-access.mjs';
+
+const plainDraft = (categoryId) => ({ category_id: categoryId, difficulty: 'easy', type: 'single', stem: '<p>旧表单题干</p>', options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }], answer: [0], analysis: '<p>旧解析</p>', score: 100 });
+
+export async function run(ctx) {
+  const { check, count } = assertions(); let stage = 'setup';
+  try {
+    const { admin, categoryId } = await prepare(ctx, 'main设计器兼容');
+    stage = 'unauthorized authoring does not write';
+    const learner = await examLearner(ctx, { categoryId });
+    const request = { request_id: randomUUID(), bundle: await authoringBundle(categoryId) };
+    const beforeDenied = await writeFacts(ctx);
+    check.equal((await ctx.request(null, 'POST', '/admin/question-documents/commit', request)).status, 401);
+    check.equal((await ctx.request(learner, 'POST', '/admin/question-documents/commit', request)).status, 403);
+    check.equal((await ctx.request(learner, 'GET', '/admin/questions/authoring-options')).status, 403);
+    check.deepEqual(await writeFacts(ctx), beforeDenied);
+    stage = 'malicious nodes/source and transaction failure leave zero partial writes';
+    const malicious = structuredClone(request);
+    malicious.bundle.document.content.content[0].content[0].content[0].content[0].marks = [{ type: 'link', attrs: { href: 'javascript:alert(1)' } }];
+    check.equal((await ctx.request(admin.actor, 'POST', '/admin/question-documents/commit', malicious)).status, 400);
+    const spoofed = structuredClone(request); spoofed.bundle.document.questions.question_fixture_00001.source = 'ai';
+    check.equal((await ctx.request(admin.actor, 'POST', '/admin/question-documents/commit', spoofed)).status, 400);
+    const rolledBack = structuredClone(request);
+    const second = structuredClone(rolledBack.bundle.document.content.content[0]); second.attrs.client_id = 'second_question';
+    rolledBack.bundle.document.content.content.push(second);
+    rolledBack.bundle.document.questions.second_question = { ...rolledBack.bundle.document.questions.question_fixture_00001, category_id: '999999999' };
+    rolledBack.bundle.option_ids.second_question = { editor_option_00000001: 'A', editor_option_00000002: 'B' };
+    const failure = await ctx.request(admin.actor, 'POST', '/admin/question-documents/commit', rolledBack);
+    check.equal(failure.status, 409, JSON.stringify(failure));
+    check.deepEqual(await writeFacts(ctx), beforeDenied);
+    check.equal((await ctx.request(admin.actor, 'GET', `/admin/question-documents/commits/${request.request_id}`)).status, 404);
+    stage = 'same request different content is rejected without duplication';
+    const first = await api(ctx, admin.actor, 'POST', '/admin/question-documents/commit', request);
+    const committedFacts = await writeFacts(ctx);
+    const different = structuredClone(request); different.bundle.document.questions.question_fixture_00001.score_cents = 9000;
+    const changedId = await ctx.request(admin.actor, 'POST', '/admin/question-documents/commit', different);
+    check.equal(changedId.status, 409);
+    check.deepEqual(await writeFacts(ctx), committedFacts);
+    const ownerName = `designer_owner_${request.request_id.slice(0, 8)}`;
+    const role = await api(ctx, admin.actor, 'POST', '/admin/roles', { code: ownerName, name: '其他原稿操作者', permissions: ['questions:read', 'questions:write'] });
+    const ownerPassword = randomStrongPassword(ownerName, '其他原稿操作者');
+    await api(ctx, admin.actor, 'POST', '/admin/administrators', { username: ownerName, password: ownerPassword, real_name: '其他原稿操作者', role_ids: [String(role.id)] });
+    const otherOwner = await flowLogin(ctx, ownerName, ownerPassword, '其他原稿操作者');
+    check.equal((await ctx.request(otherOwner.actor, 'GET', `/admin/question-documents/commits/${request.request_id}`)).status, 404, 'write permission does not grant another owner receipt access');
+    for (const permission of ['questions:read', 'questions:write']) {
+      const catalogName = `catalog_${permission.split(':')[1]}_${request.request_id.slice(0, 8)}`;
+      const catalogRole = await api(ctx, admin.actor, 'POST', '/admin/roles', { code: catalogName, name: catalogName, permissions: [permission] });
+      const catalogPassword = randomStrongPassword(catalogName);
+      await api(ctx, admin.actor, 'POST', '/admin/administrators', { username: catalogName, password: catalogPassword, real_name: catalogName, role_ids: [String(catalogRole.id)] });
+      const catalogActor = await flowLogin(ctx, catalogName, catalogPassword, catalogName);
+      const catalog = await api(ctx, catalogActor.actor, 'GET', '/admin/questions/authoring-options');
+      check.deepEqual(catalog.difficulties.filter((option) => option.enabled).map((option) => option.code), ['easy', 'hard'], `${permission}-only actor can read non-sensitive authoring options`);
+    }
+    stage = 'existing form rejects lossy edits with zero revisions';
+    const item = first.items[0];
+    const lossy = await ctx.request(admin.actor, 'PUT', `/ai/questions/${item.question_id}`, { expected_version_id: item.saved_version_id, stem: '<p>打平整个复杂题干</p>' });
+    check.equal(lossy.status, 400);
+    check.deepEqual(await writeFacts(ctx), committedFacts);
+    stage = 'ordinary form schema3 create and schema2 compatibility';
+    const rich = await api(ctx, admin.actor, 'GET', `/ai/questions/${item.question_id}`);
+    const formCreated = await api(ctx, admin.actor, 'POST', '/ai/questions', { category_id: categoryId, difficulty: 'hard', type: 'single', score: 100, content_schema_version: 3, content_json: rich.content_json });
+    check.equal(formCreated.content_schema_version, 3);
+    const formBundle = await api(ctx, admin.actor, 'POST', '/admin/question-documents/assemble', { version_ids: [formCreated.saved_version_id] });
+    check.ok(JSON.stringify(formBundle.document.content).includes('表格事实'));
+    check.deepEqual(Object.values(formBundle.option_ids)[0], { A: 'A', B: 'B' });
+    const legacy = await api(ctx, admin.actor, 'POST', '/ai/questions', plainDraft(categoryId));
+    check.equal(legacy.content_schema_version, 2);
+    check.deepEqual(legacy.content_json.answer_option_ids, ['A']);
+    const illegalV2 = { ...plainDraft(categoryId), content_schema_version: 2, content_json: rich.content_json };
+    check.equal((await ctx.request(admin.actor, 'POST', '/ai/questions', illegalV2)).status, 400);
+    check.equal((await ctx.request(admin.actor, 'POST', '/ai/questions', { ...plainDraft(categoryId), difficulty: 'medium' })).status, 400);
+    stage = 'schema2 and historical medium release remain readable by old client';
+    const { paperId, releaseId } = await fixedPaper(ctx, admin.actor, categoryId, legacy.saved_version_id, '历史medium冻结卷');
+    // Build historical facts only inside the owned fixture database. The API
+    // never writes a new medium question or publishes a new medium release.
+    await ctx.queryTestDb("UPDATE question SET difficulty='medium' WHERE id=?", [legacy.question_id]);
+    await ctx.queryTestDb("UPDATE question_version SET difficulty='medium' WHERE id=?", [legacy.saved_version_id]);
+    const [releaseRow] = await ctx.queryTestDb('SELECT id,snapshot_json FROM paper_release_question WHERE release_id=?', [releaseId]);
+    const snapshot = typeof releaseRow.snapshot_json === 'string' ? JSON.parse(releaseRow.snapshot_json) : releaseRow.snapshot_json;
+    snapshot.difficulty = 'medium';
+    await ctx.queryTestDb("UPDATE paper_release_question SET difficulty='medium',snapshot_json=? WHERE id=?", [JSON.stringify(snapshot), releaseRow.id]);
+    const historical = await ctx.queryTestDb('SELECT q.difficulty,v.difficulty AS version_difficulty,prq.difficulty AS release_difficulty,prq.snapshot_json FROM question q JOIN question_version v ON v.id=q.current_version_id JOIN paper_release_question prq ON prq.question_version_id=v.id WHERE q.id=?', [legacy.question_id]);
+    const historicalQuestion = await api(ctx, admin.actor, 'GET', `/ai/questions/${legacy.question_id}`);
+    check.equal(historicalQuestion.difficulty, 'medium');
+    const attempt = await api(ctx, learner, 'POST', `/me/exams/${paperId}/start`);
+    check.equal(Object.hasOwn(attempt.questions[0], 'content_schema_version'), false);
+    check.deepEqual(attempt.questions[0].options.map((option) => option.id).sort(), ['A', 'B']);
+    const body = { record_id: attempt.record_id, answers: attempt.questions.map((question) => ({ item_id: question.item_id, option_ids: ['A'] })) };
+    const result = await api(ctx, learner, 'POST', `/me/exam-records/${attempt.record_id}/submit`, body);
+    check.equal(result.score, 100);
+    check.deepEqual(await api(ctx, learner, 'GET', `/me/exam-records/${attempt.record_id}/result`, undefined, CONTENT_V3), { ...result, items: result.items.map((entry) => ({ ...entry, content_schema_version: 2 })) });
+    check.deepEqual(await ctx.queryTestDb('SELECT q.difficulty,v.difficulty AS version_difficulty,prq.difficulty AS release_difficulty,prq.snapshot_json FROM question q JOIN question_version v ON v.id=q.current_version_id JOIN paper_release_question prq ON prq.question_version_id=v.id WHERE q.id=?', [legacy.question_id]), historical);
+    stage = 'schema3 old-client submit cannot write and expiry remains pure timeout';
+    const richPaper = await fixedPaper(ctx, admin.actor, categoryId, item.saved_version_id, '内容升级拒绝卷');
+    const active = await api(ctx, learner, 'POST', `/me/exams/${richPaper.paperId}/start`, undefined, CONTENT_V3);
+    const activeFacts = await writeFacts(ctx);
+    const deniedSubmit = await ctx.request(learner, 'POST', `/me/exam-records/${active.record_id}/submit`, { record_id: active.record_id, answers: active.questions.map((question) => ({ item_id: question.item_id, option_ids: ['A'] })) });
+    check.equal(deniedSubmit.status, 409);
+    check.equal(deniedSubmit.data.reason_code, 'CONTENT_VERSION_REQUIRED');
+    check.deepEqual(await writeFacts(ctx), activeFacts);
+    const foreign = await examLearner(ctx, { categoryId });
+    check.equal((await ctx.request(foreign, 'GET', `/me/exam-records/${active.record_id}`, undefined, CONTENT_V3)).status, 403);
+    await ctx.queryTestDb('UPDATE exam_record SET deadline_at=DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 SECOND) WHERE id=?', [active.record_id]);
+    const expired = await api(ctx, learner, 'GET', `/me/exam-records/${active.record_id}`);
+    check.equal(expired.status, 'timeout');
+    check.deepEqual(expired.questions, []);
+    assertPureTimeout(await api(ctx, learner, 'POST', `/me/exam-records/${active.record_id}/submit`, {}, CONTENT_V3));
+    await assertTimeoutFacts(ctx, active.record_id);
+    console.log(`[main-question-designers-compatibility] ${count()} assertions passed plus pure-timeout helpers: permissions/malicious/rollback/lossless/schema2/medium/upgrade`);
+  } catch (error) { error.message = `[main-question-designers-compatibility stage=${stage}] ${error.message}`; throw error; }
+}

@@ -47,4 +47,5 @@ export function renderableNodes(doc: unknown): RenderableNode[] {
     ? { type: 'paragraph', children: (node.content || []).map(inline) }
     : { type: 'image', assetId: node.attrs.asset_id })
 }
+export type ReadonlyContentDoc = ReadonlyTiptapDoc | import('./content-v3').ReadonlyRichDocV3
 export function textDoc(text: string): ReadonlyTiptapDoc { return { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] } }

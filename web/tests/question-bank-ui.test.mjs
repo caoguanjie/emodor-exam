@@ -566,6 +566,11 @@ function legacyRow(overrides = {}) {
 function setHttp() {
   context.http = async (method, url, body, config) => {
     context.calls.push({ method, url, body, config });
+    if (method === 'get' && url === '/admin/questions/authoring-options') return { difficulties: [
+      { code: 'easy', label: '简单', enabled: true, sort: 10 },
+      { code: 'medium', label: '中级', enabled: false, sort: 20 },
+      { code: 'hard', label: '困难', enabled: true, sort: 30 },
+    ] };
     if (method === 'get' && url.includes('category-')) return { items: [{ id: '7', name: '安全培训' }], total: 1, page: 1, page_size: 20 };
     if (method === 'get' && url === '/admin/question-materials') return { items: JSON.parse(JSON.stringify(context.materials)), total: context.materials.length, page: 1, page_size: 100 };
     if (method === 'get' && /^\/admin\/question-materials\/[^/]+$/.test(url)) return JSON.parse(JSON.stringify(context.materialDetail));
@@ -611,7 +616,7 @@ before(async () => {
     appType: 'custom',
     plugins: [plugin()],
   });
-  trainingTypes = await import('../src/api/training-types.ts');
+  trainingTypes = await vite.ssrLoadModule('/src/api/training-types.ts');
   QuestionPreview = await loadClientSfc('/src/components/QuestionPreview.vue', previewClientId);
   QuestionEditor = await loadClientSfc('/src/components/QuestionEditor.vue', editorClientId);
   Questions = await loadClientSfc('/src/views/admin/Questions.vue', questionsClientId);
@@ -1036,6 +1041,85 @@ test('requires an explicit difficulty for a legacy edit and sends expected_versi
   mounted.unmount();
 });
 
+test('a historic medium stays visible but cannot save until an enabled difficulty is selected', async () => {
+  context.row = legacyRow({ difficulty: 'medium' });
+  const mounted = mount(Questions);
+  try {
+    await waitFor(() => button(mounted.root, '修订'), 'question list');
+    await click(button(mounted.root, '修订'));
+    assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'medium');
+    assert.equal(button(mounted.root, '保存为待审核版本').props.disabled, true);
+    await button(mounted.root, '保存为待审核版本').props.onClick();
+    assert.equal(context.calls.some((call) => call.method === 'put'), false);
+    await click(button(mounted.root, 'choose-hard'));
+    assert.equal(button(mounted.root, '保存为待审核版本').props.disabled, false);
+  } finally { mounted.unmount(); }
+});
+
+test('write-only question authors load the shared difficulty catalog and save without reading question content', async () => {
+  context.permissions = new Set(['questions:write']);
+  const mounted = mount(Questions);
+  try {
+    await waitFor(() => button(mounted.root, '人工录题'), 'manual action');
+    await click(button(mounted.root, '人工录题'));
+    const state = mounted.instance.$.setupState;
+    state.editorForm.stem = '人工新题';
+    state.editorForm.options = [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }];
+    await button(mounted.root, '保存并确认可用').props.onClick();
+    assert.ok(context.calls.some((call) => call.method === 'get' && call.url === '/admin/questions/authoring-options'));
+    assert.ok(context.calls.some((call) => call.method === 'post' && call.url === '/ai/questions'));
+    assert.equal(context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), false);
+    assert.equal(context.calls.some((call) => call.method === 'get' && call.url === '/ai/question-concepts'), false);
+  } finally { mounted.unmount(); }
+});
+
+test('a failed difficulty catalog blocks manual writes and can be retried without losing the draft', async () => {
+  const normalHttp = context.http;
+  let reads = 0;
+  context.http = async (method, url, body, config) => {
+    if (url === '/admin/questions/authoring-options' && ++reads === 1) throw new Error('难度目录暂不可用');
+    return normalHttp(method, url, body, config);
+  };
+  const mounted = mount(Questions);
+  try {
+    await waitFor(() => button(mounted.root, '人工录题'), 'question list');
+    await click(button(mounted.root, '人工录题'));
+    mounted.instance.$.setupState.editorForm.stem = '待保存草稿';
+    await nextTick();
+    assert.equal(button(mounted.root, '保存并确认可用').props.disabled, true);
+    await button(mounted.root, '保存并确认可用').props.onClick();
+    assert.equal(context.calls.some((call) => call.method === 'post' && call.url === '/ai/questions'), false);
+    await click(button(mounted.root, '重试加载难度'));
+    assert.equal(mounted.instance.$.setupState.editorForm.stem, '待保存草稿');
+    assert.equal(button(mounted.root, '保存并确认可用').props.disabled, false);
+  } finally { mounted.unmount(); }
+});
+
+test('the existing form saves schema 3 answers with exact revision identity and refuses destructive rich rewrites', async () => {
+  const content = { stem: { type: 'doc', content: [{ type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: '富题干', marks: [{ type: 'bold' }] }] }] },
+    options: [{ id: 'A', content: tiptap('甲') }, { id: 'B', content: tiptap('乙') }], analysis: null, answer_option_ids: ['A'] };
+  context.row = legacyRow({ difficulty: 'easy', current_version_id: '101', content_schema_version: 3, content_json: content });
+  const mounted = mount(Questions);
+  try {
+    await waitFor(() => button(mounted.root, '修订'), 'question list');
+    await click(button(mounted.root, '修订'));
+    const state = mounted.instance.$.setupState;
+    state.editorForm.stem = '<p>无法定位的替换</p>';
+    await button(mounted.root, '保存为待审核版本').props.onClick();
+    assert.equal(context.calls.some((call) => call.method === 'put'), false);
+    assert.equal(state.editorForm.stem, '<p>无法定位的替换</p>');
+    assert.ok(context.messages.some((item) => item.type === 'warning' && item.message.includes('题干')));
+    state.editorForm.stem = '<h2><strong>富题干</strong></h2>';
+    state.editorForm.answer = [1];
+    await button(mounted.root, '保存为待审核版本').props.onClick();
+    const write = context.calls.find((call) => call.method === 'put');
+    assert.equal(write.body.content_schema_version, 3);
+    assert.equal(write.body.expected_version_id, '101');
+    assert.deepEqual(write.body.content_json, { ...content, answer_option_ids: ['B'] });
+    assert.equal(Object.hasOwn(write.body, 'source'), false);
+  } finally { mounted.unmount(); }
+});
+
 test('sends the exact decimal expected version for review and regenerate', async () => {
   context.row = legacyRow({ current_version_id: '900719925474099312345', revision: 3, difficulty: 'medium' });
   const mounted = mount(Questions);
@@ -1355,6 +1439,82 @@ async function switchImportTab(mounted, value) {
   await nextTick();
 }
 
+test('file import offers enabled server difficulties and retains the server labels', async () => {
+  const mounted = mount(QuestionImport);
+  try {
+    await waitFor(() => context.calls.some((call) => call.url === '/admin/questions/authoring-options'), 'difficulty catalog');
+    await nextTick();
+    const choices = walk(mounted.root, (node) => ['easy', 'medium', 'hard'].includes(node.props?.value) && node.props?.label)
+      .map((node) => [node.props.value, node.props.label]);
+    assert.deepEqual(choices, [['easy', '简单'], ['hard', '困难']]);
+  } finally { mounted.unmount(); }
+});
+
+test('a failed authoring catalog offers a retry and recovers enabled import choices', async () => {
+  const normalHttp = context.http;
+  let reads = 0;
+  context.http = async (method, url, body, config) => {
+    if (url === '/admin/questions/authoring-options' && ++reads === 1) throw new Error('难度目录暂不可用');
+    return normalHttp(method, url, body, config);
+  };
+  const mounted = mount(QuestionImport);
+  try {
+    await waitFor(() => walk(mounted.root, (node) => node.props?.title === '难度目录暂不可用').length > 0, 'catalog error');
+    await click(button(mounted.root, '重试加载难度'));
+    await waitFor(() => walk(mounted.root, (node) => node.props?.label === '困难').length > 0, 'reloaded choices');
+    assert.equal(reads, 2);
+  } finally { mounted.unmount(); }
+});
+
+test('AI preview accepts medium only when the runtime catalog enables it', async () => {
+  const batch = aiImportBatch();
+  batch.rows[0].difficulty = 'medium';
+  const commits = [];
+  const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    enabledDifficulties: () => ['easy', 'medium', 'hard'],
+    readTask: async () => aiTask('completed'), readBatch: async () => batch,
+    commitBatch: async (id, rows) => { commits.push({ id, rows }); return { batch_id: id, committed_rows: rows, created_ids: ['800', '801'] }; },
+    onCommitted() {}, onWarning() {},
+  });
+  try {
+    await workflow.startTask(async () => aiTask('completed'));
+    assert.ok(workflow.preview.value, 'enabled medium preview should be accepted');
+    workflow.difficulty.value = 'medium';
+    assert.deepEqual(workflow.visibleRows.value.map((row) => row.row_number), [2]);
+    await workflow.commitImport();
+    assert.deepEqual(commits, [{ id: '301', rows: [2, 3] }]);
+  } finally { workflow.discard(); }
+});
+
+test('AI preview refuses disabled medium instead of relabeling it', async () => {
+  const batch = aiImportBatch(); batch.rows[0].difficulty = 'medium';
+  const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    enabledDifficulties: () => ['easy', 'hard'], readTask: async () => aiTask('completed'), readBatch: async () => batch,
+    commitBatch: async () => { throw new Error('disabled batch must not commit'); }, onCommitted() {}, onWarning() {},
+  });
+  try {
+    await workflow.startTask(async () => aiTask('completed'));
+    assert.equal(workflow.preview.value, null);
+    assert.equal(batch.rows[0].difficulty, 'medium');
+  } finally { workflow.discard(); }
+});
+
+test('AI import cannot commit while the authoritative catalog is unavailable', async () => {
+  let enabled = ['easy', 'hard'];
+  const commits = [];
+  const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    enabledDifficulties: () => enabled, readTask: async () => aiTask('completed'), readBatch: async () => aiImportBatch(),
+    commitBatch: async (id, rows) => { commits.push({ id, rows }); return { batch_id: id, committed_rows: rows, created_ids: ['800', '801'] }; },
+    onCommitted() {}, onWarning() {},
+  });
+  try {
+    await workflow.startTask(async () => aiTask('completed'));
+    enabled = [];
+    await workflow.commitImport();
+    assert.deepEqual(commits, []);
+  } finally { workflow.discard(); }
+});
+
 test('AI import uploads a transient reference file, polls its task and renders only generated easy/hard rows', async () => {
   context.permissions = new Set(['questions:write', 'ai:read', 'ai:write']);
   const normalHttp = context.http;
@@ -1391,6 +1551,7 @@ test('AI import uploads a transient reference file, polls its task and renders o
 test('AI preview filters by difficulty and commits only selected valid server row numbers', async () => {
   const calls = [];
   const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    enabledDifficulties: () => ['easy', 'hard'],
     readTask: async () => aiTask('completed'),
     readBatch: async () => aiImportBatch(),
     commitBatch: async (id, rows) => {
@@ -1416,6 +1577,7 @@ test('AI import clears polling on departure and ignores a late task result', asy
   let reads = 0;
   let batchReads = 0;
   const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    enabledDifficulties: () => ['easy', 'hard'],
     readTask: async () => { reads += 1; return gate.promise; },
     readBatch: async () => { batchReads += 1; return aiImportBatch(); },
     commitBatch: async () => ({}), onCommitted() {}, onWarning() {},
@@ -1513,6 +1675,7 @@ test('AI confirmation with an unknown result queries the original batch without 
   let reads = 0;
   const receipts = [];
   const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    enabledDifficulties: () => ['easy', 'hard'],
     readTask: async () => aiTask('completed'),
     readBatch: async (id) => {
       reads += 1;
@@ -1559,6 +1722,7 @@ test('AI batch loading can restart after its completed task leaves the cached pa
   const gate = deferred();
   let reads = 0;
   const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    enabledDifficulties: () => ['easy', 'hard'],
     readTask: async () => aiTask('completed'),
     readBatch: async () => { reads += 1; return reads === 1 ? gate.promise : { ...aiImportBatch(), batch_id: '302' }; },
     commitBatch: async () => ({}), onCommitted() {}, onWarning() {},
@@ -1610,6 +1774,7 @@ for (const operation of ['editing', 'regenerating']) {
     let readMode = 'valid';
     const batchReads = [];
     const workflow = importWorkflow.useAiQuestionImportWorkflow({
+      enabledDifficulties: () => ['easy', 'hard'],
       readTask: async () => aiTask('completed'),
       readBatch: async (id) => {
         batchReads.push(id);
@@ -1654,6 +1819,7 @@ for (const operation of ['editing', 'regenerating']) {
 
 test('an unverifiable AI row mutation response also requires original-batch reconciliation', async () => {
   const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    enabledDifficulties: () => ['easy', 'hard'],
     readTask: async () => aiTask('completed'), readBatch: async () => aiImportBatch(),
     commitBatch: async () => ({}), onCommitted() {}, onWarning() {},
   });
@@ -1668,6 +1834,7 @@ test('an unverifiable AI row mutation response also requires original-batch reco
 test('an explicit business rejection of an AI row mutation preserves the confirmed preview without an unknown lock', async () => {
   const { ApiError } = await vite.ssrLoadModule(httpStubId);
   const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    enabledDifficulties: () => ['easy', 'hard'],
     readTask: async () => aiTask('completed'), readBatch: async () => aiImportBatch(),
     commitBatch: async () => ({}), onCommitted() {}, onWarning() {},
   });
@@ -1750,6 +1917,7 @@ test('an interrupted batch reconciliation clears only busy state and remains loc
 test('deactivating an in-flight AI row edit retains its unknown lock when the cached page returns', async () => {
   const gate = deferred();
   const workflow = importWorkflow.useAiQuestionImportWorkflow({
+    enabledDifficulties: () => ['easy', 'hard'],
     readTask: async () => aiTask('completed'), readBatch: async () => aiImportBatch(),
     commitBatch: async () => ({}), onCommitted() {}, onWarning() {},
   });

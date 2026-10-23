@@ -1,0 +1,302 @@
+.ruleexam-tiptap .ProseMirror {
+    width: 100%;
+    min-height: inherit;
+    font-family: SimSun, STSong;
+    font-size: 11pt;
+    outline: none;
+}
+
+.ruleexam-tiptap .ProseMirror * {
+    /*  拆分换行 */
+    overflow-wrap: break-word;
+    /* 保留空白字符，并在必要时将它们用于换行 */
+    white-space: break-spaces;
+    /* 可以在任何字符之间进行换行 */
+    word-break: break-all;
+}
+
+.ruleexam-tiptap .ProseMirror h1,
+.ruleexam-tiptap .ProseMirror h2,
+.ruleexam-tiptap .ProseMirror h3,
+.ruleexam-tiptap .ProseMirror h4,
+.ruleexam-tiptap .ProseMirror h5,
+.ruleexam-tiptap .ProseMirror h6 {
+    line-height: 1.1
+}
+
+.ruleexam-tiptap .ProseMirror h1 {
+    font-size: 32px
+}
+
+.ruleexam-tiptap .ProseMirror h2 {
+    font-size: 20px
+}
+
+.ruleexam-tiptap .ProseMirror h3 {
+    font-size: 18px
+}
+
+.ruleexam-tiptap .ProseMirror h4 {
+    font-size: 16px
+}
+
+.ruleexam-tiptap .ProseMirror h5,
+.ruleexam-tiptap .ProseMirror h6 {
+    font-size: 14px
+}
+
+.ruleexam-tiptap .ProseMirror strong {
+    font-weight: 700
+}
+
+.ruleexam-tiptap .ProseMirror em {
+    font-style: italic;
+    font-weight: inherit
+}
+
+.ruleexam-tiptap .ProseMirror hr {
+    margin: 8px 0;
+    border: none;
+    border-top: 1px solid #868686
+}
+
+.ruleexam-tiptap .ProseMirror p {
+    line-height: 1.5
+}
+
+.ruleexam-tiptap .ProseMirror p span {
+    line-height: inherit;
+}
+
+.ruleexam-tiptap .ProseMirror[contenteditable="false"] {
+    white-space: normal;
+}
+
+.ruleexam-tiptap .ProseMirror table {
+    width: 100%;
+    margin: 0;
+    overflow: hidden;
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+
+.ruleexam-tiptap .ProseMirror table .selectedCell:after {
+    /* // 选择区域的样式 */
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 2;
+    pointer-events: none;
+    content: "";
+    background: rgba(200, 200, 255, .4)
+}
+
+.ruleexam-tiptap .ProseMirror table .column-resize-handle {
+    /* // 拖动线的效果 */
+    position: absolute;
+    top: 0;
+    right: -2px;
+    bottom: -2px;
+    width: 4px;
+    pointer-events: none;
+    background-color: #adf
+}
+
+
+/* // 表头的样式 */
+
+.ruleexam-tiptap .ProseMirror table th {
+    font-weight: 600;
+    text-align: left;
+}
+
+
+/* 表格每列的样式 */
+
+.ruleexam-tiptap .ProseMirror table td,
+.ruleexam-tiptap .ProseMirror table th {
+    position: relative;
+    box-sizing: border-box;
+    min-width: 1em;
+    padding: 2px 5px;
+    vertical-align: top;
+    border: 1px solid #000;
+}
+
+
+/*   // 表格内容p每行的样式 */
+
+.ruleexam-tiptap .ProseMirror table p {
+    margin: 0;
+    line-height: 1.5;
+}
+
+.ruleexam-tiptap .ProseMirror p {
+    margin: 0;
+    padding: 0;
+}
+
+.ruleexam-tiptap .ProseMirror hr {
+    margin: 8px 0;
+    border: none;
+    border-top: 1px solid #868686;
+}
+
+
+/* 自定义拓展的样式，表单样式 */
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] {
+    /* display: inline-block; */
+    position: relative;
+    line-height: 1;
+    text-indent: 0;
+    cursor: pointer;
+}
+
+
+/* 上下结构 */
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field].vertical {
+    display: block;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field]+span[data-extension-type=field] {
+    margin-left: 4px;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field].vertical {
+    margin-left: 0 !important;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] .custom-field-content {
+    background: rgba(184, 218, 255, .23);
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field].custom-field.field-focus .custom-field-content {
+    background: rgba(184, 218, 255, .54);
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] .custom-field-content {
+    line-height: inherit;
+    text-align: left;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] .custom-field-content.field-empty::after {
+    height: 0;
+    padding: 0 4px;
+    color: #7fbdff;
+    font-size: inherit;
+    content: attr(data-placeholder);
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field].field-focus .custom-field-content:after {
+    color: #3d9aff
+}
+
+
+/* 单选 */
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] span[data-widget-type=radio],
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] span[data-widget-type=checkbox] {
+    background-color: transparent !important;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] span[data-widget-type=radio]:after,
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] span[data-widget-type=checkbox]:after {
+    content: none !important;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] span[data-widget-type=radio] .custom-field-content::after,
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] span[data-widget-type=checkbox] .custom-field-content::after {
+    height: 0;
+    padding: 0 4px;
+    color: #7fbdff;
+    font-size: inherit;
+    content: attr(data-placeholder);
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] span[data-widget-type=radio],
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] span[data-widget-type=checkbox] {
+    background-color: transparent !important;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] .prefix-start {
+    vertical-align: middle;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] .prefix-start::before {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    margin-right: 4px;
+    content: "";
+    background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAftJREFUWEfN18urjVEYx/HPGWDgMpESJkrIQFGKgVxKZCDChL+AoalbblMzx1/A5BAppZRLBpRioMRJmSAlE+cYYKJfrbfedts5e787lrfe2u33Wc/zXc91rTGDP3OxA/uwDsvKGw2fyvsad/AQPwdRPTaA0FKcwVEsGkA+It9wDefxeaY1MwHMw0mcwPyi5CVu4wk+ll3nU7yxHFuxHxuK/HdcxiX86AfyJ4Ds+hY2l0U3cApvB/TAGlzEoSL/DAf6eaMfwHrcxQq8xxFEQZcnG7iOlfiAvXjVVtQLkJ0/L8Yf4yC+drHcWrMYN7GtQGxqe6INkJg/Km6P8V34NaLxZvkc3C8Q8eb2JifaAMnY08XtoRx1573s8US8m3BcKJWlAYjr35Vs3zJCzGdzWHLiKVIdqxKKBmAcx5BsPzyblhG/T5TquIrjAUiH+1KazNohSq0rR0r0TWlWSwKwG/eQJrOxq9Yh170ozWpPAK7EFThbWueQujqJp7Wfw3gAMjhSFjvL704ah1yUofYgZR+AtNfVSGwmh1TUVTz2YncyAFNYgIWY7qpxyHWxF7vTbYCM2vz5L55sNiN76r8IQfUkrF6G1RtR9VacrK86jAJQfRwHouqBJADVj2RNKKodSpsWXPVY3kBUvZg0EFWvZu2JWO1y2juW/8r1/DcTNp7681NrVAAAAABJRU5ErkJggg==) no-repeat 100%/100%;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] span[data-widget-type=checkbox] .prefix-start::before {
+    background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAARxJREFUWEft1z1KBEEQhuFnDTbSA5h4AAVTjUUE72DmD4gG4kHUQBH8yfYOC4sYayroAUw8gBsZqJT0wIAr7DDstkF3NkNVf299VENVx++zhB1sYAGzI2Ka/BriFQPc4Lme3Kl9dHGCfcw0UWgQ+4lLHOMj8iqAEO9jDV+J9DbRRgVtTjgYrm4nZ0PzHpsBUQGc4wBv2EoBbUT/yo0Ce5jHBQ4DIOiekhvrExSvoALiLjm9HACnOMI19iZR9og7r7CLswCIrlzEKh6nBLCCB7wEwHt6anNo23Dj8kdjhu4wAKLr6y9i3Evaxv3oFoDiQHGgOFAcKA4UB/6FA9kHkuwjWfahNPtYHqNZ1sUkALKvZhVEtuW0PmJPdT3/Bh8MaxVoPhO/AAAAAElFTkSuQmCC) no-repeat 100%/100%
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] span[data-widget-type=radio][data-checked] .prefix-start::before {
+    background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAjhJREFUWEfN10uoTXEUx/HPHWDgMZHymighSlHCQB4RGYgwwcyjGJp65TU1Q3nMMEGklCKuDJBiIOKmTLxKJu41wIB+9d91ut1zzs6l7V+7Tmevx/e/1n+ttf896q+RWI51mI3J5YmFD+V5iRu4hx91TPfUEJqIg9iKcTXkI/IVF3EEnzrpdAIYhX3Yi9HFyDNcxwO8L7vOq0RjCpZgPeYV+W84geP4PhRIO4Ds+hoWFaUr2I/XNSMwE8ewqcg/woahojEUwFzcxFS8xRbEwJ+sbOASpuEd1uJ5q6HBANn5k+L8Pjbiy594btEZj6tYWiAWtEaiFSA57y1hj/NV+DlM55X6CNwuEInmsupMtALkxB4oYQ/lcHc+mD2RSHSTjqOlslQACf2bctoXDyPn3QKWM/EQqY7pSUUFcAq7kdO+uZuVYb6/XKrjNPYEIB3uc2kys2qUWnR2YDvmFJgXOI9z+NUFMCX6qjSrCTG2GreQJjO/i/IkXMCKNnJ3sQ0fu9h5WprVmgCcTChwqLTOdrqRvdPBeaUXiJVdIpHWfhinYjSDI2WRXeV3u7UTZ2rmfxfOdpDNUAtobwDSXmcguenroJT6XVgT4HFLGx9KJf7ity8A/RiDsRjo4KCSq8MQO7HXbsVf7A20AmTU5s92628CBC4ju/+/SEHjh7DxMmy8ETXeinPqGx1GAWh8HAei0Q+SADT+SValorGP0qoFN/pZXkE0ejGpIBq9mrVOxMYup4PH8j+5nv8GPjW++orshXEAAAAASUVORK5CYII=) no-repeat 100% / 100%;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field] span[data-widget-type=checkbox][data-checked] .prefix-start::before {
+    background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAixJREFUWEfF18vLTlEUx/HPSxm5pSTKtSiX3pRCCRGKkjIxkZRLiYH8D6YYkHKZYWjqklwnzCSXgQxQiInylpJbS/to93ge55z3dN6zZ+fstffvu9dea++1h/zblmI/tmAOJvaxqfNrBG9wExfwLB88lH1MwAkcwrg6CjVsf+IsjuFbjCsAQvwaNuJXIr2YaGMFTVp4MLy6L3k2NG9ja0AUAKdxGO+xOxk0ER00NhZ4CTNxBkcCIOieJG9salG8gAqIW8nTwwFwEkdxHgfbWHafOc/hAE4FQETlEqzGozECWIWHeB4AX1KqTULTgKvKH4EZuiMBEFGfZ0TVScrsFuLlf4z+6LYFEC6OQLuSzpXI/97WGsBy3MHUpBhptxc/eghaAViMe5ieiT3FWnxuG2ABHmBWJhQxsA4fmm7B+D4uzOecjfuYl/18nVb+dkAgVt6Clen43IlwZ2+bkcQXZR3v0spfNc2CiOYbmIJP2NBznU5Le74sEwq79XhRkqelHogUfYzhbKKP6caM03NyujdWZP0RaAEZ48paKUBMEHt6F3N7ILan2mFN9j9O0c3piC0Tj/5KAIMgYnBezHzFtgRbRbwWQAER+R0lWm+LymYHrldVTnaVPVDMOz+tMIf4jl24WlO8tgf6QcT5vgeXRyE+aoAYGJ6Is/54KmJGqV89CPsJxH3etHb4GwOdFySdl2SdF6Wdl+URZJ0+TAKg86dZAdHZ4zTP9TF9nv8GaGuiFfEt+yEAAAAASUVORK5CYII=) no-repeat 100%/100%
+}
+
+
+/* 只读状态 */
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field][data-readonly] .custom-field-content {
+    background-color: transparent !important;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field][data-readonly] .custom-field-content.field-empty::after {
+    color: #999BA1;
+}
+
+
+/* 下划线 */
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field][data-underline] .custom-field-content {
+    border-bottom: 1px solid #000;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field][data-underline] span[data-widget-type=radio].custom-field-content {
+    border-bottom: none !important;
+}
+
+
+/* 校验失败效果 */
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field][data-validate] {
+    /* border: 2px solid red !important; */
+    background-color: rgb(254, 240, 240) !important;
+    animation: ruleexam-tiptap-shink 0.5s infinite;
+    animation-iteration-count: 1;
+}
+
+.ruleexam-tiptap .ProseMirror span[data-extension-type=field][data-validate] .custom-field-content.field-empty::after {
+    color: #F56C6C;
+}
+
+
+/* 闪烁的动画效果 */
+
+.ruleexam-tiptap .ProseMirror .shink {
+    animation: ruleexam-tiptap-shink 0.5s infinite;
+    animation-iteration-count: 1;
+}
+
+@keyframes ruleexam-tiptap-shink {
+    0% {
+        background-color: #f99;
+    }
+
+    100% {
+        background-color: rgba(184, 218, 255, .23)
+    }
+}

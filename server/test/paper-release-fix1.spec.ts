@@ -99,7 +99,7 @@ describe('paper release fix1 transaction boundaries', () => {
       .rejects.toMatchObject({ code: 40970, message: expect.stringContaining('重新选题') });
   });
 
-  it('freezes a newly published regulation paper without inventing category, difficulty, or approval facts', async () => {
+  it('freezes a newly published regulation paper with enabled difficulty without inventing category or approval facts', async () => {
     const paper: any = {
       id: '11', regulationId: '9', businessScope: 'regulation', mode: 'fixed', categoryId: null,
       requiresLearning: 1, regulationIds: ['9'], courseIds: [], ruleConfig: null,
@@ -110,7 +110,7 @@ describe('paper release fix1 transaction boundaries', () => {
       id: '31', paperId: '11', questionId: '101', questionVersionId: null,
       conceptId: null, sort: 0, score: '100.00',
     };
-    const version = approvedVersion();
+    const version = approvedVersion({ difficulty: 'easy' });
     const releases: any[] = [];
     const releaseQuestions: any[] = [];
     const paperRepo = {
@@ -164,7 +164,7 @@ describe('paper release fix1 transaction boundaries', () => {
     expect(currentOrCaptureForRelease).toHaveBeenCalledWith(manager, '101', undefined);
     expect(frozen).toMatchObject({
       businessScope: 'regulation', categoryId: null, mode: 'fixed', requiresLearning: true,
-      pool: [{ versionId: '701', categoryId: null, difficulty: 'unknown', approvedBy: null, approvedAt: null,
+      pool: [{ versionId: '701', categoryId: null, difficulty: 'easy', approvedBy: null, approvedAt: null,
         stem: '发布时制度题干', scoreCents: 10000 }],
     });
     expect(link.questionVersionId).toBe('701');
@@ -183,8 +183,8 @@ describe('paper release fix1 transaction boundaries', () => {
       { id: '32', paperId: '11', questionId: '102', questionVersionId: '702', conceptId: '81', sort: 1, score: '50.00' },
     ];
     const versions = new Map([
-      ['101', approvedVersion({ id: '701', questionId: '101', conceptId: '81' })],
-      ['102', approvedVersion({ id: '702', questionId: '102', conceptId: '81' })],
+      ['101', approvedVersion({ id: '701', questionId: '101', conceptId: '81', difficulty: 'easy' })],
+      ['102', approvedVersion({ id: '702', questionId: '102', conceptId: '81', difficulty: 'hard' })],
     ]);
     const paperRepo = {
       findOne: vi.fn(async () => paper),
@@ -299,7 +299,7 @@ describe('release-backed legacy paper compatibility', () => {
       rule: { totalCents: 10000, passCents: 6000, durationMinutes: 30, maxAttempts: 3,
         partialCreditRatio: 0.5, rules: [{ type: 'single', count: 1, scoreCents: 10000 }] },
       pool: [{ ...approvedVersion(), questionId: '101', versionId: '701', categoryId: null,
-        difficulty: 'unknown', conceptId: '81', scoreCents: 10000 }],
+        difficulty: 'easy', conceptId: '81', scoreCents: 10000 }],
     };
     const paperRepo = {
       findOne: vi.fn(async ({ where }: any) => papers.get(String(where.id)) || null),

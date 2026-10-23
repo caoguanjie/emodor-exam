@@ -2,6 +2,7 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Errors } from '../../common/errors';
+import { assertActiveDifficulty } from '../../common/question-difficulty';
 import type { Difficulty, QuestionOption, QuestionType } from '../../common/training-contracts';
 import { Question } from '../../entities/question.entity';
 import { QuestionVersion } from '../../entities/question-version.entity';
@@ -11,6 +12,12 @@ import { AccessService } from '../access/access.service';
 import { MediaService } from '../media/media.service';
 import { CategoryService } from '../training/category.service';
 import { QuestionConceptService } from './question-concept.service';
+import { parseQuestionContent } from './question-content-dispatch';
+import { classifyQuestionAsset } from './question-authoring-media';
+import { synchronizeFormAuthoring, type AuthoringQuestionWrite, type AuthoringSavedItem } from './question-authoring-codec';
+import type { AuthoringBundle } from '../../common/question-authoring';
+import { legacyHtmlDoc } from './question-content';
+import { parseRichDocV3 } from './question-content-v3';
 import {
   controlledQuestionMediaIds,
   sanitizeQuestionRichTextForDisplay,
@@ -45,9 +52,14 @@ type QuestionMediaFields = {
   stem?: unknown;
   options?: unknown;
   analysis?: unknown;
+  contentSchemaVersion?: number;
+  content_schema_version?: number;
+  contentJson?: unknown;
+  content_json?: unknown;
 };
 
 function questionMediaField(fields: QuestionMediaFields, assetId: string): 'prompt' | 'answer' | null {
+  if (fields.contentSchemaVersion === 3 || fields.content_schema_version === 3) return classifyQuestionAsset(fields, assetId);
   const optionTexts = Array.isArray(fields.options)
     ? fields.options.flatMap((option) => (
         option && typeof option === 'object' && typeof (option as { text?: unknown }).text === 'string'
@@ -194,7 +206,7 @@ export class QuestionVersionService implements OnModuleInit {
       options: draft.options,
       answer: draft.answer,
       analysis: draft.analysis,
-      contentSchemaVersion: 2,
+      contentSchemaVersion: draft.contentSchemaVersion,
       contentJson: draft.contentJson,
       scoreCents: draft.scoreCents,
       conceptId: draft.conceptId || null,
@@ -284,6 +296,7 @@ export class QuestionVersionService implements OnModuleInit {
     draft: ValidatedQuestionDraft,
     actorId: string,
     approval?: { actorId: string; at: Date },
+    authoring?: AuthoringQuestionWrite,
   ) {
     const questionRepo = manager.getRepository(Question);
     const versionRepo = manager.getRepository(QuestionVersion);
@@ -304,7 +317,11 @@ export class QuestionVersionService implements OnModuleInit {
       source: draft.source,
       createdBy: String(actorId),
     }));
-    const version = await versionRepo.save(this.versionEntity(versionRepo, String(question.id), 1, draft, actorId, approval));
+    const version = this.versionEntity(versionRepo, String(question.id), 1, draft, actorId, approval);
+    this.attachAuthoring(version, draft, authoring?.bundle || null, authoring?.client_id || `question_${question.id}`);
+    await versionRepo.save(version);
+    this.finalizeAuthoringIdentity(version);
+    await versionRepo.save(version);
     this.applyCompatibility(question, version);
     await questionRepo.save(question);
     await this.bindMedia(manager, version, draft.mediaAssetIds);
@@ -355,7 +372,7 @@ export class QuestionVersionService implements OnModuleInit {
       || input.sourcePageGroup !== undefined || input.sourcePageStart !== undefined || input.sourcePageEnd !== undefined) {
       throw Errors.param('参考题生成只能创建无资料绑定的 AI 题目');
     }
-    if (input.difficulty !== 'easy' && input.difficulty !== 'hard') throw Errors.param('参考题生成只支持 easy / hard');
+    assertActiveDifficulty(input.difficulty);
     const draft = validateAndSanitizeQuestionDraft(input, { allowReferenceAi: true });
     await this.assertMediaUsable(String(actorId), draft.mediaAssetIds, manager);
     return draft;
@@ -417,9 +434,37 @@ export class QuestionVersionService implements OnModuleInit {
   ): Promise<string> {
     // Input provenance is copied from the existing identity by the question
     // workflow. Reference-generated AI questions intentionally have no material.
-    const draft = validateAndSanitizeQuestionDraft(input, { allowReferenceAi: true });
+    let actual = input;
+    let expected = expectedVersionId;
+    if (input.contentSchemaVersion === undefined && input.contentJson == null) {
+      const current = await this.current(questionId);
+      if (current?.contentSchemaVersion === 3) {
+        const content = parseQuestionContent(current);
+        if (content.schema !== 3) throw Errors.internal('题目内容版本不一致');
+        const stem = input.stem === current.stem ? content.stem : parseRichDocV3(legacyHtmlDoc(input.stem));
+        const analysis = input.analysis === current.analysis ? content.analysis : input.analysis == null ? null : parseRichDocV3(legacyHtmlDoc(input.analysis));
+        const options = input.options.map((option) => {
+          const old = current.options.find((item) => item.key === option.key);
+          const rich = content.options.find((item) => item.id === option.key);
+          return { id: option.key, content: rich && old?.text === option.text ? rich.content : parseRichDocV3(legacyHtmlDoc(option.text)) };
+        });
+        actual = { ...input, contentSchemaVersion: 3, contentJson: { stem, options, analysis, answer_option_ids: input.answer.map((index) => options[index]?.id) } };
+        // Even an internal caller omitting a token must not apply content read
+        // from an older revision after another writer advances the identity.
+        if (expected === undefined) expected = String(current.id);
+      }
+    }
+    const draft = validateAndSanitizeQuestionDraft(actual, { allowReferenceAi: true });
     await this.assertSource(draft);
     return this.dataSource.transaction(async (manager) => {
+      return this.reviseInManager(manager, questionId, draft, actorId, expected);
+    });
+  }
+
+  private async reviseInManager(
+    manager: EntityManager, questionId: string, draft: ValidatedQuestionDraft, actorId: string,
+    expectedVersionId?: string | null, authoring?: AuthoringQuestionWrite,
+  ): Promise<string> {
       await this.assertRelations(manager, draft);
       const questionRepo = manager.getRepository(Question);
       const versionRepo = manager.getRepository(QuestionVersion);
@@ -434,6 +479,7 @@ export class QuestionVersionService implements OnModuleInit {
       await this.assertMediaUsable(
         String(actorId),
         draft.mediaAssetIds.filter((assetId) => !existingMediaIds.has(assetId)),
+        authoring ? manager : undefined,
       );
 
       let current: QuestionVersion;
@@ -462,11 +508,96 @@ export class QuestionVersionService implements OnModuleInit {
       const next = await versionRepo.save(
         this.versionEntity(versionRepo, String(question.id), Number(current.revision) + 1, revisionDraft, actorId),
       );
+      if (current.contentSchemaVersion === 3 && draft.contentSchemaVersion !== 3) throw Errors.param('$.content_schema_version: schema 3 修订不能降级', { path: '$.content_schema_version' });
+      this.attachAuthoring(next, revisionDraft, authoring?.bundle || current.authoringJson || null,
+        authoring?.client_id || Object.keys(current.authoringJson?.document.questions || {})[0] || `question_${question.id}`);
+      this.finalizeAuthoringIdentity(next);
+      await versionRepo.save(next);
       this.applyCompatibility(question, next);
       await questionRepo.save(question);
       await this.bindMedia(manager, next, draft.mediaAssetIds);
       return String(next.id);
+  }
+
+  private attachAuthoring(version: QuestionVersion, draft: ValidatedQuestionDraft, base: AuthoringBundle | null, client: string): void {
+    const content = parseQuestionContent(draft);
+    const placeholder: AuthoringBundle = base || { document: { schema_version: 1, content: { type: 'doc', content: [] }, questions: {} }, option_ids: {}, identities: {}, layouts: {} };
+    const supplied = placeholder.document.questions[client];
+    const bundle = supplied ? placeholder : { ...placeholder, document: { ...placeholder.document, questions: { [client]: {
+      type: draft.type, category_id: draft.categoryId, difficulty: draft.difficulty, concept_id: draft.conceptId || null,
+      regulation_id: draft.regulationId || null, regulation_version_id: draft.regulationVersionId || null,
+      score_cents: draft.scoreCents, analysis: { type: 'doc', content: [] },
+    } } } };
+    version.authoringSchemaVersion = 1;
+    version.authoringJson = synchronizeFormAuthoring(base, {
+      client_id: client, bundle, content, identity: { question_id: String(version.questionId), expected_version_id: version.id ? String(version.id) : null },
+      category_id: draft.categoryId, type: draft.type, difficulty: draft.difficulty, score: draft.scoreCents / 100, concept_id: draft.conceptId,
     });
+  }
+
+  private finalizeAuthoringIdentity(version: QuestionVersion): void {
+    if (!version.authoringJson) return;
+    const client = Object.keys(version.authoringJson.document.questions)[0];
+    version.authoringJson.identities[client] = { question_id: String(version.questionId), expected_version_id: String(version.id) };
+    version.authoringJson.document.questions[client].question_id = String(version.questionId);
+    version.authoringJson.document.questions[client].base_revision = Number(version.revision);
+  }
+
+  /** Caller owns the transaction: content, authoring, media and receipt share it. */
+  async lockAuthoringBatch(manager: EntityManager, inputs: readonly AuthoringQuestionWrite[]): Promise<void> {
+    const order = (left: string, right: string) => BigInt(left) < BigInt(right) ? -1 : BigInt(left) > BigInt(right) ? 1 : 0;
+    for (const category of [...new Set(inputs.map((input) => input.category_id))].sort(order)) await this.categories.lockActive(manager, category);
+    for (const question of [...new Set(inputs.flatMap((input) => input.identity ? [input.identity.question_id] : []))].sort(order)) {
+      const row = await manager.getRepository(Question).findOne({ where: { id: question }, lock: { mode: 'pessimistic_write' } });
+      if (!row) throw Errors.notFound('题目不存在');
+    }
+  }
+
+  /** Caller owns the transaction: content, authoring, media and receipt share it. */
+  async writeAuthoringInTransaction(manager: EntityManager, input: AuthoringQuestionWrite, actorId: string): Promise<AuthoringSavedItem> {
+    const meta = input.bundle.document.questions[input.client_id];
+    let source: QuestionDraftInput['source'] = 'manual';
+    let current: QuestionVersion | null = null;
+    let question: Question | null = null;
+    if (input.identity) {
+      question = await manager.getRepository(Question).findOne({ where: { id: input.identity.question_id }, lock: { mode: 'pessimistic_write' } });
+      if (!question) throw Errors.notFound('题目不存在');
+      this.assertExpectedVersion(question, input.identity.expected_version_id);
+      current = question.currentVersionId ? await manager.getRepository(QuestionVersion).findOne({ where: { id: String(question.currentVersionId) } }) : null;
+      if (question.currentVersionId && !current) throw Errors.questionVersionConflict('题目当前版本不存在');
+      const live = await manager.query(`SELECT 1 AS blocked FROM exam_record er
+        INNER JOIN paper_question pq ON pq.paper_id = er.paper_id
+        WHERE er.status = 'in_progress' AND pq.question_id = ? LIMIT 1`, [String(question.id)]);
+      if (live.length) throw Errors.questionInUse();
+      if (question.type !== input.type) {
+        const linked = await manager.query('SELECT 1 AS blocked FROM paper_question WHERE question_id = ? LIMIT 1', [String(question.id)]);
+        if (linked.length) throw Errors.questionInUse('题目已被 legacy 固定试卷引用，不能变更题型');
+      }
+      const trusted = current || question;
+      if (trusted.source !== 'manual' && trusted.source !== 'ai' && trusted.source !== 'import') throw Errors.param('题目真实来源非法');
+      source = trusted.source;
+      const trustedVersionId = current ? current.regulationVersionId : question.versionId;
+      if ((meta.regulation_id || null) !== (trusted.regulationId || null) || (meta.regulation_version_id || null) !== (trustedVersionId || null)) throw Errors.param('$.regulation_id: 不允许伪造题目来源', { path: '$.regulation_id' });
+    } else if (meta.regulation_id !== null || meta.regulation_version_id !== null) throw Errors.param('$.regulation_id: 人工新题不能指定资料来源', { path: '$.regulation_id' });
+    const parsed = parseQuestionContent({ ...input.content, type: input.type });
+    const { schema, ...contentJson } = parsed;
+    const draft = validateAndSanitizeQuestionDraft({
+      categoryId: input.category_id, difficulty: input.difficulty, type: input.type, scoreCents: Math.round(input.score * 100),
+      conceptId: input.concept_id, source, stem: '', options: [], answer: [], analysis: null,
+      contentSchemaVersion: schema, contentJson, regulationId: meta.regulation_id || undefined, regulationVersionId: meta.regulation_version_id || undefined,
+      sourcePageGroup: current?.sourcePageGroup ?? undefined, sourcePageStart: current?.sourcePageStart ?? undefined, sourcePageEnd: current?.sourcePageEnd ?? undefined,
+    }, { allowReferenceAi: true });
+    await this.assertSource(draft, manager);
+    await this.assertRelations(manager, draft);
+    let versionId: string;
+    if (input.identity) versionId = await this.reviseInManager(manager, input.identity.question_id, draft, actorId, input.identity.expected_version_id, input);
+    else {
+      await this.assertMediaUsable(actorId, draft.mediaAssetIds, manager);
+      versionId = (await this.createInManager(manager, draft, actorId, { actorId, at: new Date() }, input)).versionId;
+    }
+    const saved = await manager.getRepository(QuestionVersion).findOne({ where: { id: versionId } });
+    if (!saved?.authoringJson) throw Errors.internal('作者原稿未保存');
+    return { client_id: input.client_id, question_id: String(saved.questionId), saved_version_id: versionId, revision: Number(saved.revision), bundle: saved.authoringJson };
   }
 
   /** Upgrade-only capture for a legacy review action; it records current content, not reconstructed history. */
@@ -538,6 +669,7 @@ export class QuestionVersionService implements OnModuleInit {
       if (!version) throw Errors.notFound('题目版本不存在');
       const question = await questionRepo.findOne({ where: { id: String(version.questionId) }, lock: { mode: 'pessimistic_write' } });
       if (!question || String(question.currentVersionId) !== String(version.id)) throw Errors.questionVersionConflict();
+      assertActiveDifficulty(version.difficulty);
       const now = new Date();
       version.status = 'approved';
       version.approvedBy = String(actorId);
@@ -565,6 +697,8 @@ export class QuestionVersionService implements OnModuleInit {
       if (!question) throw Errors.notFound('题目不存在');
       this.assertExpectedVersion(question, expectedVersionId);
 
+      if (status === 'approved' && !question.currentVersionId) assertActiveDifficulty(question.difficulty);
+
       let version: QuestionVersion;
       if (!question.currentVersionId) {
         version = await this.captureLegacy(manager, question);
@@ -580,6 +714,7 @@ export class QuestionVersionService implements OnModuleInit {
         version = found;
       }
 
+      if (status === 'approved') assertActiveDifficulty(version.difficulty);
       const now = new Date();
       version.status = status;
       version.reviewedBy = String(actorId);
@@ -637,6 +772,7 @@ export class QuestionVersionService implements OnModuleInit {
   }
 
   async approvedCandidates(filter: CandidateFilter, manager?: EntityManager): Promise<QuestionVersionSnapshot[]> {
+    assertActiveDifficulty(filter.difficulty);
     if (manager) await this.categories.lockActive(manager, String(filter.categoryId));
     else await this.categories.assertActive(String(filter.categoryId));
     const repo = manager ? manager.getRepository(QuestionVersion) : this.versionRepo;

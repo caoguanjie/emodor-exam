@@ -22,7 +22,7 @@ import {
 function baseDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraftInput {
   return {
     categoryId: '11',
-    difficulty: 'medium',
+    difficulty: 'easy',
     type: 'single',
     stem: '<p>进入受限空间前应做什么？</p>',
     options: [
@@ -42,7 +42,7 @@ describe('training question bank validation', () => {
     const result = validateAndSanitizeQuestionDraft(baseDraft());
 
     expect(result.categoryId).toBe('11');
-    expect(result.difficulty).toBe('medium');
+    expect(result.difficulty).toBe('easy');
     expect(result.regulationId).toBeUndefined();
     expect(result.regulationVersionId).toBeUndefined();
   });
@@ -88,12 +88,12 @@ describe('training question bank validation', () => {
       material_id: '21',
       material_version_id: '34',
       category_id: '11',
-      difficulty: 'medium',
+      difficulty: 'easy',
     }, { type: 'body', metatype: GenerateQuestionsDto } as any)).resolves.toMatchObject({
       material_id: '21',
       material_version_id: '34',
       category_id: '11',
-      difficulty: 'medium',
+      difficulty: 'easy',
     });
   });
 
@@ -101,7 +101,7 @@ describe('training question bank validation', () => {
     const pipe = new StrictDtoValidationPipe(QUESTION_CREATE_KEYS);
 
     await expect(pipe.transform({
-      category_id: '11', difficulty: 'medium', type: 'single', stem: '<p>题干</p>',
+      category_id: '11', difficulty: 'easy', type: 'single', stem: '<p>题干</p>',
       options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }], answer: [0],
       analysis: '<p>解析</p>', rubric: '<p>已取消字段</p>', score: 5,
     }, { type: 'body', metatype: CreateQuestionDto } as any)).rejects.toMatchObject({ status: 400 });
@@ -786,10 +786,10 @@ describe('versioned question bank', () => {
   it('rejects a delayed regeneration when the current version changes and creates no wrong version', async () => {
     const { service: versions, question, versions: rows } = versionServiceFixture();
     question.categoryId = '11';
-    question.difficulty = 'medium';
+    question.difficulty = 'easy';
     question.currentVersionId = '99';
     rows.push({
-      id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'medium', type: 'single',
+      id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'easy', type: 'single',
       stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
       scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
       source: 'ai', status: 'rejected', approvedBy: null, approvedAt: null, reviewedBy: '1',

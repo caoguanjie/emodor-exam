@@ -50,6 +50,7 @@ import { VideoLearningRecord } from './entities/video-learning-record.entity';
 import { VideoLearningSession } from './entities/video-learning-session.entity';
 import { QuestionConcept } from './entities/question-concept.entity';
 import { QuestionVersion } from './entities/question-version.entity';
+import { QuestionAuthoringCommit } from './entities/question-authoring-commit.entity';
 import { SysMenu } from './entities/sys-menu.entity';
 import { SysDictionary } from './entities/sys-dictionary.entity';
 import { SiteSetting } from './entities/site-setting.entity';
@@ -135,6 +136,9 @@ import { VideoLearningController } from './modules/video-learning/video-learning
 import { VideoSessionService } from './modules/video-learning/video-session.service';
 import { QuestionConceptService } from './modules/questions/question-concept.service';
 import { QuestionVersionService } from './modules/questions/question-version.service';
+import { QuestionAuthoringController } from './modules/questions/question-authoring.controller';
+import { QuestionAuthoringService } from './modules/questions/question-authoring.service';
+import { QuestionAuthoringOptionsController } from './modules/questions/question-authoring-options.controller';
 import { QuestionImportController } from './modules/questions/question-import.controller';
 import { QuestionImportService } from './modules/questions/question-import.service';
 import { AiQuestionImportController } from './modules/questions/ai-question-import.controller';
@@ -158,7 +162,7 @@ const config = loadConfig();
       MediaAsset, MediaReference,
       TrainingCourse, CourseChapter, CourseLesson, LessonVersion,
       VideoLearningRecord, VideoLearningSession,
-      QuestionConcept, QuestionVersion,
+      QuestionConcept, QuestionVersion, QuestionAuthoringCommit,
       SysMenu, SysDictionary, SiteSetting,
       LearnerIdentity, IdentityVerificationSession,
     ]),
@@ -171,7 +175,7 @@ const config = loadConfig();
     StatisticsController, TrainingStatisticsController, AdminDashboardController, HealthController,
     MediaController, MediaTicketController, IdentityController,
     CourseAdminController, LearnerHomeController, MyCoursesController,
-    VideoLearningController, QuestionImportController, AiQuestionImportController,
+    VideoLearningController, QuestionImportController, AiQuestionImportController, QuestionAuthoringController, QuestionAuthoringOptionsController,
     SystemController, SiteConfigController,
   ],
   providers: [
@@ -200,7 +204,7 @@ const config = loadConfig();
     },
     CourseService, LessonVersionService,
     VideoSessionService,
-    QuestionConceptService, QuestionVersionService, QuestionImportService, AiQuestionImportService,
+    QuestionConceptService, QuestionVersionService, QuestionAuthoringService, QuestionImportService, AiQuestionImportService,
     SystemService, AuditQueryService,
     // 守卫链（07 册 2.3.2）：① JWT 认证 → ② 细权限映射 → ③ 兼容角色边界
     { provide: APP_GUARD, useClass: JwtAuthGuard },

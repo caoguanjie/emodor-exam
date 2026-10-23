@@ -14,6 +14,14 @@ import {
 const SUITE_A = '/owned/suite-a.mjs';
 const SUITE_B = '/owned/suite-b.mjs';
 
+for (const name of ['main-question-designers', 'main-question-designers-compatibility']) {
+  test(`${name} suite is registered once in aggregate selection`, () => {
+    const expected = fileURLToPath(new URL(`./${name}.mjs`, import.meta.url));
+    assert.deepEqual(resolveSuitePaths(name), [expected]);
+    assert.equal(resolveSuitePaths('all').filter((path) => path === expected).length, 1);
+  });
+}
+
 test('training full flow suite is registered once in aggregate selection', () => {
   const expected = fileURLToPath(new URL('./training-full-flow.mjs', import.meta.url));
   assert.deepEqual(resolveSuitePaths('training-full-flow'), [expected]);

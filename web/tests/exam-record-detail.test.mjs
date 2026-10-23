@@ -13,6 +13,7 @@ const previewStubId = '\0exam-record-detail-preview-test';
 
 const testContext = {
   calls: [],
+  requestOptions: [],
   previews: [],
   record: null,
   result: null,
@@ -28,8 +29,9 @@ const routeStubCode = `
 const httpStubCode = `
   const context = globalThis.__examRecordDetailTest;
   export default {
-    async get(path) {
+    async get(path, options) {
       context.calls.push(path);
+      context.requestOptions.push(options || null);
       if (path.endsWith('/result')) return context.result;
       return context.record;
     },
@@ -194,6 +196,7 @@ after(async () => {
 
 beforeEach(() => {
   testContext.calls = [];
+  testContext.requestOptions = [];
   testContext.previews = [];
   testContext.record = record('in_progress');
   testContext.result = null;
@@ -245,6 +248,23 @@ test('admin readonly v2 result maps stable selected IDs separately from correct 
   assert.match(textContent(mounted.root), /学员作答.*B/s);
   assert.deepEqual(testContext.previews[0].content_json.answer_option_ids, ['stable-right']);
   assert.equal('selected_option_ids' in testContext.previews[0], false);
+  mounted.unmount();
+});
+
+test('admin result advertises schema 3 and preserves rich result content', async () => {
+  const doc = (text) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
+  testContext.record = record('passed');
+  testContext.result = {
+    record_id: '42', status: 'passed', grading_state: 'finalized', submission_method: 'manual', legacy: false,
+    submitted_at: '2026-10-22T01:20:00.000Z', graded_at: '2026-10-22T01:20:00.000Z', score: 100, passed: true, correct_rate: 1,
+    items: [{ item_id: '101', type: 'single', content_schema_version: 3, stem: doc('富文本题干'), score: 100,
+      options: [{ id: 'rich-right', content: doc('正确选项') }, { id: 'rich-wrong', content: doc('错误选项') }],
+      selected_option_ids: ['rich-right'], correct_option_ids: ['rich-right'], analysis: doc('富文本解析'), gained_score: 100 }],
+  };
+  const mounted = await mountDetail();
+  assert.equal(testContext.requestOptions[1].headers['X-Question-Content-Version'], '3');
+  assert.equal(testContext.previews[0].content_schema_version, 3);
+  assert.deepEqual(testContext.previews[0].content_json.answer_option_ids, ['rich-right']);
   mounted.unmount();
 });
 
