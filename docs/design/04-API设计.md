@@ -250,13 +250,13 @@ A3 学员管理边界：列表、详情、资料更新和启停仅作用于 `sys
 
 | # | 方法 | 路径 | 请求与约束 | 成功 data |
 |---|---|---|---|---|
-| 1 | GET | /admin/students | query：`page`、`page_size`、`keyword`、`category_id`、`source`（institution/external）、`status`（0/1） | `Page<Student>`；ID 均为字符串 |
+| 1 | GET | /admin/students | query：`page`、`page_size`、`keyword`（姓名或手机号）、`category_id`、`source`（institution/external）、`status`（0/1） | `Page<Student>`；ID 均为字符串；列表不展示内部用户名或工号 |
 | 2 | GET | /admin/students/{id} | — | `Student`，不含 password_hash |
 | 3 | POST | /admin/students | body：`phone`、`real_name`、`category_id`、`source` 必填；可选 `username/employee_no/email/gender/birthday/age`；不接受部门及密码字段 | `Student`，role 固定 employee，`department_id=NULL`，`force_password_change=0` |
 | 4 | PUT | /admin/students/{id} | body：`real_name/employee_no/category_id/source/phone/email/gender/birthday/age` 可选；不接受 department/username/password/role | `Student` |
 | 5 | PUT | /admin/students/{id}/status | body：`status`（0/1） | `Student`；停用同时吊销既有令牌 |
 | 6 | PUT | /admin/students/{id}/avatar | body：`avatar_id`（ready 的 avatar 图片资源 ID）或 null | `Student`；同一用户行锁事务内重查 managed-student 边界并更新引用 |
-| 7 | GET | /admin/students/import-template | — | `.xlsx` 二进制；七列表头为 `用户名/姓名/工号/手机号/邮箱/来源/培训类别ID`；用户名可空，手机号必填 |
+| 7 | GET | /admin/students/import-template | — | `.xlsx` 二进制，禁止缓存；首表六列为 `姓名/年龄/性别/培训类别/手机号/来源`，另附填写示例与说明（含当前启用类别名称），只导入首表 |
 | 8 | POST | /admin/students/import-preview | JSON `rows` 数组，或 multipart `file`；可选 `defaults:{source?,category_id?}` | `ImportPreview`；密码字段/旧密码列整包返回 40001 |
 | 9 | GET | /admin/students/import-batches/{id} | —；仅批次 owner 可读 | 未提交批次为 `ImportPreview`，已提交批次为 `ImportResult` |
 | 10 | POST | /admin/students/import-batches/{id}/commit | body：`row_numbers` 为非空整数数组；仅批次 owner | `ImportResult` |
@@ -265,11 +265,13 @@ A3 学员管理边界：列表、详情、资料更新和启停仅作用于 `sys
 
 导入预检逐行返回 `ImportPreview = { batch_id, valid_rows, errors:[{row,message}], duplicates }`；模板行号从 2 开始。预检按数据库 `utf8mb4_0900_ai_ci` 规则识别用户名/工号大小写与重音重复，并检查规范化手机号必填且唯一、启用类别与来源。username 仅是内部兼容标识；创建和导入省略时生成随机 `m_` 标识，提供时沿用唯一约束，不作为学员登录凭据。确认只消费服务端规范化行，批次按 owner+id 隔离；首次确认固定合法行集合，同集合重试返回原 `created_ids`，更换集合返回 40911。确认事务按类别 ID 加锁并重新检查类别存在且启用；类别在预检后被停用或删除时返回 40910，不创建悬挂学员。新批次 `normalized_rows` 不保存密码或哈希；确认时为兼容非空存储生成不可知随机值的 bcrypt 哈希，`force_password_change=0`。旧未确认批次如含 password/initial_password/初始密码/password_hash/passwordHash，返回 40911 并要求重新预检，不沿用旧凭据；已确认回执保持幂等。任何响应、错误明细和审计记录不得包含明文口令或哈希。
 
+模板填写规则：姓名、手机号必填；年龄可空或 0—150 整数，性别可空或男/女。培训类别下拉选项使用下载时当前启用的类别名称快照，以工作簿命名区域引用，类别更新后须重新下载；Excel 使用停止型校验拒绝非列表值，服务端导入仍复核类别存在且启用。每行培训类别必填；空值、未知或停用类别均使该行预检失败，不再用 defaults.category_id 补齐，页面不提供默认类别控件。来源填写本机构/外来；留空一律默认本机构（包括旧客户端传入 defaults.source 时），页面不再提供默认来源控件。旧 defaults 请求仅校验格式，不作为补值依据。示例使用合成人名和待替换手机号，仅供参考，不参与导入。兼容旧系统五列（学生姓名/年龄/性别/培训类别/手机号）及既有无密码七列模板；旧五列的来源默认本机构。年龄、性别在预检规范化后随确认落库；未知类别不自动创建，非法值逐行报错，空行跳过。
+
 ### 3.2.3 本人资料 /me/profile（A2）
 
 | # | 方法 | 路径 | 请求 | 成功 data |
 |---|---|---|---|---|
-| 1 | GET | /me/profile | — | 当前用户资料（含 `occupation/gender/birthday/category_id/source`，旧用户可为 null） |
+| 1 | GET | /me/profile | — | 当前用户资料（含 `occupation/gender/birthday/category_id/category_name/source`，旧用户可为 null）；category_name 按现行类别表读取，停用类仍可显示 |
 | 2 | POST | /me/profile | 移动端兼容入口；仅允许 `real_name?`、`email?`、`avatar_id?`、`occupation?`、`gender?`、`birthday?` | 更新后的资料 |
 | 3 | PATCH | /me/profile | PC/既有兼容；请求与 POST 相同 | 更新后的资料 |
 
@@ -278,6 +280,19 @@ A3 学员管理边界：列表、详情、资料更新和启停仅作用于 `sys
 `occupation` 去首尾空白后为 1—64 字符或 null，且不修改培训类别；`gender` 仅 `male/female/null`；`birthday` 仅真实 `YYYY-MM-DD/null` 且不得晚于服务端 Asia/Shanghai 业务当前日期。普通保存继续禁止 `source/category_id/role/status/identity_status/username` 等权威字段；Gate G 实名契约规定已实名姓名不得由兼容的 `real_name` 字段修改，PC/mobile 共用事务内检查，非法修改返回 40001。
 
 `source/category_id/role/avatarId/username/department_id` 等未知或越权字段均返回 40001，不静默丢弃；`avatar_id` 只接受已经由本人上传且 ready 的头像资源，绑定与旧资源解绑在同一事务内完成。
+
+#### 3.2.3.1 培训工种首次确认（2026-10-23）
+
+PC「培训类别」与移动端「培训工种」共同引用 `sys_user.category_id`，不是普通 `occupation` 文本。个人资料和实名认证保留独立入口；导入/PC 已分配类别者只能查看，未分配者首次明确确认后锁定。
+
+| 方法 | 路径 | 请求 | 成功 data |
+|---|---|---|---|
+| GET | /me/training-categories | query 仅 `page/page_size`，正整数，默认 1/20，上限 100 | `Page<{id:string,name:string}>`，只列启用类别 |
+| PUT | /me/training-category | 严格 body `{category_id:string}`，正十进制字符串 ID | 完整本人资料，含 `category_id/category_name` |
+
+两个端点只接受启用、无任何业务角色链接的 mobile employee，不借此开放后台类别管理。写入在事务内锁定用户、校验启用类别：当前 NULL 允许首次赋值；同值重放幂等返回、不重复记录首次审计；已非空不同值返回 40001 与 `data.reason_code=TRAINING_CATEGORY_LOCKED`。无效/停用新类别使用 40910。普通 POST/PATCH `/me/profile` 的白名单不放宽。
+
+绑定只改本人类别，不改 source/role/实名/姓名。首次绑定和 PC 后续类别调整记录操作者、目标及前后类别；既有题单、进行中考试、历史分数不重算。网络写结果不明时客户端先 GET `/me/profile` 读回，不自动重发写请求。课程仍遵守 3.9/3.10 的全 published 浏览与实名播放规则，不因类别新增门槛。
 
 ### 3.2.4 受控媒体 /media（A4）
 

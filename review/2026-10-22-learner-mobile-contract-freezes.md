@@ -121,6 +121,7 @@ interface LearnerProfile {
   birthday: string | null // YYYY-MM-DD
   source: 'institution' | 'external' | null
   category_id: string | null
+  category_name: string | null // 当前类别名称，停用类别仍可显示
   role: 'employee' | 'regulation_admin' | 'super_admin'
   status: number
 }
@@ -146,6 +147,7 @@ interface SelfProfilePatch {
 - `019_learner_profile` 在 `sys_user` 增加可空 `occupation VARCHAR(64)`、`gender VARCHAR(16)`、`birthday DATE`；同步 migration、`database/init.sql`、entity 与 03/04 册。Task 10 实名迁移顺延为 `020_identity_verification`。
 - occupation 可空，非空去首尾空白后长度 1—64；gender 仅 `male/female/null`；birthday 仅 `YYYY-MM-DD/null`，必须是真实日期且不晚于服务端业务当前日期。
 - `phone/source/category_id/role/status/identity_status/username` 不在 `SelfProfilePatch` 白名单，篡改返回 40001。手机号继续只走 Auth Contract 的受控流程。
+- **2026-10-23 已批准增量**：移动端「培训工种」与 PC「培训类别」统一读取 `category_id/category_name`，不再编辑 occupation 充当工种，不迁移/猜测回填旧文本。普通资料白名单保持原样；新增 GET `/me/training-categories?page/page_size` 返回启用类别窄分页 `{id,name}`，PUT `/me/training-category` 仅接受 `{category_id:string}`，只允许启用且无业务角色链接的 mobile employee。事务内 NULL→启用类别首次确认，同值重放幂等，已有不同类别返回 40001 / `TRAINING_CATEGORY_LOCKED`；后续仅由有 `students:write` 的 PC 人员调整，并审计前后值。返回完整本人资料；不影响来源、实名、历史考试或课程门槛。个人资料与实名认证仍为两个菜单；未设置者二次确认后锁定，写结果未知先 GET 读回，页面返回刷新 PC 改动。详细契约见 `docs/superpowers/specs/2026-10-23-learner-training-category.md`。
 - mobile 页面将 `real_name` 和手机号作为只读权威字段；本阶段不把静态 fixture 覆盖回服务端。Task 10 接入实名权威状态后，再禁止已实名姓名经 PC 兼容字段修改。
 - 头像仍遵守现有私有媒体绑定：上传成功不等于资料已保存；只有 PATCH 成功才更新 `avatar_id` 关联，失败保留本地输入并允许重试。
 

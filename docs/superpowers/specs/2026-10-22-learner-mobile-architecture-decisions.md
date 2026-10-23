@@ -357,6 +357,20 @@
 - root 独占共享文件、Git index 和本地提交，worker 不提交；保留现有用户脏改动，不纳入无关并行任务。
 - 确认依据：用户明确决定“不使用 worktree，直接在当前 main 分支集成”。
 
+### D39：TabBar 使用 Wot 组件，包装层保留业务导航并定制设计外观
+
+- `AppTabBar` 负责业务导航；内部使用 `wd-tabbar` / `wd-tabbar-item` 承接组件行为，定制样式按 Pencil 还原。
+- 包装层继续保留现有路由、静态 `scenario` 参数传递和 Lucide `AppIcon`；Wot 的 `shape="round"`、fixed、safe-area 与 change 承接胶囊形状、固定定位、安全区和切换事件。placeholder 按现有页面占位策略适用时使用；当前沿用 `AppPage` 已有底部占位，不启用 Wot placeholder，避免重复占位。
+- 用户指定的 `mZWTf` 只是方案标题文字；视觉基准是实际画板 `N4rck`，以可见 TabBar `PkHP7` / 胶囊 `Xtjij` 的毛玻璃、阴影与激活胶囊样式为准。
+- 确认原话：“该改成‘AppTabBar 负责业务导航，wd-tabbar 负责组件行为，定制样式负责还原 Pencil’。”本次明确授权按此修改 TabBar，不扩展到其他页面或业务流程。
+- 本决定已按下文 2026-10-23 TabBar 实施记录落地；Chrome 计算样式与所列自动化检查已通过，真实 H5 与微信小程序的未验项仍分别保留，不能由编译或计算样式结果推定真机视觉通过。
+
+### D40：错题本筛选采用 Wot UI 原生 card 分段器
+
+- 用户最初要求 iOS 毛玻璃分段切换；查证 Wot UI 2.3.2 已提供 `wd-segmented` 后，用户最终明确撤销毛玻璃，改用 Wot UI 原生 card 分段器，并要求与页面整体协调。
+- 保留“全部 / 单选 / 多选 / 判断”四项筛选；静态与真实错题本共用组件，仅保留页面间距，不覆盖组件内部样式，不添加 blur、shadow 或自定义颜色。
+- 最终原生 card 方向替代本轮早先的毛玻璃方案；不把 TabBar 的毛玻璃材质要求扩展到错题本筛选。
+
 ## 已实施事实与验证边界
 
 以下只区分现状，不自动扩大实施授权；2026-10-22 对列出的配置、目录和文档进行了窄范围只读核对。
@@ -451,6 +465,19 @@
 - `Static*` / `Live*` 组件分离，登录表单、真实首页轮播、课程媒体及考试生产组件不能由静态 scenario 截图代替；真实接口页面尚未完成全量视觉验收。Gate J 的功能/自动化通过不覆盖该视觉缺口。
 - Pencil 的超时“自动交卷”仍是过时设计，应继续遵守 D16 的到期不自动提交，不能为视觉对齐恢复旧行为；解析中的答错、未答、漏选也尚未完成同状态对照。
 - 详细范围、逐路由结论与基准限制见 [Pencil 视觉核对报告](../../../review/2026-10-23-learner-mobile-pencil-visual-audit.md)；临时审计数据仅放 `/tmp`、不入库，收尾须清理。记录员不执行删除，也不以形成报告代替清理确认。
+- 2026-10-23 D39 TabBar 改造已完成：`AppTabBar` 内部使用 `wd-tabbar` / `wd-tabbar-item`，保留业务路由、静态 `scenario`、Lucide `AppIcon` 及 `AppPage` 底部占位，不启用 Wot placeholder。指定 Pencil 节点的精确材质参数已由 Chrome `getComputedStyle` 验证。
+- 本次 TabBar 证据：type-check、unit 34 文件/313 项、Chrome static-shell 32/32、Chrome `static-exam.spec.ts --workers=1` 37/37、`build:h5` 与 `build:mp-weixin` 均 PASS；考试中心及考试相关路由未因共享 TabBar 回归，独立 reviewer 无必须修问题。记录员仅记录 root 交付证据，未重复执行检查。
+- 本次 TabBar 仍未验：微信开发者工具/真机的样式穿透、安全区、ARIA/读屏，iOS Safari/微信浏览器的毛玻璃表现；H5 与 Pencil 的截图像素对照未重新进行。上述通过结果不代表这些未验项通过，也不代表全页面像素级视觉缺口已收口。
+- 用户随后澄清本轮核对范围为 Pencil 正式区所有应有底部主导航的画板；以下是 Pencil MCP 全量审计事实，不是新的 H5 业务实现或真机验收结论。
+- 本轮通过 Pencil MCP 盘点 `gemini.pen`：共有 95 个 414×844 frame，其中 77 个主画板；排除已选参考 `ePmpp` 与归档 `zwlpG` 后，正式主画板为 61 个。该全量口径与前序 60 个唯一画板的路由映射审计口径分开记录。
+- 正式区只有 6 个画板应有底部主导航（画板/TabBar）：首页 `y208N/Qjj2m`、课程 `Y0ZNqY/C2Hj7D`、考试 `JDheF/jElEX`，以及我的 `gmOqo/mBgUQ`、`jcvqt/UdiSQ`、`I69w9x/XWaFe`；其他画板没有 TabBar 是页面层级设计，不补加。
+- 六个 TabBar 均引用 `P8qyL`，位置与尺寸均为 x=0、y=774、w=414、h=70，padding 为 `[0,16,12,16]`；解析实例后，与 `Xtjij` 基准的 capsule 382×58、fill `#E8EDF573`、radius 29、blur 10、三层阴影、padding 5，以及 tab 93×48 / radius 24 / gap 3、icon 22、label 10 全部一致。
+- 六屏截图已逐屏核对，每屏只有一个正确激活态，TabBar 子树均无布局问题，未发现 TabBar 视觉或结构差异；因此本轮不为制造 diff 修改 `gemini.pen`，也不修改 H5 业务代码。记录员仅记录 root 交付的 MCP 与截图证据，未重复执行审计。
+- 非 TabBar 的既有画板 clipping 报告继续保留，不混作 TabBar 缺陷；本轮 Pencil 画板一致性结论不替代真实真机/微信/iOS 毛玻璃验收，也不消除前序其他页面的视觉缺口。
+- 2026-10-23 D40 已实施：新增共享 `WrongBookSegmented.vue`，`StaticWrongBook` / `LiveWrongBook` 共用 Wot 原生 card 分段器，保留四项筛选并补充 `radiogroup` / `radio` / `aria-checked`。组件只留页面间距，无 `:deep`、CSS 变量、blur、shadow 或自定义颜色覆盖。
+- 错题本本轮证据：定向静态测试先 RED 后 GREEN，type-check、static E2E 94/94、H5/MP build 均 PASS；最终撤销毛玻璃并加入 ARIA 插槽后，root 已重新运行 `PLAYWRIGHT_CHANNEL=chrome npm --prefix mobile run test:e2e -- exam-flow.spec.ts -g "history preserves timeout and wrong book" --workers=1`，真实错题本 flow 定向 1/1 PASS（2.4s）。独立 reviewer 确认无阻塞。记录员仅记录 root 交付证据，未重复执行验证。
+- Chrome 390×844 视觉与计算样式核对为 `wd-segmented--card`，尺寸 358×36、背景 `rgb(242,243,245)`、radius 4、filter none、shadow none，符合原生 card 方向；微信开发者工具/真机及真实读屏仍未验。
+- 本轮全量 unit 并非全绿：34 个文件中 33 PASS / 1 FAIL，312/313 项通过；失败为既有 exam-store unknown submission 重试用例，已隔离复现。root 核对根因为测试 `active()` 每次生成不同 `deadline_at`，生产 `queryStatus` 正确拒绝 deadline 漂移，偶然同毫秒时用例可通过；该失败与本次 UI 文件无差异，本轮不越界修改考试业务或测试。此结果是当前检查事实，不用前序 313/313 的历史通过覆盖。
 
 ## 已冻结实施契约（独立审查已通过，非新增用户决定）
 
@@ -489,9 +516,11 @@
 ## 当前断点与未验边界
 
 - 当前断点：Task 1—15 实施及 Task 16/Gate J 自动化、桌面 Chrome 验收收口（全量 21/21 PASS）继续有效；2026-10-23 Pencil 全路由视觉核对已完成，但未达到像素级还原，真实接口页面视觉覆盖及已发现差异仍未收口。后续视觉修正、真实供应商/设备/容器/生产环境验收均按最新授权推进，不自行扩大任务。
+- 当前 TabBar 状态：D39 已实施并通过 Chrome 计算样式、type-check、313 项 unit、32 项 static-shell、37 项 static-exam、H5/MP 构建与独立审查；随后 Pencil MCP 全量审计确认正式区 61 个主画板中应有 TabBar 的 6 屏均与基准一致，逐屏截图无 TabBar 差异，本轮未修改 `gemini.pen` 或 H5 业务代码。微信开发者工具/真机样式穿透、安全区、ARIA/读屏及 iOS Safari/微信浏览器毛玻璃仍未验，H5 与 Pencil 截图像素对照未重做；非 TabBar 的既有 clipping 报告继续保留。
+- 当前错题本筛选状态：D40 已实施并通过定向静态测试、type-check、94 项 static E2E、H5/MP 构建、Chrome 原生 card 视觉核对与独立审查；最终样式撤销及 ARIA 插槽变化后，真实 flow 已重新验证 1/1 PASS，微信开发者工具/真机和真实读屏仍未验。本轮全量 unit 为 312/313，既有 exam-store deadline 测试夹具问题已隔离，考试业务/测试未在本轮修改，不能宣称当前全量 unit 全绿。
 - 用户已要求停止继续提问；不重开已确认问题，也不把 Gate J 自动化与桌面 Chrome 通过扩大为真实供应商、真机或生产部署完成。
 - D12 的页面内断网继续作答与 D31 的离线刷新/重进边界均已确定，不再把完整题目离线缓存作为待决方案。
-- 其余实现细节按设计/计划处理，不自动升级为新增已确认产品决定；既有 D01—D38 继续作为决策基线，冲突时采用最新明确决定。
+- 其余实现细节按设计/计划处理，不自动升级为新增已确认产品决定；既有 D01—D40 继续作为决策基线，冲突时采用最新明确决定。
 - 首期验收范围已澄清为 H5 交付、`MP-WEIXIN` 编译兼容；小程序真机闭环后续再验。
 - 完整设计、计划与本记录不能代替分级验收证据；真实短信、腾讯 OCR/FaceID、iOS Safari/Android Chrome/微信内置浏览器及开发者工具/真机、真实视频解码/弱网/相机、Docker/Nginx 运行和生产部署仍未执行。
 
