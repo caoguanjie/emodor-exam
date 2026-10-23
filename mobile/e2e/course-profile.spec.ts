@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 const user = { id: 17, username: 'learner-17', real_name: '会话旧姓名', phone_masked: '138****0000', role: 'employee', source: 'institution', category_id: 3, identity_status: 'unverified' }
-const profile = { id: '17', username: 'learner-17', real_name: '真实学员姓名', phone: '13900000000', email: null, avatar_id: null, occupation: '电工', gender: 'female', birthday: '2000-03-04', source: 'external', category_id: '9007199254740993', role: 'employee', status: 1 }
+const profile = { id: '17', username: 'learner-17', real_name: '真实学员姓名', phone: '13900000000', email: null, avatar_id: null, occupation: '旧职业文本', gender: 'female', birthday: '2000-03-04', source: 'external', category_id: '9007199254740993', category_name: '电工', role: 'employee', status: 1 }
 const first = { id: '9007199254740995', title: '接口推荐课程', category_id: '9007199254740993', cover_asset_id: null, status: 'published', required_lesson_count: 2 }
 const second = { ...first, id: '9007199254740996', title: '接口第二门课程' }
 function envelope(data: unknown) { return { code: 0, message: 'ok', data } }
@@ -107,9 +107,9 @@ test('profile saves only editable fields, preserves failed input, and accepts au
   await page.route('**/api/v1/me/profile', route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: envelope(profile) })
     expect(route.request().method()).toBe('POST')
-    expect(route.request().postDataJSON()).toEqual({ occupation: '班组长', gender: 'female', birthday: '2000-03-04' })
+    expect(route.request().postDataJSON()).toEqual({ gender: 'male', birthday: '2000-03-04' })
     saves++
-    return saves === 1 ? route.abort('internetdisconnected') : route.fulfill({ json: envelope({ ...profile, real_name: '实名权威姓名', occupation: '班组长', phone: '13900001111' }) })
+    return saves === 1 ? route.abort('internetdisconnected') : route.fulfill({ json: envelope({ ...profile, real_name: '实名权威姓名', gender: 'male', phone: '13900001111' }) })
   })
   await page.goto('/#/pages/profile/index')
   await expect(page.getByText('真实学员姓名', { exact: true })).toBeVisible()
@@ -120,11 +120,11 @@ test('profile saves only editable fields, preserves failed input, and accepts au
   await expect(phone).toHaveValue('13900000000')
   await expect(name).not.toBeEditable()
   await expect(phone).not.toBeEditable()
-  await page.getByRole('button', { name: '工种', exact: true }).click()
-  await page.getByRole('button', { name: '选择班组长', exact: true }).click()
+  await page.getByRole('button', { name: '性别', exact: true }).click()
+  await page.getByRole('button', { name: '选择男', exact: true }).click()
   await page.getByText('保存资料', { exact: true }).click()
   await expect(page.getByText('网络连接失败，请检查网络后重试', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '工种', exact: true })).toContainText('班组长')
+  await expect(page.getByRole('button', { name: '性别', exact: true })).toContainText('男')
   await page.getByText('保存资料', { exact: true }).click()
   await expect(page.getByText('已保存', { exact: true })).toBeVisible()
   await expect(name).toHaveValue('实名权威姓名')
@@ -138,16 +138,16 @@ test('an in-flight profile save locks all choices and cannot overwrite a later u
   await page.route('**/api/v1/me/profile', route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: envelope(profile) })
     saves++
-    expect(route.request().postDataJSON()).toEqual({ occupation: '班组长', gender: 'female', birthday: '2000-03-04' })
-    finishSave = () => route.fulfill({ json: envelope({ ...profile, occupation: '班组长' }) })
+    expect(route.request().postDataJSON()).toEqual({ gender: 'female', birthday: '2000-03-04' })
+    finishSave = () => route.fulfill({ json: envelope(profile) })
   })
   await page.goto('/#/pages/profile/info')
   await expect(page.getByRole('textbox').first()).toHaveValue('真实学员姓名')
-  await page.getByRole('button', { name: '工种', exact: true }).click()
-  await page.getByRole('button', { name: '选择班组长', exact: true }).click()
+  await page.getByRole('button', { name: '性别', exact: true }).click()
+  await page.getByRole('button', { name: '选择女', exact: true }).click()
   await page.getByText('保存资料', { exact: true }).click()
   await expect.poll(() => saves).toBe(1)
-  for (const label of ['工种', '性别', '生日']) {
+  for (const label of ['性别', '生日']) {
     const field = page.getByRole('button', { name: label, exact: true })
     await expect(field).toHaveAttribute('aria-disabled', 'true')
     await field.dispatchEvent('click')
@@ -156,7 +156,7 @@ test('an in-flight profile save locks all choices and cannot overwrite a later u
   await expect(page.getByText('选择生日', { exact: true })).toBeHidden()
   // A late click from an already-rendered picker must be ignored by the handler too.
   await page.locator('.profile-picker__choice').first().dispatchEvent('click')
-  await expect(page.getByRole('button', { name: '工种', exact: true })).toContainText('班组长')
+  await expect(page.locator('.category-field__value')).toHaveText('电工')
   await expect(page.getByRole('button', { name: '性别', exact: true })).toContainText('女')
   await expect(page.getByText('已保存', { exact: true })).toHaveCount(0)
   await finishSave()

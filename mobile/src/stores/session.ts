@@ -81,6 +81,7 @@ export const useSessionStore = defineStore('mobile-session', () => {
   function login(input: SmsLoginInput): Promise<MobileSessionResult> {
     if (loginPromise) return Promise.reject(new ApiError(40001, '正在登录，请稍候'))
     const startedRevision = ++revision.value
+    learner.invalidateProfile()
     loggingIn.value = true
     const pending = enqueueAuthWrite(async () => {
       if (startedRevision !== revision.value) throw new ApiError(40107, '登录会话已切换，请重新操作')
@@ -98,6 +99,7 @@ export const useSessionStore = defineStore('mobile-session', () => {
   function logout(): Promise<void> {
     const previousUser = user.value?.id
     const startedRevision = ++revision.value
+    learner.invalidateProfile()
     const previousToken = accessToken.value
     return enqueueAuthWrite(async () => {
       if (previousUser !== undefined) {

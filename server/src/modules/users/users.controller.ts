@@ -57,6 +57,19 @@ class SelfProfileDto {
 
 const SELF_PROFILE_FIELDS = ['real_name', 'email', 'avatar_id', 'occupation', 'gender', 'birthday'] as const;
 
+export class ConfirmTrainingCategoryDto {
+  @IsString() @MaxLength(32) @Matches(/^[1-9]\d*$/) category_id!: string;
+}
+
+const CategoryPageNumber = () => Transform(({ value }) => (
+  typeof value === 'string' && /^[1-9]\d*$/.test(value) ? Number(value) : value
+));
+
+export class TrainingCategoryQueryDto {
+  @IsOptional() @CategoryPageNumber() @IsInt() @Min(1) @Max(Number.MAX_SAFE_INTEGER) page?: number;
+  @IsOptional() @CategoryPageNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
+}
+
 class StudentAvatarDto {
   @IsOptional() @IsString() @MaxLength(32) avatar_id?: string | null;
 }
@@ -87,6 +100,7 @@ interface StudentImportPreviewBody {
 const STUDENT_IMPORT_ROW_KEYS = [
   'row', 'username', 'real_name', 'realName', 'employee_no', 'employeeNo', 'phone', 'email',
   'source', 'category_id', 'categoryId', 'category',
+  'category_name', 'age', 'gender', '学生姓名', '年龄', '性别', '培训类别',
   '用户名', '姓名', '工号', '手机号', '邮箱', '来源', '培训类别ID',
 ] as const;
 
@@ -158,6 +172,7 @@ export class StudentsController {
     const buffer = await this.importer.buildStudentTemplate();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="student-import-template.xlsx"');
+    res.setHeader('Cache-Control', 'no-store');
     res.end(buffer);
   }
 
@@ -177,14 +192,16 @@ export class StudentsController {
   ) {
     const bodyRecord = assertImportObject(body || {}, ['rows', 'defaults'], '导入请求');
     let rows: unknown[] = file ? await this.importer.parseStudentWorkbook(file.buffer) : parseImportRows(bodyRecord.rows);
-    const defaults = parseImportDefaults(bodyRecord.defaults);
+    // Validate legacy payloads, but never use defaults to fill a missing category.
+    parseImportDefaults(bodyRecord.defaults);
     rows = rows.map((row: unknown) => {
       if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
       const rowRecord = assertImportObject(row, STUDENT_IMPORT_ROW_KEYS, '导入行');
+      const nonempty = (value: unknown) => value !== undefined && value !== null && String(value).trim() !== '';
+      const source = [rowRecord.source, rowRecord['来源']].find(nonempty);
       return {
         ...rowRecord,
-        source: rowRecord.source || defaults.source,
-        category_id: rowRecord.category_id || defaults.category_id,
+        source: source ?? 'institution',
       };
     });
     return this.importer.preview(String(user.id), 'students', rows);
@@ -234,7 +251,7 @@ export class StudentsController {
 
 }
 
-/** 学员与管理员共用的本人资料；source/category/role 永远不由本人接口接受。 */
+/** 资料由 PC/mobile 共用；培训类别仅普通 mobile 学员可通过专用入口首次确认。 */
 @Controller('me')
 export class MeProfileController {
   constructor(private readonly users: UsersService) {}
@@ -242,6 +259,26 @@ export class MeProfileController {
   @Get('profile')
   profile(@CurrentUser() user: AuthUser) {
     return this.users.selfProfile(String(user.id));
+  }
+
+  @Get('training-categories')
+  trainingCategories(
+    @Query(new StrictDtoValidationPipe(['page', 'page_size'])) query: TrainingCategoryQueryDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    assertImportObject(req.query, ['page', 'page_size'], '培训工种查询');
+    return this.users.listSelfTrainingCategories(user, query);
+  }
+
+  @Put('training-category')
+  confirmTrainingCategory(
+    @Body(new StrictDtoValidationPipe(['category_id'])) dto: ConfirmTrainingCategoryDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    assertImportObject(req.body, ['category_id'], '培训工种确认请求');
+    return this.users.confirmTrainingCategory(user, dto, req.ip || null);
   }
 
   @Patch('profile')

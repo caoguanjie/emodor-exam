@@ -91,7 +91,7 @@ export const shellProfile = { name: '学员演示账号', phone: '13800000000', 
 export function isProfileFieldReadonly(field: 'name' | 'phone' | 'job' | 'gender' | 'birthday'): boolean {
   return field === 'name' || field === 'phone'
 }
-export const profileJobs = ['产业工人', '班组长', '管理人员', '电工', '危化品作业人员', '建筑施工安全', '消防安全管理员']
+export const profileTrainingCategories = ['产业工人', '班组长', '管理人员', '电工', '危化品作业人员', '建筑施工安全', '消防安全管理员'].map((name, index) => ({ id: String(index + 1), name }))
 export const smsHelp = [
   { title: '确认手机号填写正确', description: '请核对11位手机号，填错可返回修改。' },
   { title: '等待倒计时结束后重发', description: '短信可能延迟，请稍等片刻再重新获取。' },

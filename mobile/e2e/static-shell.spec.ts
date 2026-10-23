@@ -41,7 +41,7 @@ test('SMS form switches to sent state and accepts a complete fixture entry', asy
 test('profile choice updates the visible value and saves locally', async ({ page }) => {
   await page.goto('/#/pages/profile/info?scenario=profile-job')
   await page.getByRole('button', { name: '选择电工', exact: true }).click()
-  await expect(page.getByRole('button', { name: '工种', exact: true })).toContainText('电工')
+  await expect(page.getByRole('button', { name: '培训工种', exact: true })).toContainText('电工')
   await page.getByText('保存资料', { exact: true }).click()
   await expect(page.getByText('已保存', { exact: true })).toBeVisible()
 })
@@ -56,9 +56,9 @@ test('profile keeps authoritative identity fields read-only while choices remain
   await expect(phone).not.toBeEditable()
   await expect(name).toBeDisabled()
   await expect(phone).toBeDisabled()
-  await page.getByRole('button', { name: '工种', exact: true }).click()
+  await page.getByRole('button', { name: '培训工种', exact: true }).click()
   await page.getByRole('button', { name: '选择电工', exact: true }).click()
-  await expect(page.getByRole('button', { name: '工种', exact: true })).toContainText('电工')
+  await expect(page.getByRole('button', { name: '培训工种', exact: true })).toContainText('电工')
   await page.getByText('保存资料', { exact: true }).click()
   await expect(name).toHaveValue('学员演示账号')
   await expect(phone).toHaveValue('13800000000')
@@ -127,6 +127,39 @@ test('deep-linked pages use their specified return fallback instead of the home 
   await expect(page).toHaveURL(/#\/pages\/profile\/index\?scenario=profile-default$/)
 })
 
+test('wrong book uses the Wot segmented control and filters question types', async ({ page }) => {
+  await page.goto('/#/pages/profile/wrong-book?scenario=exam-wrong-book')
+
+  const segmented = page.locator('.wrong-book-segmented.wd-segmented')
+  await expect(segmented).toBeVisible()
+  await expect(segmented).toHaveClass(/wd-segmented--card/)
+  await expect(segmented.locator('.wd-segmented__item')).toHaveCount(4)
+  await expect(segmented.locator('.wd-segmented__item.is-active')).toHaveText('全部')
+  await expect(segmented.getByRole('radio')).toHaveCount(4)
+  await expect(segmented.getByRole('radio', { name: '全部', exact: true })).toHaveAttribute('aria-checked', 'true')
+
+  const material = await segmented.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      backdropFilter: style.backdropFilter || style.getPropertyValue('-webkit-backdrop-filter'),
+      boxShadow: style.boxShadow,
+    }
+  })
+  expect(material.backdropFilter).toBe('none')
+  expect(material.boxShadow).toBe('none')
+
+  await expect(page.locator('.wrong-card')).toHaveCount(2)
+  await segmented.getByRole('radio', { name: '多选', exact: true }).click()
+  await expect(segmented.locator('.wd-segmented__item.is-active')).toHaveText('多选')
+  await expect(segmented.getByRole('radio', { name: '多选', exact: true })).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByText('暂无错题', { exact: true })).toBeVisible()
+
+  await segmented.getByRole('radio', { name: '判断', exact: true }).click()
+  await expect(segmented.locator('.wd-segmented__item.is-active')).toHaveText('判断')
+  await expect(page.locator('.wrong-card')).toHaveCount(1)
+  await expect(page.getByText('电气设备着火时，可以直接用水扑救。', { exact: true })).toBeVisible()
+})
+
 test('profile static previews preserve their scenario across menu and return journeys without API calls', async ({ page }) => {
   const calls: string[] = []
   page.on('request', request => { if (request.url().includes('/api/v1/')) calls.push(request.url()) })
@@ -156,4 +189,46 @@ test('profile static previews preserve their scenario across menu and return jou
   await page.getByRole('button', { name: '返回', exact: true }).click()
   await expect(page).toHaveURL(/scenario=profile-default$/)
   expect(calls).toEqual([])
+})
+
+test('home navigation uses the Pencil-matched Wot round tabbar and preserves static scenarios', async ({ page }) => {
+  await page.goto('/#/pages/home/index?scenario=home-default')
+
+  const tabbar = page.locator('.wd-tabbar')
+  await expect(tabbar).toBeVisible()
+  await expect(tabbar).toHaveClass(/wd-tabbar--round/)
+
+  const homeItem = tabbar.locator('.wd-tabbar-item').filter({ hasText: '首页' })
+  const courseItem = tabbar.locator('.wd-tabbar-item').filter({ hasText: '课程' })
+  await expect(homeItem).toBeVisible()
+  await expect(homeItem.locator('.wd-tabbar-item__body-title')).toHaveClass(/is-active/)
+
+  const material = await tabbar.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      height: style.height,
+      marginLeft: style.marginLeft,
+      marginRight: style.marginRight,
+      borderRadius: style.borderRadius,
+      backgroundColor: style.backgroundColor,
+      backdropFilter: style.backdropFilter,
+      boxShadow: style.boxShadow,
+    }
+  })
+  expect(material.height).toBe('58px')
+  expect(material.marginLeft).toBe('16px')
+  expect(material.marginRight).toBe('16px')
+  expect(material.borderRadius).toBe('29px')
+  expect(material.backgroundColor).toBe('rgba(232, 237, 245, 0.45)')
+  expect(material.backdropFilter).toBe('blur(10px)')
+  expect(material.boxShadow.match(/inset/g)?.length).toBe(2)
+  expect(material.boxShadow).toContain('10px 30px')
+
+  const activeBackground = await homeItem.evaluate(element => getComputedStyle(element).backgroundColor)
+  expect(activeBackground).toBe('rgba(25, 137, 250, 0.1)')
+
+  await courseItem.click()
+  await expect(page).toHaveURL(/#\/pages\/course\/index\?scenario=course-list$/)
+  await expect(page.locator('.wd-tabbar .wd-tabbar-item').filter({ hasText: '课程' }).locator('.wd-tabbar-item__body-title')).toHaveClass(/is-active/)
+  await expect(page.getByText('全部课程 · 6门', { exact: true })).toBeVisible()
 })

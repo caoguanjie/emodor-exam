@@ -241,12 +241,12 @@ export async function run(ctx) {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(template.body);
   const worksheet = workbook.worksheets[0];
-  const xlsxUsername = `a2_xlsx_${randomBytes(3).toString('hex')}`;
-  const xlsxUniqueUsername = `a2_xlsx_unique_${randomBytes(3).toString('hex')}`;
+  const xlsxPhone = randomLearnerPhone();
+  const xlsxUniquePhone = randomLearnerPhone();
   assert.ok(!worksheet.getRow(1).values.some((value) => /密码|password/i.test(String(value))), 'student template must omit password');
-  worksheet.addRow([xlsxUsername, 'XLSX 学员', 'A2-XLSX-1', randomLearnerPhone(), '', 'institution', categoryId]);
-  worksheet.addRow([xlsxUsername.toUpperCase(), 'XLSX 重复', 'A2-XLSX-2', randomLearnerPhone(), '', 'institution', categoryId]);
-  worksheet.addRow([xlsxUniqueUsername, 'XLSX 唯一', 'A2-XLSX-3', randomLearnerPhone(), '', 'institution', categoryId]);
+  worksheet.getRow(2).values = ['XLSX 学员', 28, '男', categoryName, xlsxPhone, '本机构'];
+  worksheet.getRow(3).values = ['XLSX 重复', 29, '女', categoryName, xlsxPhone, '本机构'];
+  worksheet.getRow(4).values = ['XLSX 唯一', 30, '女', categoryName, xlsxUniquePhone, '外来'];
   const xlsxPreview = await ctx.upload(admin, '/admin/students/import-preview', Buffer.from(await workbook.xlsx.writeBuffer()), 'students.xlsx');
   assert.equal(xlsxPreview.status, 200);
   assert.deepEqual(xlsxPreview.data.valid_rows, [4]);
@@ -256,9 +256,13 @@ export async function run(ctx) {
   }
   const xlsxCommit = await ctx.request(admin, 'POST', `/admin/students/import-batches/${xlsxPreview.data.batch_id}/commit`, { row_numbers: [4] });
   assert.equal(xlsxCommit.status, 200);
-  const xlsxStored = await ctx.queryTestDb('SELECT username, password_hash FROM sys_user WHERE username = ?', [xlsxUniqueUsername]);
+  const xlsxStored = await ctx.queryTestDb('SELECT username, password_hash, age, gender, source, category_id FROM sys_user WHERE phone = ?', [xlsxUniquePhone]);
   assert.equal(xlsxStored.length, 1);
   assert.match(xlsxStored[0].password_hash, /^\$2[aby]\$/);
+  assert.equal(xlsxStored[0].age, 30);
+  assert.equal(xlsxStored[0].gender, 'female');
+  assert.equal(xlsxStored[0].source, 'external');
+  assert.equal(String(xlsxStored[0].category_id), categoryId);
   const xlsxBatch = await ctx.queryTestDb('SELECT normalized_rows, errors FROM import_batch WHERE id = ?', [xlsxPreview.data.batch_id]);
   for (const actualPassword of importPasswords) {
     assert.equal(JSON.stringify(xlsxBatch).includes(actualPassword), false);

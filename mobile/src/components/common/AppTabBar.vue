@@ -8,24 +8,69 @@ const tabs = [
   { id: 'exam', title: '考试', icon: 'clipboard-pen-line', url: '/pages/exam/index', scenario: 'exam-center' },
   { id: 'profile', title: '我的', icon: 'user-round', url: '/pages/profile/index', scenario: 'profile-default' },
 ]
+const tabbarStyle = [
+  '--wot-tabbar-height: 58px',
+  '--wot-tabbar-bg: #e8edf573',
+  '--wot-tabbar-round-margin-horizontal: 16px',
+  '--wot-tabbar-round-radius: 29px',
+  '--wot-tabbar-item-title-font-size: 10px',
+  '--wot-tabbar-item-title-line-height: 14px',
+  'bottom: calc(12px + var(--app-safe-area-bottom))',
+  'box-sizing: border-box',
+  'padding: 5px',
+  'background: #e8edf573',
+  'border-radius: 29px',
+  'box-shadow: inset 0 1px 1px #fffffff2, inset 0 -1px 1px #0000000f, 0 10px 30px #16202e1f',
+  'backdrop-filter: blur(10px)',
+  '-webkit-backdrop-filter: blur(10px)',
+  'font-family: var(--app-font-family)',
+].join('; ')
 function navigate(tab: typeof tabs[number]) {
   const current = typeof getCurrentPages === 'function' ? getCurrentPages().at(-1) as unknown as { options?: Record<string, unknown> } : undefined
   const url = isStaticSessionPreview(current?.options) ? `${tab.url}?scenario=${tab.scenario}` : tab.url
   uni.reLaunch({ url })
 }
+function handleChange({ value }: { value: string | number }) {
+  const tab = tabs.find(item => item.id === value)
+  if (tab) navigate(tab)
+}
 </script>
 <template>
-  <view class="tab-bar" role="navigation" aria-label="主导航">
-    <view class="tab-bar__capsule">
-      <view v-for="tab in tabs" :key="tab.id" class="tab-bar__item" :class="{ 'tab-bar__item--active': active === tab.id }" role="button" :aria-label="tab.title" :aria-current="active === tab.id ? 'page' : undefined" @click="navigate(tab)">
-        <AppIcon :name="tab.icon" :size="22" :color="active === tab.id ? '#1989fa' : '#646566'" /><text>{{ tab.title }}</text>
-      </view>
-    </view>
-  </view>
+  <wd-tabbar
+    :model-value="active"
+    shape="round"
+    fixed
+    safe-area-inset-bottom
+    :bordered="false"
+    :z-index="20"
+    active-color="#1989fa"
+    inactive-color="#646566"
+    custom-class="tab-bar"
+    :custom-style="tabbarStyle"
+    role="navigation"
+    aria-label="主导航"
+    @change="handleChange"
+  >
+    <wd-tabbar-item
+      v-for="tab in tabs"
+      :key="tab.id"
+      :name="tab.id"
+      :title="tab.title"
+      :custom-class="active === tab.id ? 'tab-bar__item tab-bar__item--active' : 'tab-bar__item'"
+      role="button"
+      :aria-label="tab.title"
+      :aria-current="active === tab.id ? 'page' : undefined"
+    >
+      <template #icon="{ active: itemActive }">
+        <AppIcon :name="tab.icon" :size="22" :color="itemActive ? '#1989fa' : '#646566'" />
+      </template>
+    </wd-tabbar-item>
+  </wd-tabbar>
 </template>
 <style scoped>
-.tab-bar { position: fixed; z-index: 20; left: 0; right: 0; bottom: 0; width: 100%; padding: 0 16px calc(12px + var(--app-safe-area-bottom)); pointer-events: none; }
-.tab-bar__capsule { height: 58px; display: flex; padding: 5px; border-radius: var(--app-radius-full); background: color-mix(in srgb, var(--app-color-primary-soft) 55%, transparent); backdrop-filter: blur(10px); box-shadow: inset 0 1px 1px var(--app-color-surface), 0 10px 30px #16202e1f; pointer-events: auto; }
-.tab-bar__item { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 3px; border-radius: var(--app-radius-full); color: var(--app-color-text-secondary); font-size: 10px; font-weight: 500; }
-.tab-bar__item--active { background: color-mix(in srgb, var(--app-color-primary) 10%, transparent); color: var(--app-color-primary); font-weight: 600; }
+:deep(.tab-bar__item) { min-width: 0; border-radius: 24px; }
+:deep(.tab-bar__item--active) { background: #1989fa1a; }
+:deep(.tab-bar__item .wd-tabbar-item__body) { gap: 3px; }
+:deep(.tab-bar__item .wd-tabbar-item__body-title) { font-family: var(--app-font-family); font-weight: 500; }
+:deep(.tab-bar__item--active .wd-tabbar-item__body-title) { font-weight: 600; }
 </style>

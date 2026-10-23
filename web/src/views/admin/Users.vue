@@ -3,7 +3,7 @@
     <FitsTable>
       <template #search>
         <FitsListSearch @submit.prevent>
-          <el-form-item label="关键字"><el-input v-model="studentQuery.keyword" placeholder="用户名 / 姓名 / 工号" style="width:210px" clearable @keyup.enter="loadStudents" /></el-form-item>
+          <el-form-item label="关键字"><el-input v-model="studentQuery.keyword" placeholder="姓名 / 手机号" style="width:210px" clearable @keyup.enter="loadStudents" /></el-form-item>
           <el-form-item label="培训类别">
             <el-select v-model="studentQuery.category_id" clearable placeholder="全部类别" style="width:180px" @change="loadStudents">
               <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
@@ -18,30 +18,66 @@
         </FitsListSearch>
       </template>
       <template v-if="auth.can('students:write')" #actions>
-        <el-select v-if="auth.can('students:write')" v-model="studentImportDefaults.source" clearable placeholder="导入默认来源" style="width:150px">
-          <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
-        </el-select>
-        <el-select v-if="auth.can('students:write')" v-model="studentImportDefaults.category_id" clearable placeholder="导入默认类别" style="width:170px">
-          <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
-        </el-select>
-        <el-button v-if="auth.can('students:write')" @click="downloadStudentTemplate">下载导入模板</el-button>
+        <el-button v-if="auth.can('students:write')" type="primary" @click="openStudentCreate">新增学员</el-button>
         <el-upload v-if="auth.can('students:write')" :show-file-list="false" accept=".xlsx" :before-upload="onStudentImport">
           <el-button type="success">预览导入</el-button>
         </el-upload>
-        <el-button v-if="auth.can('students:write')" type="primary" @click="openStudentCreate">新增学员</el-button>
+        <el-button v-if="auth.can('students:write')" @click="downloadStudentTemplate">下载导入模板</el-button>
       </template>
       <el-table v-loading="studentLoading" :data="students">
         <template #empty><el-empty v-if="!studentLoading" description="暂无学员" /></template>
-        <el-table-column prop="username" label="用户名" width="130" />
-        <el-table-column prop="real_name" label="姓名" width="110" />
-        <el-table-column prop="employee_no" label="工号" width="110" />
-        <el-table-column label="来源" width="90"><template #default="{ row }">{{ sourceLabel(row.source) }}</template></el-table-column>
-        <el-table-column label="培训类别" min-width="150"><template #default="{ row }">{{ categoryName(row.category_id) }}</template></el-table-column>
-        <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag></template></el-table-column>
-        <el-table-column v-if="auth.can('students:write')" label="操作" width="250" fixed="right">
+        <el-table-column label="姓名" min-width="110" show-overflow-tooltip><template #default="{ row }">{{ row.real_name || '-' }}</template></el-table-column>
+        <el-table-column label="学员头像" width="100" align="center"><template #default="{ row }"><StudentAvatar :asset-id="row.avatar_id" /></template></el-table-column>
+        <el-table-column label="性别" width="70" align="center"><template #default="{ row }">{{ row.gender === 'male' ? '男' : row.gender === 'female' ? '女' : '—' }}</template></el-table-column>
+        <el-table-column label="年龄" width="70" align="center"><template #default="{ row }">{{ row.age ?? ageFromBirthday(row.birthday) ?? '—' }}</template></el-table-column>
+        <el-table-column label="培训类别" min-width="150" show-overflow-tooltip><template #default="{ row }">{{ categoryName(row.category_id) }}</template></el-table-column>
+        <el-table-column label="手机号" min-width="140"><template #default="{ row }">{{ row.phone || '—' }}</template></el-table-column>
+        <el-table-column label="创建时间" min-width="165"><template #default="{ row }">{{ formatCreatedAt(row.created_at) }}</template></el-table-column>
+        <el-table-column label="来源" width="110">
           <template #default="{ row }">
-            <el-button text type="primary" @click="openStudentEdit(row)">编辑</el-button>
-            <el-button text :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStudentStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
+            <el-switch
+              v-if="row.source === 'institution' || row.source === 'external'"
+              class="student-quick-switch"
+              size="large"
+              :model-value="row.source"
+              active-value="institution"
+              inactive-value="external"
+              active-text="本机构"
+              inactive-text="外来"
+              inline-prompt
+              :width="78"
+              :aria-label="`${row.real_name || row.username}的来源`"
+              :loading="studentRowBusy[row.id] === 'source'"
+              :disabled="!auth.can('students:write') || !!studentRowBusy[row.id] || studentLoading"
+              @change="updateStudentField(row, 'source', $event)"
+            />
+            <span v-else>{{ sourceLabel(row.source) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-switch
+              class="student-quick-switch"
+              size="large"
+              :model-value="row.status"
+              :active-value="1"
+              :inactive-value="0"
+              active-text="启用"
+              inactive-text="停用"
+              inline-prompt
+              :width="68"
+              :aria-label="`${row.real_name || row.username}的启用状态`"
+              :loading="studentRowBusy[row.id] === 'status'"
+              :disabled="!auth.can('students:write') || !!studentRowBusy[row.id] || studentLoading"
+              @change="updateStudentField(row, 'status', $event)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column v-if="auth.can('students:write')" label="操作" width="100" fixed="right">
+          <template #default="{ row }">
+            <FitsTableActions>
+              <FitsTableAction type="primary" :disabled="!!studentRowBusy[row.id]" @click="openStudentEdit(row)">编辑</FitsTableAction>
+            </FitsTableActions>
           </template>
         </el-table-column>
       </el-table>
@@ -81,22 +117,29 @@
         <template #footer><el-button @click="cancelStudentDialog">取消</el-button><el-button v-if="auth.can('students:write')" type="primary" :loading="studentSaveBusy" :disabled="studentSaveBusy" @click="saveStudent">确定</el-button></template>
       </el-dialog>
 
-      <el-dialog v-model="previewVisible" title="导入预览" width="650px">
-        <ImportPreview v-if="studentPreview" :preview="studentPreview" @confirm="commitStudentImport" @retry="previewVisible = false" />
+      <el-dialog v-model="previewVisible" title="导入预览" width="650px" class="re-form-dialog" destroy-on-close>
+        <ImportPreview v-if="studentPreview" :preview="studentPreview" />
+        <template #footer>
+          <el-button @click="previewVisible = false">重新上传</el-button>
+          <el-button type="primary" :disabled="!studentPreview?.valid_rows.length" @click="studentPreview && commitStudentImport(studentPreview.valid_rows)">
+            确认导入 {{ studentPreview?.valid_rows.length || 0 }} 行
+          </el-button>
+        </template>
       </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { FitsTable, FitsListSearch } from '../../components/FitsTable';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
+import { ElMessage } from 'element-plus';
 import type { UploadFile } from 'element-plus';
 import http, { download, upload } from '../../api/http';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 import ImportPreview from '../../components/ImportPreview.vue';
 import MediaUpload from '../../components/MediaUpload.vue';
+import StudentAvatar from '../../components/StudentAvatar.vue';
 import type { ImportPreview as ImportPreviewData } from '../../api/training-types';
 import {
   isStudentSaveIdentityCurrent,
@@ -112,11 +155,18 @@ const auth = useAuthStore();
 const students = ref<any[]>([]);
 const studentTotal = ref(0);
 const studentLoading = ref(false);
+const studentRowBusy = reactive<Record<string, 'source' | 'status'>>({});
 const categories = ref<any[]>([]);
 const studentDialog = ref(false);
 const studentForm = reactive<any>({});
 function businessToday() {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+function formatCreatedAt(value: string | null | undefined) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
 }
 function ageFromBirthday(birthday: string | null | undefined) {
   if (!birthday) return undefined;
@@ -130,7 +180,6 @@ const studentAvatarDialogVersion = ref(0);
 const studentSaveInFlightKey = ref<string | null>(null);
 const studentSaveBusy = computed(() => studentSaveInFlightKey.value !== null);
 const studentQuery = reactive<any>({ page: 1, page_size: 20, keyword: '', category_id: '', source: '' });
-const studentImportDefaults = reactive<{ source: string; category_id: string }>({ source: '', category_id: '' });
 const studentPreview = ref<ImportPreviewData | null>(null);
 const previewVisible = ref(false);
 const studentDirty = ref(false);
@@ -209,7 +258,7 @@ async function beforeStudentDialogClose(done: () => void) {
 }
 
 function sourceLabel(source: string | null) { return source === 'institution' ? '本机构' : source === 'external' ? '外来' : '未设置'; }
-function categoryName(id: string | null) { return categories.value.find((item) => String(item.id) === String(id))?.name || '未设置'; }
+function categoryName(id: string | null) { return categories.value.find((item) => String(item.id) === String(id))?.name || '-'; }
 
 async function loadCategories() {
   const data: any = await http.get('/admin/training-categories', { params: { page: 1, page_size: 100, status: 1 } });
@@ -407,16 +456,41 @@ async function saveStudent() {
     if (studentSaveInFlightKey.value === operationKey) studentSaveInFlightKey.value = null;
   }
 }
-async function toggleStudentStatus(row: any) {
-  await ElMessageBox.confirm(row.status === 1 ? '停用后该学员旧令牌立即失效，确认停用？' : '确认启用该学员？', '确认', { type: 'warning' });
-  await http.put(`/admin/students/${row.id}/status`, { status: row.status === 1 ? 0 : 1 }); await loadStudents();
+async function updateStudentField(row: any, field: 'source' | 'status', value: string | number | boolean) {
+  const id = String(row.id);
+  if (!auth.can('students:write') || studentRowBusy[id] || studentLoading.value) return;
+  if (field === 'source' ? value !== 'institution' && value !== 'external' : value !== 0 && value !== 1) return;
+  if (row[field] === value) return;
+  studentRowBusy[id] = field;
+  // Keep the confirmed value until the server responds. Update by id because a
+  // search/page change may have replaced the row object while saving.
+  const applyValue = (data: any) => {
+    row[field] = data[field];
+    const current = students.value.find((item) => String(item.id) === id);
+    if (current) current[field] = data[field];
+  };
+  try {
+    const data: any = await http.put(`/admin/students/${id}${field === 'status' ? '/status' : ''}`, { [field]: value });
+    applyValue(data);
+    ElMessage.success(field === 'source' ? '来源已更新' : data.status === 1 ? '已启用' : '已停用');
+  } catch {
+    // A lost response does not prove the write failed; read back instead of
+    // retrying the mutation or restoring a value that may already be obsolete.
+    try { applyValue(await http.get(`/admin/students/${id}`)); }
+    catch { ElMessage.warning('暂时无法确认保存结果，请刷新列表核对'); }
+  } finally {
+    delete studentRowBusy[id];
+  }
+  if (field === 'source' && studentQuery.source && row.source !== studentQuery.source) {
+    // A successful source change can move this learner out of the active filter.
+    try { await loadStudents(); } catch { /* The request interceptor reports the error. */ }
+  }
 }
 function downloadStudentTemplate() { download('/admin/students/import-template', '学员导入模板.xlsx'); }
 async function onStudentImport(file: UploadFile | File) {
   const raw = (file as UploadFile).raw || file;
   if (!(raw instanceof File)) return false;
-  const defaults = Object.fromEntries(Object.entries(studentImportDefaults).filter(([, value]) => value));
-  const data: any = await upload('/admin/students/import-preview', raw as File, 'file', { defaults: JSON.stringify(defaults) });
+  const data: any = await upload('/admin/students/import-preview', raw as File, 'file');
   studentPreview.value = data; previewVisible.value = true;
   return false;
 }
@@ -441,5 +515,40 @@ onMounted(async () => {
 .student-photo-field :deep(.el-alert) { margin-top: 8px; }
 @media (max-width: 680px) {
   .student-fields { grid-template-columns: minmax(0, 1fr); }
+}
+:deep(.student-quick-switch) {
+  --el-switch-off-color: #e5e7eb;
+}
+
+:deep(.student-quick-switch .el-switch__core) {
+  height: 28px;
+  border-radius: 14px;
+}
+
+:deep(.student-quick-switch .el-switch__action) {
+  width: 24px;
+  height: 24px;
+}
+
+:deep(.student-quick-switch.is-checked .el-switch__action) {
+  left: calc(100% - 25px);
+}
+
+:deep(.student-quick-switch .el-switch__inner) {
+  height: 24px;
+  padding: 0 6px 0 28px;
+}
+
+:deep(.student-quick-switch.is-checked .el-switch__inner) {
+  padding: 0 28px 0 6px;
+}
+
+:deep(.student-quick-switch .el-switch__inner-wrapper) {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+:deep(.student-quick-switch:not(.is-checked) .el-switch__inner-wrapper) {
+  color: var(--re-text-2, #51565f);
 }
 </style>

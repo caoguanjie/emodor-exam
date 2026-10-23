@@ -15,6 +15,7 @@ import { SysUserRole } from '../../entities/sys-user-role.entity';
 import { MediaService } from '../media/media.service';
 import { normalizeChinaMobile } from '../auth/phone';
 import { IdentityService } from '../identity/identity.service';
+import type { AuthUser } from '../../common/decorators/current-user.decorator';
 
 interface SelfProfilePatch {
   real_name?: string;
@@ -91,9 +92,12 @@ export class UsersService {
     };
   }
 
-  private sanitizeProfile(u: SysUser) {
+  private async sanitizeProfile(u: SysUser) {
+    // Existing references retain their current name even after deactivation.
+    const category = u.categoryId ? await this.categories.findById(String(u.categoryId)) : null;
     return {
       ...this.sanitizeStudent(u),
+      category_name: category?.name ?? null,
       occupation: u.occupation ?? null,
       gender: u.gender ?? null,
       birthday: u.birthday ?? null,
@@ -119,7 +123,7 @@ export class UsersService {
       // even when that role currently has no permissions or is inactive.
       .andWhere('NOT EXISTS (SELECT 1 FROM sys_user_role student_role WHERE student_role.user_id = u.id)');
     if (query.keyword?.trim()) {
-      qb.andWhere('(u.username LIKE :kw OR u.real_name LIKE :kw OR u.employee_no LIKE :kw)', { kw: `%${query.keyword.trim()}%` });
+      qb.andWhere('(u.real_name LIKE :kw OR u.phone LIKE :kw)', { kw: `%${query.keyword.trim()}%` });
     }
     if (query.category_id) qb.andWhere('u.category_id = :categoryId', { categoryId: String(query.category_id) });
     if (query.source) {
@@ -147,6 +151,75 @@ export class UsersService {
     const user = await this.userRepo.findOne({ where: { id: String(id) } });
     if (!user) throw Errors.notFound('员工不存在');
     return this.sanitizeProfile(user);
+  }
+
+  private assertMobileLearnerActor(actor: AuthUser): void {
+    if (actor.client !== 'mobile' || actor.role !== RoleEnum.EMPLOYEE) {
+      throw Errors.forbidden('仅普通移动学员可确认培训工种');
+    }
+  }
+
+  private async lockMobileLearner(manager: EntityManager, actor: AuthUser): Promise<SysUser> {
+    this.assertMobileLearnerActor(actor);
+    const user = await manager.findOne(SysUser, {
+      where: { id: String(actor.id) },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!user || user.role !== RoleEnum.EMPLOYEE) throw Errors.forbidden('仅普通移动学员可确认培训工种');
+    if (Number(user.status) !== 1) throw Errors.accountDisabled();
+    const link = await manager.getRepository(SysUserRole).findOne({ where: { userId: String(user.id) } });
+    if (link) throw Errors.forbidden('管理账号不能使用学员培训工种入口');
+    return user;
+  }
+
+  async listSelfTrainingCategories(actor: AuthUser, query: { page?: number; page_size?: number }) {
+    this.assertMobileLearnerActor(actor);
+    const page = query.page === undefined ? 1 : query.page;
+    const pageSize = query.page_size === undefined ? 20 : query.page_size;
+    if (Object.keys(query).some((key) => key !== 'page' && key !== 'page_size')
+      || !Number.isSafeInteger(page) || page < 1
+      || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+      throw Errors.param('培训工种分页参数非法');
+    }
+    await this.dataSource.transaction(async (manager) => {
+      await this.lockMobileLearner(manager, actor);
+    });
+    // Release the transaction connection before using CategoryService's repository.
+    const result = await this.categories.list({ page, page_size: pageSize, status: 1 });
+    return { ...result, items: result.items.map((category) => ({ id: String(category.id), name: category.name })) };
+  }
+
+  async confirmTrainingCategory(actor: AuthUser, input: { category_id: string }, ip: string | null) {
+    this.assertMobileLearnerActor(actor);
+    if (!input || typeof input !== 'object' || Array.isArray(input)
+      || Object.keys(input).some((key) => key !== 'category_id')
+      || typeof input.category_id !== 'string' || input.category_id.length > 32 || !/^[1-9]\d*$/.test(input.category_id)) {
+      throw Errors.param('培训工种确认只接受 category_id 正十进制字符串');
+    }
+    const result = await this.dataSource.transaction(async (manager) => {
+      const user = await this.lockMobileLearner(manager, actor);
+      // The user row serializes first confirmation with PC edits and role changes.
+      // Replay precedes category validation so a later deactivation cannot break it.
+      if (user.categoryId !== null && user.categoryId !== undefined) {
+        if (String(user.categoryId) !== input.category_id) {
+          throw Errors.param('培训工种已确认，如需修改请联系管理员或监考人员', { reason_code: 'TRAINING_CATEGORY_LOCKED' });
+        }
+        return { user, changed: false };
+      }
+      // Match updateStudent's user -> category order. Category deletion holds the
+      // category lock while checking references, so no dangling reference can win.
+      await this.categories.lockActive(manager, input.category_id);
+      user.categoryId = input.category_id;
+      return { user: await manager.getRepository(SysUser).save(user), changed: true };
+    });
+    if (result.changed) {
+      this.audit.log({
+        actor_id: actor.id, actor_name: actor.username, action: 'student.training_category.confirm', object_type: 'sys_user',
+        object_id: String(result.user.id), detail: { before_category_id: null, after_category_id: String(result.user.categoryId) },
+        result: 'success', source_ip: ip,
+      });
+    }
+    return this.sanitizeProfile(result.user);
   }
 
   private assertLearnerSource(source: string): asserts source is 'institution' | 'external' {
@@ -205,11 +278,13 @@ export class UsersService {
     if (patch.source !== undefined) this.assertLearnerSource(patch.source);
     this.validateDemographics(patch);
     let user: SysUser;
+    let previousCategoryId: string | null = null;
     const oldSids: string[] = [];
     try {
       user = await this.dataSource.transaction(async (manager) => {
         const repo = manager.getRepository(SysUser);
         const lockedUser = await this.lockManagedStudent(manager, id);
+        previousCategoryId = lockedUser.categoryId ? String(lockedUser.categoryId) : null;
         if (patch.category_id !== undefined) await this.categories.lockActive(manager, patch.category_id);
         if (patch.real_name !== undefined) { await this.identity?.assertNameEditable(manager, id, lockedUser.realName, patch.real_name); lockedUser.realName = patch.real_name; }
         if (patch.employee_no !== undefined) lockedUser.employeeNo = patch.employee_no || null;
@@ -236,7 +311,10 @@ export class UsersService {
     await this.sessions.markRevoked(oldSids);
     this.audit.log({
       actor_id: actor.id, actor_name: actor.name, action: 'student.update', object_type: 'sys_user',
-      object_id: id, detail: { category_id: user.categoryId, source: user.source }, result: 'success', source_ip: ip,
+      object_id: id, detail: {
+        category_id: user.categoryId, source: user.source,
+        before_category_id: previousCategoryId, after_category_id: user.categoryId ? String(user.categoryId) : null,
+      }, result: 'success', source_ip: ip,
     });
     return this.sanitizeStudent(user);
   }

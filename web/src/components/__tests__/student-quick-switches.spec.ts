@@ -56,7 +56,20 @@ function switches(wrapper: VueWrapper, rowIndex = 0) {
   return wrapper.findAll('.el-table__body-wrapper tbody tr')[rowIndex]!.findAll('[role="switch"]');
 }
 
-describe('student SMS profile dialog', () => {
+describe('student list quick switches', () => {
+  it('shows learner profile columns instead of internal usernames and employee numbers', async () => {
+    Object.assign(serverRows[0]!, { username: 'm_internal_identifier', phone: '13800138000', gender: 'female', age: 0, created_at: '2026-10-23T09:00:00Z' });
+    const wrapper = await render();
+    const headers = wrapper.findAll('thead th').map((cell) => cell.text());
+    expect(headers).toEqual(expect.arrayContaining(['姓名', '学员头像', '性别', '年龄', '培训类别', '手机号', '创建时间', '来源', '状态', '操作']));
+    expect(headers).not.toContain('用户名');
+    expect(headers).not.toContain('工号');
+    const row = wrapper.find('.el-table__body-wrapper tbody tr');
+    expect(row.text()).not.toContain('m_internal_identifier');
+    expect(row.text()).toContain('13800138000');
+    expect(row.text()).toContain('2026-10-23 17:00');
+    expect(wrapper.find('input[placeholder="姓名 / 手机号"]').exists()).toBe(true);
+  });
   it('creates SMS learners without requesting or sending a password', async () => {
     mocks.post.mockResolvedValue({ id: '13' });
     const wrapper = await render();
@@ -76,7 +89,7 @@ describe('student SMS profile dialog', () => {
   it('edits the phone login and profile in the legacy dialog and saves status separately', async () => {
     Object.assign(serverRows[0]!, { phone: '13800138000', category_id: '10', gender: 'female', birthday: '2000-01-01' });
     const wrapper = await render();
-    await wrapper.findAll('.el-button').find((button) => button.text() === '编辑')!.trigger('click');
+    await wrapper.findAll('.fits-table-action').find((button) => button.text() === '编辑')!.trigger('click');
     await flushPromises();
     const form = wrapper.find('.student-edit-form');
     expect(form.exists()).toBe(true);
@@ -100,4 +113,73 @@ describe('student SMS profile dialog', () => {
     expect(mocks.put).toHaveBeenCalledWith('/admin/students/11/status', { status: 0 });
   });
 
+  it('saves only the changed field immediately, without a confirmation dialog or full edit', async () => {
+    const wrapper = await render();
+    expect(mocks.put).not.toHaveBeenCalled();
+    expect(switches(wrapper)).toHaveLength(2);
+    await switches(wrapper)[0]!.trigger('click'); await flushPromises();
+    expect(mocks.put).toHaveBeenLastCalledWith('/admin/students/11', { source: 'institution' });
+    expect(switches(wrapper)[0]!.element.closest('.el-switch')?.textContent).toContain('本机构');
+    await switches(wrapper)[0]!.trigger('click'); await flushPromises();
+    expect(mocks.put).toHaveBeenLastCalledWith('/admin/students/11', { source: 'external' });
+    await switches(wrapper)[1]!.trigger('click'); await flushPromises();
+    expect(mocks.put).toHaveBeenLastCalledWith('/admin/students/11/status', { status: 0 });
+    expect(switches(wrapper)[1]!.attributes('aria-checked')).toBe('false');
+    await switches(wrapper)[1]!.trigger('click'); await flushPromises();
+    expect(mocks.put).toHaveBeenLastCalledWith('/admin/students/11/status', { status: 1 });
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(serverRows[0]!.category_id).toBeNull();
+    expect(wrapper.findAll('.fits-table-action').map((button) => button.text())).not.toContain('停用');
+  });
+
+  it('blocks duplicate or conflicting clicks for the pending row while other rows remain available', async () => {
+    const wrapper = await render();
+    let resolve!: (value: Student) => void;
+    mocks.put.mockImplementationOnce(() => new Promise<Student>((done) => { resolve = done; }));
+    await switches(wrapper)[0]!.trigger('click');
+    expect(switches(wrapper).every((item) => item.attributes('aria-disabled') === 'true')).toBe(true);
+    expect(switches(wrapper, 1).every((item) => item.attributes('aria-disabled') !== 'true')).toBe(true);
+    await switches(wrapper)[0]!.trigger('click');
+    await switches(wrapper)[1]!.trigger('click');
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+    resolve({ ...serverRows[0]!, source: 'institution' }); await flushPromises();
+    expect(switches(wrapper)[0]!.attributes('aria-checked')).toBe('true');
+    expect(switches(wrapper).every((item) => item.attributes('aria-disabled') !== 'true')).toBe(true);
+  });
+
+  it.each([false, true])('queries authoritative state after a failed response (write applied: %s)', async (applied) => {
+    const wrapper = await render();
+    mocks.put.mockImplementationOnce(async () => {
+      if (applied) serverRows[0]!.status = 0;
+      throw new Error('response lost');
+    });
+    await switches(wrapper)[1]!.trigger('click'); await flushPromises();
+    expect(mocks.get).toHaveBeenCalledWith('/admin/students/11');
+    expect(switches(wrapper)[1]!.attributes('aria-checked')).toBe(applied ? 'false' : 'true');
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+    expect(mocks.success).not.toHaveBeenCalled();
+  });
+
+  it('respects read-only permissions and does not silently assign a missing legacy source', async () => {
+    mocks.canWrite = false;
+    serverRows[1]!.source = null;
+    const wrapper = await render();
+    expect(switches(wrapper).every((item) => item.attributes('aria-disabled') === 'true')).toBe(true);
+    await switches(wrapper)[0]!.trigger('click');
+    await switches(wrapper)[1]!.trigger('click');
+    expect(mocks.put).not.toHaveBeenCalled();
+    expect(switches(wrapper, 1)).toHaveLength(1);
+    expect(wrapper.findAll('.el-table__body-wrapper tbody tr')[1]!.text()).toContain('未设置');
+  });
+
+  it('refreshes an active source filter when a saved change no longer matches it', async () => {
+    const wrapper = await render();
+    const sourceFilter = wrapper.findAllComponents(ElSelect)[1]!;
+    sourceFilter.vm.$emit('update:modelValue', 'external');
+    sourceFilter.vm.$emit('change', 'external'); await flushPromises();
+    expect(wrapper.findAll('.el-table__body-wrapper tbody tr')).toHaveLength(1);
+    await switches(wrapper)[0]!.trigger('click'); await flushPromises();
+    expect(serverRows[0]!.source).toBe('institution');
+    expect(wrapper.findAll('.el-table__body-wrapper tbody tr')).toHaveLength(0);
+  });
 });

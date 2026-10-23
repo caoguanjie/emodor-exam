@@ -10,12 +10,6 @@
       <el-table-column prop="row" label="行号" width="80" />
       <el-table-column prop="message" label="原因" min-width="220" />
     </el-table>
-    <div class="preview-actions">
-      <el-button @click="$emit('retry')">重新上传</el-button>
-      <el-button type="primary" :disabled="!preview.valid_rows.length" @click="$emit('confirm', preview.valid_rows)">
-        确认导入 {{ preview.valid_rows.length }} 行
-      </el-button>
-    </div>
   </div>
 </template>
 
@@ -23,13 +17,8 @@
 import type { ImportPreview as Preview } from '../api/training-types';
 
 defineProps<{ preview: Preview }>();
-defineEmits<{
-  confirm: [rows: number[]];
-  retry: [];
-}>();
 </script>
 
 <style scoped>
 .preview-summary { display: flex; gap: 8px; margin-bottom: 12px; }
-.preview-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 </style>

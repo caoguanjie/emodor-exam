@@ -27,6 +27,7 @@ export const SUITE_REGISTRY = Object.freeze({
   'training-identity': join(ROOT, 'tests', 'training-identity.mjs'),
   'training-access': join(ROOT, 'tests', 'training-access.mjs'),
   'mobile-auth': join(ROOT, 'tests', 'mobile-auth.mjs'),
+  'learner-training-category': join(ROOT, 'tests', 'learner-training-category.mjs'),
   'mobile-identity': join(ROOT, 'tests', 'mobile-identity.mjs'),
   'mobile-media-ticket': join(ROOT, 'tests', 'mobile-media-ticket.mjs'),
   'training-student-admin-boundary': join(ROOT, 'tests', 'training-student-admin-boundary.mjs'),
@@ -63,6 +64,9 @@ export function suiteRuntimeEnvOverrides(suitePath) {
       SMS_PROVIDER: 'disabled',
       IDENTITY_PROVIDER: 'disabled',
     };
+  }
+  if (suitePath === SUITE_REGISTRY['learner-training-category']) {
+    return { DB_POOL_SIZE: '2', NODE_ENV: 'test', SERVER_DEBUG_LOGIN_ENABLED: 'true', SMS_PROVIDER: 'disabled' };
   }
   if (['mobile-auth', 'training-courses'].some((name) => SUITE_REGISTRY[name] === suitePath)) {
     return { NODE_ENV: 'test', SERVER_DEBUG_LOGIN_ENABLED: 'true', SMS_PROVIDER: 'disabled' };

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { onLoad, onShow } from '@dcloudio/uni-app'
 import AppPage from '@/components/common/AppPage.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import ConfirmSheet from '@/components/common/ConfirmSheet.vue'
@@ -18,11 +18,12 @@ const displayName = computed(() => preview.value ? shellProfile.name : learner.p
 const displayCategory = computed(() => {
   if (preview.value) return `${shellProfile.job} · 本机构学员`
   const source = learner.profile ? learner.profile.source : session.user?.source
-  return `${learner.profile?.occupation || '未设置工种'} · ${source === 'institution' ? '本机构学员' : source === 'external' ? '社会学员' : '学员'}`
+  return `${learner.profile?.category_name || (learner.profile?.category_id ? '已设置培训工种' : learner.profileError ? '工种加载失败' : learner.profileLoading ? '工种加载中' : '未设置培训工种')} · ${source === 'institution' ? '本机构学员' : source === 'external' ? '社会学员' : '学员'}`
 })
 const verified = computed(() => preview.value ? scenario.value.verified : session.user?.identity_status === 'verified')
 const identityLabel = computed(() => verified.value ? '已实名' : !preview.value && session.user?.identity_status === 'pending' ? '认证中' : '未实名')
-onLoad(query => { preview.value = isStaticSessionPreview(query); loadScenario(query); if (!preview.value) reload() })
+onLoad(query => { preview.value = isStaticSessionPreview(query); loadScenario(query) })
+onShow(() => { if (!preview.value) void reload() })
 async function reload() { if (!session.initialized && !await session.bootstrap()) return; if (session.accessToken) void learner.loadProfile().catch(() => {}) }
 const logoutVisible = ref(false)
 const previewRoutes: Record<string, string> = { '/pages/profile/info': 'profile-info', '/pages/profile/exam-history': 'exam-history', '/pages/profile/wrong-book': 'exam-wrong-book', '/pages/identity/index': 'identity-collect', '/pages/profile/about': 'about-default' }

@@ -19,6 +19,8 @@ async function setup(page: Page, options: SetupOptions = {}) {
     const path = new URL(route.request().url()).pathname, data = route.request().postDataJSON(), method = route.request().method()
     calls.push({ path, method, data })
     if (path.endsWith('/auth/refresh')) return route.fulfill({ json: envelope({ access_token: 'exam-browser-memory', expires_in: 900, user: { id: 17, username: 'learner', real_name: '学员', phone_masked: '138****0000', role: 'employee', source: 'external', category_id: null, identity_status: 'verified' } }) })
+    if (path.endsWith('/me/profile')) return route.fulfill({ json: envelope({ id: '17', username: 'learner', real_name: '学员', phone: null, email: null, avatar_id: null, occupation: null, gender: null, birthday: null, source: 'external', category_id: '3', category_name: '接口培训工种', role: 'employee', status: 1 }) })
+    if (path.endsWith('/me/identity-verification')) return route.fulfill({ json: envelope({ status: 'verified', real_name: '学员', id_number_masked: null, verified_at: null, current_session_id: null, reason_code: null }) })
     if (path.endsWith('/me/exams')) return route.fulfill({ json: envelope({ items: [{ paper_id: '41', title: '接口安全培训考试', mode: 'fixed', status: 'published', source: 'external', category_id: null, difficulty: 'easy' }], total: 1, page: 1, page_size: 10 }) })
     if (path.endsWith('/41/start')) {
       if (options.identity) return route.fulfill({ status: 403, json: { code: 40302, message: 'opaque provider detail', data: { reason_code: options.identity } } })

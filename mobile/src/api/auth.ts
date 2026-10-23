@@ -1,5 +1,6 @@
 import { ApiError, request } from './client'
 import type { MobileSessionResult, SmsChallenge, SmsLoginInput } from '@/types/api'
+import type { Page } from './courses'
 export function normalizeMobilePhone(phone: string): string { return phone.replace(/[\s-]/g, '') }
 export function isValidMobilePhone(phone: string): boolean { return /^1[3-9]\d{9}$/.test(normalizeMobilePhone(phone)) }
 
@@ -33,6 +34,7 @@ export interface LearnerProfile {
   birthday: string | null
   source: 'institution' | 'external' | null
   category_id: string | null
+  category_name: string | null
   role: 'employee' | 'regulation_admin' | 'super_admin'
   status: number
 }
@@ -40,4 +42,12 @@ export interface EditableLearnerProfile { occupation?: string | null; gender?: '
 export function getLearnerProfile(): Promise<LearnerProfile> { return request({ url: '/me/profile' }) }
 export function saveLearnerProfile(data: EditableLearnerProfile): Promise<LearnerProfile> {
   return request({ url: '/me/profile', method: 'POST', data })
+}
+export interface LearnerTrainingCategory { id: string; name: string }
+export function getLearnerTrainingCategories(page = 1): Promise<Page<LearnerTrainingCategory>> {
+  return request({ url: `/me/training-categories?page=${page}&page_size=100` })
+}
+export function confirmLearnerTrainingCategory(category_id: string): Promise<LearnerProfile> {
+  if (!/^[1-9]\d*$/.test(category_id)) throw new ApiError(40001, '请选择有效培训工种')
+  return request({ url: '/me/training-category', method: 'PUT', data: { category_id }, refreshOnUnauthorized: false })
 }
