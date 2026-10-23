@@ -1,0 +1,4 @@
+interface:
+  display_name: "软件工程审查"
+  short_description: "基于实际代码与配置判断清单适用性，按风险排序审查软件工程问题"
+  default_prompt: "使用 $software-review 审查当前项目，先判断英文清单各项适用性，再给出有证据的前 10 个优先修复问题；无法确认的单列，暂不修改代码。"
