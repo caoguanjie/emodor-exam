@@ -89,14 +89,19 @@ DB_PASSWORD=<.env 中的口令> ADMIN_INITIAL_PASSWORD=<自定义初始口令> \
 mysql -h127.0.0.1 -uroot -p < database/init.sql
 DB_PASSWORD=... ADMIN_INITIAL_PASSWORD=... node database/seed.mjs
 
-# 2. 启动 API（环境变量见 deploy/.env.example）
-cd server && npm install && npm run build && node dist/main.js   # :3000
+# 2. 真实 H5 联调：初始化根 .env，填写供应商凭据后检查并启动 API
+npm --prefix server run env:init
+# 编辑根目录 .env；已有配置不会覆盖，具体字段见 deploy/real-h5-env.md
+npm --prefix server run env:check
+npm --prefix server run start:local   # :3000，显式加载根 .env
 
 # 3. 启动前端（Vite dev server，/api/v1 已代理至 :3000）
 cd web && npm install && npm run dev   # :5173
 
 # 4. 用 admin / <ADMIN_INITIAL_PASSWORD> 登录 → 首次登录强制改密 → 创建培训类别、学员与课程
 ```
+
+短信/腾讯实名变量填写、本地 H5 启动与 Compose 环境注入见[真实 H5 联调配置](deploy/real-h5-env.md)。原有 `start:dev` 保留只使用外部环境变量的行为；真实联调使用 `start:local`。
 
 正式发布构建在仓库根使用统一脚本：
 

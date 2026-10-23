@@ -27,6 +27,7 @@ tests/mysql-data/
 
 # 运行期数据（上传文件 / 加密配置 / 日志）
 server/data/
+/data/
 
 # GUI 测试截图（一次性本地证据，报告在 review/；不进仓库）
 gui-test-screenshots/

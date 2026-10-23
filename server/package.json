@@ -11,6 +11,9 @@
     "pretest": "npm run build",
     "start": "node dist/main.js",
     "start:dev": "npm run build && node dist/main.js",
+    "env:init": "node ../scripts/backend-env.mjs init",
+    "env:check": "node ../scripts/backend-env.mjs check --real",
+    "start:local": "npm run env:check && npm run build && cd .. && node --env-file=.env server/dist/main.js",
     "test": "vitest run"
   },
   "dependencies": {

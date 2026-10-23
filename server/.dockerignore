@@ -1,0 +1,7 @@
+# 本地凭据和运行数据不进入 API 镜像构建上下文。
+.env
+.env.*
+node_modules
+dist
+data
+.DS_Store
