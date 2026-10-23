@@ -1,6 +1,6 @@
 import type {
   ExamDifficulty, LearnerSource, RankRow, RuleSnapshot, ScoreGroup, TrainingCourseCompletion,
-  TrainingExamSummary,
+  StatsFilter, TrainingExamSummary,
 } from '../../common/training-contracts';
 
 export interface StatisticsRecord {
@@ -69,14 +69,14 @@ function preferredRecord(left: StatisticsRecord, right: StatisticsRecord): Stati
 
 export function bestFinalizedRecords(
   records: StatisticsRecord[],
-  difficulty: ExamDifficulty,
+  difficulty: ExamDifficulty | undefined,
   releaseId: string | null,
   rule: RuleSnapshot | null,
 ): StatisticsRecord[] {
   const byUser = new Map<string, StatisticsRecord>();
   for (const record of records) {
     if (record.gradingState !== 'finalized' || record.score === null) continue;
-    if (difficultyOf(record) !== difficulty || !compatible(record, releaseId, rule)) continue;
+    if ((difficulty && difficultyOf(record) !== difficulty) || !compatible(record, releaseId, rule)) continue;
     const previous = byUser.get(record.userId);
     byUser.set(record.userId, previous ? preferredRecord(previous, record) : record);
   }
@@ -96,6 +96,7 @@ export function buildRankingRows(
   difficulty: ExamDifficulty,
   releaseId: string | null,
   rule: RuleSnapshot | null,
+  options: Pick<StatsFilter, 'sort_by' | 'sort_order'> & { userGenders?: Map<string, RankRow['gender']> } = {},
 ): RankRow[] {
   const selected = bestFinalizedRecords(records, difficulty, releaseId, rule)
     .sort((left, right) => {
@@ -109,7 +110,7 @@ export function buildRankingRows(
     });
   let previousScore: number | null = null;
   let previousRank = 0;
-  return selected.map((record, index) => {
+  const rows: RankRow[] = selected.map((record, index) => {
     const score = Number(record.score);
     const rank = previousScore !== null && score === previousScore ? previousRank : index + 1;
     previousScore = score;
@@ -118,6 +119,7 @@ export function buildRankingRows(
       rank,
       user_id: record.userId,
       name: userNames.get(record.userId) || '未知学员',
+      gender: options.userGenders?.get(record.userId) || null,
       source: record.source,
       difficulty,
       score,
@@ -125,6 +127,11 @@ export function buildRankingRows(
       record_id: record.id,
     };
   });
+  const direction = options.sort_order === 'asc' ? 1 : -1;
+  const key = options.sort_by === 'duration' ? 'duration_seconds' : 'score';
+  // The score ranks and personal bests are frozen before display sorting.
+  // Stable sorting preserves the canonical score/graded-time/id order on ties.
+  return rows.sort((left, right) => (left[key] - right[key]) * direction);
 }
 
 function distribution(scores: number[]) {
@@ -156,6 +163,13 @@ function scoreGroups(records: StatisticsRecord[], releaseId: string | null, rule
       average_score: scores.length
         ? Math.round((scores.reduce((sum, score) => sum + score, 0) / scores.length) * 100) / 100
         : null,
+      highest_score: scores.length ? Math.max(...scores) : null,
+      lowest_score: scores.length ? Math.min(...scores) : null,
+      passed_users: passed,
+      average_duration_seconds: best.length
+        ? Math.round(best.reduce((sum, record) => sum + examDurationSeconds(record), 0) / best.length * 100) / 100
+        : null,
+      excellent_users: null,
       pass_rate: best.length ? Math.round((passed / best.length) * 10000) / 10000 : null,
       distribution: distribution(scores),
     };
@@ -170,7 +184,7 @@ export function buildExamSummary(input: {
   course: TrainingCourseCompletion;
   uncompletedReasons?: TrainingExamSummary['uncompleted_reasons'];
   asOf?: Date;
-}): TrainingExamSummary {
+}): Omit<TrainingExamSummary, 'exam'> {
   const historicalUsers = new Set(input.records.map((record) => record.userId));
   const eligibleStarted = new Set([...historicalUsers].filter((userId) => input.eligibleUserIds.has(userId)));
   const submitted = input.records.filter((record) => record.submittedAt !== null);

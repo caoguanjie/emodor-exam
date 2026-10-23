@@ -5,7 +5,8 @@ import { In, MoreThanOrEqual, Repository } from 'typeorm';
 import { Errors } from '../../common/errors';
 import type {
   AdminDashboard, ExamDifficulty, LearnerSource, Page, RankRow, RuleSnapshot, StatsFilter,
-  TrainingExamSummary, TrainingStatisticsOptions, TrainingUncompletedReason,
+  TrainingExamOverviewRow, TrainingExamSummary, TrainingStatisticsOptions, TrainingStatisticsOverviewFilter,
+  TrainingUncompletedReason,
 } from '../../common/training-contracts';
 import { CourseLesson } from '../../entities/course-lesson.entity';
 import { ExamPaper } from '../../entities/exam-paper.entity';
@@ -20,7 +21,7 @@ import { TrainingCourse } from '../../entities/training-course.entity';
 import { VideoLearningRecord } from '../../entities/video-learning-record.entity';
 import { AccessService } from '../access/access.service';
 import {
-  buildDashboardTrend, buildExamSummary, buildRankingRows, computeCourseCompletion,
+  bestFinalizedRecords, buildDashboardTrend, buildExamSummary, buildRankingRows, computeCourseCompletion,
   ruleKey, type StatisticsRecord,
 } from './ranking';
 
@@ -54,6 +55,19 @@ function recordView(row: ExamRecord): StatisticsRecord {
   };
 }
 
+function examInfo(paper: ExamPaper, release: PaperRelease | null): TrainingExamSummary['exam'] {
+  const rule = release?.ruleSnapshot;
+  const categoryId = release ? release.categoryId : paper.categoryId;
+  return {
+    paper_id: String(paper.id), title: paper.title,
+    category_id: categoryId ? String(categoryId) : null,
+    total_score: rule ? Number(rule.totalCents) / 100 : null,
+    duration_minutes: rule ? Number(rule.durationMinutes) : null,
+    pass_score: rule ? Number(rule.passCents) / 100 : null,
+    excellent_score: null,
+  };
+}
+
 function shanghaiDate(value: Date): string {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -78,6 +92,65 @@ export class TrainingStatisticsService {
     @InjectRepository(TrainingCategory) private readonly categoryRepo: Repository<TrainingCategory>,
     private readonly access: AccessService,
   ) {}
+
+  async overview(filter: TrainingStatisticsOverviewFilter): Promise<Page<TrainingExamOverviewRow>> {
+    const page = Math.max(1, Number(filter.page || 1));
+    const pageSize = Math.min(100, Math.max(1, Number(filter.pageSize || 20)));
+    // Join only the latest release so filtering and pagination both use its
+    // frozen category. Draft configuration must not overwrite a released exam.
+    const query = this.paperRepo.createQueryBuilder('paper')
+      .leftJoinAndMapOne('paper.statisticsRelease', PaperRelease, 'release',
+        'release.paperId = paper.id AND release.versionNo = '
+        + '(SELECT MAX(latest.version_no) FROM paper_release latest WHERE latest.paper_id = paper.id)')
+      .where('paper.businessScope = :scope', { scope: 'training' });
+    const keyword = filter.keyword?.trim();
+    if (keyword) query.andWhere('paper.title LIKE :keyword', { keyword: `%${keyword}%` });
+    if (filter.categoryId) {
+      query.andWhere('(CASE WHEN release.id IS NULL THEN paper.categoryId ELSE release.categoryId END) = :categoryId',
+        { categoryId: id(filter.categoryId, '培训类别') });
+    }
+    const [papers, total] = await query.orderBy('paper.id', 'DESC')
+      .skip((page - 1) * pageSize).take(pageSize).getManyAndCount() as [
+        Array<ExamPaper & { statisticsRelease?: PaperRelease | null }>, number,
+      ];
+    const releaseIds = papers.flatMap((paper) => paper.statisticsRelease ? [String(paper.statisticsRelease.id)] : []);
+    const categoryIds = [...new Set(papers.map((paper) => examInfo(paper, paper.statisticsRelease || null).category_id)
+      .filter((categoryId): categoryId is string => categoryId !== null))];
+    const [rawRecords, categories] = await Promise.all([
+      releaseIds.length ? this.recordRepo.find({ where: { releaseId: In(releaseIds) } }) : Promise.resolve([]),
+      categoryIds.length ? this.categoryRepo.find({ where: { id: In(categoryIds) } }) : Promise.resolve([]),
+    ]);
+    const recordsByRelease = new Map<string, StatisticsRecord[]>();
+    for (const row of rawRecords) {
+      const record = recordView(row);
+      if (!record.releaseId || !releaseIds.includes(record.releaseId)) continue;
+      if (filter.categoryId && record.categoryId !== String(filter.categoryId)) continue;
+      const group = recordsByRelease.get(record.releaseId) || [];
+      group.push(record);
+      recordsByRelease.set(record.releaseId, group);
+    }
+    const categoryNames = new Map(categories.map((category) => [String(category.id), category.name]));
+    const items = papers.map((paper): TrainingExamOverviewRow => {
+      const release = paper.statisticsRelease || null;
+      const info = examInfo(paper, release);
+      const releaseId = release ? String(release.id) : null;
+      const records = release ? recordsByRelease.get(releaseId!) || [] : [];
+      // This is descriptive across difficulties, never a combined ranking.
+      const best = release ? bestFinalizedRecords(records, undefined, releaseId, release.ruleSnapshot) : [];
+      return {
+        paper_id: info.paper_id, title: info.title, category_id: info.category_id,
+        category_name: info.category_id ? categoryNames.get(info.category_id) || null : null,
+        status: paper.status, release_id: releaseId,
+        total_score: info.total_score, duration_minutes: info.duration_minutes, pass_score: info.pass_score,
+        participant_count: new Set(records.map((record) => record.userId)).size,
+        finalized_users: best.length,
+        average_score: best.length
+          ? Math.round(best.reduce((sum, record) => sum + Number(record.score), 0) / best.length * 100) / 100
+          : null,
+      };
+    });
+    return { items, total, page, page_size: pageSize };
+  }
 
   private expectedDifficulty(
     paper: ExamPaper,
@@ -108,7 +181,7 @@ export class TrainingStatisticsService {
       this.userRepo.find(),
       this.recordRepo.find({ where: { paperId }, order: { id: 'ASC' } }),
     ]);
-    const currentCategory = release?.categoryId || paper.categoryId || null;
+    const currentCategory = release ? release.categoryId : paper.categoryId || null;
     const eligibleUsers = userRows.filter((user) => {
       // Source and category are training facts, not permission roles. Giving a
       // learner a business role must not silently remove that person from the
@@ -190,12 +263,12 @@ export class TrainingStatisticsService {
     const context = await this.context(filter);
     const releaseId = context.release ? String(context.release.id) : null;
     const scoringRule = context.release?.ruleSnapshot || null;
-    const categoryId = context.release?.categoryId || context.paper.categoryId || null;
+    const categoryId = context.release ? context.release.categoryId : context.paper.categoryId || null;
     const course = await this.courseCompletion(categoryId ? String(categoryId) : null, context.eligibleUsers);
     const reasons = this.uncompletedReasons(
       context.eligibleUsers, context.records, releaseId, scoringRule, course.incomplete_user_ids,
     );
-    return buildExamSummary({
+    return { ...buildExamSummary({
       records: context.records,
       eligibleUserIds: new Set(context.eligibleUsers.map((user) => String(user.id))),
       scoringReleaseId: releaseId,
@@ -207,7 +280,7 @@ export class TrainingStatisticsService {
         completion_rate: course.completion_rate,
       },
       uncompletedReasons: reasons,
-    });
+    }), exam: examInfo(context.paper, context.release) };
   }
 
   async ranking(filter: StatsFilter): Promise<Page<RankRow>> {
@@ -219,6 +292,10 @@ export class TrainingStatisticsService {
       filter.difficulty,
       context.release ? String(context.release.id) : null,
       context.release?.ruleSnapshot || null,
+      {
+        sort_by: filter.sort_by, sort_order: filter.sort_order,
+        userGenders: new Map(context.users.map((user) => [String(user.id), user.gender || null])),
+      },
     );
     const page = Math.max(1, Number(filter.page || 1));
     const pageSize = Math.min(100, Math.max(1, Number(filter.pageSize || 20)));
@@ -243,8 +320,11 @@ export class TrainingStatisticsService {
       { header: '分数', key: 'score', width: 10 },
       { header: '用时(秒)', key: 'duration_seconds', width: 12 },
       { header: '答卷ID', key: 'record_id', width: 16 },
+      { header: '性别', key: 'gender', width: 12 },
     ];
-    for (const row of result.items) sheet.addRow(row);
+    for (const row of result.items) sheet.addRow({ ...row,
+      gender: row.gender === 'male' ? '男' : row.gender === 'female' ? '女' : '未填写',
+    });
     const note = workbook.addWorksheet('口径说明');
     note.getCell('A1').value = '排名与成绩仅比较当前发布版本、相同冻结评分规则和所选难度；参与及提交人数属于该试卷历史范围。';
     note.getColumn(1).width = 100;

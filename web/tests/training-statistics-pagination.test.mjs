@@ -17,6 +17,7 @@ let vite;
 let TrainingStatistics;
 
 const summary = {
+  exam: { paper_id: 'paper-1', title: '考试', category_id: null, total_score: 100, duration_minutes: 45, pass_score: 60, excellent_score: null },
   paper_id: 'paper-1',
   release_id: 'release-1',
   eligible_count: 2,
@@ -61,6 +62,7 @@ const httpStubCode = `
       const params = clone(config?.params);
       context.calls.push({ path, params });
       if (path === '/statistics/training/options') return { papers: [], categories: [] };
+      if (path === '/statistics/training/overview') return { items: [], total: 0, page: 1, page_size: 20 };
       if (path === '/statistics/training/summary') return clone(context.summary);
       if (path === '/statistics/training/ranking') {
         const page = params.page;
@@ -194,7 +196,7 @@ test('uses the emitted pagination page only through v-model and applies the page
   const app = host.createApp(TrainingStatistics);
   for (const name of [
     'el-alert', 'el-button', 'el-col', 'el-empty', 'el-option', 'el-pagination', 'el-progress',
-    'el-row', 'el-select', 'el-table', 'el-table-column', 'el-tag',
+    'el-row', 'el-select', 'el-table', 'el-table-column', 'el-tag', 'el-form', 'el-form-item', 'el-input', 'el-collapse', 'el-collapse-item',
   ]) {
     app.component(name, passthrough(name === 'el-pagination' ? 'pagination' : name, ['default', 'title']));
   }

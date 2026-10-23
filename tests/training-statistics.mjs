@@ -138,9 +138,203 @@ async function assertLegacyPureTimeoutStatistics(ctx, admin, adminId) {
   assert.equal(rows.get(users[1].real_name).getCell('J').value, 80, 'legacy graded timeout keeps its original frozen score in export');
 }
 
+async function assertTrainingOverviewAndSorting(ctx, admin, adminId, readOnlyActor, learnerActor) {
+  const tag = `C6补齐${randomBytes(4).toString('hex')}`;
+  const categories = [];
+  for (const suffix of ['发布类别', '其他类别']) {
+    const name = `${tag} ${suffix}`;
+    const result = await ctx.queryTestDb('INSERT INTO training_category (name,status,created_by) VALUES (?,1,?)', [name, adminId]);
+    categories.push({ id: String(result.insertId), name });
+  }
+  const rule = {
+    totalCents: 10000, passCents: 6000, durationMinutes: 30, maxAttempts: 5,
+    partialCreditRatio: 0.5, rules: [{ type: 'single', count: 1, scoreCents: 10000 }],
+  };
+  const oldRule = { ...rule, passCents: 7000 };
+  const createPaper = async (suffix, categoryId, status = 'published', businessScope = 'training') => {
+    const title = `${tag} ${suffix}`;
+    const result = await ctx.queryTestDb(
+      `INSERT INTO exam_paper (business_scope,mode,category_id,rule_config,title,total_score,pass_score,duration_minutes,max_attempts,partial_credit_ratio,status,created_by)
+       VALUES (?,'random',?,?,?,100,60,30,5,0.5,?,?)`,
+      [businessScope, categoryId, JSON.stringify(rule), title, status, adminId],
+    );
+    return { id: String(result.insertId), title };
+  };
+  const releasePaper = async (paper, categoryId, version, snapshot = rule) => {
+    const result = await ctx.queryTestDb(
+      `INSERT INTO paper_release (paper_id,version_no,business_scope,mode,category_id,requires_learning,rule_snapshot,created_by)
+       VALUES (?,?,'training','random',?,0,?,?)`,
+      [paper.id, version, categoryId, JSON.stringify(snapshot), adminId],
+    );
+    return String(result.insertId);
+  };
+  const paper = await createPaper('成绩卷 当前名称', categories[0].id);
+  const priorReleaseId = await releasePaper(paper, categories[0].id, 1, oldRule);
+  const releaseId = await releasePaper(paper, categories[0].id, 2);
+  const draft = await createPaper('未发布草稿', categories[0].id, 'draft');
+  const empty = await createPaper('无成绩卷', categories[1].id);
+  const emptyReleaseId = await releasePaper(empty, categories[1].id, 1);
+  const archived = await createPaper('归档卷', categories[1].id, 'archived');
+  await releasePaper(archived, categories[1].id, 1);
+  await createPaper('旧制度卷', categories[0].id, 'published', 'regulation');
+  // Deliberately disagree with the release: statistics must use its frozen category and rules.
+  await ctx.queryTestDb('UPDATE exam_paper SET category_id=?,total_score=200,pass_score=150,duration_minutes=99 WHERE id=?', [categories[1].id, paper.id]);
+
+  const users = [];
+  for (const [label, name, gender] of [
+    ['sort_a', '排序甲', 'male'], ['sort_b', '排序乙', 'female'], ['sort_c', '排序丙', null],
+    ['sort_timeout', '纯超时', null], ['sort_rule', '异规则', null], ['sort_old', '仅旧发布', null],
+  ]) {
+    const user = await createUser(ctx, { label, name, categoryId: categories[0].id, source: 'institution', status: 1 });
+    await ctx.queryTestDb('UPDATE sys_user SET gender=? WHERE id=?', [gender, user.id]);
+    users.push(user);
+  }
+  const addRecord = async (user, values) => insertRecord(ctx, {
+    paperId: paper.id, releaseId, categoryId: categories[0].id, rule,
+    userId: user.id, source: 'institution', difficulty: 'easy', attemptNo: 1,
+    status: 'passed', score: 90, startedAt: '2026-10-21 08:00:00.000',
+    deadlineAt: '2026-10-21 08:30:00.000', submittedAt: '2026-10-21 08:05:00.000',
+    method: 'manual', gradingState: 'finalized', gradedAt: '2026-10-21 08:05:00.000', ...values,
+  });
+  await addRecord(users[0], { score: 40, status: 'failed', submittedAt: '2026-10-21 08:01:00.000' });
+  await addRecord(users[0], { attemptNo: 2, startedAt: '2026-10-21 10:00:00.000', deadlineAt: '2026-10-21 10:30:00.000', submittedAt: '2026-10-21 10:15:00.000', gradedAt: '2026-10-21 10:15:00.000' });
+  await addRecord(users[0], { attemptNo: 3, score: 96, source: 'external', difficulty: 'hard', submittedAt: '2026-10-21 08:10:00.000' });
+  await addRecord(users[1], {});
+  await addRecord(users[2], { score: 30, status: 'failed', submittedAt: '2026-10-21 08:03:00.000' });
+  await addRecord(users[3], { score: 0, status: 'timeout', submittedAt: null, method: null, gradingState: 'not_submitted', gradedAt: null });
+  await addRecord(users[4], { releaseId: priorReleaseId, rule: oldRule, score: 100 });
+  await addRecord(users[4], { attemptNo: 2, rule: oldRule, score: 99 });
+  await addRecord(users[5], { releaseId: priorReleaseId, rule: oldRule, score: 100 });
+  await addRecord(users[1], { paperId: draft.id, releaseId: null, score: 100 });
+  await addRecord(users[3], { paperId: empty.id, releaseId: emptyReleaseId, categoryId: categories[1].id, score: 0, status: 'timeout', submittedAt: null, method: null, gradingState: 'not_submitted', gradedAt: null });
+
+  const overviewQuery = `/statistics/training/overview?keyword=${encodeURIComponent(tag)}`;
+  const overview = await ctx.request(admin.actor, 'GET', `${overviewQuery}&page=1&page_size=100`);
+  assert.equal(overview.status, 200, JSON.stringify(overview));
+  assert.equal(overview.data.total, 4, 'overview must exclude regulation papers');
+  assert.equal(overview.data.items.length, 4);
+  const row = overview.data.items.find((item) => item.paper_id === paper.id);
+  assert.deepEqual(row, {
+    paper_id: paper.id, title: paper.title, category_id: categories[0].id, category_name: categories[0].name,
+    status: 'published', release_id: releaseId, total_score: 100, duration_minutes: 30, pass_score: 60,
+    participant_count: 5, finalized_users: 3, average_score: 72,
+  }, 'overview must count latest-release starters, then average one best score per user across difficulties');
+  const draftRow = overview.data.items.find((item) => item.paper_id === draft.id);
+  assert.deepEqual({
+    release: draftRow.release_id, total: draftRow.total_score, duration: draftRow.duration_minutes,
+    pass: draftRow.pass_score, participants: draftRow.participant_count,
+    finalized: draftRow.finalized_users, average: draftRow.average_score,
+  }, { release: null, total: null, duration: null, pass: null, participants: 0, finalized: 0, average: null }, 'unreleased drafts must not reuse old records or mutable rules');
+  const emptyRow = overview.data.items.find((item) => item.paper_id === empty.id);
+  assert.deepEqual([emptyRow.participant_count, emptyRow.finalized_users, emptyRow.average_score], [1, 0, null], 'pure timeout is a starter but not a scored result');
+  assert.equal(overview.data.items.find((item) => item.paper_id === archived.id).status, 'archived');
+
+  const categoryOverview = await ctx.request(admin.actor, 'GET', `${overviewQuery}&category_id=${categories[0].id}`);
+  assert.equal(categoryOverview.status, 200);
+  assert.equal(categoryOverview.data.total, 2);
+  assert.deepEqual(new Set(categoryOverview.data.items.map((item) => item.paper_id)), new Set([paper.id, draft.id]), 'category filter must follow the latest release');
+  const pages = [];
+  for (const page of [1, 2]) {
+    const result = await ctx.request(admin.actor, 'GET', `${overviewQuery}&page=${page}&page_size=2`);
+    assert.equal(result.status, 200);
+    assert.deepEqual([result.data.total, result.data.page, result.data.page_size, result.data.items.length], [4, page, 2, 2]);
+    pages.push(...result.data.items.map((item) => item.paper_id));
+  }
+  assert.equal(new Set(pages).size, 4, 'overview pagination must neither repeat nor skip papers');
+  const noMatch = await ctx.request(admin.actor, 'GET', `${overviewQuery}不存在&page=1&page_size=20`);
+  assert.equal(noMatch.status, 200);
+  assert.deepEqual([noMatch.data.total, noMatch.data.items], [0, []]);
+  const narrowOverview = await ctx.request(readOnlyActor, 'GET', overviewQuery);
+  assert.equal(narrowOverview.status, 200, 'statistics-only role must access overview without source-module permissions');
+  for (const path of [overviewQuery, `/statistics/training/summary?paper_id=${paper.id}`, `/statistics/training/ranking?paper_id=${paper.id}&difficulty=easy`]) {
+    const denied = await ctx.request(learnerActor, 'GET', path);
+    assert.equal(denied.status, 403, `ordinary learner must not read statistics: ${path}`);
+  }
+  for (const query of ['page=0', 'page_size=101', 'category_id=invalid', 'unexpected=1']) {
+    const invalid = await ctx.request(admin.actor, 'GET', `/statistics/training/overview?${query}`);
+    assert.equal(invalid.status, 400, `invalid overview query: ${query}`);
+  }
+
+  const summary = await ctx.request(admin.actor, 'GET', `/statistics/training/summary?paper_id=${paper.id}`);
+  assert.equal(summary.status, 200, JSON.stringify(summary));
+  assert.deepEqual(summary.data.exam, {
+    paper_id: paper.id, title: paper.title, category_id: categories[0].id,
+    total_score: 100, duration_minutes: 30, pass_score: 60, excellent_score: null,
+  });
+  const easy = summary.data.score_groups.find((group) => group.difficulty === 'easy');
+  assert.deepEqual({
+    finalized: easy.finalized_users, average: easy.average_score, highest: easy.highest_score,
+    lowest: easy.lowest_score, passed: easy.passed_users, duration: easy.average_duration_seconds,
+    excellent: easy.excellent_users,
+  }, { finalized: 3, average: 70, highest: 90, lowest: 30, passed: 2, duration: 460, excellent: null }, 'score metrics must use the same best-score representative records');
+  assert.ok(Math.abs(easy.pass_rate - 2 / 3) < 0.0001);
+  const hard = summary.data.score_groups.find((group) => group.difficulty === 'hard');
+  assert.deepEqual([hard.finalized_users, hard.highest_score, hard.lowest_score, hard.passed_users, hard.average_duration_seconds, hard.excellent_users], [1, 96, 96, 1, 600, null]);
+  const frozenSource = await ctx.request(admin.actor, 'GET', `/statistics/training/ranking?paper_id=${paper.id}&category_id=${categories[0].id}&source=external&difficulty=hard`);
+  assert.equal(frozenSource.status, 200);
+  assert.deepEqual(frozenSource.data.items.map((item) => [item.user_id, item.source, item.score]), [[String(users[0].id), 'external', 96]], 'source/category filters must use record snapshots even after current facts differ');
+  const emptySource = await ctx.request(admin.actor, 'GET', `/statistics/training/ranking?paper_id=${paper.id}&source=external&difficulty=easy`);
+  assert.equal(emptySource.status, 200);
+  assert.deepEqual([emptySource.data.total, emptySource.data.items], [0, []]);
+  for (const noScorePaper of [draft, empty]) {
+    const noScores = await ctx.request(admin.actor, 'GET', `/statistics/training/summary?paper_id=${noScorePaper.id}&difficulty=easy`);
+    assert.equal(noScores.status, 200);
+    assert.equal(noScores.data.finalized_users, 0, 'unreleased/timeout records must not enter summary scores');
+    assert.equal(noScores.data.exam.excellent_score, null);
+    if (noScorePaper === draft) {
+      assert.equal(noScores.data.release_id, null);
+      assert.deepEqual([noScores.data.exam.total_score, noScores.data.exam.duration_minutes, noScores.data.exam.pass_score], [null, null, null]);
+    }
+    for (const group of noScores.data.score_groups) {
+      assert.deepEqual([group.average_score, group.highest_score, group.lowest_score, group.average_duration_seconds, group.excellent_users], [null, null, null, null, null]);
+      assert.deepEqual([group.finalized_users, group.passed_users], [0, 0]);
+    }
+    const noRanking = await ctx.request(admin.actor, 'GET', `/statistics/training/ranking?paper_id=${noScorePaper.id}&difficulty=easy`);
+    assert.equal(noRanking.status, 200);
+    assert.deepEqual([noRanking.data.total, noRanking.data.items], [0, []]);
+  }
+
+  const rankingQuery = `/statistics/training/ranking?paper_id=${paper.id}&difficulty=easy`;
+  const ranking = await ctx.request(admin.actor, 'GET', `${rankingQuery}&page=1&page_size=20`);
+  assert.equal(ranking.status, 200);
+  assert.deepEqual(ranking.data.items.map((item) => [item.rank, item.user_id, item.gender, item.score, item.duration_seconds]), [
+    [1, String(users[1].id), 'female', 90, 300], [1, String(users[0].id), 'male', 90, 900], [3, String(users[2].id), null, 30, 180],
+  ], 'rank must be based on scores, preserve gender, and exclude old/different rules and pure timeout');
+  for (const [sort, order, expected] of [
+    ['score', 'asc', [[3, '排序丙'], [1, '排序乙'], [1, '排序甲']]],
+    ['score', 'desc', [[1, '排序乙'], [1, '排序甲'], [3, '排序丙']]],
+    ['duration', 'asc', [[3, '排序丙'], [1, '排序乙'], [1, '排序甲']]],
+    ['duration', 'desc', [[1, '排序甲'], [1, '排序乙'], [3, '排序丙']]],
+  ]) {
+    const sorted = await ctx.request(admin.actor, 'GET', `${rankingQuery}&sort_by=${sort}&sort_order=${order}&page=1&page_size=20`);
+    assert.equal(sorted.status, 200, JSON.stringify(sorted));
+    assert.deepEqual(sorted.data.items.map((item) => [item.rank, item.name]), expected, `${sort} ${order} must not renumber score ranks`);
+  }
+  const sortedPageQuery = `paper_id=${paper.id}&difficulty=easy&sort_by=duration&sort_order=desc&page=2&page_size=1`;
+  const sortedPage = await ctx.request(admin.actor, 'GET', `/statistics/training/ranking?${sortedPageQuery}`);
+  assert.equal(sortedPage.status, 200);
+  assert.deepEqual([sortedPage.data.total, sortedPage.data.page, sortedPage.data.page_size], [3, 2, 1]);
+  assert.deepEqual(sortedPage.data.items.map((item) => [item.rank, item.name, item.score]), [[1, '排序乙', 90]], 'sort must happen before pagination');
+  const exported = await ctx.request(admin.actor, 'GET', `/statistics/training/export?${sortedPageQuery}`);
+  assert.equal(exported.status, 200);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(exported.body);
+  const sheet = workbook.getWorksheet('难度排名');
+  assert.equal(sheet.rowCount, 2, 'export must contain the sorted current page only');
+  assert.deepEqual([sheet.getCell('A2').value, String(sheet.getCell('B2').value), sheet.getCell('C2').value, sheet.getCell('F2').value, sheet.getCell('G2').value, String(sheet.getCell('H2').value)], [1, String(users[1].id), '排序乙', 90, 300, sortedPage.data.items[0].record_id]);
+  for (const query of ['sort_by=name', 'sort_order=up']) {
+    for (const endpoint of ['ranking', 'export']) {
+      const invalid = await ctx.request(admin.actor, 'GET', `/statistics/training/${endpoint}?paper_id=${paper.id}&difficulty=easy&${query}`);
+      assert.equal(invalid.status, 400, `invalid ranking/export sort must be rejected: ${query}`);
+    }
+  }
+}
+
 export async function run(ctx) {
   ctx.reportOwnedRuntime?.({ stage: 'training-statistics-start', database: ctx.env.DB_DATABASE });
   const admin = await readyAdmin(ctx);
+  const initialOverview = await ctx.request(admin.actor, 'GET', '/statistics/training/overview?page=1&page_size=20');
+  assert.equal(initialOverview.status, 200, `training overview must be available: ${JSON.stringify(initialOverview)}`);
   const adminRow = await one(ctx, "SELECT id FROM sys_user WHERE username = 'admin'");
   const categoryName = `C6 类别 ${randomBytes(4).toString('hex')}`;
   await ctx.queryTestDb('INSERT INTO training_category (name,description,status,created_by) VALUES (?,?,1,?)', [categoryName, 'statistics fixture', adminRow.id]);
@@ -331,5 +525,7 @@ export async function run(ctx) {
   const routes = flattenNavigation(navigation.data).map((item) => item.route_path).filter(Boolean);
   assert.ok(routes.includes('/admin/dashboard'));
   assert.ok(routes.includes('/admin/training-statistics'));
+  const learnerLogin = await login(ctx, learnerB.username, admin.password);
+  await assertTrainingOverviewAndSorting(ctx, admin, adminRow.id, narrowLogin.actor, learnerLogin.actor);
   await assertLegacyPureTimeoutStatistics(ctx, admin, adminRow.id);
 }

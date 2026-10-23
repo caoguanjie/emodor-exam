@@ -7,7 +7,10 @@ import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { Errors } from '../../common/errors';
 import { SkipEnvelope } from '../../common/response.interceptor';
 import { TrainingStatisticsService } from './training-statistics.service';
-import { TRAINING_STATISTICS_QUERY_KEYS, TrainingStatisticsQueryDto } from './training-statistics.dto';
+import {
+  TRAINING_STATISTICS_OVERVIEW_QUERY_KEYS, TRAINING_STATISTICS_QUERY_KEYS,
+  TrainingStatisticsOverviewQueryDto, TrainingStatisticsQueryDto,
+} from './training-statistics.dto';
 
 function assertQueryKeys(value: unknown, allowed: readonly string[]): void {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Errors.param('统计查询必须是对象');
@@ -18,6 +21,16 @@ function assertQueryKeys(value: unknown, allowed: readonly string[]): void {
 @Controller('statistics/training')
 export class TrainingStatisticsController {
   constructor(private readonly statistics: TrainingStatisticsService, private readonly audit: AuditService) {}
+
+  @Get('overview')
+  @Permissions('statistics:read')
+  overview(
+    @Query(new StrictDtoValidationPipe(TRAINING_STATISTICS_OVERVIEW_QUERY_KEYS)) query: TrainingStatisticsOverviewQueryDto,
+    @Req() req: Request,
+  ) {
+    assertQueryKeys(req.query, TRAINING_STATISTICS_OVERVIEW_QUERY_KEYS);
+    return this.statistics.overview(query.toFilter());
+  }
 
   @Get('options')
   @Permissions('statistics:read')
@@ -68,6 +81,8 @@ export class TrainingStatisticsController {
         category_id: filter.categoryId || null,
         source: filter.source || null,
         difficulty: filter.difficulty || null,
+        sort_by: filter.sort_by || 'score',
+        sort_order: filter.sort_order || 'desc',
         page: filter.page,
         page_size: filter.pageSize,
       },

@@ -128,6 +128,11 @@ export interface ScoreGroup {
   difficulty: ExamDifficulty;
   finalized_users: number;
   average_score: number | null;
+  highest_score: number | null;
+  lowest_score: number | null;
+  passed_users: number;
+  average_duration_seconds: number | null;
+  excellent_users: null;
   pass_rate: number | null;
   distribution: ScoreDistributionBucket[];
 }
@@ -141,7 +146,25 @@ export interface TrainingCourseCompletion {
 
 export type TrainingUncompletedReason = 'learning_incomplete' | 'not_started' | 'not_passed';
 
+export interface TrainingExamOverviewRow {
+  paper_id: Id;
+  title: string;
+  category_id: Id | null;
+  category_name: string | null;
+  status: string;
+  release_id: Id | null;
+  total_score: number | null;
+  duration_minutes: number | null;
+  pass_score: number | null;
+  participant_count: number;
+  finalized_users: number;
+  average_score: number | null;
+}
+
 export interface TrainingExamSummary {
+  exam: Pick<TrainingExamOverviewRow, 'paper_id' | 'title' | 'category_id' | 'total_score' | 'duration_minutes' | 'pass_score'> & {
+    excellent_score: null;
+  };
   release_id: Id | null;
   eligible_count: number;
   eligible_started_count: number;
@@ -162,6 +185,7 @@ export interface RankRow {
   rank: number;
   user_id: Id;
   name: string;
+  gender: 'male' | 'female' | null;
   source: LearnerSource | null;
   difficulty: ExamDifficulty;
   score: number;
