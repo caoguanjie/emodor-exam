@@ -14,7 +14,7 @@
         <el-table-column prop="type" label="类型" min-width="150"/><el-table-column prop="code" label="编码" min-width="140"/><el-table-column prop="label" label="显示名称" min-width="150"/><el-table-column prop="sort" label="排序" width="80"/>
         <el-table-column label="属性" width="100"><template #default="{row}"><el-tag :type="row.is_system?'warning':'info'">{{row.is_system?'固定':'自定义'}}</el-tag></template></el-table-column>
         <el-table-column label="状态" width="90"><template #default="{row}"><el-tag :type="row.status?'success':'info'">{{row.status?'启用':'停用'}}</el-tag></template></el-table-column>
-        <el-table-column v-if="canWrite" label="操作" width="150"><template #default="{row}"><el-button link type="primary" :disabled="row.is_system" @click="openEdit(row)">编辑</el-button><el-button link type="danger" :disabled="row.is_system" @click="remove(row)">删除</el-button></template></el-table-column>
+        <el-table-column v-if="canWrite" label="操作" width="120"><template #default="{row}"><FitsTableActions><FitsTableAction type="primary" :disabled="row.is_system" @click="openEdit(row)">编辑</FitsTableAction><FitsTableAction type="danger" :disabled="row.is_system" @click="remove(row)">删除</FitsTableAction></FitsTableActions></template></el-table-column>
       </el-table>
       <template #pagination><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" :total="total" :page-sizes="[10,20,50,100]" layout="total, sizes, prev, pager, next" @change="load"/></template>
     </FitsTable>
@@ -26,7 +26,7 @@
 </template>
 
 <script setup lang="ts">
-import { FitsTable, FitsListSearch } from '../../components/FitsTable';
+import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { computed, reactive, ref, watch } from 'vue'; import { ElMessage, ElMessageBox } from 'element-plus'; import http from '../../api/http'; import { useAuthStore } from '../../stores/auth'; import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 interface DictionaryRow{id:string;type:string;code:string;label:string;sort:number;status:number;is_system:boolean;remark:string|null}
 interface DictionaryForm{id:string;type:string;code:string;label:string;sort:number;status:number;remark:string}

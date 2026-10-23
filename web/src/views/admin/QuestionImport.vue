@@ -164,10 +164,12 @@
             <el-tag v-if="ai.selectable(row)" type="success">有效</el-tag>
             <span v-else class="row-error">{{ row.errors.join('；') || '重复或未通过校验' }}</span>
           </template></el-table-column>
-          <el-table-column label="操作" width="220" fixed="right"><template #default="{ row }">
-            <el-button link :disabled="ai.commitUnknown.value || ai.statusBusy.value" @click="previewGenerated(row)">预览</el-button>
-            <el-button link :disabled="!canChangeRows" @click="editGenerated(row)">修改</el-button>
-            <el-button link :disabled="!canChangeRows" :loading="ai.rowBusy.value" @click="regenerateRow(row)">重新生成</el-button>
+          <el-table-column label="操作" width="200" fixed="right"><template #default="{ row }">
+            <FitsTableActions>
+              <FitsTableAction :disabled="ai.commitUnknown.value || ai.statusBusy.value" @click="previewGenerated(row)">预览</FitsTableAction>
+              <FitsTableAction :disabled="!canChangeRows" @click="editGenerated(row)">修改</FitsTableAction>
+              <FitsTableAction :disabled="!canChangeRows" :loading="ai.rowBusy.value" @click="regenerateRow(row)">重新生成</FitsTableAction>
+            </FitsTableActions>
           </template></el-table-column>
         </el-table>
         <div class="preview-actions">
@@ -209,6 +211,7 @@ import http, { download, upload } from '../../api/http';
 import type { AiQuestionImportEdit, AiQuestionImportRow, Difficulty, Id, ImportResult, Page, QuestionType } from '../../api/training-types';
 import { useAuthStore } from '../../stores/auth';
 import QuestionPreview from '../../components/QuestionPreview.vue';
+import { FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAiQuestionImportWorkflow, useQuestionImportWorkflow } from '../../utils/question-import-workflow';
 import { useAuthoringOptions } from '../../composables/useAuthoringOptions';

@@ -37,7 +37,7 @@
           <el-table-column label="规则" min-width="230"><template #default="{ row }">{{ ruleSummary(row) }}</template></el-table-column>
           <el-table-column label="学习门槛" width="100"><template #default="{ row }">{{ row.requires_learning ? '开启' : '关闭' }}</template></el-table-column>
           <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
-          <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="openDetail(row.id, 'training', row.mode === 'fixed' && row.status === 'draft' && auth.can('papers:write') && auth.can('questions:read'))">{{ row.mode === 'fixed' && row.status === 'draft' ? '编辑试卷' : '配置' }}</el-button></template></el-table-column>
+          <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><FitsTableActions><FitsTableAction type="primary" @click="openDetail(row.id, 'training', row.mode === 'fixed' && row.status === 'draft' && auth.can('papers:write') && auth.can('questions:read'))">{{ row.mode === 'fixed' && row.status === 'draft' ? '编辑试卷' : '配置' }}</FitsTableAction></FitsTableActions></template></el-table-column>
         </el-table>
         <template #pagination>
           <el-pagination layout="total, prev, pager, next" :total="trainingTotal" :page-size="trainingQuery.page_size"
@@ -65,7 +65,7 @@
           <el-table-column label="及格线 / 限时 / 次数" min-width="220"><template #default="{ row }">{{ row.pass_score }} 分 · {{ row.duration_minutes }} 分钟 · {{ row.max_attempts }} 次</template></el-table-column>
           <el-table-column label="发布快照" width="130"><template #default="{ row }"><el-tag :type="row.rules_locked ? 'success' : row.status === 'published' ? 'warning' : 'info'">{{ legacyReleaseLabel(row) }}</el-tag></template></el-table-column>
           <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
-          <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button size="small" type="primary" @click="openDetail(row.id, 'regulation')">{{ row.rules_locked ? '查看' : '组卷' }}</el-button></template></el-table-column>
+          <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><FitsTableActions><FitsTableAction type="primary" @click="openDetail(row.id, 'regulation')">{{ row.rules_locked ? '查看' : '组卷' }}</FitsTableAction></FitsTableActions></template></el-table-column>
         </el-table>
         <template #pagination>
           <el-pagination layout="total, prev, pager, next" :total="legacyTotal" :page-size="legacyQuery.page_size"
@@ -99,7 +99,7 @@
 
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
-import { FitsTable, FitsListSearch } from '../../components/FitsTable';
+import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
 import http from '../../api/http';

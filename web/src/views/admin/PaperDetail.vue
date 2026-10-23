@@ -26,7 +26,7 @@
         <el-table-column prop="sort" label="顺序" width="70" /><el-table-column prop="stem" label="题干" min-width="260" show-overflow-tooltip />
         <el-table-column label="题型" width="90"><template #default="{ row }">{{ typeLabel(row.type) }}</template></el-table-column>
         <el-table-column label="分值" width="170"><template #default="{ row }"><el-input-number v-model="row.score" :min="0.5" :max="100" :step="0.5" size="small" :disabled="legacyPaper.status !== 'draft' || legacyStrategyLocked || !auth.can('papers:write')" @change="legacyDirty = true" /></template></el-table-column>
-        <el-table-column label="操作" width="90"><template #default="{ row }"><el-button v-if="legacyPaper.status === 'draft' && !legacyStrategyLocked && auth.can('papers:write')" text type="danger" @click="removeLegacy(row)">移除</el-button></template></el-table-column>
+        <el-table-column label="操作" width="90"><template #default="{ row }"><FitsTableActions><FitsTableAction v-if="legacyPaper.status === 'draft' && !legacyStrategyLocked && auth.can('papers:write')" type="danger" @click="removeLegacy(row)">移除</FitsTableAction></FitsTableActions></template></el-table-column>
       </el-table>
       <el-button v-if="legacyPaper.status === 'draft' && !legacyStrategyLocked && auth.can('papers:write') && (legacyDirty || legacySum !== legacyPersistedSum)" type="primary" style="margin-top:14px" @click="saveLegacyQuestions">保存题单</el-button>
     </el-card>
@@ -79,7 +79,7 @@
         <el-table-column label="题型 / 难度" width="130"><template #default="{ row }">{{ typeLabel(row.type) }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column>
         <el-table-column label="来源" width="120"><template #default="{ row }">{{ row.regulation_id ? `资料 ${row.regulation_id}` : '无资料来源' }}</template></el-table-column>
         <el-table-column label="分值" width="180"><template #default="{ row }"><el-input-number v-model="row.score_cents" :min="1" :max="10000" :disabled="!editable" /><span class="hint inline">整数分</span></template></el-table-column>
-        <el-table-column label="操作" width="90"><template #default="{ row }"><el-button v-if="editable" text type="danger" @click="removeFixed(row)">移除</el-button></template></el-table-column>
+        <el-table-column label="操作" width="90"><template #default="{ row }"><FitsTableActions><FitsTableAction v-if="editable" type="danger" @click="removeFixed(row)">移除</FitsTableAction></FitsTableActions></template></el-table-column>
       </el-table>
     </el-card>
 
@@ -147,6 +147,7 @@ import type {
   TrainingPaperStatus,
 } from '../../api/training-types';
 import QuestionPreview from '../../components/QuestionPreview.vue';
+import { FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { resolvePaperSaveCompletion } from '../../utils/paper-editor-state';
 import { useAuthStore } from '../../stores/auth';

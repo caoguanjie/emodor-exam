@@ -93,11 +93,13 @@
           </el-table-column>
           <el-table-column label="操作" width="260" fixed="right">
             <template #default="{ row }">
-              <el-button text size="small" type="primary" @click="openView(row)">预览</el-button>
-              <el-button v-if="row.status === 'pending' && auth.can('questions:review')" text size="small" type="success" @click="reviewQuestion(row, 'approved')">通过</el-button>
-              <el-button v-if="row.status !== 'rejected' && auth.can('questions:review')" text size="small" type="warning" @click="reviewQuestion(row, 'rejected')">驳回</el-button>
-              <el-button v-if="auth.can('questions:write')" text size="small" @click="openEdit(row)">修订</el-button>
-              <el-button v-if="row.source === 'ai' && row.regulation_id && row.regulation_version_id && ['single', 'multiple'].includes(row.type) && auth.can('questions:write')" text size="small" @click="regenerate(row)">重生成</el-button>
+              <FitsTableActions>
+                <FitsTableAction type="primary" @click="openView(row)">预览</FitsTableAction>
+                <FitsTableAction v-if="row.status === 'pending' && auth.can('questions:review')" type="success" @click="reviewQuestion(row, 'approved')">通过</FitsTableAction>
+                <FitsTableAction v-if="row.status !== 'rejected' && auth.can('questions:review')" type="warning" @click="reviewQuestion(row, 'rejected')">驳回</FitsTableAction>
+                <FitsTableAction v-if="auth.can('questions:write')" @click="openEdit(row)">修订</FitsTableAction>
+                <FitsTableAction v-if="row.source === 'ai' && row.regulation_id && row.regulation_version_id && ['single', 'multiple'].includes(row.type) && auth.can('questions:write')" @click="regenerate(row)">重生成</FitsTableAction>
+              </FitsTableActions>
             </template>
           </el-table-column>
         </el-table>
@@ -173,7 +175,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { FitsTable, FitsListSearch } from '../../components/FitsTable';
+import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
 import { useAuthStore } from '../../stores/auth';

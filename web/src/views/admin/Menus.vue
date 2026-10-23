@@ -12,7 +12,7 @@
         <el-table-column prop="permission_code" label="权限标识" min-width="190" show-overflow-tooltip />
         <el-table-column prop="sort" label="排序" width="80" />
         <el-table-column prop="status" label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status ? 'success' : 'info'">{{ row.status ? '启用' : '停用' }}</el-tag></template></el-table-column>
-        <el-table-column v-if="canWrite" label="操作" width="150" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openEdit(row)">编辑</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template></el-table-column>
+        <el-table-column v-if="canWrite" label="操作" width="120" fixed="right"><template #default="{ row }"><FitsTableActions><FitsTableAction type="primary" @click="openEdit(row)">编辑</FitsTableAction><FitsTableAction type="danger" @click="remove(row)">删除</FitsTableAction></FitsTableActions></template></el-table-column>
       </el-table>
     </FitsTable>
 
@@ -36,7 +36,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
-import { FitsTable } from '../../components/FitsTable';
+import { FitsTable, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { useAuthStore } from '../../stores/auth';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 

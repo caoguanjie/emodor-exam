@@ -64,7 +64,7 @@
           <template #default="{ row }">{{ formatTime(row.started_at) }}</template>
         </el-table-column>
         <el-table-column label="操作" fixed="right" width="90">
-          <template #default="{ row }"><el-button link type="primary" @click="openDetail(row.record_id)">详情</el-button></template>
+          <template #default="{ row }"><FitsTableActions><FitsTableAction type="primary" @click="openDetail(row.record_id)">详情</FitsTableAction></FitsTableActions></template>
         </el-table-column>
       </el-table>
       <template #pagination>
@@ -77,7 +77,7 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { FitsTable, FitsListSearch } from '../../components/FitsTable';
+import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { useRouter } from 'vue-router';
 import http from '../../api/http';
 import type { ExamRecordSummary, Page } from '../../api/training-types';

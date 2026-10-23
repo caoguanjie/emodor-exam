@@ -34,7 +34,7 @@
 
       <div class="setting-block banner-setting">
         <div class="block-head">
-          <h3>首页轮播图</h3>
+          <h3>学员端首页轮播图</h3>
           <el-tag type="info">最多 3 张</el-tag>
         </div>
         <el-upload
@@ -56,15 +56,6 @@
           <el-icon><Plus /></el-icon>
         </el-upload>
         <p class="hint">可一次选择多张图片，按添加顺序展示；支持 JPG、PNG、WebP，单张最大 10 MiB。点击预览可左右切换，需调整时删除后重新添加。</p>
-      </div>
-
-      <div v-if="saved.banners.length" class="setting-block public-banners">
-        <h3>当前公开轮播</h3>
-        <el-carousel height="180px">
-          <el-carousel-item v-for="banner in saved.banners" :key="banner.asset_id">
-            <img :src="publicSiteAssetUrl(banner.asset_id)" alt="公开轮播图" />
-          </el-carousel-item>
-        </el-carousel>
       </div>
     </div>
     <el-image-viewer
@@ -297,7 +288,7 @@ function onBannerRemove(file: UploadFile, files: SiteBannerFile[] = bannerFiles.
 }
 
 function onBannerExceed() {
-  ElMessage.warning('首页轮播图最多上传 3 张');
+  ElMessage.warning('学员端首页轮播图最多上传 3 张');
 }
 
 async function reset() {
@@ -341,5 +332,4 @@ onBeforeUnmount(() => {
 .banner-uploader.is-full :deep(.el-upload--picture-card) { display: none; }
 .logo-uploader :deep(.el-upload-list--picture-card .el-upload-list__item-thumbnail) { object-fit: contain; }
 .banner-uploader :deep(.el-upload-list--picture-card .el-upload-list__item-thumbnail) { object-fit: cover; }
-.public-banners img { width: 100%; height: 100%; object-fit: cover; }
 </style>

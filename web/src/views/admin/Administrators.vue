@@ -17,7 +17,7 @@
         </el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag></template></el-table-column>
         <el-table-column prop="last_login_at" label="最后登录" min-width="170" />
-        <el-table-column label="操作" width="120" fixed="right"><template #default="{ row }"><el-button v-if="auth.can('administrators:write')" text type="primary" :disabled="row.system_role === 'super_admin'" @click="openRoles(row)">配置角色</el-button></template></el-table-column>
+        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><FitsTableActions><FitsTableAction v-if="auth.can('administrators:write')" type="primary" :disabled="row.system_role === 'super_admin'" @click="openRoles(row)">配置角色</FitsTableAction></FitsTableActions></template></el-table-column>
       </el-table>
     </FitsTable>
 
@@ -50,7 +50,7 @@
         <el-table-column prop="real_name" label="姓名" width="160" />
         <el-table-column label="系统身份" width="150"><template #default="{ row }">{{ roleName(row.system_role) }}</template></el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="90" fixed="right"><template #default="{ row }"><el-button text type="primary" @click="chooseCandidate(row)">选择</el-button></template></el-table-column>
+        <el-table-column label="操作" width="90" fixed="right"><template #default="{ row }"><FitsTableActions><FitsTableAction type="primary" @click="chooseCandidate(row)">选择</FitsTableAction></FitsTableActions></template></el-table-column>
       </el-table>
       <el-pagination
         v-model:current-page="candidateQuery.page"
@@ -83,7 +83,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import http from '../../api/http';
-import { FitsTable } from '../../components/FitsTable';
+import { FitsTable, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 

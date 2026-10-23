@@ -24,11 +24,13 @@
           <template #default="{ row }"><el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag></template>
         </el-table-column>
         <el-table-column label="更新时间" width="180"><template #default="{ row }">{{ formatDateTime(row.updated_at) }}</template></el-table-column>
-        <el-table-column v-if="auth.can('training_categories:write')" label="操作" width="220" fixed="right">
+        <el-table-column v-if="auth.can('training_categories:write')" label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button text type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button text :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
-            <el-button text type="danger" @click="remove(row)">删除</el-button>
+            <FitsTableActions>
+              <FitsTableAction type="primary" @click="openEdit(row)">编辑</FitsTableAction>
+              <FitsTableAction :type="row.status === 1 ? 'warning' : 'success'" @click="toggleStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</FitsTableAction>
+              <FitsTableAction type="danger" @click="remove(row)">删除</FitsTableAction>
+            </FitsTableActions>
           </template>
         </el-table-column>
       </el-table>
@@ -49,7 +51,7 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref, watch } from 'vue';
-import { FitsTable, FitsListSearch } from '../../components/FitsTable';
+import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';

@@ -8,7 +8,7 @@
         <el-table-column label="类型" width="110"><template #default="{ row }"><el-tag :type="row.is_system ? 'info' : 'primary'">{{ row.is_system ? '系统角色' : '业务角色' }}</el-tag></template></el-table-column>
         <el-table-column label="权限" min-width="360"><template #default="{ row }"><el-tag v-for="code in row.permissions" :key="code" size="small" effect="plain" class="permission-tag">{{ code }}</el-tag></template></el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 1 ? 'success' : 'info'">{{ row.status === 1 ? '启用' : '停用' }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button v-if="auth.can('roles:write')" text type="primary" :disabled="row.is_system" @click="openEdit(row)">编辑</el-button></template></el-table-column>
+        <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><FitsTableActions><FitsTableAction v-if="auth.can('roles:write')" type="primary" :disabled="row.is_system" @click="openEdit(row)">编辑</FitsTableAction></FitsTableActions></template></el-table-column>
       </el-table>
     </FitsTable>
 
@@ -23,7 +23,7 @@
 import { onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import http from '../../api/http';
-import { FitsTable } from '../../components/FitsTable';
+import { FitsTable, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 

@@ -9,7 +9,7 @@
         <el-table-column prop="created_at" label="登录时间" min-width="170" />
         <el-table-column prop="last_seen_at" label="最近活动" min-width="170" />
         <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'info'">{{ row.status === 'active' ? '在线' : '已下线' }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="110" fixed="right"><template #default="{ row }"><el-button v-if="row.status === 'active' && auth.can('sessions:write')" text type="danger" @click="revoke(row)">强制下线</el-button></template></el-table-column>
+        <el-table-column label="操作" width="110" fixed="right"><template #default="{ row }"><FitsTableActions><FitsTableAction v-if="row.status === 'active' && auth.can('sessions:write')" type="danger" @click="revoke(row)">强制下线</FitsTableAction></FitsTableActions></template></el-table-column>
       </el-table>
       <template #pagination><el-pagination layout="total, prev, pager, next" :total="total" :page-size="pageSize" v-model:current-page="page" @current-change="load" /></template>
     </FitsTable>
@@ -20,7 +20,7 @@
 import { onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
-import { FitsTable } from '../../components/FitsTable';
+import { FitsTable, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { useAuthStore } from '../../stores/auth';
 
 const auth = useAuthStore();
