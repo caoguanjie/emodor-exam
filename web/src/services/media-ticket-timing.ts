@@ -7,3 +7,8 @@ export function mediaTicketRenewalDelay(expiresAt: number): number {
 export function mediaTicketRetryDelay(expiresAt: number): number {
   return expiresAt > 0 ? Math.min(1000, mediaTicketRenewalDelay(expiresAt)) : 1000;
 }
+
+/** 从重复响应起完整等待一秒，跨过供应商签名秒，不依赖设备钟对齐。 */
+export function mediaTicketNextSignatureDelay(): number {
+  return 1050;
+}

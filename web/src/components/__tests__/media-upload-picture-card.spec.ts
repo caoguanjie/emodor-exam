@@ -80,6 +80,56 @@ describe('MediaUpload picture cards', () => {
     expect(renewed.currentTime).toBe(123); expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
     expect(mocks.ticket).toHaveBeenCalledTimes(2); expect(wrapper.emitted('update:modelValue')).toBeUndefined();
   });
+  it('keeps the saved video mounted and playing when COS repeats the same one-second signature', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-26T12:00:00Z'));
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    mocks.ticket.mockImplementation(async () => { const second = Math.floor(Date.now() / 1000); return { content_url: `${remoteUrl}?signed=${second}`, expires_at: new Date(second * 1000 + 1000).toISOString() }; });
+    const wrapper = await render({ purpose: 'video', listType: 'drag', currentAssetId: '12' });
+    await wrapper.get('button[aria-label="播放预览"]').trigger('click'); await flushPromises();
+    const first = document.body.querySelector('.media-upload__video-player') as HTMLVideoElement;
+    first.currentTime = 123; Object.defineProperty(first, 'paused', { configurable: true, value: false }); vi.mocked(HTMLMediaElement.prototype.pause).mockClear();
+    await vi.advanceTimersByTimeAsync(999); await flushPromises();
+    expect(mocks.ticket).toHaveBeenCalledTimes(2); expect(document.body.querySelector('.media-upload__video-player')).toBe(first);
+    expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled(); expect(first.currentTime).toBe(123);
+    await vi.advanceTimersByTimeAsync(551); await flushPromises(); first.dispatchEvent(new Event('loadedmetadata')); await flushPromises();
+    expect(mocks.ticket).toHaveBeenCalledTimes(3); expect(first.currentTime).toBe(123); expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+  });
+  it('waits one signature boundary to recover a saved-video network error that receives the same five-minute URL', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-26T12:00:00Z')); vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    mocks.ticket.mockImplementation(async () => { const second = Math.floor(Date.now() / 1000); return { content_url: `${remoteUrl}?signed=${second}`, expires_at: new Date(second * 1000 + 300000).toISOString() }; });
+    const wrapper = await render({ purpose: 'video', listType: 'drag', currentAssetId: '12' });
+    await wrapper.get('button[aria-label="播放预览"]').trigger('click'); await flushPromises();
+    const first = document.body.querySelector('.media-upload__video-player') as HTMLVideoElement; const original = first.getAttribute('src');
+    first.currentTime = 123; Object.defineProperty(first, 'paused', { configurable: true, value: false }); await vi.advanceTimersByTimeAsync(100);
+    first.dispatchEvent(new Event('error')); await flushPromises(); await vi.advanceTimersByTimeAsync(1050); await flushPromises();
+    const renewed = document.body.querySelector('.media-upload__video-player') as HTMLVideoElement;
+    expect(renewed.getAttribute('src')).not.toBe(original); renewed.dispatchEvent(new Event('loadedmetadata')); await flushPromises();
+    expect(mocks.ticket).toHaveBeenCalledTimes(3); expect(renewed.currentTime).toBe(123); expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+  });
+  it('bounds a saved-video renewal when the signer never advances its signature', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-26T12:00:00Z'));
+    mocks.ticket.mockResolvedValue({ content_url: remoteUrl, expires_at: new Date(Date.now() + 300000).toISOString() });
+    const wrapper = await render({ purpose: 'video', listType: 'drag', currentAssetId: '12' });
+    await wrapper.get('button[aria-label="播放预览"]').trigger('click'); await flushPromises();
+    await vi.advanceTimersByTimeAsync(310000); await flushPromises(); expect(mocks.ticket).toHaveBeenCalledTimes(3); expect(document.body.textContent).toContain('播放地址未更新');
+    await vi.advanceTimersByTimeAsync(300000); expect(mocks.ticket).toHaveBeenCalledTimes(3);
+  });
+  it.each(['close', 'decode'] as const)('cancels duplicate-signature waiting on %s and never revives the saved video', async action => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-26T12:00:00Z'));
+    mocks.ticket.mockImplementation(async () => { const second = Math.floor(Date.now() / 1000); return { content_url: `${remoteUrl}?signed=${second}`, expires_at: new Date(second * 1000 + 300000).toISOString() }; });
+    const wrapper = await render({ purpose: 'video', listType: 'drag', currentAssetId: '12' });
+    await wrapper.get('button[aria-label="播放预览"]').trigger('click'); await flushPromises();
+    const first = document.body.querySelector('.media-upload__video-player') as HTMLVideoElement, original = first.getAttribute('src');
+    await vi.advanceTimersByTimeAsync(100); first.dispatchEvent(new Event('error')); await flushPromises();
+    vi.mocked(HTMLMediaElement.prototype.pause).mockClear();
+    if (action === 'close') (document.body.querySelector('.el-dialog__headerbtn') as HTMLButtonElement).click();
+    else { Object.defineProperty(first, 'error', { configurable: true, value: { code: 3 } }); first.dispatchEvent(new Event('error')); }
+    await flushPromises(); await vi.advanceTimersByTimeAsync(5000); await flushPromises();
+    expect(mocks.ticket).toHaveBeenCalledTimes(2);
+    if (action === 'decode') expect(document.body.querySelector('.media-upload__video-player')).toBeNull();
+    else { expect(first.getAttribute('src')).toBe(original); expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled(); }
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined();
+  });
   it.each([1000, 5000, 300000].flatMap(ttl => [0, 200, 800].map(latency => ({ ttl, latency }))))('starts renewing before a $ttl ms ticket expires after $latency ms response latency', async ({ ttl, latency }) => {
     vi.useFakeTimers(); const started = Date.now(), calls: number[] = [];
     mocks.ticket.mockImplementation(() => {

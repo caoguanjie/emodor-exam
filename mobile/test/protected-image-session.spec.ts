@@ -9,6 +9,19 @@ let context: ProtectedImageContext
 beforeEach(() => { vi.resetAllMocks(); setActivePinia(createPinia()); context = { assetId: '901', ownerType: 'sys_user_avatar', ownerId: '17', epoch: 1, userId: '17', authenticated: true, loggingIn: false }; mocks.ticket.mockResolvedValue(ticket) })
 afterEach(() => { vi.useRealTimers() })
 describe('protected image account boundary', () => {
+  it('does not redisplay a deterministic same-second image signature or geometrically chase its expiry', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-26T12:00:00Z'));
+    mocks.ticket.mockImplementation(async () => { const second = Math.floor(Date.now() / 1000); return { content_url: `/api/v1/media/tickets/signed-${second}/content`, expires_at: new Date(second * 1000 + 1000).toISOString() } });
+    const show = vi.fn(), image = createProtectedImageController({ read: () => context, show }); image.update();
+    await vi.advanceTimersByTimeAsync(999); expect(mocks.ticket).toHaveBeenCalledTimes(2); expect(show.mock.calls.filter(call => call[0])).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(551); expect(mocks.ticket).toHaveBeenCalledTimes(3); expect(show.mock.calls.filter(call => call[0])).toHaveLength(2); image.dispose();
+  });
+  it('ends an image renewal after the same signature repeats across a UTC-second boundary', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-26T12:00:00Z'));
+    const fixed = { ...ticket, expires_at: new Date(Date.now() + 300000).toISOString() }; context = { ...context, initialTicket: fixed }; mocks.ticket.mockResolvedValue(fixed);
+    const show = vi.fn(), image = createProtectedImageController({ read: () => context, show }); image.update();
+    await vi.advanceTimersByTimeAsync(310000); expect(mocks.ticket).toHaveBeenCalledTimes(2); expect(show).toHaveBeenLastCalledWith(''); image.dispose();
+  });
   it.each([1000, 5000, 300000].flatMap(ttl => [0, 200, 800].map(latency => ({ ttl, latency }))))('renews a $ttl ms image ticket before expiry after $latency ms response latency', async ({ ttl, latency }) => {
     vi.useFakeTimers(); const started = Date.now(), calls: number[] = [];
     mocks.ticket.mockImplementation(() => { const issued = Date.now(); calls.push(issued); return new Promise(resolve => setTimeout(() => resolve({ ...ticket, expires_at: new Date(issued + ttl).toISOString() }), latency)) });

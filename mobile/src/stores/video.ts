@@ -3,7 +3,7 @@ import { ApiError } from '@/api/client'
 import { getMediaTicket, type MediaTicketView } from '@/api/media'
 import { closeVideoSession, heartbeatVideoSession, startVideoSession, type VideoPlaybackState, type VideoProgress, type VideoSessionView } from '@/api/video'
 import { toHeartbeat, type NativeVideoEvent, type NativeVideoFailure } from '@/platform/media-player'
-import { mediaTicketRenewalDelay, mediaTicketRetryDelay } from '@/platform/media-ticket-timing'
+import { mediaTicketNextSignatureDelay, mediaTicketRenewalDelay, mediaTicketRetryDelay } from '@/platform/media-ticket-timing'
 
 interface VideoClientOptions {
   controls: { play(): void; pause(): void; seek(positionMs: number): void }
@@ -105,15 +105,24 @@ export function createVideoSessionClient(options: VideoClientOptions) {
     const remaining = Date.parse(ticket.expires_at) - Date.now()
     if (!Number.isFinite(remaining) || remaining <= 0) throw new ApiError(-2, '视频播放地址已过期，请重试')
     const src = options.resolveUrl(ticket.content_url)
+    // 同 URL 不会产生 loadedmetadata，不能重新进入等待恢复位置的状态。
+    if (src === state.src) return false
     handle.ticketExpiresAt = Date.parse(ticket.expires_at); restoring = true; state.src = src
     clearTicket()
     ticketTimer = setTimeout(() => { if (current(handle)) void renewTicket(handle) }, mediaTicketRenewalDelay(handle.ticketExpiresAt))
+    return true
   }
-  async function failPlayback(handle: ActiveSession) {
+  async function failPlayback(handle: ActiveSession, message = '视频加载失败，请重试') {
     if (!current(handle)) return
     intent = false; restoring = false; handle.recovering = false
-    state.status = 'error'; state.error = '视频加载失败，请重试'; clearBeat(); clearTicket(); pausePlayer()
+    state.status = 'error'; state.error = message; clearBeat(); clearTicket(); pausePlayer()
     await report(handle, 'paused')
+  }
+  function waitForTicketRetry(delay: number): Promise<boolean> {
+    return new Promise(resolve => {
+      ticketTimer = setTimeout(() => { ticketTimer = undefined; cancelTicketWait = undefined; resolve(true) }, delay)
+      cancelTicketWait = () => resolve(false)
+    })
   }
   function renewTicket(handle: ActiveSession): Promise<void> {
     const renewable = () => current(handle) && !['ended', 'error', 'stopped'].includes(state.status)
@@ -121,18 +130,18 @@ export function createVideoSessionClient(options: VideoClientOptions) {
     if (handle.ticketFlight) return handle.ticketFlight
     clearTicket()
     const pending = (async () => {
-      for (let attempt = 0; attempt < 2 && renewable(); attempt++) {
+      let networkRetries = 0, duplicateRetries = 0
+      while (renewable()) {
         try {
           const ticket = await getMediaTicket(handle.view.media.asset_id, 'lesson_version_video', handle.view.version_id)
-          if (renewable()) displayTicket(handle, ticket)
-          return
+          if (!renewable()) return
+          if (displayTicket(handle, ticket)) return
+          if (duplicateRetries++ >= 1) { await failPlayback(handle, '播放地址未更新，请重试'); return }
+          if (!await waitForTicketRetry(mediaTicketNextSignatureDelay())) return
         } catch (error) {
           if (!renewable()) return
-          if (attempt === 0 && error instanceof ApiError && (error.code === -1 || error.status >= 500)) {
-            const retry = await new Promise<boolean>(resolve => {
-              ticketTimer = setTimeout(() => { ticketTimer = undefined; cancelTicketWait = undefined; resolve(true) }, mediaTicketRetryDelay(handle.ticketExpiresAt))
-              cancelTicketWait = () => resolve(false)
-            })
+          if (networkRetries++ === 0 && error instanceof ApiError && (error.code === -1 || error.status >= 500)) {
+            const retry = await waitForTicketRetry(mediaTicketRetryDelay(handle.ticketExpiresAt))
             if (retry) continue
             return
           }

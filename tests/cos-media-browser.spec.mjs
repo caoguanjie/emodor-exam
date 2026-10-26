@@ -76,7 +76,7 @@ async function startFixture(videoBytes, streamingBytes) {
   await new Promise((resolvePromise, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolvePromise); });
   const address = server.address();
   assert.ok(address && typeof address === 'object');
-  return { root, server, failOldStreams, streamRequests, url: `http://127.0.0.1:${address.port}/` };
+  return { root, server, failOldStreams, resetOldStream: () => { oldStreamFailed = false; }, streamRequests, url: `http://127.0.0.1:${address.port}/` };
 }
 
 export async function run({ videoBytes }) {
@@ -87,7 +87,9 @@ export async function run({ videoBytes }) {
   const page = await browser.newPage();
   let renewalCalls = 0;
   let holdRenewal = false;
-  let recoveryPhase = false, sessionStarts = 0;
+  let recoveryPhase = false, sameSignaturePhase = false, sameTicket, sameTicketCalls = 0, sessionStarts = 0;
+  let duplicateResponseSeen;
+  const duplicateResponse = new Promise(resolvePromise => { duplicateResponseSeen = resolvePromise; });
   let releaseRecovery, recoveryRequestArrived;
   const recoveryReleased = new Promise(resolvePromise => { releaseRecovery = resolvePromise; });
   const recoveryRequested = new Promise(resolvePromise => { recoveryRequestArrived = resolvePromise; });
@@ -98,16 +100,26 @@ export async function run({ videoBytes }) {
   await page.route('https://fixture-123.cos.ap-shanghai.myqcloud.com/**', async route => {
     const url = new URL(route.request().url());
     if (url.pathname.endsWith('/stream-old.mp4')) return route.fulfill({ status: 307, headers: { location: `${fixture.url}stream-old.mp4` }, body: '' });
-    if (url.pathname.endsWith('.mp4')) return route.fulfill({ status: 200, contentType: 'video/mp4', body: url.pathname.endsWith('fixture-recovered.mp4') ? streamingBytes : videoBytes, headers: { 'accept-ranges': 'bytes' } });
+    if (url.pathname.endsWith('.mp4')) return route.fulfill({ status: 200, contentType: 'video/mp4', body: url.pathname.includes('recovered') ? streamingBytes : videoBytes, headers: { 'accept-ranges': 'bytes' } });
     if (url.pathname.endsWith('.png')) return route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64') });
     return route.fulfill({ status: 404, body: 'missing' });
   });
   await page.route('**/api/v1/**', async route => {
     const request = route.request(); const url = new URL(request.url());
     const envelope = data => ({ status: 200, contentType: 'application/json', body: JSON.stringify({ code: 0, message: 'ok', data }) });
-    if (url.pathname.endsWith('/me/video-sessions')) { sessionStarts++; return route.fulfill(envelope({ session_id: '501', version_id: '31', heartbeat_interval_ms: 30000, media: { asset_id: '22', ticket: { content_url: signed(recoveryPhase ? 'stream-old.mp4' : 'fixture-initial.mp4'), expires_at: new Date(Date.now() + (recoveryPhase ? 1000 : 1400)).toISOString() } }, progress: { confirmed_position_ms: 500, credited_ms: 0, coverage_ms: 0, duration_ms: 30000, completed: false, last_seq: 0 } })); }
+    if (url.pathname.endsWith('/me/video-sessions')) {
+      sessionStarts++;
+      const ticket = sameSignaturePhase ? { content_url: signed('stream-old.mp4'), expires_at: new Date(Math.floor(Date.now() / 1000) * 1000 + 300000).toISOString() }
+        : { content_url: signed(recoveryPhase ? 'stream-old.mp4' : 'fixture-initial.mp4'), expires_at: new Date(Date.now() + (recoveryPhase ? 1000 : 1400)).toISOString() };
+      if (sameSignaturePhase) sameTicket = ticket;
+      return route.fulfill(envelope({ session_id: '501', version_id: '31', heartbeat_interval_ms: 30000, media: { asset_id: '22', ticket }, progress: { confirmed_position_ms: 500, credited_ms: 0, coverage_ms: 0, duration_ms: 30000, completed: false, last_seq: 0 } }));
+    }
     if (url.pathname.endsWith('/media/22/tickets')) {
       renewalCalls++;
+      if (sameSignaturePhase) {
+        if (++sameTicketCalls === 1) { await route.fulfill(envelope(sameTicket)); duplicateResponseSeen(); return; }
+        return route.fulfill(envelope({ content_url: signed('fixture-same-src-recovered.mp4'), expires_at: new Date(Date.now() + 300000).toISOString() }));
+      }
       if (recoveryPhase) { recoveryRequestArrived(); await recoveryReleased; return route.fulfill(envelope({ content_url: signed('fixture-recovered.mp4'), expires_at: new Date(Date.now() + 60_000).toISOString() })); }
       if (holdRenewal) await renewalReleased;
       return route.fulfill(envelope({ content_url: signed(`fixture-${renewalCalls}.mp4`), expires_at: new Date(Date.now() + 60_000).toISOString() }));
@@ -154,6 +166,22 @@ export async function run({ videoBytes }) {
   assert.ok(Math.abs(recovered.position - recovering.position / 1000) < 0.8, `network recovery lost position: ${recovering.position} -> ${recovered.position}`);
   recoveryPhase = false;
 
+  sameSignaturePhase = true; fixture.resetOldStream();
+  const sameStarts = sessionStarts;
+  await page.evaluate(() => { window.__client.select({ courseId: '5', lessonId: '5' }); });
+  await page.evaluate(() => window.__client.play());
+  await page.waitForFunction(() => window.__video.readyState >= 1 && !window.__video.paused, null, { timeout: 5000 });
+  await wait(100); fixture.failOldStreams(); await page.evaluate(() => { window.__video.currentTime = 29; });
+  await Promise.race([duplicateResponse, wait(5000).then(() => { throw new Error('same-signature response was not requested'); })]);
+  const duplicate = await page.evaluate(() => ({ source: window.__client.state.src, position: window.__client.state.positionMs, status: window.__client.state.status }));
+  assert.equal(duplicate.source, sameTicket.content_url, 'the first repeated ticket must keep the original source while waiting');
+  assert.equal(duplicate.status, 'buffering');
+  await page.waitForFunction(() => /fixture-same-src-recovered\.mp4/.test(window.__video.src) && !window.__video.paused, null, { timeout: 5000 });
+  const sameRecovered = await page.evaluate(() => ({ position: window.__video.currentTime, session: window.__client.state.sessionId }));
+  assert.equal(sameRecovered.session, '501'); assert.equal(sessionStarts - sameStarts, 1); assert.equal(sameTicketCalls, 2, 'one repeated signature permits only one later signature request');
+  assert.ok(Math.abs(sameRecovered.position - duplicate.position / 1000) < 0.8, 'same-signature recovery must restore position');
+  sameSignaturePhase = false;
+
   holdRenewal = true;
   await page.evaluate(() => { window.__epoch++; window.__client.select({ courseId: '2', lessonId: '2' }); });
   await page.waitForFunction(() => window.__client.state.src === '', null, { timeout: 2_000 });
@@ -180,7 +208,7 @@ export async function run({ videoBytes }) {
     releaseRenewal(); releaseRecovery(); fixture.failOldStreams();
     await browser.close(); await new Promise(resolvePromise => fixture.server.close(resolvePromise)); await rm(fixture.root, { recursive: true, force: true });
   }
-  console.log(`[cos-media-browser] real HTMLVideoElement renewal/currentTime/paused, slow in-flight renewal + old-source network error recovery, stale account switch, controlled image DOM passed; COS requests were route-stubbed`);
+  console.log(`[cos-media-browser] real HTMLVideoElement renewal/currentTime/paused, slow in-flight renewal + old-source network error recovery, repeated same-src signature recovery, stale account switch, controlled image DOM passed; COS requests were route-stubbed`);
 }
 
 async function standaloneVideoFixture() {

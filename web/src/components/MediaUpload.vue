@@ -87,9 +87,9 @@
     <el-image-viewer v-if="previewVisible && previewUrl && !isVideo" :url-list="[previewUrl]" teleported @close="previewVisible = false" />
     <el-dialog v-if="previewVisible && isVideo" v-model="previewVisible" title="视频预览" width="min(900px, 92vw)"
       class="re-form-dialog" append-to-body destroy-on-close :before-close="beforePreviewClose">
-      <p v-if="previewLoading" role="status">正在申请视频预览地址…</p>
+      <p v-if="previewLoading && !previewUrl" role="status">正在申请视频预览地址…</p>
       <div v-else-if="previewError"><p role="alert">{{ previewError }}</p><button type="button" class="media-upload__button" @click="openPreview">重试预览</button></div>
-      <video v-else-if="previewUrl" ref="videoPlayer" class="media-upload__video-player" :src="previewUrl" controls preload="metadata" @error="retryVideoPreview" @loadedmetadata="restorePreviewPosition" />
+      <video v-else-if="previewUrl" ref="videoPlayer" class="media-upload__video-player" :src="previewUrl" controls preload="metadata" @play="previewPlayIntent = true" @pause="previewPaused" @error="retryVideoPreview" @loadedmetadata="restorePreviewPosition" />
       <template #footer><el-button @click="previewVisible = false">关闭</el-button></template>
     </el-dialog>
   </div>
@@ -103,7 +103,7 @@ import { getMediaLimits, getMediaMetadata, uploadMedia, type MediaMetadata, type
 import { createMediaUploadTask, type MediaUploadTask } from '../services/media-upload';
 import { invalidatePcMedia, resolvePcMedia } from '../services/media-content';
 import { onMediaContextChange } from '../services/media-context';
-import { mediaTicketRenewalDelay, mediaTicketRetryDelay } from '../services/media-ticket-timing';
+import { mediaTicketNextSignatureDelay, mediaTicketRenewalDelay, mediaTicketRetryDelay } from '../services/media-ticket-timing';
 import {
   createMediaUploadState,
   mediaKindForPurpose,
@@ -174,6 +174,8 @@ let unsubscribeUpload: (() => void) | null = null;
 let previewRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 let previewPosition = 0;
 let previewWasPlaying = false;
+let previewPlayIntent = false;
+let previewSwitching = false;
 let previewRetries = 0;
 let previewExpiresAt = 0;
 
@@ -260,6 +262,7 @@ function closeVideoPreview() {
   clearTimeout(previewRefreshTimer);
   previewRetries = 0;
   previewWasPlaying = false;
+  previewPlayIntent = false; previewSwitching = false;
   videoPlayer.value?.pause();
 }
 
@@ -278,12 +281,27 @@ function showVideoFrame(event: Event) {
 }
 
 async function openPreview() {
+  const opening = !previewVisible.value;
   previewVisible.value = true;
   if (previewUrl.value && !previewUrl.value.startsWith('blob:') && isVideo.value) {
-    if (previewExpiresAt <= Date.now() + 10000) previewUrl.value = null;
-    else schedulePreviewRefresh();
+    if (opening && previewExpiresAt <= Date.now()) previewUrl.value = null;
+    else if (previewError.value || previewExpiresAt <= Date.now() + 10000) { await refreshVideoPreview(); return; }
+    else { schedulePreviewRefresh(); return; }
   }
   if (previewUrl.value || !isVideo.value) return;
+  await requestVideoPreview();
+}
+
+function waitForPreviewRetry(signal: AbortSignal, delay: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const stop = () => { clearTimeout(timer); resolve(false); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', stop); resolve(true); }, delay);
+    signal.addEventListener('abort', stop, { once: true });
+    if (signal.aborted) stop();
+  });
+}
+
+async function requestVideoPreview() {
   const assetId = currentPreviewAssetId.value;
   if (!assetId || previewLoading.value) return;
   const serial = ++previewSerial;
@@ -291,11 +309,26 @@ async function openPreview() {
   previewController = controller;
   previewLoading.value = true;
   previewError.value = '';
+  clearTimeout(previewRefreshTimer);
   try {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    let networkRetries = 0, duplicateRetries = 0;
+    while (!controller.signal.aborted) {
       try {
         const ticket = await resolvePcMedia(assetId, controller.signal);
         if (serial !== previewSerial || controller.signal.aborted || assetId !== currentPreviewAssetId.value) return;
+        if (ticket.content_url === previewUrl.value) {
+          if (duplicateRetries++ >= 1) throw new Error('播放地址未更新，请重试');
+          if (!await waitForPreviewRetry(controller.signal, mediaTicketNextSignatureDelay())) return;
+          invalidatePcMedia(assetId);
+          continue;
+        }
+        // 先取得不同的签名再暂停并换源；相同 URL 不会触发 loadedmetadata。
+        if (videoPlayer.value) {
+          previewPosition = videoPlayer.value.currentTime || 0;
+          previewWasPlaying = !videoPlayer.value.paused || Boolean(videoPlayer.value.error && previewPlayIntent);
+          previewSwitching = true;
+          videoPlayer.value.pause();
+        }
         previewUrl.value = ticket.content_url;
         previewExpiresAt = Date.parse(ticket.expires_at);
         schedulePreviewRefresh();
@@ -303,17 +336,13 @@ async function openPreview() {
       } catch (error) {
         if (serial !== previewSerial || controller.signal.aborted) return;
         const code = error && typeof error === 'object' && 'code' in error ? Number(error.code) : NaN;
-        if (attempt === 0 && (code <= 0 || (code >= 500 && code < 600) || (code >= 50000 && code < 60000))) {
-          const retry = await new Promise<boolean>(resolve => {
-            const stop = () => { clearTimeout(timer); resolve(false); };
-            const timer = setTimeout(() => { controller.signal.removeEventListener('abort', stop); resolve(true); }, mediaTicketRetryDelay(previewExpiresAt));
-            controller.signal.addEventListener('abort', stop, { once: true });
-            if (controller.signal.aborted) stop();
-          });
+        if (networkRetries++ === 0 && (code <= 0 || (code >= 500 && code < 600) || (code >= 50000 && code < 60000))) {
+          const retry = await waitForPreviewRetry(controller.signal, mediaTicketRetryDelay(previewExpiresAt));
           if (retry) continue;
           return;
         }
         previewError.value = safeErrorMessage(error);
+        videoPlayer.value?.pause();
         return;
       }
     }
@@ -350,23 +379,25 @@ function cancelUpload() {
 
 async function refreshVideoPreview() {
   if (!currentPreviewAssetId.value || state.value.file || !previewVisible.value) return;
-  if (videoPlayer.value) {
-    previewPosition = videoPlayer.value.currentTime || 0;
-    previewWasPlaying = !videoPlayer.value.paused;
-  }
-  videoPlayer.value?.pause();
   invalidatePcMedia(currentPreviewAssetId.value);
-  previewUrl.value = null;
-  await openPreview();
+  await requestVideoPreview();
 }
+function previewPaused() { if (!previewSwitching && !videoPlayer.value?.error) previewPlayIntent = false; }
 function retryVideoPreview() {
+  if ([3, 4].includes(videoPlayer.value?.error?.code || 0)) {
+    previewSerial++; previewController?.abort(); previewController = null;
+    clearTimeout(previewRefreshTimer); previewLoading.value = false;
+    previewError.value = '视频格式无法播放，请检查文件'; videoPlayer.value?.pause();
+    return;
+  }
+  if (previewLoading.value) return;
   if (previewRetries++ < 1) void refreshVideoPreview();
   else { previewError.value = '视频预览暂不可用，请重新打开'; previewUrl.value = null; }
 }
 function restorePreviewPosition() {
   if (videoPlayer.value && previewPosition > 0) videoPlayer.value.currentTime = previewPosition;
   if (previewWasPlaying) void videoPlayer.value?.play().catch(() => {});
-  previewPosition = 0; previewWasPlaying = false;
+  previewPosition = 0; previewWasPlaying = false; previewSwitching = false;
 }
 
 function resetInput() {

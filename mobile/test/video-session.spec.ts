@@ -273,6 +273,47 @@ describe('video session client', () => {
     client.ready(); expect(controls.seek).toHaveBeenLastCalledWith(13000)
     await client.dispose()
   })
+  it('keeps normal time updates active when one-second COS signing returns the same URL and expiry within a UTC second', async () => {
+    const ticket = () => { const second = Math.floor(Date.now() / 1000); return { content_url: `/api/v1/media/tickets/signed-${second}/content`, expires_at: new Date(second * 1000 + 1000).toISOString() } }
+    install(wire => ok(wire.url.endsWith('/video-sessions') ? { ...response(), media: { asset_id: '91', ticket: ticket() } } : wire.url.includes('/tickets') ? ticket() : progress))
+    const { client, controls } = setup(); await client.play(); client.ready(); await client.event('play'); const original = client.state.src; controls.play.mockClear(); controls.seek.mockClear()
+    await vi.advanceTimersByTimeAsync(999); client.timeUpdate(13000)
+    expect(requests.filter(r => r.url.includes('/tickets'))).toHaveLength(1)
+    expect(client.state.src).toBe(original); expect(client.state.positionMs).toBe(13000); expect(client.state.status).toBe('playing')
+    expect(controls.seek).not.toHaveBeenCalled(); expect(controls.play).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(551); expect(client.state.src).not.toBe(original); client.ready()
+    expect(controls.seek).toHaveBeenLastCalledWith(13000); expect(requests.filter(r => r.url.includes('/tickets'))).toHaveLength(2)
+    await client.dispose()
+  })
+  it.each([0, 200])('recovers a network error at 100ms when the repeated five-minute signer clock is %i ms behind', async offset => {
+    vi.setSystemTime(Date.now() + 300)
+    const ticket = () => { const second = Math.floor((Date.now() - offset) / 1000); return { content_url: `/api/v1/media/tickets/signed-${second}/content`, expires_at: new Date(second * 1000 + 300000).toISOString() } }
+    install(wire => ok(wire.url.endsWith('/video-sessions') ? { ...response(), media: { asset_id: '91', ticket: ticket() } } : wire.url.includes('/tickets') ? ticket() : progress))
+    const { client, controls } = setup(); await client.play(); client.ready(); await client.event('play'); const original = client.state.src; controls.play.mockClear()
+    await vi.advanceTimersByTimeAsync(100); client.timeUpdate(13000); await client.event('error', 'network'); await settle()
+    expect(client.state.src).toBe(original); expect(requests.filter(r => r.url.includes('/tickets'))).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1050); expect(client.state.src).not.toBe(original); client.ready()
+    expect(client.state.sessionId).toBe('81'); expect(controls.seek).toHaveBeenLastCalledWith(13000); expect(controls.play).toHaveBeenCalledTimes(1)
+    expect(requests.filter(r => r.url.includes('/tickets'))).toHaveLength(2); expect(requests.filter(r => r.url === '/api/v1/me/video-sessions')).toHaveLength(1)
+    await client.dispose()
+  })
+  it('stops a recovery that keeps returning the same signature across the next UTC second', async () => {
+    const ticket = { content_url: '/api/v1/media/tickets/unchanged/content', expires_at: new Date(Date.now() + 300000).toISOString() }
+    install(wire => ok(wire.url.endsWith('/video-sessions') ? { ...response(), media: { asset_id: '91', ticket } } : wire.url.includes('/tickets') ? ticket : progress))
+    const { client } = setup(); await client.play(); client.ready(); await client.event('play'); await vi.advanceTimersByTimeAsync(100)
+    await client.event('error', 'network'); await vi.advanceTimersByTimeAsync(10000)
+    expect(client.state.status).toBe('error'); expect(requests.filter(r => r.url.includes('/tickets'))).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(300000); expect(requests.filter(r => r.url.includes('/tickets'))).toHaveLength(2)
+    await client.dispose()
+  })
+  it('cancels duplicate-signature waiting when a terminal decode error arrives', async () => {
+    const ticket = { content_url: '/api/v1/media/tickets/unchanged/content', expires_at: new Date(Date.now() + 300000).toISOString() }
+    install(wire => ok(wire.url.endsWith('/video-sessions') ? { ...response(), media: { asset_id: '91', ticket } } : wire.url.includes('/tickets') ? ticket : progress))
+    const { client, controls } = setup(); await client.play(); client.ready(); await client.event('play'); controls.play.mockClear(); await vi.advanceTimersByTimeAsync(100)
+    await client.event('error', 'network'); await settle(); await client.event('error', 'decode'); await vi.advanceTimersByTimeAsync(5000)
+    expect(client.state.status).toBe('error'); expect(requests.filter(r => r.url.includes('/tickets'))).toHaveLength(1); expect(controls.play).not.toHaveBeenCalled()
+    await client.dispose()
+  })
   it.each([1000, 5000, 300000].flatMap(ttl => [0, 200, 800].map(latency => ({ ttl, latency }))))('renews a $ttl ms video ticket before expiry after $latency ms response latency', async ({ ttl, latency }) => {
     const started = Date.now(), renewals: number[] = []
     install(wire => {
