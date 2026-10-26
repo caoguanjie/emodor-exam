@@ -10,7 +10,7 @@ import { PassThrough } from 'node:stream';
 
 const require=createRequire(new URL('../../server/package.json',import.meta.url));
 const CONFIG_NAMES=['COS_BUCKET','COS_REGION','COS_KEY_PREFIX','COS_SECRET_ID','COS_SECRET_KEY'];
-const ALLOWED_HEADERS=['Authorization','Content-Type','Content-MD5','Range','x-cos-security-token','x-cos-sdk-retry'];
+const ALLOWED_HEADERS=['Authorization','Content-Type','Content-MD5','Range','x-cos-acl','x-cos-security-token','x-cos-sdk-retry'];
 const EXPOSE_HEADERS=['ETag','Content-Range','Content-Length','Accept-Ranges'];
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 class PreflightError extends Error {constructor(code){super(code);this.code=code;}}

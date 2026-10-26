@@ -7,7 +7,7 @@
     "ID": "RuleExamMedia-REVIEWED_ORIGINS",
     "AllowedOrigins": [],
     "AllowedMethods": ["GET", "HEAD", "PUT"],
-    "AllowedHeaders": ["Authorization", "Content-Type", "Content-MD5", "Range", "x-cos-security-token", "x-cos-sdk-retry"],
+    "AllowedHeaders": ["Authorization", "Content-Type", "Content-MD5", "Range", "x-cos-acl", "x-cos-security-token", "x-cos-sdk-retry"],
     "ExposeHeaders": ["ETag", "Content-Range", "Content-Length", "Accept-Ranges"],
     "MaxAgeSeconds": 600
   },
@@ -15,6 +15,7 @@
     "Fill exact HTTPS page origins or HTTP localhost development origins; no default wildcard.",
     "CORS is bucket-wide browser behavior, not object authorization. Browser STS policies remain exact-key scoped.",
     "Content-Length is browser controlled; do not try to set it from client JavaScript. Expose it for reads.",
-    "Authorization/x-cos-security-token support the installed COS browser SDK, x-cos-sdk-retry supports its retry path."
+    "Authorization/x-cos-security-token support the installed COS browser SDK, x-cos-sdk-retry supports its retry path.",
+    "Production simple PUT signs x-cos-acl: private; browser clients must pass that signed header unchanged."
   ]
 }

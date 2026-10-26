@@ -76,9 +76,12 @@ export class CosUploadGrantAdapter {
       TmpSecretId:credentials.tmp_secret_id,TmpSecretKey:credentials.tmp_secret_key,SecurityToken:credentials.token,
       StartTime:data.startTime,ExpiredTime:data.expiredTime,
     })});
+    // The shared bucket may be public-read. Bind an explicit private object ACL
+    // into the PUT signature so clients cannot omit or replace it.
+    const headers={'Content-Type':input.mimeType,'x-cos-acl':'private'};
     const url=await new Promise<string>((resolve,reject)=>signer.getObjectUrl({Bucket:locator.bucket!,Region:locator.region!,Key:locator.key,Method:'PUT',Sign:true,
-      Headers:{'Content-Type':input.mimeType},Protocol:'https:'},(error,result)=>error?reject(new Error('上传指令签名失败')):resolve(result.Url)));
+      Headers:headers,Protocol:'https:'},(error,result)=>error?reject(new Error('上传指令签名失败')):resolve(result.Url)));
     if(Date.now()>=data.expiredTime*1000 || Date.now()>=input.expiresAt.getTime()) throw new Error('上传临时授权已到期');
-    return {mode:'simple',method:'PUT',url,headers:{'Content-Type':input.mimeType},expires_at:new Date(data.expiredTime*1000).toISOString()};
+    return {mode:'simple',method:'PUT',url,headers,expires_at:new Date(data.expiredTime*1000).toISOString()};
   }
 }

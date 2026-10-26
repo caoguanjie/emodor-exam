@@ -2,6 +2,8 @@
 
 RuleExam 沿用 gooodwork 的 COS 桶和同一套后端 `SecretId/SecretKey`。本目录只提供预检工具及追加配置建议，不创建长期身份，不修改桶 ACL、版本控制、CORS、Policy 或已有身份权限。应用前缀约束不等于共享长期密钥之间存在 IAM 隔离。
 
+共享桶可以保持既有的 `public-read`。新对象省略 ACL 时会继承桶权限，因此本项目 simple PUT 的签名和返回请求头必须同时固定 `x-cos-acl: private`；multipart 初始化及正式对象写入也显式设置 `private`。不新增 `PutObjectACL` 临时权限，simple STS 仍只有准确键的 `PutObject`。验收按本项目对象的实际匿名 GET 拒绝结果判断，不要求把全桶改为私有。[PUT Object 请求头说明](https://cloud.tencent.com/document/product/436/7749)、[对象权限说明](https://cloud.tencent.com/document/api/436/13324)。
+
 工具直接加载 `server/node_modules` 已锁定的 `cos-nodejs-sdk-v5@3.0.0` 与 `qcloud-cos-sts@3.1.3`。不需要构建或启动 Nest，不启动定时任务，不连接数据库，不读取任何 `.env` 文件。环境变量由 Node 或调用方注入；仅检查 `COS_BUCKET`、`COS_REGION`、`COS_KEY_PREFIX`、`COS_SECRET_ID`、`COS_SECRET_KEY`，可选 `COS_SESSION_TOKEN`。
 
 ## 默认只读检查
@@ -25,6 +27,8 @@ node --env-file=.env scripts/media/cos-preflight.mjs --inspect
 
 只读检查中的 STS、真实签名传输和浏览器 CORS 均为 `not-run`。`metadata_complete` 只说明已完成所需元数据检查。`ready=false`、`g0=not-verified` 明确保留真实应用及浏览器验收门。版本 `enabled`、`suspended`、`unconfigured` 都是可识别的状态，不会因此要求修改共享桶版本控制。
 
+桶 ACL 为公读时保留 `fail` 诊断，提醒操作者核对每个本项目对象均显式私有；这不是要求修改共享桶 ACL，也不会阻止显式对象私有与匿名拒读探针。不要将桶诊断误写为对象公开或对象验收已通过。
+
 CLI 退出码：`0` 表示本次所请求的元数据检查完成且探针未失败；`2` 表示元数据仍有未知/未满足项；`1` 表示参数、工具执行或显式探针失败。不得把退出码 `0` 当成 G0、业务、真机或容量已通过。
 
 ## 生成可审阅提案
@@ -39,7 +43,7 @@ node --env-file=.env scripts/media/cos-preflight.mjs --render-proposal --out '<�
 
 提案包含以下追加建议：
 
-1. **CORS**：原规则逐条原样保留后追加精确来源的 `GET/HEAD/PUT`。允许 `Authorization`、`Content-Type`、`Content-MD5`、`Range`、`x-cos-security-token`、`x-cos-sdk-retry`；这些覆盖已安装浏览器 SDK 的上传、临时授权与重试路径。暴露 `ETag/Content-Range/Content-Length/Accept-Ranges`。保留原 `ResponseVary`，另列推荐值供人工审阅。浏览器自行控制 `Content-Length`，前端不手动设置。
+1. **CORS**：原规则逐条原样保留后追加精确来源的 `GET/HEAD/PUT`。允许 `Authorization`、`Content-Type`、`Content-MD5`、`Range`、`x-cos-acl`、`x-cos-security-token`、`x-cos-sdk-retry`；这些覆盖生产 simple PUT 的显式私有 ACL，以及已安装浏览器 SDK 的上传、临时授权与重试路径。前端须透传服务端给出的全部 simple headers；ACL 已绑定签名，不能删除或改成公读。暴露 `ETag/Content-Range/Content-Length/Accept-Ranges`。保留原 `ResponseVary`，另列推荐值供人工审阅。浏览器自行控制 `Content-Length`，前端不手动设置。
 2. **CSP**：仅列出 `img-src/media-src/connect-src` 需追加的标准桶 origin，保留所有现有指令和其它来源。域名固定由有效配置生成：`https://<COS_BUCKET>.cos.<COS_REGION>.myqcloud.com`；不猜测自定义域名，不自动改 nginx。
 3. **前端公开配置**：`VITE_COS_MEDIA_ORIGIN` 为上述标准桶 origin；`VITE_COS_MEDIA_PREFIX` 为 `<COS_KEY_PREFIX>media/`。它们是公开定位配置，不能放入 `SecretId/SecretKey/token`。实名 `identity/` 与临时 `staging/` 不进入公开媒体前缀。
 4. **微信小程序**：列出对应 request/uploadFile/downloadFile 域名的控制台登记建议。当前小程序仍保留既有代理上传兼容路径；建议不代表已启用小程序直传或已通过设备验收。

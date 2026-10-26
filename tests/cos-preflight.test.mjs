@@ -75,7 +75,9 @@ test('proposal preserves every existing CORS rule, adds only explicit origins an
   assert.deepEqual(proposal.cors.CORSRules[0],data.getBucketCors.CORSRules[0]);assert.equal(proposal.cors.ResponseVary,'true');
   const added=proposal.cors.CORSRules.at(-1);
   assert.deepEqual(added.AllowedOrigins,['https://exam.example.com','http://localhost:5173']);assert.deepEqual(added.AllowedMethods,['GET','HEAD','PUT']);
-  for(const header of ['Authorization','Content-Type','Content-MD5','Range','x-cos-security-token','x-cos-sdk-retry'])assert.ok(added.AllowedHeaders.includes(header));
+  for(const header of ['Authorization','Content-Type','Content-MD5','Range','x-cos-security-token','x-cos-sdk-retry','x-cos-acl'])assert.ok(added.AllowedHeaders.includes(header),`missing CORS header ${header}`);
+  const template=JSON.parse(await readFile(new URL('../deploy/cos/cors.template.json',import.meta.url),'utf8'));
+  assert.ok(template.additional_rule.AllowedHeaders.includes('x-cos-acl'));
   for(const header of ['ETag','Content-Range','Content-Length','Accept-Ranges'])assert.ok(added.ExposeHeaders.includes(header));
   assert.ok(!added.AllowedOrigins.includes('*'));assert.equal(proposal.apply_automatically,false);
   assert.equal(proposal.public_frontend.VITE_COS_MEDIA_ORIGIN,'https://fixture-1234567890.cos.ap-guangzhou.myqcloud.com');

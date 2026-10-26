@@ -236,7 +236,10 @@ export class MediaStorageMigrationService {
     const before = await this.dataSource.getRepository(MediaAsset).findOne({ where: { id: item.assetId } });
     if (before && before.status === 'ready' && sameLocator(this.locator(before), item.source)
       && before.sha256 === item.sha256 && Number(before.sizeBytes) === item.sizeBytes) {
-      return this.save(manifest, cp, { state: 'rolled_back', reason: null });
+      // A prior rollback may have committed before its receipt or cleanup.
+      // Reuse the same exact-candidate ownership/reference checks on recovery.
+      const cleaned = await this.cleanCandidate(cp, manifest);
+      return this.save(manifest, cp, { state: 'rolled_back', reason: null, cleanupPending: !cleaned });
     }
     if (!this.targetRow(before, item, cp.target)) return { ...cp, state: 'failed', reason: 'ROW_CHANGED' };
     const expectedUpdatedAt = cp.switchedUpdatedAt ?? iso(before.updatedAt);

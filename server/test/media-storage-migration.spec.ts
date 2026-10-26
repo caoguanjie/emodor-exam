@@ -150,6 +150,31 @@ describe('local media storage migration', () => {
     expect(f.cos.remove).not.toHaveBeenCalled();
   });
 
+  it('retries exact candidate cleanup after rollback already restored the local row', async () => {
+    const f = await fixture(); const [item] = await f.plan();
+    const migrated = await f.service.apply(item, f.manifest);
+    f.cos.remove.mockRejectedValueOnce(new Error('temporary COS failure'));
+    expect(await f.service.rollback(item, f.manifest)).toMatchObject({ state: 'rolled_back', cleanupPending: true });
+    expect(f.objects.has(migrated.target!.key)).toBe(true);
+    expect(await f.service.rollback(item, f.manifest)).toMatchObject({ state: 'rolled_back', cleanupPending: false });
+    expect(f.cos.remove).toHaveBeenCalledTimes(2);
+    expect(f.objects.has(migrated.target!.key)).toBe(false);
+    expect(f.assets.get('1').storageProvider).toBe('local');
+  });
+
+  it('recovers cleanup when the local switch succeeded but the rollback receipt was lost', async () => {
+    const f = await fixture(); const [item] = await f.plan();
+    const migrated = await f.service.apply(item, f.manifest);
+    const save = f.manifest.save;
+    f.manifest.save = vi.fn().mockRejectedValueOnce(new Error('lost rollback receipt')).mockImplementation(save);
+    await expect(f.service.rollback(item, f.manifest)).rejects.toThrow('lost rollback receipt');
+    expect(f.assets.get('1').storageProvider).toBe('local');
+    expect(f.cos.remove).not.toHaveBeenCalled();
+    expect(await f.service.rollback(item, f.manifest)).toMatchObject({ state: 'rolled_back', cleanupPending: false });
+    expect(f.cos.remove).toHaveBeenCalledTimes(1);
+    expect(f.objects.has(migrated.target!.key)).toBe(false);
+  });
+
   it('rollback_requires_matching_local_sha and never claims a COS-only upload as a local backup', async () => {
     const f = await fixture(); const [item] = await f.plan(); await f.service.apply(item, f.manifest);
     await writeFile(join(f.root, 'media/source.png'), 'changed');

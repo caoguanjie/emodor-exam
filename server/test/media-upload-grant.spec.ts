@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import COS from 'cos-nodejs-sdk-v5';
 import { CosUploadGrantAdapter, multipartUploadPolicy } from '../src/modules/media/storage/cos-upload-grant.adapter';
 afterEach(()=>vi.useRealTimers());
 
@@ -26,6 +27,27 @@ describe('browser multipart grant boundary', () => {
     const text=decodeURIComponent(JSON.stringify(grant));
     expect(text).toContain('unusable-temporary-id');
     expect(text).not.toContain(config.secretId);expect(text).not.toContain(config.secretKey);expect(text).not.toContain('unusable-temporary-key');
+  });
+  it('binds simple PUT to a private object ACL without granting separate ACL write permission', async () => {
+    vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(1700000000000);
+    const credentials=issuedAt(Math.floor(Date.now()/1000),600);let requested:any;
+    const adapter=new CosUploadGrantAdapter(grantConfig,async options=>{requested=options;return credentials;});
+    const input={...grantInput(),mode:'simple' as const,uploadId:null,mimeType:'image/png'};
+    const grant=await adapter.issue(input);
+    expect(grant.mode).toBe('simple');
+    if(grant.mode!=='simple')throw new Error('expected a simple grant');
+    expect(grant.headers).toEqual({'Content-Type':'image/png','x-cos-acl':'private'});
+    expect(requested.policy.statement).toEqual([{effect:'allow',action:['name/cos:PutObject'],resource:['qcs::cos:ap-guangzhou:uid/1234567890:fixture-1234567890/ruleexam/test/staging/session.upload']}]);
+    const signed=new URL(grant.url);
+    expect(signed.searchParams.get('q-header-list')?.split(';')).toContain('x-cos-acl');
+    const signature=(headers:Record<string,string>)=>new URLSearchParams(COS.getAuthorization({
+      SecretId:credentials.credentials.tmpSecretId,SecretKey:credentials.credentials.tmpSecretKey,
+      Bucket:input.locator.bucket,Region:input.locator.region,Key:input.locator.key,Method:'PUT',Headers:headers,KeyTime:signed.searchParams.get('q-key-time')!,
+    })).get('q-signature');
+    expect(signature(grant.headers)).toBe(signed.searchParams.get('q-signature'));
+    expect(signature({...grant.headers,'x-cos-acl':'public-read'})).not.toBe(signed.searchParams.get('q-signature'));
+    const withoutAcl={...grant.headers};delete withoutAcl['x-cos-acl'];
+    expect(signature(withoutAcl)).not.toBe(signed.searchParams.get('q-signature'));
   });
   it('refuses an expired or foreign-prefix grant before requesting credentials', async () => {
     let calls=0;const config={provider:'cos' as const,bucket:'fixture-1234567890',region:'ap-guangzhou',keyPrefix:'ruleexam/test/',secretId:'unusable-id',secretKey:'unusable-key',sessionToken:null};
