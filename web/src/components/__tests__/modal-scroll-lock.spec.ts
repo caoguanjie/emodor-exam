@@ -84,4 +84,42 @@ describe('modal scroll lock', () => {
     cancel?.click();
     await pending;
   });
+
+  it('keeps a custom-target dialog overlay inside the content region while locking main', async () => {
+    const style = document.createElement('style');
+    style.textContent = projectStyles;
+    document.head.appendChild(style);
+    styleNodes.push(style);
+
+    const visible = ref(false);
+    const Host = defineComponent({
+      setup() {
+        const target = ref<HTMLElement>();
+        return { target, visible };
+      },
+      template: `
+        <section class="content-region">
+          <div ref="target" class="content-dialog-host" />
+          <main class="main">页面内容</main>
+          <el-dialog v-if="target" v-model="visible" :append-to="target" title="内页弹窗">弹窗内容</el-dialog>
+        </section>
+      `,
+    });
+    const wrapper = mount(Host, {
+      attachTo: document.body,
+      global: { plugins: [ElementPlus] },
+    });
+    wrappers.push(wrapper);
+
+    await nextTick();
+    visible.value = true;
+    await nextTick();
+    await flushPromises();
+
+    const host = wrapper.get('.content-dialog-host');
+    const overlay = host.get('.el-overlay');
+    expect(host.element.contains(overlay.element)).toBe(true);
+    expect(getComputedStyle(overlay.element).position).toBe('absolute');
+    expect(getComputedStyle(wrapper.get('.main').element).overflow).toBe('hidden');
+  });
 });

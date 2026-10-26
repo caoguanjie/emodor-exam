@@ -227,6 +227,21 @@ body[class*="-parent--hidden"] .main { overflow: hidden; }
   width: auto;
   height: auto;
 }
+/* 内容区弹窗使用独立挂载层，不跟随 main 滚动，也不遮挡导航。 */
+.content-region { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
+.content-dialog-host { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
+.content-dialog-host .el-overlay { position: absolute; inset: 0; pointer-events: auto; }
+.content-dialog-host .el-overlay-dialog { position: absolute; inset: 0; }
+.content-dialog-host .el-dialog {
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 64px);
+}
+.content-dialog-host .question-import-row-preview-dialog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.content-dialog-host .question-import-row-preview-dialog .el-dialog__body { min-height: 0; overflow-y: auto; }
 @media (max-width: 640px) {
   .re-form-dialog .el-dialog__body { padding: 20px 16px 16px; }
   .re-form-dialog .el-dialog__footer { padding-right: 16px; padding-left: 16px; }
@@ -323,7 +338,7 @@ html { scrollbar-color: var(--re-scrollbar-thumb) transparent; scrollbar-width: 
 
   .aside, .header, .tabs-bar { display: none !important; }
 
-  .shell, .content-shell, .main, .page-enter {
+  .shell, .content-shell, .content-region, .main, .page-enter {
     display: block !important;
     width: 100% !important;
     height: auto !important;

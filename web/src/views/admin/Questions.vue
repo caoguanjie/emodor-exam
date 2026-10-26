@@ -24,15 +24,15 @@
         </FitsListSearch>
       </template>
       <template v-if="auth.can('questions:write')" #actions>
+        <el-button type="primary" @click="openCreate">新增试题</el-button>
         <el-button @click="router.push('/admin/questions/import')">试题导入</el-button>
-        <el-button type="primary" @click="openCreate">人工录题</el-button>
       </template>
 
       <section class="table-section">
-        <el-empty v-if="!auth.can('questions:read')" description="当前账号无题库查看权限，可人工录题" />
+        <el-empty v-if="!auth.can('questions:read')" description="当前账号无题库查看权限，可新增试题" />
         <el-table v-if="auth.can('questions:read')" class="question-table" v-loading="loading" :data="list">
           <template #empty>
-            <div class="question-empty"><span class="empty-glyph">Q</span><strong>暂无符合条件的题目</strong><small>调整筛选条件，或使用上方入口创建第一道题目</small></div>
+            <el-empty v-if="!loading" description="暂无试题" />
           </template>
           <el-table-column label="题干" min-width="300">
             <template #default="{ row }"><div class="stem-summary">{{ plainText(row.stem) }}</div></template>
@@ -81,34 +81,61 @@
       </template>
     </FitsTable>
 
-    <el-dialog v-model="editorVisible" :title="editorMode === 'create' ? '新增试题' : '修订试题'" width="760px" class="re-form-dialog manual-question-dialog" destroy-on-close :before-close="beforeEditorClose">
-      <p v-if="editorMode === 'edit'" class="editor-hint">保存会生成新版本并启用；旧版本保持不变。</p>
-      <el-alert v-if="editorMode === 'edit' && editingExpectedEnabled === false" type="warning" :closable="false" show-icon title="该题当前已停用，保存本次修订后将启用。" />
-      <el-alert
-        v-if="editorMode === 'edit' && !hasEditorDifficulty"
-        type="warning"
-        show-icon
-        :closable="false"
-        title="该旧题难度当前不可用于新版本，请明确选择简单或困难后再保存；原难度不会自动改写。"
-        style="margin-bottom:12px"
-      />
-      <el-alert v-if="editorStateConflict" type="warning" :closable="false" title="题目版本或启用状态已变化，输入已保留。请刷新状态，再明确保存。"><el-button link @click="refreshEditorState">刷新题目状态</el-button></el-alert>
-      <el-alert v-if="editorSaveUnknown" type="warning" :closable="false" title="保存结果尚未确认，已锁定重复提交并保留输入。请核对服务器当前题目；关闭后重新打开确定的版本再继续。"><el-button v-if="editingId" link @click="inspectUnknownSave">查询当前题目</el-button><el-button v-else link @click="load">刷新题库核对</el-button></el-alert>
-      <ManualQuestionEditor
-        ref="manualEditor"
-        :key="editorGeneration"
-        v-model="editorForm"
-        :categories="categories"
-        :can-upload-media="auth.can('media:write')"
-        :difficulty-options="difficultyOptions"
-        :disabled="saving"
-        @upload-state-change="editorUploading = $event.pending"
-        @uncommitted-change="editorHasUncommittedContent = $event"
-        @error="editorContentError = $event"
-        @save="saveQuestion()"
-      />
-      <el-alert v-if="editorContentError" type="warning" show-icon :closable="false" :title="editorContentError" />
-      <template #footer>
+    <QuestionBusinessDialog
+      v-model="questionDialogVisible"
+      :mode="dialogMode"
+      :append-to="questionDialogAppendTarget"
+      :before-close="beforeQuestionDialogClose"
+      :preserve-editor="previewReturnsToEditor"
+      @closed="onQuestionDialogClosed"
+    >
+      <template #preview>
+        <QuestionPreview v-if="selectedQuestion" :question="selectedQuestion" variant="library" />
+      </template>
+
+      <template v-if="dialogMode === 'edit'" #title-extra>
+        <span class="editor-hint">保存会生成新版本并启用；旧版本保持不变。</span>
+      </template>
+
+      <template #editor>
+        <el-alert v-if="editorMode === 'edit' && editingExpectedEnabled === false" type="warning" :closable="false" show-icon title="该题当前已停用，保存本次修订后将启用。" />
+        <el-alert
+          v-if="editorMode === 'edit' && !hasEditorDifficulty"
+          type="warning"
+          show-icon
+          :closable="false"
+          title="该旧题难度当前不可用于新版本，请明确选择简单或困难后再保存；原难度不会自动改写。"
+          style="margin-bottom:12px"
+        />
+        <el-alert v-if="editorStateConflict" type="warning" :closable="false" title="题目版本或启用状态已变化，输入已保留。请刷新状态，再明确保存。"><el-button link @click="refreshEditorState">刷新题目状态</el-button></el-alert>
+        <el-alert v-if="editorSaveUnknown" type="warning" :closable="false" title="保存结果尚未确认，已锁定重复提交并保留输入。请核对服务器当前题目；关闭后重新打开确定的版本再继续。"><el-button v-if="editingId" link @click="inspectUnknownSave">查询当前题目</el-button><el-button v-else link @click="load">刷新题库核对</el-button></el-alert>
+        <ManualQuestionEditor
+          ref="manualEditor"
+          :key="editorGeneration"
+          v-model="editorForm"
+          :categories="categories"
+          :can-upload-media="auth.can('media:write')"
+          :difficulty-options="difficultyOptions"
+          :disabled="saving"
+          @upload-state-change="editorUploading = $event.pending"
+          @uncommitted-change="editorHasUncommittedContent = $event"
+          @error="editorContentError = $event"
+          @save="saveQuestion()"
+        />
+        <el-alert v-if="editorContentError" type="warning" show-icon :closable="false" :title="editorContentError" />
+      </template>
+
+      <template #preview-footer>
+        <el-button @click="closePreview">{{ previewReturnsToEditor ? '返回编辑' : '关闭' }}</el-button>
+        <el-button
+          v-if="!previewReturnsToEditor && canEditSelectedQuestion"
+          type="primary"
+          :disabled="selectedQuestionEditBlocked"
+          @click="editPreviewedQuestion"
+        >编辑题目</el-button>
+      </template>
+
+      <template #editor-footer>
         <div class="editor-summary" aria-live="polite">
           <span class="editor-summary__answers" :aria-label="`正确答案：${editorAnswerSummary}`">
             <span>正确答案</span>
@@ -124,37 +151,12 @@
         <el-button v-if="editorMode === 'create'" :disabled="saveDisabled" @click="saveQuestion('new')">保存并新增</el-button>
         <el-button type="primary" :loading="saving" :disabled="saveDisabled" @click="saveQuestion()">{{ editorMode === 'edit' && !editingExpectedEnabled ? '保存并启用' : '保存' }}</el-button>
       </template>
-    </el-dialog>
-
-    <el-dialog v-model="previewVisible" title="题目预览" width="760px" destroy-on-close>
-      <QuestionPreview v-if="selectedQuestion" :question="selectedQuestion" />
-      <p v-if="selectedQuestion" class="preview-identity">题目 {{ selectedQuestion.question_id }} · {{ sourceLabel(selectedQuestion.source) }} · {{ selectedQuestion.revision ? `v${selectedQuestion.revision}` : '历史题目' }} · {{ selectedQuestion.enabled ? '启用' : '停用' }}</p>
-      <p v-if="selectedQuestion?.regulation_id" class="preview-identity">历史资料来源 {{ selectedQuestion.regulation_id }} · 资料版本 {{ selectedQuestion.regulation_version_id || '未记录' }}</p>
-      <el-alert v-if="historyError" type="warning" :closable="false" :title="historyError"><el-button link @click="loadHistoryPage(versionHistoryPage.page)">重试加载历史</el-button></el-alert>
-      <p v-if="historyLoading">版本历史加载中…</p>
-      <h4 v-if="versionHistory.length">版本历史（历史审核信息仅供兼容查看）</h4>
-      <el-timeline v-if="versionHistory.length" class="version-history">
-        <el-timeline-item v-for="item in versionHistory" :key="item.id" :timestamp="formatDateTime(item.created_at)" placement="top">
-          v{{ item.revision }} · {{ statusLabel(item.status) }}
-          <span v-if="item.legacy_captured_at">（升级时捕获，非历史还原）</span>
-        </el-timeline-item>
-      </el-timeline>
-      <el-pagination
-        v-if="versionHistoryPage.total > versionHistoryPage.page_size"
-        class="question-pagination"
-        small
-        layout="total, prev, pager, next"
-        :total="versionHistoryPage.total"
-        :page-size="versionHistoryPage.page_size"
-        v-model:current-page="versionHistoryPage.page"
-        @current-change="loadHistoryPage"
-      />
-    </el-dialog>
+    </QuestionBusinessDialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, inject, onMounted, reactive, ref, watch, type Ref } from 'vue';
 import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
@@ -164,24 +166,18 @@ import { useAuthoringOptions } from '../../composables/useAuthoringOptions';
 import type { AuthoringOptions } from '../../api/question-authoring';
 import { formatDateTime } from '../../utils/format';
 import ManualQuestionEditor from '../../components/ManualQuestionEditor.vue';
+import { manualContentFromDraft } from '../../components/manual-question-content';
+import QuestionBusinessDialog, { type QuestionDialogMode } from '../../components/QuestionBusinessDialog.vue';
 import QuestionPreview from '../../components/QuestionPreview.vue';
 import { useRouter } from 'vue-router';
 import {
   questionDraftFromView,
   questionDraftWithContent,
   questionRichTextToPlainText,
-  type Id, type Page, type QuestionDraftPayload, type QuestionType, type QuestionView,
+  type Id, type QuestionDraftPayload, type QuestionType, type QuestionView,
 } from '../../api/training-types';
 
 type CategoryOption = { id: Id; name: string };
-type QuestionVersionHistory = {
-  id: Id;
-  revision: number;
-  status: 'pending' | 'approved' | 'rejected';
-  created_at: string;
-  legacy_captured_at?: string | null;
-};
-type PageState = { page: number; page_size: number; total: number; keyword: string };
 type EditorBaseline = {
   form: QuestionDraftPayload;
   mode: 'create' | 'edit';
@@ -190,16 +186,14 @@ type EditorBaseline = {
   expectedEnabled: boolean | null;
 };
 
-function pageState(): PageState {
-  return { page: 1, page_size: 20, total: 0, keyword: '' };
-}
-
 const typeOptions: Array<{ value: QuestionType; label: string }> = [
   { value: 'single', label: '单选题' }, { value: 'multiple', label: '多选题' },
   { value: 'judgment', label: '判断题' },
 ];
 const auth = useAuthStore();
 const router = useRouter();
+const contentDialogTarget = inject<Ref<HTMLElement | undefined>>('contentDialogTarget', ref<HTMLElement>());
+const questionDialogAppendTarget = computed<string | HTMLElement>(() => contentDialogTarget.value || 'body');
 const { difficultyOptions, difficultyLabel: catalogDifficultyLabel, load: loadAuthoringOptions,
   loading: catalogLoading, error: catalogError } = useAuthoringOptions(() => http.get('/admin/questions/authoring-options') as Promise<AuthoringOptions>);
 const list = ref<QuestionView[]>([]);
@@ -211,7 +205,11 @@ const questionRowBusy = reactive<Record<string, 'enabled' | 'reconcile' | 'delet
 const questionStateUnknown = reactive<Record<string, boolean>>({});
 const query = reactive<{ page: number; page_size: number; category_id: string; enabled: boolean | ''; type: string; difficulty: string; keyword: string }>({ page: 1, page_size: 20, category_id: '', enabled: true, type: '', difficulty: '', keyword: '' });
 
-const editorVisible = ref(false);
+const questionDialogVisible = ref(false);
+const dialogMode = ref<QuestionDialogMode>('preview');
+const previewReturnsToEditor = ref(false);
+const editorVisible = computed(() => questionDialogVisible.value && dialogMode.value !== 'preview');
+const editorSessionActive = computed(() => editorVisible.value || (questionDialogVisible.value && previewReturnsToEditor.value));
 const editorMode = ref<'create' | 'edit'>('create');
 const editingId = ref<Id | null>(null);
 const editingExpectedVersionId = ref<Id | null>(null);
@@ -227,13 +225,7 @@ const editorDirty = ref(false);
 const editorBaseline = ref<EditorBaseline | null>(null);
 let editorContext: symbol | null = null;
 const saving = ref(false);
-const previewVisible = ref(false);
 const selectedQuestion = ref<QuestionView | null>(null);
-const versionHistory = ref<QuestionVersionHistory[]>([]);
-const versionHistoryPage = reactive(pageState());
-const historyError = ref('');
-const historyLoading = ref(false);
-let historyRequest = 0;
 
 const hasEditorDifficulty = computed(() => difficultyOptions.value.some((item) => item.value === editorForm.value.difficulty));
 const saveDisabled = computed(() => saving.value || editorUploading.value || editorStateConflict.value || editorSaveUnknown.value
@@ -244,6 +236,8 @@ const editorAnswerSummary = computed(() => {
   return form.answer.filter((index) => index >= 0 && index < form.options.length)
     .map((index) => String.fromCharCode(65 + index)).join('、') || '未选择';
 });
+const canEditSelectedQuestion = computed(() => !!selectedQuestion.value && auth.can('questions:write'));
+const selectedQuestionEditBlocked = computed(() => questionWriteBlocked(selectedQuestion.value?.question_id));
 const editorContentError = ref('');
 
 function emptyDraft(): QuestionDraftPayload {
@@ -296,7 +290,7 @@ function discardEditorDraft() {
 
 const editorUnsaved = useUnsavedChanges(editorDirty, { onDiscard: discardEditorDraft });
 watch(
-  () => [editorVisible.value, JSON.stringify(editorSnapshot()), JSON.stringify(editorBaseline.value), editorHasUncommittedContent.value] as const,
+  () => [editorSessionActive.value, JSON.stringify(editorSnapshot()), JSON.stringify(editorBaseline.value), editorHasUncommittedContent.value] as const,
   ([visible, current, baseline, uncommitted]) => {
     editorDirty.value = !!visible && (uncommitted || !!editorBaseline.value && current !== baseline);
   },
@@ -306,7 +300,7 @@ watch(
 async function closeEditor() {
   if (!await editorUnsaved.confirmDiscard()) return;
   editorContext = null;
-  editorVisible.value = false;
+  questionDialogVisible.value = false;
 }
 
 async function beforeEditorClose(done: () => void) {
@@ -321,8 +315,6 @@ function difficultyLabel(value: string | null) { return value ? catalogDifficult
 function difficultyTagType(value: string | null): 'success' | 'warning' | 'danger' | 'info' {
   return value === 'easy' ? 'success' : value === 'medium' ? 'warning' : value === 'hard' ? 'danger' : 'info';
 }
-function sourceLabel(value: string) { return ({ ai: 'AI', manual: '人工', import: '导入' } as Record<string, string>)[value] || value; }
-function statusLabel(value: string) { return ({ approved: '已通过', pending: '待审核', rejected: '已驳回' } as Record<string, string>)[value] || value; }
 function expectedVersionId(value: Id | null | undefined): Id | null { return value ?? null; }
 function questionWriteBlocked(id: Id | null | undefined) {
   return !!id && (!!questionRowBusy[id] || !!questionStateUnknown[id]);
@@ -356,13 +348,6 @@ async function load() {
   } finally { if (request === listRequest) loading.value = false; }
 }
 
-function applyPage<T>(target: { value: T[] }, state: PageState, result: Page<T>) {
-  target.value = Array.isArray(result.items) ? result.items : [];
-  state.total = Number(result.total || 0);
-  state.page = Number(result.page || 1);
-  state.page_size = Number(result.page_size || 20);
-}
-
 async function submitFilters() { query.page = 1; await load(); }
 async function resetFilters() {
   Object.assign(query, { page: 1, category_id: '', enabled: true, type: '', difficulty: '', keyword: '' });
@@ -370,7 +355,9 @@ async function resetFilters() {
 }
 
 function toDraft(row: QuestionView): QuestionDraftPayload {
-  return questionDraftFromView(row);
+  const draft = questionDraftFromView(row);
+  manualContentFromDraft(draft);
+  return draft;
 }
 
 async function openCreate() {
@@ -384,7 +371,9 @@ async function openCreate() {
   editorStateConflict.value = false; editorSaveUnknown.value = false;
   captureEditorBaseline();
   if (editorContext !== context) return;
-  editorVisible.value = true;
+  previewReturnsToEditor.value = false;
+  dialogMode.value = 'create';
+  questionDialogVisible.value = true;
 }
 
 async function openEdit(row: QuestionView) {
@@ -394,7 +383,11 @@ async function openEdit(row: QuestionView) {
   editorContentError.value = '';
   let draft: QuestionDraftPayload;
   try { draft = toDraft(row); }
-  catch (error) { ElMessage.warning(error instanceof Error ? error.message : '该版本内容暂不可编辑'); return; }
+  catch (error) {
+    if (editorContext === context) editorContext = null;
+    ElMessage.warning(error instanceof Error ? error.message : '该版本内容暂不可编辑');
+    return;
+  }
   editorGeneration.value += 1;
   editorUploading.value = false;
   editorHasUncommittedContent.value = false;
@@ -402,29 +395,51 @@ async function openEdit(row: QuestionView) {
   editorStateConflict.value = false; editorSaveUnknown.value = false;
   captureEditorBaseline();
   if (editorContext !== context) return;
-  editorVisible.value = true;
+  previewReturnsToEditor.value = false;
+  dialogMode.value = 'edit';
+  questionDialogVisible.value = true;
 }
 
 async function openView(row: QuestionView) {
   selectedQuestion.value = row;
-  versionHistory.value = [];
-  Object.assign(versionHistoryPage, pageState());
-  previewVisible.value = true;
-  void loadHistoryPage(1);
+  previewReturnsToEditor.value = false;
+  dialogMode.value = 'preview';
+  questionDialogVisible.value = true;
 }
 
-async function loadHistoryPage(page: number) {
+function closePreview() {
+  if (previewReturnsToEditor.value) {
+    returnToEditor();
+    return;
+  }
+  questionDialogVisible.value = false;
+}
+
+async function editPreviewedQuestion() {
   if (!selectedQuestion.value) return;
-  const questionId = selectedQuestion.value.question_id;
-  const request = ++historyRequest;
-  historyLoading.value = true; historyError.value = '';
-  versionHistoryPage.page = page;
-  try {
-    const history = await http.get(`/ai/questions/${questionId}/history`, { params: { page, page_size: versionHistoryPage.page_size } }) as Page<QuestionVersionHistory>;
-    if (request === historyRequest && selectedQuestion.value?.question_id === questionId) applyPage(versionHistory, versionHistoryPage, history);
-  } catch {
-    if (request === historyRequest) historyError.value = '版本历史加载失败，当前题目仍可预览';
-  } finally { if (request === historyRequest) historyLoading.value = false; }
+  await openEdit(selectedQuestion.value);
+}
+
+function returnToEditor() {
+  dialogMode.value = editorMode.value;
+  previewReturnsToEditor.value = false;
+}
+
+async function beforeQuestionDialogClose(done: () => void) {
+  if (previewReturnsToEditor.value) {
+    returnToEditor();
+    return;
+  }
+  if (editorVisible.value) {
+    await beforeEditorClose(done);
+    return;
+  }
+  done();
+}
+
+function onQuestionDialogClosed() {
+  selectedQuestion.value = null;
+  previewReturnsToEditor.value = false;
 }
 
 async function refreshEditorState() {
@@ -443,7 +458,9 @@ async function inspectUnknownSave() {
   const context = editorContext;
   const current = await http.get(`/ai/questions/${editingId.value}`) as QuestionView;
   if (context !== editorContext) return;
-  await openView(current);
+  selectedQuestion.value = current;
+  previewReturnsToEditor.value = true;
+  dialogMode.value = 'preview';
 }
 
 function payload(value: QuestionDraftPayload) {
@@ -531,7 +548,7 @@ async function saveQuestion(afterSave: 'close' | 'new' = 'close') {
           captureEditorBaseline();
         } else {
           editorContext = null;
-          editorVisible.value = false;
+          questionDialogVisible.value = false;
         }
       }
     }
@@ -684,7 +701,6 @@ onMounted(async () => {
 .section-kicker { color: var(--re-text-3); font-size: 10px; font-weight: 700; letter-spacing: 1.8px; }
 .table-section__head strong { color: var(--re-text); font-size: 15px; }
 .table-total { color: var(--re-text-3); font-size: 12px; }
-.question-table :deep(.el-table__empty-text) { width: 100%; }
 /* 只恢复题库元信息的轻量 Tag 外观，不改全站的胶囊标签。 */
 .question-meta-tag {
   height: 24px;
@@ -710,17 +726,12 @@ onMounted(async () => {
   --el-tag-bg-color: #ecfeff;
   --el-tag-border-color: #a5f3fc;
 }
-.question-empty { display: flex; align-items: center; flex-direction: column; gap: 7px; padding: 46px 20px 50px; }
-.empty-glyph { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border: 1px solid #dce4f8; border-radius: 14px; color: var(--re-primary); background: #f2f5ff; font-family: var(--re-mono); font-size: 17px; font-weight: 700; }
-.question-empty strong { color: var(--re-text-2); font-size: 14px; }
-.question-empty small { color: var(--re-text-3); font-size: 12px; }
 .difficulty-text { font-size: 13px; font-weight: 600; }
 .difficulty-text--easy { color: var(--re-success); }
 .difficulty-text--medium { color: var(--re-warning); }
 .difficulty-text--hard { color: var(--re-danger); }
 .difficulty-text--unknown { color: var(--re-text-3); }
 .source-text { color: var(--re-text-2); font-size: 13px; }
-.question-pagination { margin-top: 16px; justify-content: flex-end; }
 .stem-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .question-row-actions { justify-content: center; }
 :deep(.question-quick-switch) { --el-switch-off-color: #e5e7eb; }
@@ -731,12 +742,11 @@ onMounted(async () => {
 :deep(.question-quick-switch.is-checked .el-switch__inner) { padding: 0 28px 0 6px; }
 :deep(.question-quick-switch .el-switch__inner-wrapper) { font-size: 13px; font-weight: 600; }
 :deep(.question-quick-switch:not(.is-checked) .el-switch__inner-wrapper) { color: var(--re-text-2, #51565f); }
-.editor-hint { color: #909399; font-size: 13px; }
+.editor-hint { margin: 0; color: #909399; font-size: 13px; font-weight: 400; line-height: 1.5; }
 .editor-summary { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; color: var(--el-text-color-secondary, #909399); font-size: 12px; line-height: 22px; text-align: left; }
 .editor-summary__answers { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .editor-summary__answer { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; color: #fff; background: var(--el-color-primary, #3056d3); font-size: 12px; font-weight: 600; line-height: 1; }
 .editor-summary__status { white-space: nowrap; }
-.version-history { margin-top: 24px; border-top: 1px solid #ebeef5; padding-top: 18px; }
 @media (max-width: 680px) {
   .question-page { padding: 20px; }
   .question-stat-strip { grid-template-columns: 1fr; }

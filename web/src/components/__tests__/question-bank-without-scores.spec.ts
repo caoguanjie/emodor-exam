@@ -74,7 +74,7 @@ describe('question bank has no scores', () => {
       expected_version_id: '50', expected_enabled: false,
     })]);
   });
-  it.each(['人工录题', '修改'])('keeps the %s overlay inside the current page content', async (action) => {
+  it.each(['新增试题', '修改'])('keeps the %s overlay inside the current page content', async (action) => {
     const { wrapper } = await show();
     const page = wrapper.get('.question-page').element as HTMLElement;
     page.classList.add('page-enter');
@@ -113,7 +113,7 @@ describe('question bank has no scores', () => {
 
   it('keeps the chosen analysis expansion while ordinary v-model edits return through the page', async () => {
     const { wrapper } = await show();
-    await click(wrapper, '人工录题');
+    await click(wrapper, '新增试题');
     const form = wrapper.getComponent(ManualQuestionEditor);
     const optional = form.get('details');
     const details = optional.element as HTMLDetailsElement;
@@ -165,9 +165,9 @@ describe('question bank has no scores', () => {
 
   it('shows answer summary and dirty state and protects cancel and route leave without saving', async () => {
     const { wrapper, router } = await show();
-    await click(wrapper, '人工录题');
+    await click(wrapper, '新增试题');
     const form = wrapper.getComponent(ManualQuestionEditor);
-    await form.findAll('.question-option__toggle')[1]!.trigger('click');
+    await form.get('[data-set-answer]').trigger('click');
     await changeRichStem(form, '修改的题干');
     expect(editorDialog().get('.editor-summary__answers').attributes('aria-label')).toBe('正确答案：B');
     expect(editorDialog().get('.editor-summary__answer').text()).toBe('B');
@@ -184,7 +184,7 @@ describe('question bank has no scores', () => {
 
   it.each(['create', 'edit'] as const)('%s submits controlled content without a score, retaining version semantics', async (mode) => {
     const { wrapper } = await show();
-    await click(wrapper, mode === 'create' ? '人工录题' : '修改');
+    await click(wrapper, mode === 'create' ? '新增试题' : '修改');
     const form = wrapper.getComponent(ManualQuestionEditor);
     await changeRichStem(form, '已改题干', true);
     const instance = (form.vm as any).getEditor();
@@ -243,5 +243,64 @@ describe('question bank has no scores', () => {
     expect(router.currentRoute.value.path).toBe('/');
     expect(instance.getText()).toContain('首次粘贴的新文字');
     expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it('keeps the real editor instance and its unsynced history while inspecting an unknown save', async () => {
+    const normalGet = api.get.getMockImplementation()!;
+    api.get.mockImplementation(async (path: string, ...args: unknown[]) => path === '/ai/questions/40'
+      ? row() : normalGet(path, ...args));
+    api.put.mockResolvedValueOnce({ question_id: '40' });
+    const { wrapper, router } = await show();
+    await click(wrapper, '修改');
+    await click(wrapper, '保存');
+    expect(editorDialog().text()).toContain('保存结果尚未确认');
+
+    const form = wrapper.getComponent(ManualQuestionEditor);
+    const editor = form.vm.getEditor()!;
+    editor.commands.setTextSelection(3);
+    editor.commands.insertContent('<p><a href="https://example.invalid">查询前未同步</a></p>');
+    await flushPromises();
+    expect(editor.getText()).toContain('查询前未同步');
+    expect(editor.can().undo()).toBe(true);
+    expect(form.vm.validate()).toBeTruthy();
+
+    await click(wrapper, '查询当前题目');
+    const previewDialog = new DOMWrapper(document.body).get('.el-dialog.question-preview-dialog');
+    expect(previewDialog.get('.el-dialog__title').text()).toBe('题目预览');
+    const hiddenForm = wrapper.getComponent(ManualQuestionEditor);
+    expect(hiddenForm.element).toBe(form.element);
+    expect(hiddenForm.vm.getEditor()).toBe(editor);
+    expect(editor.getText()).toContain('查询前未同步');
+    expect(editor.can().undo()).toBe(true);
+    expect(hiddenForm.vm.validate()).toBeTruthy();
+
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('继续编辑'));
+    await router.push('/other');
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(router.currentRoute.value.path).toBe('/');
+
+    await click(wrapper, '返回编辑');
+    expect(editorDialog().text()).toContain('保存结果尚未确认');
+    expect(wrapper.getComponent(ManualQuestionEditor).vm.getEditor()).toBe(editor);
+    expect(editor.getText()).toContain('查询前未同步');
+  });
+
+  it('keeps an old preview open when its rich content is not compatible with the editor', async () => {
+    const legacyWithLink = {
+      ...row(),
+      stem: '<p><a href="https://example.invalid">仅可预览的旧链接</a></p>',
+    };
+    const normalGet = api.get.getMockImplementation()!;
+    api.get.mockImplementation(async (path: string, ...args: unknown[]) => path === '/ai/questions'
+      ? { list: [legacyWithLink], total: 1 } : normalGet(path, ...args));
+    const { wrapper } = await show();
+    await click(wrapper, '预览');
+    const previewDialog = new DOMWrapper(document.body).get('.el-dialog.question-preview-dialog');
+    const dialog = previewDialog.element;
+
+    await click(wrapper, '编辑题目');
+    expect(new DOMWrapper(document.body).get('.el-dialog').element).toBe(dialog);
+    expect(new DOMWrapper(document.body).get('.el-dialog__title').text()).toBe('题目预览');
+    expect(wrapper.findComponent(ManualQuestionEditor).exists()).toBe(false);
   });
 });

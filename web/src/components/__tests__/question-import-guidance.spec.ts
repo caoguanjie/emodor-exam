@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import ElementPlus, { ElCheckbox, ElDialog, ElMessageBox, ElOption, ElSelect } from 'element-plus';
-import { KeepAlive, defineComponent, h, ref } from 'vue';
+import { KeepAlive, defineComponent, h, provide, ref } from 'vue';
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import QuestionImport from '../../views/admin/QuestionImport.vue';
 
@@ -58,7 +58,17 @@ async function show() {
     { path: '/admin/questions', component: { template: '<p>试题管理</p>' } },
   ] });
   await router.push('/'); await router.isReady();
-  const wrapper = mount(RouterView, { attachTo: document.body, global: { plugins: [ElementPlus, router] } });
+  const Host = defineComponent({
+    setup() {
+      const target = ref<HTMLElement>();
+      provide('contentDialogTarget', target);
+      return () => h('section', [
+        h('div', { ref: target, id: 'test-content-dialog-host', class: 'content-dialog-host' }),
+        h('main', { class: 'main' }, [h(RouterView)]),
+      ]);
+    },
+  });
+  const wrapper = mount(Host, { attachTo: document.body, global: { plugins: [ElementPlus, router] } });
   wrappers.push(wrapper); await flushPromises();
   return { wrapper, router };
 }
@@ -254,6 +264,77 @@ describe('guided question import', () => {
     expect(api.upload).toHaveBeenCalledTimes(1);
   });
 
+  it('clears the whole batch then imports only the individually reselected sparse row', async () => {
+    api.upload.mockResolvedValue(ordinaryPreview());
+    api.post.mockResolvedValue({ batch_id: '31', created_ids: ['41'], committed_rows: [5], enabled: true });
+    const { wrapper } = await show();
+    await selectCategory(wrapper);
+    await chooseFile(wrapper, new File(['example'], '题库.xlsx'));
+
+    await click(wrapper, '取消全选');
+    expect(teleportedBody().text()).toContain('已选 0 / 2 行');
+    const confirm = teleportedBody().findAll('button').find((button) => button.text() === '确认导入并启用 0 行')!;
+    expect((confirm.element as HTMLButtonElement).disabled).toBe(true);
+    expect(api.post).not.toHaveBeenCalled();
+    previewDialog(wrapper)!.vm.$emit('update:modelValue', false);
+    await flushPromises();
+    await click(wrapper, '查看预览');
+    expect(teleportedBody().text()).toContain('已选 0 / 2 行');
+
+    const row = wrapper.findAllComponents(ElCheckbox).find((checkbox) => checkbox.attributes('aria-label') === '选择第 5 行')!;
+    await row.get('input').setValue(true);
+    const all = wrapper.findAllComponents(ElCheckbox).find((checkbox) => checkbox.attributes('aria-label') === '全选可导入题目')!;
+    expect(all.props()).toMatchObject({ modelValue: false, indeterminate: true });
+    expect(teleportedBody().text()).toContain('已选 1 / 2 行');
+    await click(wrapper, '确认导入并启用 1 行');
+    expect(api.post.mock.calls).toEqual([['/admin/questions/import-batches/31/commit', { row_numbers: [5] }]]);
+  });
+
+  it('selects and clears only valid rows through both bulk buttons and the header checkbox', async () => {
+    const batch = ordinaryPreview();
+    const template = batch.rows[0]!;
+    api.upload.mockResolvedValue({
+      ...batch, duplicates: [11], errors: [{ row: 8, message: '缺少答案' }],
+      rows: [...batch.rows, { ...template, row_number: 8, errors: ['缺少答案'] }, { ...template, row_number: 11 }],
+    });
+    api.post.mockResolvedValue({ batch_id: '31', created_ids: ['41', '42'], committed_rows: [2, 5], enabled: true });
+    const { wrapper } = await show();
+    await selectCategory(wrapper);
+    await chooseFile(wrapper, new File(['example'], '题库.xlsx'));
+    const header = wrapper.findAllComponents(ElCheckbox).find((checkbox) => checkbox.attributes('aria-label') === '全选可导入题目');
+    expect(header, '预览表头应提供全选框').toBeDefined();
+    expect(header!.props()).toMatchObject({ modelValue: true, indeterminate: false });
+    await header!.get('input').setValue(false);
+    expect(teleportedBody().text()).toContain('已选 0 / 2 行');
+    await click(wrapper, '全选');
+    expect(header!.props()).toMatchObject({ modelValue: true, indeterminate: false });
+    for (const row of [8, 11]) {
+      const checkbox = wrapper.findAllComponents(ElCheckbox).find((item) => item.attributes('aria-label') === `选择第 ${row} 行`)!;
+      expect(checkbox.props()).toMatchObject({ modelValue: false, disabled: true });
+    }
+    await click(wrapper, '取消全选');
+    await header!.get('input').setValue(true);
+    expect(teleportedBody().text()).toContain('已选 2 / 2 行');
+    await click(wrapper, '确认导入并启用 2 行');
+    expect(api.post.mock.calls).toEqual([['/admin/questions/import-batches/31/commit', { row_numbers: [2, 5] }]]);
+  });
+
+  it('disables bulk selection and confirmation when there are no valid rows', async () => {
+    const batch = ordinaryPreview();
+    api.upload.mockResolvedValue({ ...batch, valid_rows: [], errors: [{ row: 2, message: '答案错误' }, { row: 5, message: '答案错误' }] });
+    const { wrapper } = await show();
+    await selectCategory(wrapper);
+    await chooseFile(wrapper, new File(['example'], '题库.xlsx'));
+    const header = wrapper.findAllComponents(ElCheckbox).find((checkbox) => checkbox.attributes('aria-label') === '全选可导入题目');
+    expect(header, '无有效行时仍应有明确禁用的全选框').toBeDefined();
+    expect(header!.props()).toMatchObject({ modelValue: false, indeterminate: false, disabled: true });
+    for (const label of ['全选', '取消全选', '确认导入并启用 0 行']) {
+      const button = teleportedBody().findAll('button').find((item) => item.text() === label)!;
+      expect((button.element as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
   it('opens an ordinary full preview above the list dialog with an ordinary title', async () => {
     api.upload.mockResolvedValue(ordinaryPreview());
     const { wrapper } = await show();
@@ -266,19 +347,22 @@ describe('guided question import', () => {
     expect(titles).not.toContain('生成题预览');
     const listOverlay = document.querySelector('.question-import-preview-dialog')?.closest('.el-overlay') as HTMLElement;
     const rowOverlay = document.querySelector('.question-import-row-preview-dialog')?.closest('.el-overlay') as HTMLElement;
-    expect(listOverlay?.parentElement?.parentElement).toBe(document.body);
-    expect(rowOverlay?.parentElement?.parentElement).toBe(document.body);
+    const host = wrapper.get('#test-content-dialog-host').element;
+    expect(host.contains(listOverlay)).toBe(true);
+    expect(host.contains(rowOverlay)).toBe(true);
+    expect(wrapper.get('.main').element.contains(listOverlay)).toBe(false);
     expect(Number(rowOverlay?.style.zIndex)).toBeGreaterThan(Number(listOverlay?.style.zIndex));
   });
 
   it('blocks every list-dialog dismissal while commit status is pending or unknown and keeps recovery available', async () => {
     const batch = ordinaryPreview();
     const commit = deferred<never>();
+    const status = deferred<ReturnType<typeof ordinaryPreview>>();
     api.upload.mockResolvedValue(batch);
     api.post.mockReturnValue(commit.promise);
     const priorGet = api.get.getMockImplementation()!;
     api.get.mockImplementation(async (path: string, ...args: unknown[]) => (
-      path === '/admin/questions/import-batches/31' ? batch : priorGet(path, ...args)
+      path === '/admin/questions/import-batches/31' ? status.promise : priorGet(path, ...args)
     ));
     const { wrapper } = await show();
     await selectCategory(wrapper);
@@ -293,6 +377,16 @@ describe('guided question import', () => {
     expect(dialog.props('closeOnClickModal')).toBe(false);
     expect(dialog.props('closeOnPressEscape')).toBe(false);
     expect(dialog.props('showClose')).toBe(false);
+    for (const label of ['全选', '取消全选']) {
+      const button = teleportedBody().findAll('button').find((item) => item.text() === label);
+      expect(button, label).toBeDefined();
+      expect((button!.element as HTMLButtonElement).disabled).toBe(true);
+    }
+    const header = wrapper.findAllComponents(ElCheckbox).find((checkbox) => checkbox.attributes('aria-label') === '全选可导入题目')!;
+    expect(header.props('disabled')).toBe(true);
+    wrapper.findComponent({ name: 'QuestionImportPreviewDialog' }).vm.$emit('select-all', true);
+    await flushPromises();
+    expect(teleportedBody().text()).toContain('确认导入并启用 1 行');
     dialog.vm.$emit('update:modelValue', false);
     await flushPromises();
     expect(previewDialog(wrapper)!.props('modelValue')).toBe(true);
@@ -301,6 +395,10 @@ describe('guided question import', () => {
     await flushPromises();
     dialog = previewDialog(wrapper)!;
     expect(dialog.props('showClose')).toBe(false);
+    expect(header.props('disabled')).toBe(true);
+    wrapper.findComponent({ name: 'QuestionImportPreviewDialog' }).vm.$emit('select-all', false);
+    await flushPromises();
+    expect(teleportedBody().text()).toContain('确认导入并启用 1 行');
     dialog.vm.$emit('update:modelValue', false);
     await flushPromises();
     expect(previewDialog(wrapper)!.props('modelValue')).toBe(true);
@@ -309,6 +407,12 @@ describe('guided question import', () => {
     await click(wrapper, '查询原批次状态');
     expect(api.post).toHaveBeenCalledTimes(1);
     expect(api.get).toHaveBeenCalledWith('/admin/questions/import-batches/31');
+    expect(header.props('disabled')).toBe(true);
+    wrapper.findComponent({ name: 'QuestionImportPreviewDialog' }).vm.$emit('select-all', true);
+    await flushPromises();
+    expect(teleportedBody().text()).toContain('确认导入并启用 1 行');
+    status.resolve(batch);
+    await flushPromises();
     expect(previewDialog(wrapper)!.props('showClose')).toBe(true);
     expect(teleportedBody().text()).toContain('确认导入并启用 1 行');
     previewDialog(wrapper)!.vm.$emit('update:modelValue', false);
@@ -334,9 +438,16 @@ describe('guided question import', () => {
     api.upload.mockResolvedValue(ordinaryPreview());
     const active = ref(true);
     const Host = defineComponent({
-      setup: () => () => h(KeepAlive, null, () => active.value
-        ? h(QuestionImport, { key: 'import' })
-        : h('div', { key: 'other' }, '其他页面')),
+      setup() {
+        const target = ref<HTMLElement>();
+        provide('contentDialogTarget', target);
+        return () => h('section', [
+          h('div', { ref: target, class: 'content-dialog-host' }),
+          h(KeepAlive, null, () => active.value
+            ? h(QuestionImport, { key: 'import' })
+            : h('div', { key: 'other' }, '其他页面')),
+        ]);
+      },
     });
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: Host }] });
     await router.push('/'); await router.isReady();

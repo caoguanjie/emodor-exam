@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import ElementPlus, { ElPagination, ElSelect } from 'element-plus';
+import { defineComponent, provide, ref } from 'vue';
 import Questions from '../../views/admin/Questions.vue';
 
 const api = vi.hoisted(() => ({
@@ -88,6 +89,29 @@ async function render(all = true) {
   }
   return wrapper;
 }
+async function renderInContentHost() {
+  const Host = defineComponent({
+    components: { Questions },
+    setup() {
+      const contentDialogTarget = ref<HTMLElement>();
+      provide('contentDialogTarget', contentDialogTarget);
+      return { contentDialogTarget };
+    },
+    template: `
+      <section class="test-content-region">
+        <div ref="contentDialogTarget" class="content-dialog-host" />
+        <Questions />
+      </section>
+    `,
+  });
+  const wrapper = mount(Host, {
+    attachTo: document.body,
+    global: { plugins: [ElementPlus], stubs: { ManualQuestionEditor: true, transition: false } },
+  });
+  wrappers.push(wrapper);
+  await flushPromises();
+  return wrapper;
+}
 function bodyRows(wrapper: VueWrapper) { return wrapper.findAll('.el-table__body-wrapper tbody tr'); }
 function toggle(wrapper: VueWrapper, index = 0) { return bodyRows(wrapper)[index]!.get('[role="switch"]'); }
 function rowAction(wrapper: VueWrapper, label: string, index = 0) {
@@ -102,6 +126,146 @@ function editorButton(wrapper: VueWrapper, label: string) {
 }
 
 describe('question list actions and confirmed lifecycle switches', () => {
+  it('uses the shared Element Plus empty state only after the empty question query settles', async () => {
+    const pending = deferred<{ list: QuestionRow[]; total: number }>();
+    const original = api.get.getMockImplementation()!;
+    api.get.mockImplementation((path: string, ...args: unknown[]) => path === '/ai/questions'
+      ? pending.promise : original(path, ...args));
+    const wrapper = await render(false);
+    expect(wrapper.get('.question-table').findComponent({ name: 'ElEmpty' }).exists()).toBe(false);
+
+    pending.resolve({ list: [], total: 0 });
+    await flushPromises();
+    const empty = wrapper.get('.question-table').getComponent({ name: 'ElEmpty' });
+    expect(empty.props('description')).toBe('暂无试题');
+    expect(empty.find('.el-empty__image svg').exists()).toBe(true);
+  });
+
+  it('places the primary create-question action before import and opens the existing editor', async () => {
+    const wrapper = await render();
+    const buttons = wrapper.get('[aria-label="列表操作"]').findAll('button');
+    expect(buttons.map((button) => button.text())).toEqual(['新增试题', '试题导入']);
+    expect(buttons[0]!.classes()).toContain('el-button--primary');
+    await buttons[0]!.trigger('click');
+    await flushPromises();
+    expect(editorDialog(wrapper).props()).toMatchObject({ modelValue: true, title: '新增试题' });
+  });
+
+  it('uses one inner-page business dialog and switches preview to the existing editor in place', async () => {
+    const wrapper = await renderInContentHost();
+    expect(wrapper.findAllComponents({ name: 'ElDialog' })).toHaveLength(1);
+
+    await rowAction(wrapper, '预览').trigger('click');
+    await flushPromises();
+
+    const host = wrapper.get('.content-dialog-host');
+    const dialog = host.get('.el-dialog').element;
+    expect(dialog.classList).toContain('question-business-dialog');
+    expect(dialog.classList).toContain('question-preview-dialog');
+    expect(dialog.closest('.el-overlay')?.parentElement).toBe(host.element);
+    expect(host.get('.el-dialog__title').text()).toBe('题目预览');
+    expect(host.get('.question-preview').classes()).toContain('question-preview--library');
+    expect(host.find('.question-preview__meta').exists()).toBe(false);
+    expect(host.find('.preview-identity').exists()).toBe(false);
+    expect(host.find('.version-history').exists()).toBe(false);
+    expect(api.get.mock.calls.some(([path]) => String(path).endsWith('/history'))).toBe(false);
+    expect(host.get('.el-dialog__footer').findAll('button').map((button) => button.text())).toEqual(['关闭', '编辑题目']);
+
+    await host.get('.el-dialog__footer').findAll('button')[1]!.trigger('click');
+    await flushPromises();
+
+    expect(host.get('.el-dialog').element).toBe(dialog);
+    expect(dialog.classList).toContain('re-form-dialog');
+    expect(dialog.classList).toContain('manual-question-dialog');
+    expect(host.get('.el-dialog__title').text()).toBe('修订试题');
+    expect(host.findComponent({ name: 'ManualQuestionEditor' }).exists()).toBe(true);
+    expect(host.text()).toContain('保存会生成新版本并启用；旧版本保持不变。');
+    expect(host.get('.el-dialog__footer').text()).toContain('正确答案');
+    expect(host.get('.el-dialog__footer').text()).toContain('暂无未保存修改');
+    expect(host.get('.el-dialog__footer').text()).toContain('取消');
+    expect(host.get('.el-dialog__footer').text()).toContain('保存');
+  });
+
+  it.each([
+    ['新增试题', '新增试题', false],
+    ['修改', '修订试题', true],
+    ['预览', '题目预览', false],
+  ] as const)('places the revision hint beside the title only for %s', async (action, title, hasHint) => {
+    const wrapper = await renderInContentHost();
+    if (action === '新增试题') {
+      await wrapper.get('[aria-label="列表操作"]').findAll('button')[0]!.trigger('click');
+    } else {
+      await rowAction(wrapper, action).trigger('click');
+    }
+    await flushPromises();
+    const host = wrapper.get('.content-dialog-host');
+    const header = host.get('.el-dialog__header');
+    expect(header.get('.el-dialog__title').text()).toBe(title);
+    expect(header.find('.editor-hint').exists()).toBe(hasHint);
+    if (hasHint) {
+      expect(header.get('.editor-hint').text()).toBe('保存会生成新版本并启用；旧版本保持不变。');
+    }
+    expect(host.get('.el-dialog__body').text()).not.toContain('保存会生成新版本并启用；旧版本保持不变。');
+  });
+
+  it('keeps the lightweight preview read-only when the account cannot edit questions', async () => {
+    api.canWrite = false;
+    const wrapper = await renderInContentHost();
+
+    await rowAction(wrapper, '预览').trigger('click');
+    await flushPromises();
+
+    const footer = wrapper.get('.content-dialog-host').get('.el-dialog__footer');
+    expect(footer.findAll('button').map((button) => button.text())).toEqual(['关闭']);
+  });
+
+  it('keeps preview open when the selected question cannot enter the editor', async () => {
+    Object.assign(rows[0]!, {
+      content_schema_version: 3,
+      content_json: { stem: { type: 'doc', content: [] }, options: [] },
+    });
+    const wrapper = await renderInContentHost();
+
+    await rowAction(wrapper, '预览').trigger('click');
+    await flushPromises();
+    const host = wrapper.get('.content-dialog-host');
+    const dialog = host.get('.el-dialog').element;
+    await host.get('.el-dialog__footer').findAll('button')[1]!.trigger('click');
+    await flushPromises();
+
+    expect(host.get('.el-dialog').element).toBe(dialog);
+    expect(host.get('.el-dialog__title').text()).toBe('题目预览');
+    expect(host.findComponent({ name: 'ManualQuestionEditor' }).exists()).toBe(false);
+    expect(api.warning).toHaveBeenCalled();
+  });
+
+  it('returns from an unknown-save inspection to the preserved editor in the same dialog', async () => {
+    const wrapper = await renderInContentHost();
+    await rowAction(wrapper, '修改').trigger('click');
+    await flushPromises();
+
+    const host = wrapper.get('.content-dialog-host');
+    const dialog = host.get('.el-dialog').element;
+    api.put.mockResolvedValueOnce({ question_id: '40' });
+    await (wrapper.getComponent(Questions).vm.$ as unknown as {
+      setupState: { saveQuestion(): Promise<void> };
+    }).setupState.saveQuestion();
+    await flushPromises();
+    expect(host.text()).toContain('保存结果尚未确认');
+
+    await host.findAll('button').find((button) => button.text() === '查询当前题目')!.trigger('click');
+    await flushPromises();
+    expect(host.get('.el-dialog').element).toBe(dialog);
+    expect(host.get('.el-dialog__title').text()).toBe('题目预览');
+    expect(host.get('.el-dialog__footer').findAll('button').map((button) => button.text())).toEqual(['返回编辑']);
+
+    await host.get('.el-dialog__footer button').trigger('click');
+    await flushPromises();
+    expect(host.get('.el-dialog').element).toBe(dialog);
+    expect(host.get('.el-dialog__title').text()).toBe('修订试题');
+    expect(host.text()).toContain('保存结果尚未确认');
+  });
+
   it.each([
     ['single', 'easy', '单选题', '简单', 'primary', 'success'],
     ['multiple', 'hard', '多选题', '困难', 'info', 'danger'],

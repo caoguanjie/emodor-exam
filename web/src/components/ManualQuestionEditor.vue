@@ -28,7 +28,7 @@
 
     <div class="manual-question-editor__heading">
       <div class="manual-question-editor__field-label">题干与选项 <span aria-hidden="true">*</span></div>
-      <span class="manual-question-editor__hint">点击选项前的字母设为正确答案</span>
+      <span class="manual-question-editor__hint">点击选项字母或右侧“设为答案”修改正确答案</span>
     </div>
     <div class="manual-question-editor__body">
       <div v-if="!locked" class="manual-question-editor__toolbar" role="toolbar" aria-label="题干与选项格式">

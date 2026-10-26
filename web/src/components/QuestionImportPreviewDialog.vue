@@ -1,10 +1,12 @@
 <template>
   <el-dialog
+    v-if="contentDialogTarget"
     :model-value="modelValue"
     title="试题导入预览"
     width="min(1120px, calc(100vw - 32px))"
     top="4vh"
     class="re-form-dialog question-import-preview-dialog"
+    :append-to="contentDialogTarget"
     append-to-body
     :close-on-click-modal="!dismissBlocked"
     :close-on-press-escape="!dismissBlocked"
@@ -17,6 +19,9 @@
         <el-tag type="success">可导入 {{ preview.valid_rows.length }} 行</el-tag>
         <el-tag v-if="preview.errors.length" type="danger">错误 {{ preview.errors.length }} 行</el-tag>
         <el-tag v-if="preview.duplicates.length" type="warning">重复 {{ preview.duplicates.length }} 行</el-tag>
+        <span class="question-import-preview__selection-count" aria-live="polite">已选 {{ selectedCount }} / {{ validRows.length }} 行</span>
+        <el-button size="small" :disabled="dismissBlocked || !validRows.length || allSelected" @click="selectAll(true)">全选</el-button>
+        <el-button size="small" :disabled="dismissBlocked || !selectedCount" @click="selectAll(false)">取消全选</el-button>
         <span class="question-import-preview__batch">批次 {{ preview.batch_id }}</span>
       </div>
 
@@ -41,7 +46,16 @@
         row-key="row_number"
         max-height="46vh"
       >
-        <el-table-column label="选择" width="64">
+        <el-table-column label="选择" width="80" align="center" header-align="center">
+          <template #header>
+            <el-checkbox
+              :model-value="allSelected"
+              :indeterminate="partiallySelected"
+              :disabled="dismissBlocked || !validRows.length"
+              aria-label="全选可导入题目"
+              @update:model-value="selectAll"
+            >全选</el-checkbox>
+          </template>
           <template #default="{ row }">
             <el-checkbox
               :model-value="selectedRows.includes(row.row_number)"
@@ -95,21 +109,23 @@
       <el-button
         type="primary"
         :loading="commitBusy"
-        :disabled="!catalogReady || !selectedRows.length || dismissBlocked"
+        :disabled="!catalogReady || !selectedCount || dismissBlocked"
         @click="emit('commit')"
       >
-        确认导入并启用 {{ selectedRows.length }} 行
+        确认导入并启用 {{ selectedCount }} 行
       </el-button>
     </template>
 
   </el-dialog>
 
   <el-dialog
+    v-if="contentDialogTarget"
     v-model="rowPreviewVisible"
     title="试题预览"
     width="min(760px, calc(100vw - 32px))"
     top="6vh"
     class="question-import-row-preview-dialog"
+    :append-to="contentDialogTarget"
     append-to-body
     destroy-on-close
   >
@@ -118,7 +134,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onDeactivated, ref, watch } from 'vue';
+import { computed, inject, onDeactivated, ref, watch, type Ref } from 'vue';
 import {
   questionRichTextToPlainText,
   type AiQuestionImportRow,
@@ -127,6 +143,8 @@ import {
 } from '../api/training-types';
 import QuestionPreview from './QuestionPreview.vue';
 import { FitsTableAction } from './FitsTable';
+
+const contentDialogTarget = inject<Ref<HTMLElement | string | undefined>>('contentDialogTarget', ref('body'));
 
 const props = defineProps<{
   modelValue: boolean;
@@ -144,6 +162,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
   'select-row': [rowNumber: number, checked: unknown];
+  'select-all': [checked: boolean];
   reset: [];
   'query-status': [];
   commit: [];
@@ -151,9 +170,21 @@ const emit = defineEmits<{
 
 const dismissBlocked = computed(() => props.commitBusy || props.statusBusy || props.commitUnknown);
 const rows = computed(() => props.preview?.rows || []);
+const validRows = computed(() => [...new Set(props.preview?.valid_rows || [])]);
+const selectedCount = computed(() => {
+  const selected = new Set(props.selectedRows);
+  return validRows.value.filter((row) => selected.has(row)).length;
+});
+const allSelected = computed(() => validRows.value.length > 0 && selectedCount.value === validRows.value.length);
+const partiallySelected = computed(() => selectedCount.value > 0 && !allSelected.value);
 const uniqueWarnings = computed(() => [...new Set(props.preview?.warnings || [])]);
 const rowPreviewVisible = ref(false);
 const rowPreview = ref<AiQuestionImportRow | null>(null);
+
+function selectAll(checked: unknown) {
+  if (dismissBlocked.value || !validRows.value.length) return;
+  emit('select-all', checked === true);
+}
 
 function requestVisibility(value: boolean) {
   if (!value && dismissBlocked.value) return;
@@ -197,6 +228,8 @@ onDeactivated(closeRowPreview);
   margin-bottom: 14px;
 }
 .question-import-preview__batch { color: var(--el-text-color-secondary); font-size: 13px; }
+.question-import-preview__selection-count { color: var(--el-text-color-regular); font-size: 13px; }
+.question-import-preview__summary .el-button + .el-button { margin-left: 0; }
 .question-import-preview__summary + :deep(.el-alert),
 :deep(.el-alert + .el-alert) { margin-top: 10px; }
 .question-import-preview__table { width: 100%; margin-top: 14px; }

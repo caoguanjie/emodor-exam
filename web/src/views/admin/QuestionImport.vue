@@ -193,6 +193,7 @@
       :status-busy="statusBusy"
       :commit-unknown="commitUnknown"
       @select-row="selectFileRow"
+      @select-all="selectAllFileRows"
       @reset="resetPreview"
       @query-status="queryBatchStatus"
       @commit="commitImport"
@@ -319,6 +320,10 @@ watch(() => preview.value?.batch_id, (batchId) => {
 function selectFileRow(row: number, checked: unknown) {
   if (!preview.value?.valid_rows.includes(row) || commitBusy.value || statusBusy.value || commitUnknown.value) return;
   fileSelectedRows.value = checked ? [...new Set([...fileSelectedRows.value, row])] : fileSelectedRows.value.filter((id) => id !== row);
+}
+function selectAllFileRows(checked: boolean) {
+  if (!preview.value || commitBusy.value || statusBusy.value || commitUnknown.value) return;
+  fileSelectedRows.value = checked ? [...new Set(preview.value.valid_rows)] : [];
 }
 watch(aiFormat, () => { aiUploadKey.value += 1; });
 

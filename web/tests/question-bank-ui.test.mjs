@@ -21,6 +21,8 @@ const formatStubId = '\0question-format-test';
 const elementStubId = '\0question-element-test';
 const editorStubId = '\0question-editor-child-test';
 const previewStubId = '\0question-preview-child-test';
+const businessDialogStubId = '\0question-business-dialog-child-test';
+const manualQuestionContentStubId = '\0question-manual-content-test';
 const mediaUploadStubId = '\0question-media-upload-test';
 const unsavedStubId = '\0question-unsaved-test';
 const routeStubId = '\0question-route-test';
@@ -34,6 +36,8 @@ const virtualStubs = new Map([
   ['virtual:question-element-test', elementStubId],
   ['virtual:question-editor-child-test', editorStubId],
   ['virtual:question-preview-child-test', previewStubId],
+  ['virtual:question-business-dialog-child-test', businessDialogStubId],
+  ['virtual:question-manual-content-test', manualQuestionContentStubId],
   ['virtual:question-import-preview-dialog-client-test', importPreviewDialogClientId],
   ['virtual:question-media-upload-test', mediaUploadStubId],
   ['virtual:question-unsaved-test', unsavedStubId],
@@ -118,7 +122,43 @@ const stubs = new Map([
   `],
   [previewStubId, `
     import { h } from 'vue';
-    export default { props: ['question'], setup(props) { return () => h('question-preview-stub', { stem: props.question?.stem || '', score: props.question?.score }); } };
+    export default { props: ['question', 'variant'], setup(props) { return () => h('question-preview-stub', { stem: props.question?.stem || '', score: props.question?.score, variant: props.variant }); } };
+  `],
+  [businessDialogStubId, `
+    import { h, resolveComponent } from 'vue';
+    export default {
+      props: ['modelValue', 'mode', 'appendTo', 'beforeClose', 'preserveEditor'],
+      emits: ['update:modelValue', 'closed'],
+      setup(props, { emit, slots }) {
+        const ElDialog = resolveComponent('el-dialog');
+        const title = () => props.mode === 'preview' ? '题目预览' : props.mode === 'create' ? '新增试题' : '修订试题';
+        return () => h(ElDialog, {
+          modelValue: props.modelValue,
+          mode: props.mode,
+          title: title(),
+          class: props.mode === 'preview'
+            ? 'question-business-dialog question-preview-dialog'
+            : 'question-business-dialog re-form-dialog manual-question-dialog',
+          appendTo: props.appendTo,
+          beforeClose: props.beforeClose,
+          'onUpdate:modelValue': (value) => emit('update:modelValue', value),
+        }, {
+          default: () => [
+            props.mode === 'preview' ? slots.preview?.() : null,
+            props.mode !== 'preview' || props.preserveEditor
+              ? h('div', { style: { display: props.mode === 'preview' ? 'none' : 'contents' } }, slots.editor?.())
+              : null,
+          ],
+          footer: () => props.mode === 'preview' ? slots['preview-footer']?.() : slots['editor-footer']?.(),
+        });
+      },
+    };
+  `],
+  [manualQuestionContentStubId, `
+    export function manualContentFromDraft(value) {
+      if (value?.__manualContentUnsupported) throw new Error('无法安全保留当前题目内容，请检查不支持的格式后重试');
+      return value?.content_json || {};
+    }
   `],
   [mediaUploadStubId, `
     import { h } from 'vue';
@@ -180,6 +220,7 @@ function plugin() {
         if (source === '../../utils/format' || source === '/src/utils/format.ts') return formatStubId;
         if (['../../components/QuestionEditor.vue', '/src/components/QuestionEditor.vue', '../../components/ManualQuestionEditor.vue', '/src/components/ManualQuestionEditor.vue'].includes(source)) return editorStubId;
         if (source === '../../components/QuestionPreview.vue' || source === '/src/components/QuestionPreview.vue') return previewStubId;
+        if (source === '../../components/manual-question-content' || source === '/src/components/manual-question-content.ts') return manualQuestionContentStubId;
         if (source === '../../composables/useUnsavedChanges' || source === '/src/composables/useUnsavedChanges.ts') return unsavedStubId;
       }
       return undefined;
@@ -216,6 +257,7 @@ function stripViteClientGlue(code, path) {
       .replace(/from "\/src\/utils\/format\.ts"/g, 'from "virtual:question-format-test"')
       .replace(/from "\/src\/components\/(?:Manual)?QuestionEditor\.vue"/g, 'from "virtual:question-editor-child-test"')
       .replace(/from "\/src\/components\/QuestionPreview\.vue"/g, 'from "virtual:question-preview-child-test"')
+      .replace(/from "\/src\/components\/QuestionBusinessDialog\.vue"/g, 'from "virtual:question-business-dialog-child-test"')
       .replace(/from "\/src\/components\/QuestionImportPreviewDialog\.vue"/g, 'from "virtual:question-import-preview-dialog-client-test"')
       .replace(/from "\/src\/composables\/useUnsavedChanges\.ts"/g, 'from "virtual:question-unsaved-test"')
       .replace(/from "\/node_modules\/\.vite\/deps\/vue-router\.js[^"]*"/g, 'from "virtual:question-route-test"')
@@ -855,8 +897,8 @@ test('manual question save sends restricted v2 content with unchanged option IDs
   globalThis.document = controlledMediaDocument();
   try {
     const mounted = mount(Questions);
-    await waitFor(() => button(mounted.root, '人工录题'), 'question list');
-    await click(button(mounted.root, '人工录题'));
+    await waitFor(() => button(mounted.root, '新增试题'), 'question list');
+    await click(button(mounted.root, '新增试题'));
     const state = mounted.instance.$.setupState;
     state.editorForm.stem = '<p onclick="steal()">安全<strong>题干</strong><br><img data-media-id="42" src="https://outside.invalid/x"></p>';
     state.editorForm.options = [{ key: 'keep_b', text: '乙' }, { key: 'keep_a', text: '甲' }];
@@ -886,8 +928,8 @@ test('manual question save sends restricted v2 content with unchanged option IDs
 
 test('save and add clears a successful draft only after the version receipt and retains metadata', async () => {
   const mounted = mount(Questions);
-  await waitFor(() => button(mounted.root, '人工录题'), 'question list');
-  await click(button(mounted.root, '人工录题'));
+  await waitFor(() => button(mounted.root, '新增试题'), 'question list');
+  await click(button(mounted.root, '新增试题'));
   const state = mounted.instance.$.setupState;
   state.editorForm.stem = '连续录题';
   state.editorForm.type = 'multiple';
@@ -910,8 +952,8 @@ test('save and add clears a successful draft only after the version receipt and 
 
 test('save and add keeps input after an unknown receipt instead of starting a second question', async () => {
   const mounted = mount(Questions);
-  await waitFor(() => button(mounted.root, '人工录题'), 'question list');
-  await click(button(mounted.root, '人工录题'));
+  await waitFor(() => button(mounted.root, '新增试题'), 'question list');
+  await click(button(mounted.root, '新增试题'));
   const state = mounted.instance.$.setupState;
   state.editorForm.stem = '结果未知仍保留';
   const normal = context.http;
@@ -928,8 +970,8 @@ test('save and add keeps input after an unknown receipt instead of starting a se
 
 test('invalid stable option IDs retain the editable question and show an error without sending a write', async () => {
   const mounted = mount(Questions);
-  await waitFor(() => button(mounted.root, '人工录题'), 'question list');
-  await click(button(mounted.root, '人工录题'));
+  await waitFor(() => button(mounted.root, '新增试题'), 'question list');
+  await click(button(mounted.root, '新增试题'));
   const state = mounted.instance.$.setupState;
   state.editorForm.options = [{ key: 'duplicate', text: '甲' }, { key: 'duplicate', text: '乙' }];
   await state.saveQuestion();
@@ -1052,7 +1094,7 @@ test('question management exposes manual editing and single-question regeneratio
   await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
   await nextTick();
   try {
-    assert.ok(button(mounted.root, '人工录题'));
+    assert.ok(button(mounted.root, '新增试题'));
     assert.ok(button(mounted.root, '修改'));
     assert.equal(button(mounted.root, '重生成'), null);
     assert.ok(button(mounted.root, '试题导入'));
@@ -1063,8 +1105,8 @@ test('question management exposes manual editing and single-question regeneratio
   } finally { mounted.unmount(); }
 });
 
-test('manual question dialog escapes page transforms while preview retains its current mount', async () => {
-  for (const label of ['人工录题', '预览']) {
+test('manual question and preview dialogs retain their current page mount', async () => {
+  for (const label of ['新增试题', '预览']) {
     context.calls = [];
     const mounted = mount(Questions);
     try {
@@ -1073,8 +1115,8 @@ test('manual question dialog escapes page transforms while preview retains its c
       await click(button(mounted.root, label));
       const dialog = walk(mounted.root, (node) => node.type === 'dialog')[0];
       assert.ok(dialog);
-      assert.equal(Object.hasOwn(dialog.props, 'appendToBody') || Object.hasOwn(dialog.props, 'append-to-body'), label === '人工录题', `${label} overlay mount`);
-      if (label === '人工录题') assert.match(dialog.props.class || '', /re-form-dialog/);
+      assert.equal(Object.hasOwn(dialog.props, 'appendToBody') || Object.hasOwn(dialog.props, 'append-to-body'), false, `${label} overlay mount`);
+      if (label === '新增试题') assert.match(dialog.props.class || '', /re-form-dialog/);
     } finally { mounted.unmount(); }
   }
 });
@@ -1129,8 +1171,8 @@ test('write-only question authors load the shared difficulty catalog and save wi
   context.permissions = new Set(['questions:write']);
   const mounted = mount(Questions);
   try {
-    await waitFor(() => button(mounted.root, '人工录题'), 'manual action');
-    await click(button(mounted.root, '人工录题'));
+    await waitFor(() => button(mounted.root, '新增试题'), 'manual action');
+    await click(button(mounted.root, '新增试题'));
     const state = mounted.instance.$.setupState;
     state.editorForm.stem = '人工新题';
     state.editorForm.options = [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }];
@@ -1151,8 +1193,8 @@ test('a failed difficulty catalog blocks manual writes and can be retried withou
   };
   const mounted = mount(Questions);
   try {
-    await waitFor(() => button(mounted.root, '人工录题'), 'question list');
-    await click(button(mounted.root, '人工录题'));
+    await waitFor(() => button(mounted.root, '新增试题'), 'question list');
+    await click(button(mounted.root, '新增试题'));
     mounted.instance.$.setupState.editorForm.stem = '待保存草稿';
     await nextTick();
     assert.equal(button(mounted.root, '保存').props.disabled, true);
@@ -1277,7 +1319,7 @@ test('stale enabled baseline retains edits until an explicit refresh and save', 
   } finally { mounted.unmount(); }
 });
 
-test('current preview opens when history fails and offers a retry', async () => {
+test('current preview opens without requesting removed version history', async () => {
   const normalHttp = context.http;
   context.http = async (method, url, body, config) => {
     if (url.endsWith('/history')) throw new Error('历史不可用');
@@ -1287,8 +1329,13 @@ test('current preview opens when history fails and offers a retry', async () => 
   try {
     await waitFor(() => button(mounted.root, '预览'), 'question list');
     await click(button(mounted.root, '预览'));
-    assert.ok(walk(mounted.root, (node) => node.type === 'question-preview-stub').length);
-    assert.ok(button(mounted.root, '重试加载历史'));
+    const preview = walk(mounted.root, (node) => node.type === 'question-preview-stub')[0];
+    assert.ok(preview);
+    assert.equal(preview.props.variant, 'library');
+    assert.equal(context.calls.some((call) => call.url.endsWith('/history')), false);
+    assert.equal(button(mounted.root, '重试加载历史'), null);
+    assert.ok(button(mounted.root, '关闭'));
+    assert.ok(button(mounted.root, '编辑题目'));
   } finally { mounted.unmount(); }
 });
 
@@ -1297,7 +1344,7 @@ test('manual authoring does not request concept options or show concept paginati
   context.row = null;
   const mounted = mount(Questions);
   await waitFor(() => context.calls.some((call) => call.url === '/ai/question-category-options'), 'write category options');
-  await click(button(mounted.root, '人工录题'));
+  await click(button(mounted.root, '新增试题'));
   assert.equal(context.calls.some((call) => call.url === '/ai/question-concept-options'), false);
   assert.equal(context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), false);
   assert.equal(context.calls.some((call) => call.url === '/ai/question-concepts'), false);
@@ -1305,17 +1352,22 @@ test('manual authoring does not request concept options or show concept paginati
   mounted.unmount();
 });
 
-test('uses the history Page endpoint and requests later history pages', async () => {
+test('preview switches the same business dialog to the existing editor', async () => {
   const mounted = mount(Questions);
-  await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
-  await click(button(mounted.root, '预览'));
-  await waitFor(() => context.calls.some((call) => call.url.includes(`/ai/questions/${context.row.question_id}/`)), 'history request');
-  const first = context.calls.find((call) => call.url.endsWith('/history'));
-  assert.ok(first, 'preview should use the /history contract');
-  assert.deepEqual(first.config.params, { page: 1, page_size: 20 });
-  await click(button(mounted.root, `page-${context.historyTotal}-2`));
-  await waitFor(() => context.calls.some((call) => call.url.endsWith('/history') && call.config?.params?.page === 2), 'second history page');
-  mounted.unmount();
+  try {
+    await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
+    await click(button(mounted.root, '预览'));
+    const previewDialog = walk(mounted.root, (node) => node.type === 'dialog')[0];
+    assert.equal(previewDialog.props.mode, 'preview');
+    assert.equal(previewDialog.props.title, '题目预览');
+
+    await click(button(mounted.root, '编辑题目'));
+    const editorDialog = walk(mounted.root, (node) => node.type === 'dialog')[0];
+    assert.equal(editorDialog, previewDialog, 'preview and editor should reuse one dialog host');
+    assert.equal(editorDialog.props.mode, 'edit');
+    assert.equal(editorDialog.props.title, '修订试题');
+    assert.ok(walk(editorDialog, (node) => node.type === 'question-editor-stub').length);
+  } finally { mounted.unmount(); }
 });
 
 test('protects the real question edit draft across cancel, stale failure, discard, and save', async () => {
@@ -1378,7 +1430,7 @@ test('tracks a new manual question draft but not list filters or preview state',
   await nextTick();
   assert.equal(source.dirty.value, false, 'filters are not persisted drafts');
 
-  await click(button(mounted.root, '人工录题'));
+  await click(button(mounted.root, '新增试题'));
   assert.equal(source.dirty.value, false, 'opening a new baseline is clean');
   await click(button(mounted.root, 'choose-hard'));
   assert.equal(source.dirty.value, true);
@@ -1395,7 +1447,7 @@ test('tracks a new manual question draft but not list filters or preview state',
   context.confirmDecisions.push(true);
   await dialog.props.beforeClose(() => {
     closed += 1;
-    mounted.instance.$.setupState.editorVisible = false;
+    mounted.instance.$.setupState.questionDialogVisible = false;
   });
   await nextTick();
   assert.equal(closed, 1, 'confirmed title-bar close should finish the dialog close');
@@ -1451,7 +1503,7 @@ test('keeps edits made after a delayed question submit and ignores that response
   await waitFor(() => pending.length === 2, 'second delayed question save');
   context.confirmDecisions.push(true);
   await click(button(mounted.root, '取消'));
-  await click(button(mounted.root, '人工录题'));
+  await click(button(mounted.root, '新增试题'));
   await click(button(mounted.root, 'choose-hard'));
   assert.equal(mounted.instance.$.setupState.editorMode, 'create');
   assert.equal(source.dirty.value, true);

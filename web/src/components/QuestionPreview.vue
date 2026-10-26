@@ -1,6 +1,6 @@
 <template>
-  <div class="question-preview">
-    <div class="question-preview__meta">
+  <div class="question-preview" :class="{ 'question-preview--library': variant === 'library' }">
+    <div v-if="variant !== 'library'" class="question-preview__meta">
       <el-tag size="small">{{ typeLabel }}</el-tag>
       <el-tag size="small" type="info">{{ difficultyLabel }}</el-tag>
       <span v-if="showScore && question.score != null">{{ Number(question.score) }} 分</span>
@@ -8,12 +8,28 @@
     <div class="question-preview__stem rich-content" v-html="rendered.stem" />
     <div class="question-preview__options">
       <div v-for="(option, index) in rendered.options" :key="option.key" class="question-preview__option">
-        <span class="question-preview__key">{{ String.fromCharCode(65 + index) }}</span>
+        <span class="question-preview__key">{{ String.fromCharCode(65 + index) }}{{ variant === 'library' ? '.' : '' }}</span>
         <div class="rich-content" v-html="option.text" />
-        <el-tag v-if="revealAnswer && rendered.correctIds.includes(option.key)" size="small" type="success">正确答案</el-tag>
+        <el-tag v-if="variant !== 'library' && revealAnswer && rendered.correctIds.includes(option.key)" size="small" type="success">正确答案</el-tag>
       </div>
     </div>
-    <section v-if="revealAnswer && rendered.analysis" class="question-preview__explanation">
+    <section v-if="variant === 'library' && revealAnswer" class="question-preview__result">
+      <div class="question-preview__result-row">
+        <span class="question-preview__result-label">正确答案</span>
+        <div class="question-preview__correct-options">
+          <div v-for="option in correctOptions" :key="option.key" class="question-preview__correct-option">
+            <span>{{ option.letter }} ·&nbsp;</span>
+            <div class="rich-content" v-html="option.text" />
+          </div>
+        </div>
+      </div>
+      <div class="question-preview__result-row">
+        <span class="question-preview__result-label">答案解析</span>
+        <div v-if="rendered.analysis" class="question-preview__analysis-content rich-content" v-html="rendered.analysis" />
+        <span v-else class="question-preview__analysis-content question-preview__analysis-empty">暂无解析</span>
+      </div>
+    </section>
+    <section v-else-if="revealAnswer && rendered.analysis" class="question-preview__explanation">
       <strong>解析</strong>
       <div class="rich-content" v-html="rendered.analysis" />
     </section>
@@ -39,7 +55,8 @@ const props = withDefaults(defineProps<{
   };
   revealAnswer?: boolean;
   showScore?: boolean;
-}>(), { revealAnswer: true, showScore: false });
+  variant?: 'default' | 'library';
+}>(), { revealAnswer: true, showScore: false, variant: 'default' });
 const emit = defineEmits<{ ready: [result: { ok: boolean }] }>();
 
 const rendered = reactive<{ stem: string; options: QuestionOption[]; analysis: string; correctIds: string[] }>({
@@ -50,6 +67,11 @@ let renderSerial = 0;
 
 const typeLabel = computed(() => ({ single: '单选题', multiple: '多选题', judgment: '判断题' } as Record<string, string>)[props.question.type || ''] || '题目');
 const difficultyLabel = computed(() => ({ easy: '简单', medium: '中级', hard: '困难' } as Record<string, string>)[props.question.difficulty || ''] || '难度未知');
+const correctOptions = computed(() => rendered.options.flatMap((option, index) => (
+  rendered.correctIds.includes(option.key)
+    ? [{ key: option.key, letter: String.fromCharCode(65 + index), text: option.text }]
+    : []
+)));
 
 function clearObjectUrls() {
   for (const url of objectUrls) URL.revokeObjectURL(url);
@@ -195,8 +217,35 @@ onBeforeUnmount(() => {
 .question-preview__key { flex: 0 0 26px; height: 26px; border-radius: 50%; background: #eef4ff; color: #337ecc; display: grid; place-items: center; font-weight: 600; }
 .question-preview__option .rich-content { flex: 1; min-width: 0; }
 .question-preview__explanation { padding: 12px; border-radius: 8px; background: #f5f7fa; }
+.question-preview--library { gap: 16px; }
+.question-preview--library .question-preview__stem { line-height: 1.75; }
+.question-preview--library .question-preview__options { gap: 8px; padding: 0 4px; }
+.question-preview--library .question-preview__option { min-height: 28px; gap: 8px; padding: 0; border: 0; border-radius: 0; }
+.question-preview--library .question-preview__key {
+  flex-basis: 22px;
+  height: 28px;
+  border-radius: 0;
+  background: transparent;
+  color: #646566;
+  place-items: start;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 28px;
+}
+.question-preview--library .question-preview__option > .rich-content { color: #323233; font-size: 14px; line-height: 1.6; }
+.question-preview__result { display: grid; gap: 12px; padding: 16px; border-radius: 6px; background: #f5f7fa; }
+.question-preview__result-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 16px; }
+.question-preview__result-label { color: #646566; font-size: 13px; line-height: 1.75; }
+.question-preview__correct-options { display: grid; gap: 4px; min-width: 0; }
+.question-preview__correct-option { display: flex; align-items: flex-start; min-width: 0; color: #16804a; font-size: 14px; font-weight: 600; line-height: 1.75; }
+.question-preview__correct-option > span { flex: 0 0 auto; }
+.question-preview__correct-option .rich-content { color: inherit; font-weight: inherit; }
+.question-preview__analysis-content { min-width: 0; color: #323233; font-size: 14px; line-height: 1.75; }
+.question-preview__analysis-empty { color: #969799; }
 .rich-content :deep(p) { margin: 0 0 8px; }
 .rich-content :deep(p:last-child) { margin-bottom: 0; }
+.question-preview--library .question-preview__option > .rich-content :deep(p),
+.question-preview__correct-option .rich-content :deep(p) { margin: 0; }
 .rich-content :deep(img) { display: block; max-width: 100%; max-height: 360px; margin: 10px 0; border-radius: 6px; }
 .rich-content { min-width: 0; overflow-x: auto; }
 .rich-content :deep(table) { border-collapse: collapse; min-width: 100%; }

@@ -72,15 +72,22 @@ describe('manual question Tiptap editor', () => {
     expect(wrapper.emitted('error')?.at(-1)).toEqual(['']);
   });
 
-  it('shows the opted-in answer label for the stable correct option after sorting and leaves ordinary editors unchanged', async () => {
+  it('sets the correct answer from a manual letter while keeping stable option identity', async () => {
     const wrapper = await show();
+    expect(wrapper.text()).toContain('点击选项字母或右侧“设为答案”修改正确答案');
+    const optionLetter = wrapper.get('[data-option-id="option_a"] [data-option-letter]');
+    expect(optionLetter.element.tagName).toBe('BUTTON');
+    expect(getComputedStyle(optionLetter.element).display).toBe('inline-flex');
+    expect(getComputedStyle(optionLetter.element).alignItems).toBe('center');
+    expect(getComputedStyle(optionLetter.element).justifyContent).toBe('center');
     expect(wrapper.get('[data-option-id="option_b"] [data-answer-label]').text()).toBe('✓ 正确答案');
     expect(wrapper.find('[data-option-id="option_a"] [data-answer-label]').exists()).toBe(false);
     await button(wrapper, '上移选项 B').trigger('click'); await flushPromises();
     expect(wrapper.get('[data-option-id="option_b"] [data-answer-label]').text()).toBe('✓ 正确答案');
     await wrapper.get('[data-option-id="option_a"] .question-option__toggle').trigger('click'); await flushPromises();
-    expect(wrapper.find('[data-option-id="option_b"] [data-answer-label]').exists()).toBe(false);
     expect(wrapper.get('[data-option-id="option_a"] [data-answer-label]').text()).toBe('✓ 正确答案');
+    expect(wrapper.find('[data-option-id="option_b"] [data-answer-label]').exists()).toBe(false);
+    expect(latest(wrapper).content_json!.answer_option_ids).toEqual(['option_a']);
     const ordinary = mount(TiptapEditor, { props: { modelValue: wrapper.vm.getEditor()!.getJSON(), showPanels: false, showToolbar: false,
       displayMeta: { manual_question: { type: 'single' } } }, global: { plugins: [ElementPlus] } });
     wrappers.push(ordinary); await flushPromises();
@@ -89,36 +96,43 @@ describe('manual question Tiptap editor', () => {
     expect(ordinary.get('.question-option__remove').text()).toBe('删除');
   });
 
-  it('sets the single answer from the right action, mirrors letter clicks and deletes by stable identity with a two-option floor', async () => {
+  it('changes a single answer from either the letter or explicit right action and deletes by stable identity with a two-option floor', async () => {
     const wrapper = await show();
     await wrapper.get('[data-option-id="option_c"] [data-set-answer]').trigger('click'); await flushPromises();
     expect(latest(wrapper).content_json!.answer_option_ids).toEqual(['option_c']);
-    expect(wrapper.get('[data-option-id="option_c"] .question-option__toggle').attributes('aria-checked')).toBe('true');
     expect(wrapper.get('[data-option-id="option_c"] [data-answer-label]').text()).toBe('✓ 正确答案');
     expect(wrapper.find('[data-option-id="option_c"] [data-set-answer]').exists()).toBe(false);
     await wrapper.get('[data-option-id="option_b"] .question-option__toggle').trigger('click'); await flushPromises();
-    expect(wrapper.find('[data-option-id="option_b"] [data-set-answer]').exists()).toBe(false);
+    expect(latest(wrapper).content_json!.answer_option_ids).toEqual(['option_b']);
+    expect(wrapper.get('[data-option-id="option_b"] [data-answer-label]').text()).toBe('✓ 正确答案');
     expect(wrapper.get('[data-option-id="option_c"] [data-set-answer]').text()).toBe('设为答案');
+    await wrapper.get('[data-option-id="option_c"] [data-set-answer]').trigger('click'); await flushPromises();
+    expect(latest(wrapper).content_json!.answer_option_ids).toEqual(['option_c']);
+    expect(wrapper.get('[data-option-id="option_c"] [data-answer-label]').text()).toBe('✓ 正确答案');
     await button(wrapper, '上移选项 B').trigger('click'); await flushPromises();
     expect(wrapper.get('[data-option-id="option_b"] .question-option__remove').text()).toBe('×');
     expect(wrapper.get('[data-option-id="option_b"] .question-option__remove').attributes('aria-label')).toBe('删除选项 A');
     await wrapper.get('[data-option-id="option_a"] .question-option__remove').trigger('click'); await flushPromises();
     expect(latest(wrapper).options.map((option) => option.key)).toEqual(['option_b', 'option_c']);
-    expect(latest(wrapper).content_json!.answer_option_ids).toEqual(['option_b']);
-    expect(latest(wrapper).answer).toEqual([0]);
+    expect(latest(wrapper).content_json!.answer_option_ids).toEqual(['option_c']);
+    expect(latest(wrapper).answer).toEqual([1]);
     expect(wrapper.find('.question-option__remove').exists()).toBe(false);
     const before = wrapper.vm.getEditor()!.getJSON();
     expect(wrapper.vm.getEditor()!.commands.removeQuestionOption('option_c')).toBe(false);
     expect(wrapper.vm.getEditor()!.getJSON()).toEqual(before);
   });
 
-  it('adds right-side multiple answers without clearing the existing answer and lets letters deselect them', async () => {
+  it('adds and removes multiple answers from letters and explicit right-side actions', async () => {
     const value = draft(); value.type = 'multiple'; const wrapper = await show(value);
     await wrapper.get('[data-option-id="option_a"] [data-set-answer]').trigger('click'); await flushPromises();
     expect(latest(wrapper).content_json!.answer_option_ids).toEqual(['option_a', 'option_b']);
     expect(wrapper.findAll('[data-answer-label]')).toHaveLength(2);
-    expect(wrapper.get('[data-option-id="option_a"] .question-option__toggle').attributes('aria-checked')).toBe('true');
     await wrapper.get('[data-option-id="option_b"] .question-option__toggle').trigger('click'); await flushPromises();
+    expect(latest(wrapper).content_json!.answer_option_ids).toEqual(['option_a']);
+    expect(wrapper.get('[data-option-id="option_b"] [data-set-answer]').text()).toBe('设为答案');
+    await wrapper.get('[data-option-id="option_b"] [data-set-answer]').trigger('click'); await flushPromises();
+    expect(latest(wrapper).content_json!.answer_option_ids).toEqual(['option_a', 'option_b']);
+    await wrapper.get('[data-option-id="option_b"] [data-unset-answer]').trigger('click'); await flushPromises();
     expect(latest(wrapper).content_json!.answer_option_ids).toEqual(['option_a']);
     expect(wrapper.get('[data-option-id="option_b"] [data-set-answer]').text()).toBe('设为答案');
     await wrapper.get('[data-option-id="option_a"] .question-option__remove').trigger('click'); await flushPromises();
@@ -207,6 +221,8 @@ describe('manual question Tiptap editor', () => {
     expect(wrapper.find('[data-option-drag-handle]').exists()).toBe(false);
     await wrapper.get('[data-question-option] .question-option__toggle').trigger('click'); await flushPromises();
     expect(latest(wrapper).answer).toEqual([0]);
+    await wrapper.findAll('[data-question-option]')[1]!.get('[data-set-answer]').trigger('click'); await flushPromises();
+    expect(latest(wrapper).answer).toEqual([1]);
     const core = wrapper.vm.getEditor()!; const before = core.getJSON();
     const optionPosition: number[] = []; core.state.doc.descendants((node: any, pos: number) => { if (node.type.name === 'questionOption') optionPosition.push(pos + 2); });
     core.commands.insertContentAt(optionPosition[0]!, '不能修改'); expect(core.getJSON()).toEqual(before);
