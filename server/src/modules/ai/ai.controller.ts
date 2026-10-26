@@ -291,10 +291,4 @@ export class AiController {
     assertRequestKeys(body, [], '试卷复制请求');
     return this.papers.copy(id, { id: user.id, name: user.username }, req.ip || null);
   }
-
-  @Post('papers/:id/archive')
-  @Roles(...REG_ADMIN)
-  async archivePaper(@Param('id') id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    return this.papers.archive(id, { id: user.id, name: user.username }, req.ip || null);
-  }
 }

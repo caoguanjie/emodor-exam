@@ -7,7 +7,6 @@
       <div style="flex:1" />
       <el-button v-if="legacyPaper.rules_locked && auth.can('papers:write')" :loading="legacyCopying" :disabled="legacyCopying" @click="copyLegacyPaper">复制为新草稿</el-button>
       <el-button v-if="legacyPaper.status === 'draft' && auth.can('papers:publish')" type="success" :disabled="legacySum !== 100 || legacySum !== legacyPersistedSum" @click="publishLegacy">发布</el-button>
-      <el-button v-if="legacyPaper.status === 'published' && auth.can('papers:write')" type="warning" plain @click="archiveLegacy">归档</el-button>
     </div>
     <el-alert :type="legacyPaper.rules_locked ? 'success' : 'info'" :closable="false" :title="legacyReleaseMessage" style="margin-bottom:14px" />
     <el-card shadow="never" class="section-card">
@@ -40,18 +39,16 @@
     <div class="toolbar">
       <el-button text @click="router.push('/admin/papers')"><el-icon><ArrowLeft /></el-icon>返回</el-button>
       <el-divider direction="vertical" />
-      <div class="detail-head"><h2 class="detail-title">{{ paper.title }}</h2><el-tag>{{ paper.mode === 'fixed' ? '固定组卷' : '随机组卷' }}</el-tag><el-tag :type="statusType(paper.status)">{{ statusLabel(paper.status) }}</el-tag></div>
+      <div class="detail-head"><h2 class="detail-title">{{ paper.title }}</h2><el-tag v-if="paper.mode === 'random'" type="warning">随机组卷</el-tag><el-tag :type="statusType(paper.status)">{{ statusLabel(paper.status) }}</el-tag></div>
       <div style="flex:1" />
       <el-button v-if="canDesign" type="primary" :loading="designerLoading" @click="openDesigner">编辑试卷</el-button>
       <el-button @click="openPreview(false)">预览</el-button>
       <el-button v-if="canAnswerPreview" @click="openPreview(true)">答案版</el-button>
-      <el-button v-if="auth.can('papers:write')" :loading="copyingPaper" :disabled="copyingPaper" @click="copyPaper">复制</el-button>
+      <el-button v-if="paper.mode === 'fixed' && auth.can('papers:write')" :loading="copyingPaper" :disabled="copyingPaper" @click="copyPaper">复制</el-button>
       <el-button v-if="paper.status === 'draft' && auth.can('papers:publish')" type="success" :disabled="dirty || fixedQuestions.some((item) => item.enabled === false)" @click="publishPaper">发布</el-button>
-      <el-button v-if="paper.status === 'published' && auth.can('papers:publish')" type="warning" plain @click="withdrawPaper">撤回</el-button>
-      <el-button v-if="['published', 'withdrawn'].includes(paper.status) && auth.can('papers:publish')" type="danger" plain @click="archivePaper">归档</el-button>
     </div>
 
-    <el-alert v-if="paper.status !== 'draft'" type="info" :closable="false" style="margin-bottom:14px" title="发布版本不可修改；题库后续修订不会改写本卷。需要新规则或新题池时请复制为新试卷。" />
+    <el-alert v-if="paper.status !== 'draft'" type="info" :closable="false" style="margin-bottom:14px" :title="paper.mode === 'fixed' ? '发布版本不可修改；题库后续修订不会改写本卷。需要新规则或新题池时请复制为新试卷。' : '发布版本不可修改；题库后续修订不会改写本卷。'" />
     <el-alert v-else-if="dirty" type="warning" :closable="false" style="margin-bottom:14px" title="存在未保存配置；发布前请分别保存考试配置与固定题单。" />
     <el-alert v-if="designerError" :title="designerError" type="error" :closable="false" style="margin-bottom:14px"><el-button v-if="canDesign" @click="openDesigner">重试设计器</el-button></el-alert>
 
@@ -59,7 +56,6 @@
       <template #header><div class="card-head"><span>考试配置</span><el-button v-if="editable" type="primary" :loading="savingConfig" @click="saveConfig">保存配置</el-button></div></template>
       <el-form label-width="120px">
         <el-form-item label="试卷标题"><el-input v-model="form.title" maxlength="128" :disabled="!editable" /></el-form-item>
-        <el-form-item label="组卷模式"><el-radio-group v-model="form.mode" :disabled="!editable"><el-radio-button value="fixed">固定组卷</el-radio-button><el-radio-button value="random">随机组卷</el-radio-button></el-radio-group></el-form-item>
         <el-form-item label="培训类别"><el-select v-model="form.category_id" filterable style="width:100%" :disabled="!editable" @change="onCategoryChange"><el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
         <el-form-item label="资料来源筛选"><el-select v-model="form.regulation_ids" multiple filterable clearable style="width:100%" :disabled="!editable"><el-option v-for="item in regulationOptions" :key="item.id" :label="item.title" :value="item.id" /></el-select><div class="hint">留空时同类别无资料来源的人工/导入题也可用；选择后只保留指定资料来源题。</div></el-form-item>
         <el-form-item label="关联课程"><el-select v-model="form.course_ids" multiple filterable clearable style="width:100%" :disabled="!editable"><el-option v-for="item in courseOptions" :key="item.id" :label="item.title" :value="item.id" /></el-select><div class="hint">只作覆盖范围说明，不参与题池交并，也不强制学完。</div></el-form-item>
@@ -434,18 +430,22 @@ async function ensureTrainingOptions() {
 function onCategoryChange(value: Id) { void loadRelations(value, false); }
 function configPayload(submitted: Draft): Omit<Draft, 'rules'> & { rules?: PaperRuleInput[] } {
   const payload: Omit<Draft, 'rules'> & { rules?: PaperRuleInput[] } = clone(submitted);
-  if (submitted.mode === 'fixed') delete payload.rules;
+  payload.mode = paper.value?.mode ?? formBaseline.mode;
+  if (payload.mode === 'fixed') delete payload.rules;
   return payload;
 }
 
 async function saveConfig() {
-  if (form.mode === 'random' && ruleTotal.value !== 10000) { ElMessage.warning('随机规则总分必须等于 100 分'); return; }
+  const persistedMode = paper.value?.mode ?? formBaseline.mode;
+  if (persistedMode === 'random' && ruleTotal.value !== 10000) { ElMessage.warning('随机规则总分必须等于 100 分'); return; }
+  if (form.mode !== persistedMode) form.mode = persistedMode;
   const context = viewContext;
   const operation = ++configOperation;
   const submitted = snapshotForm();
+  submitted.mode = persistedMode;
   const submittedQuestions = snapshotQuestions();
   const previousBaseline = clone(formBaseline);
-  const invalidatesFixedList = submitted.mode !== previousBaseline.mode || submitted.category_id !== previousBaseline.category_id;
+  const invalidatesFixedList = submitted.category_id !== previousBaseline.category_id;
   savingConfig.value = true;
   try {
     const response = await http.put(`/admin/papers/${paperId}`, configPayload(submitted)) as TrainingPaperDetail;
@@ -460,7 +460,7 @@ async function saveConfig() {
     if (paper.value) Object.assign(paper.value, response);
     if (invalidatesFixedList) {
       questionBaseline = [];
-      if (form.mode === submitted.mode && form.category_id === submitted.category_id) fixedQuestions.value = [];
+      if (form.category_id === submitted.category_id) fixedQuestions.value = [];
     }
     syncDirty();
     ElMessage.success('考试配置已保存');
@@ -546,27 +546,11 @@ async function publishPaper() {
   await loadTraining(true, { form: submittedForm, questions: submittedQuestions });
 }
 
-async function withdrawPaper() {
-  const context = viewContext;
-  await ElMessageBox.confirm('撤回只阻止新开考；在考与历史题单继续保留。确认撤回？', '撤回试卷', { type: 'warning' });
-  if (context !== viewContext) return;
-  const operation = ++publicationOperation;
-  await http.post(`/admin/papers/${paperId}/withdraw`);
-  if (context !== viewContext || operation !== publicationOperation) return;
-  await loadTraining(false);
-}
-
-async function archivePaper() {
-  const context = viewContext;
-  await ElMessageBox.confirm('归档只阻止新开考，历史发布快照保留。确认归档？', '归档试卷', { type: 'warning' });
-  if (context !== viewContext) return;
-  const operation = ++publicationOperation;
-  await http.post(`/admin/papers/${paperId}/archive`);
-  if (context !== viewContext || operation !== publicationOperation) return;
-  await loadTraining(false);
-}
-
 async function copyPaper() {
+  if (paper.value?.mode !== 'fixed') {
+    if (paper.value?.mode === 'random') ElMessage.warning('现有随机试卷仅保留原配置，不支持复制新建');
+    return;
+  }
   if (copyingPaper.value) return;
   const context = viewContext;
   const operation = ++copyOperation;
@@ -721,15 +705,6 @@ async function publishLegacy() {
   if (context !== viewContext) return;
   const operation = ++legacyMutationOperation;
   await http.post(`/ai/papers/${paperId}/publish`);
-  if (context !== viewContext || operation !== legacyMutationOperation) return;
-  await loadLegacy();
-}
-async function archiveLegacy() {
-  const context = viewContext;
-  await ElMessageBox.confirm('归档后不再允许新开考。确认？', '归档', { type: 'warning' });
-  if (context !== viewContext) return;
-  const operation = ++legacyMutationOperation;
-  await http.post(`/ai/papers/${paperId}/archive`);
   if (context !== viewContext || operation !== legacyMutationOperation) return;
   await loadLegacy();
 }

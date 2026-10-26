@@ -404,7 +404,7 @@ CREATE TABLE IF NOT EXISTS `exam_paper` (
   `duration_minutes`     INT          NOT NULL DEFAULT 30 COMMENT '考试限时（分钟）',
   `max_attempts`         INT          NOT NULL DEFAULT 3 COMMENT '最大作答次数（含首次）',
   `partial_credit_ratio` DECIMAL(4,2) NOT NULL DEFAULT 0.50 COMMENT '多选漏选部分分比例 [0,1]',
-  `status`               VARCHAR(16)  NOT NULL DEFAULT 'draft' COMMENT 'draft / published / archived',
+  `status`               VARCHAR(16)  NOT NULL DEFAULT 'draft' COMMENT 'draft / published；withdrawn / archived 仅历史兼容',
   `created_by`           BIGINT UNSIGNED NOT NULL COMMENT '创建人',
   `created_at`           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at`           DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),

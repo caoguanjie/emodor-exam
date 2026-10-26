@@ -127,10 +127,10 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | 视频学习记录与会话 | video_learning_record 按用户+不可变课时版本保存有效时长、去重覆盖、断点与完成；video_learning_session 保存递增序号及服务端锚点，重启可恢复。 |
 | 心跳上报 | 默认每 30 秒上报。制度阅读携带滚动段位并用 Redis 累计；视频携带递增 seq、position_ms 与播放状态并逐拍落库。视频先按完整服务端间隔 +2 秒判断跳播，再把单次确认封顶 45 秒；暂停/后台不计。 |
 | 滚动覆盖率 | 阅读内容按固定 10 段划分、以 JSON 位图记录的已读到位情况（learning_record.scroll_coverage）；其中底部段必须被覆盖，是「有效学习」的必要条件之一。 |
-| 考试资格 | legacy 制度固定卷仍必须完成有效学习并返回原差距详情。新training移动首次开考校验mobile employee/权威实名、发布、启用类别及首次来源/类别匹配，默认不检查学习门槛；有效 active 恢复优先，撤回只阻新开。 |
+| 考试资格 | legacy 制度固定卷仍必须完成有效学习并返回原差距详情。新training移动首次开考校验mobile employee/权威实名、发布、启用类别及首次来源/类别匹配，默认不检查学习门槛；有效 active 恢复优先，历史撤回/归档记录只阻新开，状态写入口已退场。 |
 | 试题 | 题库稳定身份（question）与不可变 question_version。支持 single/multiple/judgment、当前两档启用且历史中级保留、`ai/manual/import` 来源；人工、文件和参考题 AI 确认后直接启用，兼容status=approved但审核元数据NULL、无新考点或题库分值。发布冻结通过启用校验的精确当前版本，后续修订不改写 release；旧题未知类别、难度与审核事实保持未知。 |
-| 试卷 | `exam_paper.business_scope` 区分制度 `regulation` 与新 `training`。培训卷支持 fixed/random、类别、可选制度筛选、课程说明关联和 10000 整数分规则；升级后新发布的制度卷和培训卷都通过 paper_release/paper_release_question 不可变冻结，所有新 fixed 发布按 `question_id` 禁止重复题目身份，改动需复制新草稿。真正升级前published无release的制度卷保持兼容。既有随机release明确使用historical-concept模式，按冻结concept分组、无concept回退question_id，预览与开考保持历史语义。 |
-| 试卷发布版本 | `paper_release` 冻结 RuleSnapshot、类别及关联条件；`paper_release_question` 冻结通过启用校验的真实精确题目版本、卷内实际分值与完整内容；考点仅旧快照兼容保留。制度旧题可保留 `categoryId=null/difficulty=unknown`。撤回/归档或复制不删除、不改写源快照；题图读取按固定草稿、发布快照或随机草稿完整校验后的当前候选池做精确版本与字段授权，不回读替代版本，也不为预览伪造发布引用。 |
+| 试卷 | `exam_paper.business_scope` 区分制度 `regulation` 与新 `training`。培训卷底层保留 fixed/random、类别、可选制度筛选、课程说明关联和 10000 整数分规则；PC 新建统一固定题单，隐藏组卷模式筛选/选择及随机复制入口，不集成自动选题工具；升级后新发布的制度卷和培训卷都通过 paper_release/paper_release_question 不可变冻结，所有新 fixed 发布按 `question_id` 禁止重复题目身份，改动需复制新草稿。真正升级前published无release的制度卷保持兼容。既有随机release明确使用historical-concept模式，按冻结concept分组、无concept回退question_id，预览与开考保持历史语义。 |
+| 试卷发布版本 | `paper_release` 冻结 RuleSnapshot、类别及关联条件；`paper_release_question` 冻结通过启用校验的真实精确题目版本、卷内实际分值与完整内容；考点仅旧快照兼容保留。制度旧题可保留 `categoryId=null/difficulty=unknown`。历史撤回/归档及复制不删除、不改写源快照；撤回/归档写入口已退场；题图读取按固定草稿、发布快照或随机草稿完整校验后的当前候选池做精确版本与字段授权，不回读替代版本，也不为预览伪造发布引用。 |
 | 个人考试归属与题单 | `exam_assignment` 冻结首次 release/source/category/difficulty/rule；补考沿用。`exam_record_question` 按每次作答冻结题面、实际分值、显示顺序和显示到原始选项映射；新答题主键是 `item_id`。 |
 | 考试记录 | 用户对某试卷的一次完整作答过程（exam_record），保存冻结期限、交卷方式、评分状态与得分；draft_*仅旧兼容列。主动受理才评分，到期进入不评分的纯timeout；`ExamRecordsService` 只投影管理端记录列表和详情。 |
 | 答题明细 | exam_answer只在新移动主动受理评分时保存稳定selected_option_ids及逐题得分，新纯timeout不创建答案；selected保留legacy兼容；不保存答题附件、人工评语或评分版本，最终结算后只读。 |
@@ -290,7 +290,7 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | video_learning_session.anchor_state | playing / paused / buffering / background / ended | B2 视频播放状态锚点 |
 | exam_paper.business_scope | regulation / training | 制度专项 legacy 卷 / 新培训发布卷 |
 | exam_paper.mode | fixed / random | 固定题单 / 按规则随机题池 |
-| exam_paper.status | draft / published / withdrawn / archived | 试卷状态；legacy 不使用 withdrawn |
+| exam_paper.status | draft / published；withdrawn / archived 仅历史兼容 | 试卷新流程：草稿 → 已发布；legacy 不使用 withdrawn，不改写历史状态 |
 | exam_record.status | in_progress / submitted / passed / failed / timeout | 进行中 / 历史已交卷待确认 / 已通过 / 未通过 / 超时未交卷；旧已评分timeout保留历史事实 |
 | exam_record.grading_state | not_submitted / finalized | 未交卷 / 已自动最终结算 |
 | exam_record.submission_method | manual / timeout / NULL | 主动交卷 / 历史已评分超时方式 / 新纯timeout未交卷或legacy历史方式未知 |

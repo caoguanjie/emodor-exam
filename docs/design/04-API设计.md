@@ -36,7 +36,7 @@
 | 项 | 约定 |
 |---|---|
 | 基础 URL | `/api/v1`（由 nginx 反向代理至 NestJS 应用） |
-| 协议风格 | REST：资源名词复数、动作用HTTP方法表达；legacy PUT可为字段修改。新移动考试不提供服务端draft/heartbeat。非幂等动作（retry、archive等）用POST |
+| 协议风格 | REST：资源名词复数、动作用HTTP方法表达；legacy PUT可为字段修改。新移动考试不提供服务端draft/heartbeat。非幂等动作（retry、publish等）用POST |
 | 请求格式 | `application/json`；文件上传为 `multipart/form-data`；Excel 导出响应为二进制流（`Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`） |
 | 认证方式 | `Authorization: Bearer <access_token>`（JWT 双令牌，见 1.3） |
 | 时间格式 | ISO 8601（`2026-09-12T14:30:00.000+08:00`）；纯秒数字段（如 `total_seconds`）为整型 |
@@ -142,7 +142,7 @@
 | /admin/question-materials | 题库资料 | 现行 | 资料创建、列表/详情、版本上传、解析状态和重试；版本 `id` 为字符串 |
 | /admin/questions | 题库导入 | 现行 | 7 列Excel/TXT模板、旧9列及两种8列兼容、逐题预览、warnings和直接启用的幂等确认 |
 | /ai | AI 与题库 | 现行 | AI配置／旧任务读取、类别选项、三类客观题版本、人工录入与启停 |
-| /admin/papers | 试卷发布 | 现行 | 固定/随机卷配置、来源选项、候选、预览、发布、复制、撤回、归档 |
+| /admin/papers | 试卷发布 | 现行 | 固定/随机卷配置、来源选项、候选、预览、发布、复制；撤回/归档写入口退场 |
 | /me | 本人/考试 | Gate H2已自动验证 | 本人资料/首页、考试列表、开考/状态恢复、主动整卷交卷、结果、历史和错题；无考试draft/heartbeat |
 | /media | 受控媒体 | 现行 | 头像、课程、视频、题目和品牌媒体；无答题图片 purpose |
 | /admin/courses、/me/courses | 课程 | 现行；视频增量见Task 12冻结契约 | 课程/章节/视频版本；启用学员可浏览全部已发布课程，来源/类别不额外阻断视频学习，开播须实名 |
@@ -496,7 +496,7 @@ interface IdentitySessionView {
 | 24 | PUT | /ai/papers/{id}/questions | 组卷；发布后锁定 |
 | 25 | POST | /ai/papers/{id}/publish | 发布试卷，校验 SUM(score)=100 |
 | 26 | POST | /ai/papers/{id}/copy | `papers:write`；按冻结事实复制为新 draft，body 只接受空对象 |
-| 27 | POST | /ai/papers/{id}/archive | 归档试卷 |
+| 27 | POST | /ai/papers/{id}/archive | 已退场，404；历史归档状态只读兼容 |
 | 28 | DELETE | /ai/questions/{id} | `questions:write`；版本／启停双基线逻辑删除，保留历史，重复返回原回执 |
 
 **试卷路由归属说明**：试卷的创建/组卷/发布属于「题库启用 → 组卷 → 发布」的出题工作流（05 册 4.4.7 组卷服务隶属 AI 出题模块），故管理侧归 `/ai/papers`；面向员工的考试执行（可考列表、开考、交卷）归 `/exams`（考试评分模块）——同一资源的管理面与执行面分离，与模块边界一致。
@@ -546,14 +546,16 @@ interface IdentitySessionView {
 | 11 | GET | /admin/papers/{id}/preview/answers | `papers:read` 且还需 `papers:export` / `questions:read` / `questions:export` 之一；答案版 |
 | 12 | POST | /admin/papers/{id}/publish | `papers:publish`；冻结发布版本，返回 `{release_id}` |
 | 13 | POST | /admin/papers/{id}/copy | `papers:write`；复制配置/固定题单为新 draft |
-| 14 | POST | /admin/papers/{id}/withdraw | `papers:publish`；published → withdrawn，保留快照 |
-| 15 | POST | /admin/papers/{id}/archive | `papers:publish`；published/withdrawn → archived，保留快照 |
+| 14 | POST | /admin/papers/{id}/withdraw | 已退场，404；不再产生 withdrawn 状态 |
+| 15 | POST | /admin/papers/{id}/archive | 已退场，404；不再产生 archived 状态 |
+
+**现行状态边界（2026-10-26）**：新写入流程仅 `draft → published`，发布后调整沿用复制新草稿。培训和 legacy 试卷的撤回/归档写入口均不再注册；旧状态的列表、详情、快照读取和开考限制仍保留，读取接口可继续按历史状态筛选，PC 日常筛选只提供草稿、已发布。不迁移或重写历史状态。
 
 **创建/修改 DTO**：`title/mode/category_id` 为核心字段；`regulation_ids/course_ids` 是去重字符串 ID 数组，其中 regulation_ids 表示题库资料的内部来源 ID；`requires_learning` 默认 false；分数/限时/次数/漏选比例默认 60/30/3/0.5。随机卷 `rules=[{type,count,score_cents}]` 最多三项且题型唯一，并满足 `Σ(count×score_cents)=10000`；固定题单同样合计 10000。来源选项允许“当前类别题目实际关联该 regulation”或“旧资料自身 category 直接匹配”；新资料不预绑类别，跨类别创建、更新或发布返回业务冲突。
 
 **发布硬校验**：候选只取同培训类别、启用题的精确当前revision，题型／启用难度及可选资料来源匹配，媒体授权合法；课程不参与题池过滤。新随机两池按question_id计算容量，不足返回40971与deficits；所有新固定／随机发布也按question_id去重，新release不写concept。发布事务重新锁定身份并复核仍启用且仍指向所选版本，失效整体回滚，不留release或published状态。既有随机release则显式使用historical-concept模式：按冻结concept分组，无concept回退question_id，预览与开考保持原语义；不恢复当前考点功能、不改写历史。
 
-**预览契约**：共通字段为 `paper_id/release_id/mode/sample_kind/note/difficulty/rule/capacities/questions`。`rule` 使用 snake_case：`total_cents/pass_cents/duration_minutes/max_attempts/partial_credit_ratio/rules[].score_cents`。固定卷 `sample_kind=fixed_paper`、`capacities=[]`；随机卷 `sample_kind=random_example`，显示初/高两池各题型 `required/available` 及选定难度的一次样例，`note` 必须明示“样例不代表所有考生同卷”。已发布/撤回/归档均读不可变 release，不回读题库当前内容。
+**预览契约**：共通字段为 `paper_id/release_id/mode/sample_kind/note/difficulty/rule/capacities/questions`。`rule` 使用 snake_case：`total_cents/pass_cents/duration_minutes/max_attempts/partial_credit_ratio/rules[].score_cents`。固定卷 `sample_kind=fixed_paper`、`capacities=[]`；随机卷 `sample_kind=random_example`，显示初/高两池各题型 `required/available` 及选定难度的一次样例，`note` 必须明示“样例不代表所有考生同卷”。已发布及历史撤回/归档记录均读不可变 release，不回读题库当前内容；历史状态保留不表示开放写入动作。
 
 schema3题目的普通预览额外返回`content_schema_version:3`与`content_json:{stem,options}`，只含完整富文题面/选项；`content_json`中不含`answer_option_ids/analysis`，外层同样不含`answer/analysis`。答案版`/preview/answers`经原有答案权限校验后返回完整schema3 `content_json`（含标准答案稳定ID和富文解析）及兼容答案/解析字段。PC预览使用这个明确的无答案部分内容类型显示富文，不能为了显示格式把答案带回普通预览。
 
@@ -1201,7 +1203,7 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | 40950 | 409 | 视频学习会话已结束或被替换 | 心跳指向已关闭、已被阅读/视频新会话取代或不属于当前活动所有者的会话 |
 | 40951 | 409 | 课程或视频版本当前不可学习 | 课程下架、课时当前版本替换，或会话后续范围检查失败；服务端先关闭活动视频所有权再返回 |
 | 40960 | 409 | 当前账号已完成实名认证 | POST 核验会话遇既有实名事实；data 固定含 status=verified、reason_code=null、clear_materials=[]，随后 GET 权威实名视图 |
-| 40970 | 409 | 试卷发布状态已变化 | 非 draft 修改/发布、非 published 撤回，或锁内类别/模式与预读不一致 |
+| 40970 | 409 | 试卷发布状态已变化 | 非 draft 修改/发布，或锁内类别/模式与预读不一致 |
 | 40971 | 409 | 候选题池容量不足 | 新随机卷初级或高级任一题型的不重复 question_id 数小于 required；data.deficits 返回 type/required/available。既有 release 的冻结抽样规则只读保留 |
 | 40972 | 409 | 试卷规则不合法 | 总分非 10000、固定题存在重复question_id／停用题／非精确当前版本/越类别或制度筛选，或随机题型规则非法 |
 | 42201 | 422 | 文件格式不支持 | 上传非 pdf/docx（含魔法数不符） |
@@ -1268,7 +1270,7 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | DELETE /admin/courses/{id}/lessons/{lessonId} | 仅未上架课程；课时须属于路径课程；仅标记 deleted_at，保留历史事实 | 同事务先锁课程再锁课时，与发布/换版共用锁序 |
 | POST /admin/questions/ai-import-tasks | 5MB、50参考行；任务状态与批次owner隔离 | 参考正文仅任务内存；生成后选行确认前零题库写，原批次幂等对账 |
 | POST /admin/papers/{id}/publish | 重复发布已 published 卷返回现有 release_id；并发发布只生成一个版次 | 先锁培训类别、再写锁 exam_paper；uk_paper_release_version 兜底 |
-| POST /admin/papers/{id}/withdraw/archive | 状态转移串行；只阻新开考且不删 release | exam_paper 行写锁；C2 开考将消费同一行锁 |
+| POST /admin/papers/{id}/withdraw/archive | 已退场，404 | 不再注册状态写入路由；历史快照保留 |
 
 ### 6.3 传输与敏感信息
 

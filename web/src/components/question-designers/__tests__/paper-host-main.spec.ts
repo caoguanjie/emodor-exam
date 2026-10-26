@@ -40,6 +40,7 @@ beforeEach(() => {
     if (path.endsWith('-options')) return { items: [], total: 0, page: 1, page_size: 100 };
     if (path === '/admin/papers') return method === 'post' ? detail({ id: '101', mode: body.mode }) : { items: [detail()], total: 1, page: 1, page_size: 20 };
     if (path === '/admin/question-documents/assemble') return bundle();
+    if (path === '/ai/papers') return { list: [], total: 0 };
     if (path === '/ai/questions') return { list: [], total: 0 };
     if (path.endsWith('/candidates')) return { items: [], total: 0, page: 1, page_size: 50 };
     if (path.startsWith('/admin/papers/')) return detail();
@@ -58,6 +59,71 @@ async function show(component: typeof PaperDetail | typeof Papers, url: string) 
 }
 
 describe('main fixed paper entry', () => {
+  it('queries and resets the training list explicitly with only draft and published filters', async () => {
+    const { wrapper, state } = await show(Papers, '/admin/papers');
+    const listReads = () => transport.calls.filter((call) => call.method === 'get' && call.path === '/admin/papers');
+    const selects = wrapper.findAllComponents(ElSelect);
+    const category = selects.find((select) => select.props('placeholder') === '培训类别')!;
+    const status = selects.find((select) => select.props('placeholder') === '状态')!;
+    expect(status.findAllComponents(ElOption).map((option) => ({ value: option.props('value'), label: option.props('label') }))).toEqual([
+      { value: 'draft', label: '草稿' },
+      { value: 'published', label: '已发布' },
+    ]);
+
+    const initialReads = listReads().length;
+    category.vm.$emit('update:modelValue', '10'); category.vm.$emit('change', '10');
+    status.vm.$emit('update:modelValue', 'published'); status.vm.$emit('change', 'published');
+    await flushPromises();
+    expect(listReads()).toHaveLength(initialReads);
+
+    state.trainingQuery.page = 4;
+    await wrapper.get('input[placeholder="试卷标题"]').setValue('安全培训');
+    await wrapper.findAll('button').find((button) => button.text() === '查询')!.trigger('click');
+    await flushPromises();
+    expect(listReads().at(-1)?.config?.params).toEqual({ page: 1, page_size: 20, keyword: '安全培训', category_id: '10', status: 'published' });
+
+    state.trainingQuery.page = 3;
+    await wrapper.findAll('button').find((button) => button.text() === '重置')!.trigger('click');
+    await flushPromises();
+    expect(state.trainingQuery).toMatchObject({ page: 1, page_size: 20, keyword: '', category_id: '', status: '' });
+    expect(listReads().at(-1)?.config?.params).toEqual({ page: 1, page_size: 20 });
+
+    state.trainingQuery.page = 5;
+    await wrapper.get('input[placeholder="试卷标题"]').setValue('回车查询');
+    const beforeEnter = listReads().length;
+    await wrapper.get('input[placeholder="试卷标题"]').trigger('keyup.enter');
+    await flushPromises();
+    expect(listReads()).toHaveLength(beforeEnter + 1);
+    expect(listReads().at(-1)?.config?.params).toEqual({ page: 1, page_size: 20, keyword: '回车查询' });
+  });
+  it('queries and resets legacy fixed-paper filters explicitly with only draft and published options', async () => {
+    const { wrapper, state } = await show(Papers, '/admin/papers');
+    state.activeScope = 'regulation';
+    await state.load(); await flushPromises();
+    const legacyReads = () => transport.calls.filter((call) => call.method === 'get' && call.path === '/ai/papers');
+    const status = wrapper.findAllComponents(ElSelect).find((select) => select.props('placeholder') === '状态')!;
+    expect(status.findAllComponents(ElOption).map((option) => ({ value: option.props('value'), label: option.props('label') }))).toEqual([
+      { value: 'draft', label: '草稿' },
+      { value: 'published', label: '已发布' },
+    ]);
+
+    const initialReads = legacyReads().length;
+    status.vm.$emit('update:modelValue', 'published'); status.vm.$emit('change', 'published');
+    await flushPromises();
+    expect(legacyReads()).toHaveLength(initialReads);
+
+    state.legacyQuery.page = 4;
+    await wrapper.get('input[placeholder="按历史资料 ID 筛选"]').setValue('regulation-7');
+    await wrapper.findAll('button').find((button) => button.text() === '查询')!.trigger('click');
+    await flushPromises();
+    expect(legacyReads().at(-1)?.config?.params).toEqual({ page: 1, page_size: 20, regulation_id: 'regulation-7', status: 'published' });
+
+    state.legacyQuery.page = 3;
+    await wrapper.findAll('button').find((button) => button.text() === '重置')!.trigger('click');
+    await flushPromises();
+    expect(state.legacyQuery).toMatchObject({ page: 1, page_size: 20, regulation_id: '', status: '' });
+    expect(legacyReads().at(-1)?.config?.params).toEqual({ page: 1, page_size: 20 });
+  });
   it('shows a disabled draft question and prevents saving it through the designer', async () => {
     const fallback = transport.respond;
     transport.respond = async (method, path, body, config) => path === '/admin/papers/100'
@@ -87,12 +153,34 @@ describe('main fixed paper entry', () => {
     const { state, router } = await show(Papers, '/admin/papers');
     state.openTrainingCreate(); state.trainingCreate.title = '新固定卷';
     await Promise.all([state.createTraining(), state.createTraining()]); await flushPromises();
-    expect(transport.calls.filter((call) => call.method === 'post' && call.path === '/admin/papers')).toHaveLength(1);
+    const creates = transport.calls.filter((call) => call.method === 'post' && call.path === '/admin/papers');
+    expect(creates).toHaveLength(1);
+    expect(creates[0].body).toMatchObject({ title: '新固定卷', mode: 'fixed' });
+    expect(creates[0].body).not.toHaveProperty('rules');
     expect(router.currentRoute.value.fullPath).toBe('/admin/papers/101?scope=training&designer=1');
   });
-  it('keeps random creation on the existing configuration page', async () => {
-    const { state, router } = await show(Papers, '/admin/papers'); state.openTrainingCreate(); state.trainingCreate.title = '随机卷'; state.trainingCreate.mode = 'random';
-    await state.createTraining(); await flushPromises(); expect(router.currentRoute.value.fullPath).toBe('/admin/papers/101?scope=training');
+  it('forces fixed creation without rules even if internal create state is tampered with', async () => {
+    const { state, router } = await show(Papers, '/admin/papers');
+    state.openTrainingCreate();
+    state.trainingCreate.title = '被篡改的创建草稿';
+    state.trainingCreate.mode = 'random';
+    state.trainingCreate.rules = [{ type: 'single', count: 1, score_cents: 10000 }];
+    await state.createTraining(); await flushPromises();
+    const request = transport.calls.find((call) => call.method === 'post' && call.path === '/admin/papers')!;
+    expect(request.body).toMatchObject({ title: '被篡改的创建草稿', mode: 'fixed' });
+    expect(request.body).not.toHaveProperty('rules');
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers/101?scope=training&designer=1');
+  });
+  it('removes mode and rule entry controls from the paper list and create dialog', async () => {
+    const { wrapper, state } = await show(Papers, '/admin/papers');
+    const visibleLabels = () => wrapper.findAll('.el-form-item__label').map((label) => label.text().trim());
+    const tableHeaders = () => wrapper.findAll('.el-table__header-wrapper .cell').map((cell) => cell.text().trim());
+    expect(visibleLabels()).not.toContain('组卷模式');
+    expect(tableHeaders()).not.toContain('模式');
+    expect(tableHeaders()).not.toContain('规则');
+    state.openTrainingCreate(); await flushPromises();
+    expect(visibleLabels()).not.toContain('组卷模式');
+    expect(visibleLabels()).not.toContain('随机规则');
   });
   it('uses only enabled catalog difficulties in the existing fixed candidate picker', async () => {
     const fallback = transport.respond;
@@ -118,6 +206,69 @@ describe('main fixed paper entry', () => {
     const { wrapper } = await show(PaperDetail, '/admin/papers/100?scope=training');
     expect(wrapper.text()).toContain('简单题池'); expect(wrapper.text()).toContain('困难题池');
     expect(wrapper.text()).not.toContain('可用于固定卷');
+  });
+  it('keeps an existing random paper random while removing mode switching and copy creation', async () => {
+    const rules = [{ type: 'single', count: 1, score_cents: 10000 }];
+    const fallback = transport.respond;
+    transport.respond = async (method, path, body, config) => {
+      if (path === '/admin/papers/100') return method === 'put'
+        ? detail({ mode: 'random', rules, ...body })
+        : detail({ mode: 'random', rules });
+      return fallback(method, path, body, config);
+    };
+    const { wrapper, state } = await show(PaperDetail, '/admin/papers/100?scope=training');
+    expect(wrapper.findAll('.el-tag').map((tag) => tag.text())).toContain('随机组卷');
+    expect(wrapper.findAll('.el-form-item__label').map((label) => label.text().trim())).not.toContain('组卷模式');
+    expect(wrapper.findAll('button').some((button) => button.text() === '复制')).toBe(false);
+    state.form.title = '保留随机模式';
+    state.form.mode = 'fixed';
+    await state.saveConfig(); await flushPromises();
+    const update = transport.calls.find((call) => call.method === 'put' && call.path === '/admin/papers/100')!;
+    expect(update.body).toMatchObject({ title: '保留随机模式', mode: 'random', rules });
+    expect(state.form.mode).toBe('random');
+    await state.copyPaper(); await flushPromises();
+    expect(transport.calls.some((call) => call.method === 'post' && call.path === '/admin/papers/100/copy')).toBe(false);
+  });
+  it('does not suggest copying an immutable published random paper', async () => {
+    const fallback = transport.respond;
+    transport.respond = async (method, path, body, config) => path === '/admin/papers/100'
+      ? detail({ mode: 'random', status: 'published' })
+      : fallback(method, path, body, config);
+    const { wrapper } = await show(PaperDetail, '/admin/papers/100?scope=training');
+    expect(wrapper.text()).toContain('发布版本不可修改；题库后续修订不会改写本卷。');
+    expect(wrapper.text()).not.toContain('请复制为新试卷');
+  });
+  it.each([
+    ['published', '已发布'],
+    ['withdrawn', '已撤回'],
+    ['archived', '已归档'],
+  ])('keeps historical %s training papers visible without withdrawal or archive actions', async (status, label) => {
+    transport.permissions.add('papers:publish');
+    const fallback = transport.respond;
+    transport.respond = async (method, path, body, config) => path === '/admin/papers/100'
+      ? detail({ status })
+      : fallback(method, path, body, config);
+    const { wrapper, state } = await show(PaperDetail, '/admin/papers/100?scope=training');
+    expect(wrapper.findAll('.el-tag').map((tag) => tag.text())).toContain(label);
+    const actions = wrapper.findAll('button').map((button) => button.text());
+    expect(actions).not.toContain('撤回');
+    expect(actions).not.toContain('归档');
+    expect(state.withdrawPaper).toBeUndefined();
+    expect(state.archivePaper).toBeUndefined();
+    expect(transport.calls.some((call) => call.path.endsWith('/withdraw') || call.path.endsWith('/archive'))).toBe(false);
+  });
+  it('removes the fixed mode label while preserving fixed-paper copy', async () => {
+    const fallback = transport.respond;
+    transport.respond = async (method, path, body, config) => path === '/admin/papers/100/copy'
+      ? { id: 'copied-fixed' }
+      : fallback(method, path, body, config);
+    const { wrapper, router, state } = await show(PaperDetail, '/admin/papers/100?scope=training');
+    expect(wrapper.findAll('.el-tag').map((tag) => tag.text())).not.toContain('固定组卷');
+    expect(wrapper.findAll('.el-form-item__label').map((label) => label.text().trim())).not.toContain('组卷模式');
+    expect(wrapper.findAll('button').some((button) => button.text() === '复制')).toBe(true);
+    await state.copyPaper(); await flushPromises();
+    expect(transport.calls.some((call) => call.method === 'post' && call.path === '/admin/papers/100/copy')).toBe(true);
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers/copied-fixed?scope=training');
   });
   it('mounts the complete real designer and saves in place before closing to the current detail', async () => {
     const { wrapper, router } = await show(PaperDetail, '/admin/papers/100?scope=training&designer=1');

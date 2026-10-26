@@ -479,11 +479,9 @@ test('omits every blank list filter and ignores a stale create receipt after clo
   const firstList = context.calls.find((call) => call.method === 'GET' && call.path === '/admin/papers');
   assert.deepEqual(firstList.config.params, { page: 1, page_size: 20 });
 
-  mounted.state.trainingQuery.mode = 'random';
   mounted.state.trainingQuery.status = 'draft';
   mounted.state.trainingQuery.category_id = 'category-1';
   mounted.state.trainingQuery.keyword = '关键字';
-  mounted.state.trainingQuery.mode = '';
   mounted.state.trainingQuery.status = '';
   mounted.state.trainingQuery.category_id = '';
   mounted.state.trainingQuery.keyword = '';
@@ -515,15 +513,17 @@ test('omits every blank list filter and ignores a stale create receipt after clo
   mounted.unmount();
 });
 
-test('retains random rules in the create payload', async () => {
+test('forces fixed mode and omits rules when internal create state is tampered with', async () => {
   const mounted = await mountPapers();
   mounted.state.openTrainingCreate();
-  mounted.state.trainingCreate.title = '随机卷';
+  mounted.state.trainingCreate.title = '被篡改的创建草稿';
   mounted.state.trainingCreate.mode = 'random';
+  mounted.state.trainingCreate.rules = [{ type: 'single', count: 1, score_cents: 10000 }];
   await mounted.state.createTraining();
   const call = context.calls.find((item) => item.method === 'POST' && item.path === '/admin/papers');
-  assert.deepEqual(call.body.rules, [{ type: 'single', count: 1, score_cents: 10000 }]);
-  assert.deepEqual(context.routerPushes, [{ path: '/admin/papers/created-paper', query: { scope: 'training' } }]);
+  assert.equal(call.body.mode, 'fixed');
+  assert.equal(Object.hasOwn(call.body, 'rules'), false);
+  assert.deepEqual(context.routerPushes, [{ path: '/admin/papers/created-paper', query: { scope: 'training', designer: '1' } }]);
   mounted.unmount();
 });
 
@@ -1201,6 +1201,18 @@ test('uses legacy release flags and ignores duplicate or stale copy completions'
   pending.resolve(legacyPaper({ id: 8, status: 'draft', release_id: null, rules_locked: false }));
   await Promise.all([first, second]);
   assert.deepEqual(context.routerPushes, []);
+});
+
+test('keeps legacy published and archived status readable without an archive write action', async () => {
+  for (const status of ['published', 'archived']) {
+    context.legacyPaper = legacyPaper({ status });
+    const mounted = await mountDetail('regulation');
+    const actions = walk(mounted.root, (node) => node.type === 'button').map(renderedText);
+    assert.equal(actions.includes('归档'), false);
+    assert.equal(mounted.state.archiveLegacy, undefined);
+    assert.equal(context.calls.some((call) => call.method === 'POST' && call.path.endsWith('/archive')), false);
+    mounted.unmount();
+  }
 });
 
 test('fix2 keeps only pre-upgrade published strategy editable while release-backed and archived strategies stay locked', async () => {

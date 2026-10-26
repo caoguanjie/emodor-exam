@@ -11,20 +11,16 @@
           <FitsListSearch @submit.prevent>
             <el-form-item label="试卷标题"><el-input v-model="trainingQuery.keyword" placeholder="试卷标题" clearable style="width:220px" @keyup.enter="searchTraining" /></el-form-item>
             <el-form-item label="培训类别">
-              <el-select v-model="trainingQuery.category_id" placeholder="培训类别" clearable style="width:180px" @change="searchTraining">
+              <el-select v-model="trainingQuery.category_id" placeholder="培训类别" clearable style="width:180px">
                 <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
               </el-select>
             </el-form-item>
-            <el-form-item label="组卷模式">
-              <el-select v-model="trainingQuery.mode" placeholder="组卷模式" clearable style="width:140px" @change="searchTraining">
-                <el-option label="固定组卷" value="fixed" /><el-option label="随机组卷" value="random" />
-              </el-select>
-            </el-form-item>
             <el-form-item label="状态">
-              <el-select v-model="trainingQuery.status" placeholder="状态" clearable style="width:140px" @change="searchTraining">
+              <el-select v-model="trainingQuery.status" placeholder="状态" clearable style="width:140px">
                 <el-option v-for="item in trainingStatuses" :key="item.value" :label="item.label" :value="item.value" />
               </el-select>
             </el-form-item>
+            <template #actions><el-button type="primary" @click="searchTraining">查询</el-button><el-button @click="resetTrainingQuery">重置</el-button></template>
           </FitsListSearch>
         </template>
         <template v-if="auth.can('papers:write')" #actions>
@@ -33,8 +29,6 @@
         <el-table v-loading="loading" :data="trainingItems">
           <el-table-column prop="title" label="试卷" min-width="220" />
           <el-table-column label="类别" min-width="150"><template #default="{ row }">{{ categoryName(row.category_id) }}</template></el-table-column>
-          <el-table-column label="模式" width="110"><template #default="{ row }">{{ row.mode === 'fixed' ? '固定组卷' : '随机组卷' }}</template></el-table-column>
-          <el-table-column label="规则" min-width="230"><template #default="{ row }">{{ ruleSummary(row) }}</template></el-table-column>
           <el-table-column label="学习门槛" width="100"><template #default="{ row }">{{ row.requires_learning ? '开启' : '关闭' }}</template></el-table-column>
           <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
           <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><FitsTableActions><FitsTableAction type="primary" @click="openDetail(row.id, 'training', row.mode === 'fixed' && row.status === 'draft' && auth.can('papers:write') && auth.can('questions:read'))">{{ row.mode === 'fixed' && row.status === 'draft' ? '编辑试卷' : '配置' }}</FitsTableAction></FitsTableActions></template></el-table-column>
@@ -51,12 +45,13 @@
       <FitsTable>
         <template #search>
           <FitsListSearch @submit.prevent>
-            <el-form-item label="历史资料 ID"><el-input v-model="legacyQuery.regulation_id" placeholder="按历史资料 ID 筛选" clearable style="width:220px" @keyup.enter="loadLegacy" /></el-form-item>
+            <el-form-item label="历史资料 ID"><el-input v-model="legacyQuery.regulation_id" placeholder="按历史资料 ID 筛选" clearable style="width:220px" @keyup.enter="searchLegacy" /></el-form-item>
             <el-form-item label="状态">
-              <el-select v-model="legacyQuery.status" placeholder="状态" clearable style="width:140px" @change="loadLegacy">
-                <el-option label="草稿" value="draft" /><el-option label="已发布" value="published" /><el-option label="已归档" value="archived" />
+              <el-select v-model="legacyQuery.status" placeholder="状态" clearable style="width:140px">
+                <el-option label="草稿" value="draft" /><el-option label="已发布" value="published" />
               </el-select>
             </el-form-item>
+            <template #actions><el-button type="primary" @click="searchLegacy">查询</el-button><el-button @click="resetLegacyQuery">重置</el-button></template>
           </FitsListSearch>
         </template>
         <el-table v-loading="loading" :data="legacyItems">
@@ -77,7 +72,6 @@
     <el-dialog v-model="trainingCreateVisible" title="创建培训试卷" width="720px" class="re-form-dialog" :before-close="beforeTrainingCreateClose">
       <el-form label-width="120px" :disabled="creating">
         <el-form-item label="试卷标题"><el-input v-model="trainingCreate.title" maxlength="128" /></el-form-item>
-        <el-form-item label="组卷模式"><el-radio-group v-model="trainingCreate.mode"><el-radio-button value="fixed">固定组卷</el-radio-button><el-radio-button value="random">随机组卷</el-radio-button></el-radio-group></el-form-item>
         <el-form-item label="培训类别"><el-select v-model="trainingCreate.category_id" filterable style="width:100%" @change="loadCreateRelations"><el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
         <el-form-item label="资料来源筛选">
           <el-select v-model="trainingCreate.regulation_ids" multiple filterable clearable style="width:100%"><el-option v-for="item in createRegulations" :key="item.id" :label="item.title" :value="item.id" /></el-select>
@@ -87,9 +81,6 @@
         <el-form-item label="学习门槛"><el-switch v-model="trainingCreate.requires_learning" /><span class="hint inline">培训考试默认关闭。</span></el-form-item>
         <el-form-item label="及格线 / 限时"><el-input-number v-model="trainingCreate.pass_score" :min="1" :max="100" /> <el-input-number v-model="trainingCreate.duration_minutes" :min="1" :max="1440" style="margin-left:12px" /></el-form-item>
         <el-form-item label="次数 / 漏选比例"><el-input-number v-model="trainingCreate.max_attempts" :min="1" :max="100" /> <el-input-number v-model="trainingCreate.partial_credit_ratio" :min="0" :max="1" :step="0.1" style="margin-left:12px" /></el-form-item>
-        <el-form-item v-if="trainingCreate.mode === 'random'" label="随机规则">
-          <div class="rules"><div v-for="(rule, index) in trainingCreate.rules" :key="rule.type" class="rule-row"><span>{{ typeLabel(rule.type) }}</span><el-input-number v-model="rule.count" :min="1" /><el-input-number v-model="rule.score_cents" :min="1" :max="10000" /><span>整数分</span><el-button text type="danger" @click="trainingCreate.rules.splice(index, 1)">移除</el-button></div><el-button size="small" @click="addRule">添加题型规则</el-button><div class="hint">规则总分 {{ createRuleTotal / 100 }} / 100；随机固定本机构初级、外来高级。</div></div>
-        </el-form-item>
       </el-form>
       <template #footer><el-button @click="closeTrainingCreate">取消</el-button><el-button type="primary" :loading="creating" @click="createTraining">创建草稿</el-button></template>
     </el-dialog>
@@ -98,20 +89,21 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
+import { onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
 import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
 import http from '../../api/http';
-import type { Id, Page, PaperMode, PaperRuleInput, QuestionType, TrainingPaperStatus, TrainingPaperSummary } from '../../api/training-types';
+import type { Id, Page, TrainingPaperStatus, TrainingPaperSummary } from '../../api/training-types';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 
 interface NamedOption { id: Id; name?: string; title?: string }
 interface TrainingCreateDraft {
-  title: string; mode: PaperMode; category_id: Id | ''; regulation_ids: Id[]; course_ids: Id[]; requires_learning: boolean;
-  pass_score: number; duration_minutes: number; max_attempts: number; partial_credit_ratio: number; rules: PaperRuleInput[];
+  title: string; category_id: Id | ''; regulation_ids: Id[]; course_ids: Id[]; requires_learning: boolean;
+  pass_score: number; duration_minutes: number; max_attempts: number; partial_credit_ratio: number;
 }
+type TrainingCreatePayload = TrainingCreateDraft & { mode: 'fixed' };
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -125,7 +117,7 @@ const trainingItems = ref<TrainingPaperSummary[]>([]);
 const trainingTotal = ref(0);
 const legacyItems = ref<any[]>([]);
 const legacyTotal = ref(0);
-const trainingQuery = reactive({ page: 1, page_size: 20, keyword: '', category_id: '', mode: '', status: '' });
+const trainingQuery = reactive({ page: 1, page_size: 20, keyword: '', category_id: '', status: '' });
 const legacyQuery = reactive({ page: 1, page_size: 20, regulation_id: '', status: '' });
 const trainingCreateVisible = ref(false);
 const trainingCreate = reactive<TrainingCreateDraft>(emptyTrainingCreate());
@@ -142,24 +134,36 @@ const completedCreateScopes = new Set<'training'>();
 const createUnsaved = useUnsavedChanges(trainingCreateDirty, { onDiscard: discardTrainingCreate });
 const trainingStatuses = [
   { value: 'draft', label: '草稿' }, { value: 'published', label: '已发布' },
-  { value: 'withdrawn', label: '已撤回' }, { value: 'archived', label: '已归档' },
 ];
 
-function emptyTrainingCreate(): TrainingCreateDraft { return { title: '', mode: 'fixed', category_id: '', regulation_ids: [], course_ids: [], requires_learning: false, pass_score: 60, duration_minutes: 30, max_attempts: 3, partial_credit_ratio: 0.5, rules: [{ type: 'single', count: 1, score_cents: 10000 }] }; }
+function emptyTrainingCreate(): TrainingCreateDraft { return { title: '', category_id: '', regulation_ids: [], course_ids: [], requires_learning: false, pass_score: 60, duration_minutes: 30, max_attempts: 3, partial_credit_ratio: 0.5 }; }
 function snapshotCreate(): TrainingCreateDraft { return JSON.parse(JSON.stringify(trainingCreate)); }
-function createPayload(submitted: TrainingCreateDraft): Omit<TrainingCreateDraft, 'rules'> & { rules?: PaperRuleInput[] } { const payload: Omit<TrainingCreateDraft, 'rules'> & { rules?: PaperRuleInput[] } = JSON.parse(JSON.stringify(submitted)); if (submitted.mode === 'fixed') delete payload.rules; return payload; }
+function createPayload(submitted: TrainingCreateDraft): TrainingCreatePayload {
+  return {
+    title: submitted.title,
+    mode: 'fixed',
+    category_id: submitted.category_id,
+    regulation_ids: [...submitted.regulation_ids],
+    course_ids: [...submitted.course_ids],
+    requires_learning: submitted.requires_learning,
+    pass_score: submitted.pass_score,
+    duration_minutes: submitted.duration_minutes,
+    max_attempts: submitted.max_attempts,
+    partial_credit_ratio: submitted.partial_credit_ratio,
+  };
+}
 function discardTrainingCreate() { createContext += 1; creating.value = false; Object.assign(trainingCreate, JSON.parse(JSON.stringify(createBaseline))); trainingCreateDirty.value = false; trainingCreateVisible.value = false; }
 watch(trainingCreate, () => { if (trainingCreateVisible.value) trainingCreateDirty.value = JSON.stringify(snapshotCreate()) !== JSON.stringify(createBaseline); }, { deep: true });
-const createRuleTotal = computed(() => trainingCreate.rules.reduce((sum, item) => sum + item.count * item.score_cents, 0));
 
-function typeLabel(type: QuestionType) { return ({ single: '单选', multiple: '多选', judgment: '判断' })[type]; }
 function statusLabel(status: TrainingPaperStatus | string) { return ({ draft: '草稿', published: '已发布', withdrawn: '已撤回', archived: '已归档' } as Record<string, string>)[status] || status; }
 function statusType(status: TrainingPaperStatus | string) { return status === 'published' ? 'success' : status === 'draft' ? 'info' : 'warning'; }
 function categoryName(categoryId: Id) { return categories.value.find((item) => item.id === categoryId)?.name || `类别 ${categoryId}`; }
-function ruleSummary(row: TrainingPaperSummary) { return row.mode === 'fixed' ? '手选题单 · 发布时冻结' : row.rules.map((item) => `${typeLabel(item.type)} ${item.count}×${item.score_cents / 100}分`).join('；'); }
 function legacyReleaseLabel(row: { status?: string; release_id?: string | null; rules_locked?: boolean }) { if (row.rules_locked && row.release_id) return '内容已冻结'; if (row.status === 'published') return '升级前旧卷'; return '待发布冻结'; }
 function openDetail(id: Id | number, scope: 'training' | 'regulation', designer = false) { void router.push({ path: `/admin/papers/${id}`, query: { scope, ...(designer ? { designer: '1' } : {}) } }); }
 function searchTraining() { trainingQuery.page = 1; void loadTraining(); }
+function resetTrainingQuery() { Object.assign(trainingQuery, { page: 1, keyword: '', category_id: '', status: '' }); void loadTraining(); }
+function searchLegacy() { legacyQuery.page = 1; void loadLegacy(); }
+function resetLegacyQuery() { Object.assign(legacyQuery, { page: 1, regulation_id: '', status: '' }); void loadLegacy(); }
 async function load() { if (activeScope.value === 'training') await loadTraining(); else await loadLegacy(); }
 function nonBlankParams(source: Record<string, unknown>) { return Object.fromEntries(Object.entries(source).filter(([, value]) => value !== '')); }
 async function loadTraining() { const context = viewContext; const operation = ++loadOperation; loading.value = true; try { const data = await http.get('/admin/papers', { params: nonBlankParams(trainingQuery) }) as Page<TrainingPaperSummary>; if (context !== viewContext || operation !== loadOperation) return; trainingItems.value = data.items; trainingTotal.value = data.total; } finally { if (context === viewContext && operation === loadOperation) loading.value = false; } }
@@ -183,7 +187,6 @@ function openTrainingCreate() { createContext += 1; creating.value = false; Obje
 function closeTrainingCreateContext() { createContext += 1; creating.value = false; trainingCreateVisible.value = false; }
 async function closeTrainingCreate() { if (await createUnsaved.confirmDiscard()) closeTrainingCreateContext(); }
 async function beforeTrainingCreateClose(done: () => void) { if (await createUnsaved.confirmDiscard()) { closeTrainingCreateContext(); done(); } }
-function addRule() { const used = new Set(trainingCreate.rules.map((item) => item.type)); const next = (['single', 'multiple', 'judgment'] as QuestionType[]).find((item) => !used.has(item)); if (next) trainingCreate.rules.push({ type: next, count: 1, score_cents: 1000 }); }
 function flushCompletedCreates() {
   if (viewDestroyed || !viewActive || completedCreateScopes.size === 0) return;
   const scopes = [...completedCreateScopes];
@@ -195,7 +198,6 @@ function reconcileCompletedCreate(scope: 'training') { if (viewDestroyed) return
 async function createTraining() {
   if (creating.value) return;
   if (!trainingCreate.title.trim() || !trainingCreate.category_id) { ElMessage.warning('请填写标题并选择培训类别'); return; }
-  if (trainingCreate.mode === 'random' && createRuleTotal.value !== 10000) { ElMessage.warning('随机规则总分必须等于 100 分'); return; }
   const context = viewContext; const dialogContext = createContext; const operation = ++createOperation; const submitted = snapshotCreate();
   const payload = createPayload(submitted);
   creating.value = true;
@@ -206,7 +208,7 @@ async function createTraining() {
       reconcileCompletedCreate('training');
       return;
     }
-    createUnsaved.markClean(); trainingCreateVisible.value = false; ElMessage.success('培训试卷草稿已创建'); openDetail(created.id, 'training', submitted.mode === 'fixed');
+    createUnsaved.markClean(); trainingCreateVisible.value = false; ElMessage.success('培训试卷草稿已创建'); openDetail(created.id, 'training', true);
   } finally { if (context === viewContext && dialogContext === createContext && operation === createOperation) creating.value = false; }
 }
 onMounted(async () => { await loadOptions(); await loadTraining(); });
@@ -219,6 +221,4 @@ onBeforeUnmount(() => { viewDestroyed = true; viewActive = false; invalidateView
 <style scoped>
 .hint { color:var(--el-text-color-secondary); font-size:12px; line-height:1.5; margin-top:4px; width:100%; }
 .hint.inline { margin-left:10px; width:auto; }
-.rules { width:100%; }
-.rule-row { display:grid; grid-template-columns:90px 120px 140px 60px 60px; align-items:center; gap:8px; margin-bottom:8px; }
 </style>

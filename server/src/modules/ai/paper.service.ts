@@ -363,20 +363,6 @@ export class PaperService {
     return this.paperView(copied);
   }
 
-  /** 归档（archived 后不可再发起新作答，C-08） */
-  async archive(id: string, actor: { id: number; name: string }, ip: string | null) {
-    const p = await this.paperRepo.findOne({ where: { id } });
-    if (!p) throw Errors.notFound('试卷不存在');
-    this.assertLegacyPaper(p);
-    p.status = PaperStatus.ARCHIVED;
-    await this.paperRepo.save(p);
-    this.audit.log({
-      actor_id: actor.id, actor_name: actor.name, action: 'paper.archive', object_type: 'exam_paper',
-      object_id: id, detail: {}, result: 'success', source_ip: ip,
-    });
-    return this.paperView(p);
-  }
-
   private trainingRule(
     strategy: { passScore: string | number; durationMinutes: number; maxAttempts: number; partialCreditRatio: string | number },
     rules: Array<{ type: QuestionType; count: number; score_cents?: number; scoreCents?: number }>,
@@ -783,36 +769,6 @@ export class PaperService {
       const selected = link.questionVersionId ? byVersion.get(String(link.questionVersionId)) : byQuestion.get(String(link.questionId));
       assertActiveDifficulty(selected?.difficulty);
     }
-  }
-
-  private async transitionTraining(
-    id: string,
-    actor: PaperActor,
-    ip: string | null,
-    action: 'withdraw' | 'archive',
-  ) {
-    const paper = await this.dataSource.transaction(async (manager) => {
-      const repo = manager.getRepository(ExamPaper);
-      const locked = await repo.findOne({ where: { id: String(id) }, lock: { mode: 'pessimistic_write' } });
-      this.assertTrainingPaper(locked);
-      if (action === 'withdraw' && locked.status !== 'published') throw Errors.paperReleaseConflict('只有已发布试卷可以撤回');
-      if (locked.status === 'archived') return locked;
-      locked.status = action === 'withdraw' ? 'withdrawn' : 'archived';
-      return repo.save(locked);
-    });
-    this.audit.log({
-      actor_id: Number(actor.id), actor_name: actor.name, action: `training_paper.${action}`, object_type: 'exam_paper',
-      object_id: String(id), detail: {}, result: 'success', source_ip: ip,
-    });
-    return this.trainingPaperView(paper);
-  }
-
-  withdrawTraining(id: string, actor: PaperActor, ip: string | null) {
-    return this.transitionTraining(id, actor, ip, 'withdraw');
-  }
-
-  archiveTraining(id: string, actor: PaperActor, ip: string | null) {
-    return this.transitionTraining(id, actor, ip, 'archive');
   }
 
   async findById(id: string) {
