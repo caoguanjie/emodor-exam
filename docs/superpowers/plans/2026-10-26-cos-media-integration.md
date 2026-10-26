@@ -1,6 +1,6 @@
 # COS 媒体集成 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **执行方式：** 按用户明确指定的 [astra-workflow](../../../.codex/skills/astra-workflow/SKILL.md) 执行，由根代理管理依赖队列、委派并行工作、整合和裁决。整个项目不经过 SDD，也不将 `subagent-driven-development` 或 `executing-plans` 作为执行前置流程。下文 checkbox 只记录交付进度，不代表逐任务串行审批。
 
 **Goal:** 复用 gooodwork 的 COS 桶及通用资产设计，完成 RuleExam 图片/视频存储、PC 视频上传续传、受控独立分发和可回退的存量迁移。
 
@@ -51,7 +51,75 @@
 | `server/src/modules/media/migration/`、`scripts/media/` | 只读清单、可续跑上传切换、回退 | 11 |
 | `tests/`、`review/`、设计分册 | 隔离集成、真桶/浏览器/容量证据 | 各任务局部同步；12 总收口 |
 
-依赖：`1 → 2 → 3`；`2+3 → 4 → 5`；`3 → 6 → 7`；`4+5 → 8`；`6 → 9`；`4+5+6 → 10`；`2+3 → 11`；全部进入 12。Task 4/6、Task 8/9/10/11 可按接口冻结后分工；同一 `app.module.ts`、`MediaService`、API 文件由根集成，不能多名执行者同时编辑。
+### Astra 并行调度
+
+用户明确要求“不经过 SDD”，覆盖 `.codex/skills/writing-plans/SKILL.md` 计划模板中的原句 `Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.`。保留该技能的计划结构，不继承其执行流程。采用稳定工作线复用 worker，不要求每个 Task 都新建执行者、再固定经过两轮逐任务审查。
+
+先冻结共享类型、API 字段和文件 owner，再按“可开工”和“可完成验收”两种条件调度。接口已经冻结时，消费方可用合约 fixture 提前开发自己的独占文件，但后端未就绪前不能声称联调完成。
+
+```text
+Task 1 公共类型/配置字段先冻结
+       ├─ Task 1 适配器与 env 配置 ─┐
+       └─ Task 2 实体与 schema ────┴─> Task 3 双存储兼容
+                                           |
+                 +-------------------------+--------------------+
+                 |                         |                    |
+            Task 4 -> Task 5          Task 6 -> Task 7       Task 11 工具
+            上传会话/发布清理          读取授权/边缘函数        清单可先做
+                 |                         |                apply 竞争验证等 5
+                 +----------+--------------+
+                            |
+                +-----------+--------------+
+                |                          |
+           Task 8 -> Task 9            Task 10 移动端
+           PC 上传再接读取               H5/小程序适配
+                +-----------+--------------+
+                            |
+                 Task 12 全链验收和交付（同时汇入 Task 11）
+```
+
+硬依赖及并行边界：
+
+- Task 2 不必等待 Task 1 全部 COS 实现，但必须先拿到 Task 1 冻结且可编译的公共类型；Task 3 等待 1、2 都完成。Task 1 的类型交付是其内部检查点，不新增独立业务任务或空壳服务。
+- Task 3 之后，Task 4、Task 6、Task 11 清单/工具开发可以并行；共享 `MediaService` 的接线修改交根顺序整合。
+- Task 5 等 4；Task 7 的函数/本地测试等 6，可与 5 并行；G0 最终验证还须使用 5 发布出的正式对象，早期云端只读检查不受此限制。
+- Task 8 的真实联调等 4、5；Task 9 等 8、6，两个 PC 任务由同一个 Web owner 顺序完成，禁止同时编辑共同文件。Task 10 的真实联调等 4、5、6；前端合约测试可先于真云 G0 完成。
+- Task 11 的清单和 manifest 逻辑可在 2、3 后完成；apply/回退的并发验收还需与 Task 5 最终清理行为一起验证。真实迁移另受 G0 和实际批次授权约束。
+- Task 12 的容量脚本、测试数据与验收结构可以提前准备；最终交付仍等待全部实现和相应真实验收证据。
+
+当前会话上限为 4 个活跃代理，包含根；执行时重新核对实际容量。以下按根加最多 3 个子代理安排，批次只是初始排程，依赖先满足者先推进，不等待整批一起结束：
+
+| 阶段 | 执行槽 A | 执行槽 B | 执行槽 C | 根的整合点 |
+|---|---|---|---|---|
+| 契约启动 | Task 1 先交公共类型，再继续适配器 | 类型冻结后开始 Task 2 | 按需只读核对云端配置条件，不操作真实桶 | 固定输入、接口、迁移号和写入归属 |
+| 基础接入 | Task 3 | 预备 Task 6 合约 fixture | 预备 Task 11 manifest 测试 | 1/2 注册整合、双存储兼容结果 |
+| 三线展开 | Task 4 → Task 5 | Task 6 → Task 7 | Task 11 清单/工具，5 就绪后补竞争验收 | 上传/读取公共入口、E2E 注册和 G0 条件 |
+| 客户端并行 | Web owner：Task 8 → Task 9 | Mobile owner：Task 10 | 已就绪的 G0/迁移验证，或独立安全审查 | API 合约读回、CSP/域名和前端接线 |
+| 收口 | 按失败归属修复 | tester 执行独立验收/容量记录 | reviewer 审查固定候选差异 | Task 12 证据归并、发布/迁移批次与回退 |
+
+某工作线因云授权、域名或供应商条件等待时，先报告准确阻碍和已完成部分，释放执行槽，让其它已就绪任务继续；不把未通过 G0 写成完成。角色按当时生效的 `.codex/agents/*.toml` 和工具能力选择，不照抄旧 Skill 示例模型、不修改用户模型配置。
+
+### 文件唯一写入者与整合约定
+
+下文 Task 的 Files 是“最终影响文件”，并不授权同一批的所有执行者同时修改这些文件。分配时采用以下唯一写入者；跨 owner 变更由需要方给出最小修改说明/补丁，根安排顺序合入，不并行覆盖。
+
+| 文件范围 | 唯一写入者/顺序 | 其它工作线交付方式 |
+|---|---|---|
+| `storage/**`、`scripts/backend-env.mjs`、server 依赖锁 | 存储 owner（Task 1） | 消费冻结端口，不复制存储实现 |
+| 媒体 entity、init、新 SQL、schema 测试 | 数据 owner（Task 2） | 新字段或状态变更由根裁决后交 owner |
+| `uploads/**`、对应测试 | 上传 owner（Task 4 → 5）；Task 2 建立的 contract 冻结后只经根同意修改 | 消费方使用接口 fixture |
+| `delivery/**`、`deploy/edgeone/**`、对应测试 | 读取 owner（Task 6 → 7） | 提交独占文件及共享接线补丁 |
+| `app.module.ts`、`media.service.ts`、`tasks.service.ts`、`tests/run-e2e.mjs` | 根维护集成工作副本；Task 3 核心改动先整体合入，4/5/6/11 增量排队 | 子代理完成主体实现并给出精确接线改动；根不代写整条业务线 |
+| `configuration.ts`、`deploy/.env.example`、`deploy/nginx/default.conf` | 根在 Task 1/6/7/12 检查点合入 | 各 owner 提交新增键/验证规则，避免互改配置格式 |
+| `web/src/api/media.ts`、`MediaUpload.vue`、auth store、其它 PC 消费者 | 同一个 Web owner 顺序执行 Task 8 → 9 | 不因 Task 编号不同而换人同时写同一文件 |
+| `mobile/**` 本任务文件 | Mobile owner（Task 10） | 只消费后端已冻结协议 |
+| `migration/**`、迁移 CLI、专用测试/runbook | 迁移 owner（Task 11） | E2E 公共注册交根 |
+| `docs/design/**`、`AGENTS.md`、共享冻结契约 | 根在契约冻结/最终收口合并 | 各 owner 返回需更新条款，保持并行题库改动 |
+| 真 `.env`、实际云配置、迁移批次 | 根在已有授权范围内统一操作 | 子代理开发工具/模板，默认不读取真实凭据、不自行操作云资源 |
+
+每条线交付：任务/候选提交、精确文件、提供/消费的接口、已跑命令与结果、未验证边界。根检查后发布为下游可用输入。公共注册合入后才跑依赖应用装配的 E2E，不能用孤立类测试冒充集成完成。
+
+测试继续按任务风险执行，但不设置每任务人工确认门。后端发布/清理与访问授权形成可运行候选（Task 5/6）后安排一次独立审查，可与前端独占文件开发并行；最终 Task 12 再审查整合候选和实际证据。reviewer 必须审固定差异，不能复用该改动的实现者；其占用计入并发预算。无需每个小 Task 固定派 reviewer 或反复更换 worker。
 
 两个上线门：**G0** 为 Task 7 的应用前缀约束、客户端临时授权/边缘访问范围、动态鉴权和 Range，**G1** 为 Task 12 的迁移和实际业务验收。G0 不要求共用的长期密钥无法读取 gooodwork 范围。G0 未满足时可做独立代码和自动化，但不切生产分发、不把代理读取称为带宽分流成功。
 
@@ -278,4 +346,4 @@ type UploadGrant =
 | 存量迁移、回退及 PDF/DOCX 排除 | 11/12 |
 | 真云配置授权、分级验收和容量未知 | 7/12 |
 
-本计划自审只由根执行：逐条核对设计覆盖、步骤是否可验、接口/字段命名一致、五项 Review Focus 都有测试、文档长度是否在描述决策而非代写实现。执行建议按项目并行约定使用子代理分工，根负责接口冻结与共享文件集成；每个可验任务检查后提交，最终独立整分支审查。计划确认前不安装依赖、不写业务实现、不操作真实云资源。
+本计划自审由根完成：核对设计覆盖、可验步骤、接口命名、Review Focus 和篇幅。执行方式已由用户选定为 Astra 并行编排，不再询问 SDD/其它执行方式，也不自动进入 SDD。正式实施启动后，根按依赖就绪情况直接调度，保持工作线 owner、按风险组织验证和独立审查，不把逐任务审查当成固定串行流水线。当前修订仅更新计划；尚未安装依赖、修改业务实现或操作真实云资源。
