@@ -12,15 +12,15 @@
 
 ## Global Constraints
 
-- 共用 gooodwork COS 桶，独立项目/环境前缀和服务身份；两个项目数据库独立。不授予本项目身份或边缘源站整桶权限。
+- 共用 gooodwork COS 桶及同一套 `COS_SECRET_ID/COS_SECRET_KEY`，两个项目各自前缀、数据库独立；不新建 RuleExam 专用长期 COS 密钥。共享长期凭据的云权限可能覆盖两边，项目范围由适配器校验、受限客户端临时授权和边缘访问规则约束，不声称长期凭据相互隔离。
 - 保留 `media_asset.id` 的 BIGINT/十进制字符串协议及 `media_reference(asset_id, owner_type, owner_id)`，不改课程、题库、冻结快照的 ID。
 - 图片、视频、封面、头像、Logo/轮播、实名材料纳入；PDF/DOCX 原件不迁移、不删除；Excel/TXT 等临时导入不归档。
 - 私有对象；每次新内容请求执行当前授权，缓存命中不绕过；纯 timeout 无题图、在考无解析图；实名图不进入普通边缘缓存。
 - 默认：上传会话 24 小时、完成回执 30 天、孤儿宽限 24 小时、分块阈值 16 MiB、分块 8 MiB、每文件并发 3、处理每实例并发 2。
 - 视频默认上限 512 MiB、图片默认上限 10 MiB；MP4/H.264、音轨 AAC；现有图片类型/像素和真实解码约束保留。
 - 视频学习仍为 30 秒心跳、45 秒封顶、2 秒容差和 95% 去重覆盖；续票不能重建学习会话或补时。
-- 上传、云访问、运维凭据只从运行环境注入；不读取项目 `.env` 获取迁移凭据，不把秘密、签名 URL 或实名材料放入日志、测试快照或仓库。
-- 数据库无外键；新迁移带可续跑探针，同步 init/entities/设计；不改既有 checksum。当前最大编号 028，执行时重查下一可用号。
+- 本地 COS/媒体后端配置保存在根目录 `.env`（0600、Git 忽略），沿用 `env:init/env:check/start:local` 及 Node `--env-file=.env`；本地迁移/检查工具共用该文件。只按白名单从明确指定的 gooodwork 环境文件导入共享 COS 凭据，不复制其他系统密钥或项目配置；不把真实值、签名 URL 或实名材料放入示例、日志、前端包或仓库。
+- 数据库无外键；新迁移带可续跑探针，同步 init/entities/设计；不改既有 checksum。初稿基线到 028，当前并行工作区已出现 `029_question_soft_delete.sql`，执行时重新选定下一可用号。
 - 生产 COS 配置缺失即失败，不静默回落本地；混合数据按每条资源的驱动读取。
 - PC 视频续传为本期验收端；H5 图片简单直传；小程序保留受控代理上传；实名沿用专用处理入口。
 - 本地源文件保留回退副本；删除须另行批准。云端变更先形成具体 diff，再授权最后一步；本计划不代签授权。
@@ -53,7 +53,20 @@
 
 依赖：`1 → 2 → 3`；`2+3 → 4 → 5`；`3 → 6 → 7`；`4+5 → 8`；`6 → 9`；`4+5+6 → 10`；`2+3 → 11`；全部进入 12。Task 4/6、Task 8/9/10/11 可按接口冻结后分工；同一 `app.module.ts`、`MediaService`、API 文件由根集成，不能多名执行者同时编辑。
 
-两个上线门：**G0** 为 Task 7 的真实前缀隔离/动态鉴权/Range，**G1** 为 Task 12 的迁移和实际业务验收。G0 未满足时可做独立代码和自动化，但不切生产分发、不把代理读取称为带宽分流成功。
+两个上线门：**G0** 为 Task 7 的应用前缀约束、客户端临时授权/边缘访问范围、动态鉴权和 Range，**G1** 为 Task 12 的迁移和实际业务验收。G0 不要求共用的长期密钥无法读取 gooodwork 范围。G0 未满足时可做独立代码和自动化，但不切生产分发、不把代理读取称为带宽分流成功。
+
+### 本地配置入口
+
+| 位置 | 约定 |
+|---|---|
+| 根 `.env` | 两边相同的 `COS_SECRET_ID/COS_SECRET_KEY`、桶/地域，以及 RuleExam 自己的 `COS_KEY_PREFIX`、`MEDIA_STORAGE_PROVIDER`、分发和上传参数；真实文件不提交 |
+| `deploy/.env.example` | 同步所有新增键名、空占位和说明，不包含真实密钥 |
+| `scripts/backend-env.mjs` | 保留原有 init/check；新增 `import-cos --from-env <明确源路径>`，原子合并白名单并保持已有 `.env` 其他配置 |
+| 后端本地启动 | 沿用 `npm --prefix server run start:local`，应用仍只读 `process.env` |
+| 本地检查/迁移 | 从仓库根使用 `node --env-file=.env scripts/media/cos-preflight.mjs --inspect` 和 `node --env-file=.env scripts/media/migrate-local-to-cos.mjs --plan ...` |
+| 前端 | 只使用公开的媒体域名配置；`COS_SECRET_*` 不进入 `VITE_*` 或构建产物 |
+
+导入白名单固定为 `COS_SECRET_ID/COS_SECRET_KEY/COS_BUCKET/COS_REGION`，明确的源文件必须同时具备 SecretId/SecretKey，缺少一项即整次失败，不做半写；桶/地域在源文件中存在才合并，否则保留目标已有值并交 `env:check` 检查完整性。不得复制 gooodwork 的 `COS_KEY_PREFIX`、DB/JWT/加密配置或整份环境文件；RuleExam 前缀单独维护。导入只复制已有值，不生成或轮换 COS 密钥；重复导入相同值无变更。当前已存在 `.env` 时也必须支持该合并步骤，不能只依赖遇到已有文件就退出的 `env:init`。显式进程环境优先级沿用 Node 行为，检查报告只显示键名/状态/被覆盖情况，不显示值。
 
 执行前用隔离 worktree 固定输入。主工作区目前存在并行题库/UI/设计改动，不能直接拷贝全部脏文件进执行分支；需要的未提交依赖先由根确认候选范围。所有提交仅显式路径、仅本地，不自动 push。
 
@@ -106,21 +119,23 @@ type UploadGrant =
 
 ## Task 1: 存储端口、运行配置与 COS 适配器
 
-**Files:** Create `server/src/modules/media/storage/media-storage.port.ts`、`server/src/modules/media/storage/cos-upload.port.ts`、`server/src/modules/media/storage/local-media-storage.ts`、`server/src/modules/media/storage/cos-media-storage.ts`、`server/src/modules/media/storage/media-storage.router.ts`、`server/src/modules/media/storage/cos-media.config.ts`；Modify `server/src/config/configuration.ts`、`server/src/app.module.ts`、`server/package.json`、`server/package-lock.json`、`deploy/.env.example`；Test `server/test/media-storage.spec.ts`、`server/test/media-cos-config.spec.ts`。
+**Files:** Create `server/src/modules/media/storage/media-storage.port.ts`、`server/src/modules/media/storage/cos-upload.port.ts`、`server/src/modules/media/storage/local-media-storage.ts`、`server/src/modules/media/storage/cos-media-storage.ts`、`server/src/modules/media/storage/media-storage.router.ts`、`server/src/modules/media/storage/cos-media.config.ts`；Modify `server/src/config/configuration.ts`、`server/src/app.module.ts`、`server/package.json`、`server/package-lock.json`、`scripts/backend-env.mjs`、`deploy/.env.example`；Test `server/test/media-storage.spec.ts`、`server/test/media-cos-config.spec.ts`，extend `tests/backend-env.test.mjs`。实施时修改根 `.env` 的本地值，但该文件始终不暂存、不提交。
 
 **Interfaces:** Produces 上述两个端口、`MediaStorageRouter.forLocator(locator:StorageLocator):MediaStoragePort`、`readCosMediaConfig(env:NodeJS.ProcessEnv):CosMediaConfig`；`CosMediaConfig` 在 `cos-media.config.ts` 导出，字段为 `provider:'local'|'cos'`、`bucket/region/keyPrefix/secretId/secretKey:string|null`、`sessionToken:string|null`，cos 分支要求前五项非空。COS 实现必须分页处理 parts/versions，只能访问配置前缀；本地实现保留现有安全相对路径检查。
 
-- [ ] **Step 1 — 固定基线和失败用例。** 记录当前媒体测试结果，不把已有失败算成本任务新增；创建 `cos_requires_complete_config`：`expect(() => readCosMediaConfig({ MEDIA_STORAGE_PROVIDER:'cos' })).toThrow()`；`local_still_reads_legacy_key` 验证旧键按字节读取；`version_is_used_for_stat_open_delete` 验证三个操作均携带相同 versionId；`rejects_foreign_prefix` 验证未发出 SDK 请求。
-- [ ] **Step 2 — 确认新用例失败。** `npm --prefix server test -- test/media-storage.spec.ts test/media-cos-config.spec.ts`；失败须来自尚未实现的新端口/配置，而非环境或旧基线。
-- [ ] **Step 3 — 实现端口和配置。** 安装精确版本 `npm install --prefix server --save-exact cos-nodejs-sdk-v5@3.0.0 qcloud-cos-sts@3.1.3`（2026-10-26 从 npm 元数据核实）；所有供应商调用封装于 adapter。配置键固定为 `MEDIA_STORAGE_PROVIDER`、`COS_BUCKET/REGION/KEY_PREFIX/SECRET_ID/SECRET_KEY/SESSION_TOKEN`；local 为默认，cos 缺必填项即拒绝；无论默认驱动是什么，router 始终能读 local 历史行。`open` 流式且支持精确单段 Range，禁止整视频 Buffer；COS-only SDK 不在前端使用。
+`scripts/backend-env.mjs` 新增 `importLocalCosEnv(root:string,sourceEnvPath:string):Promise<{changed:boolean;keys:string[]}>`，返回键名而不是值；扩展现有 `inspectBackendEnv` 检查 COS 模式必填项、前缀及来源覆盖情况。CLI 为 `node scripts/backend-env.mjs import-cos --from-env <明确源路径>`；源文件不得与目标相同，不追随未声明的其它配置文件，使用同目录临时文件、0600 与原子替换，保持非目标键和原值。
+
+- [ ] **Step 1 — 固定基线和失败用例。** 记录当前媒体测试结果，不把已有失败算成本任务新增；创建 `cos_requires_complete_config`：`expect(() => readCosMediaConfig({ MEDIA_STORAGE_PROVIDER:'cos' })).toThrow()`；`local_still_reads_legacy_key` 验证旧键按字节读取；`version_is_used_for_stat_open_delete` 验证三个操作均携带相同 versionId；`rejects_foreign_prefix` 验证适配器未发出 SDK 请求，而不是假设共享密钥本身没有跨项目前缀权限。环境工具增加 `cos_import_merges_existing_env`、`cos_import_missing_pair_is_atomic`、`cos_import_does_not_copy_other_secrets_or_prefix`、`cos_import_is_idempotent_and_private`，断言只合并四个白名单键、保留原配置、重复执行无变化、0600、输出无值；测试只使用临时目录和不可用于真实服务的测试数据。
+- [ ] **Step 2 — 确认新用例失败。** `npm --prefix server test -- test/media-storage.spec.ts test/media-cos-config.spec.ts` 和 `node --test tests/backend-env.test.mjs`；失败须来自尚未实现的新端口/配置合并，而非环境或旧基线。
+- [ ] **Step 3 — 实现端口和配置。** 安装精确版本 `npm install --prefix server --save-exact cos-nodejs-sdk-v5@3.0.0 qcloud-cos-sts@3.1.3`（2026-10-26 从 npm 元数据核实）；所有供应商调用封装于 adapter。配置键固定为 `MEDIA_STORAGE_PROVIDER`、`COS_BUCKET/REGION/KEY_PREFIX/SECRET_ID/SECRET_KEY/SESSION_TOKEN`；`COS_SECRET_ID/COS_SECRET_KEY` 复用 gooodwork 原值，通过上述白名单导入根 `.env`，不生成新的长期身份或密钥。将新增媒体参数接入 `deploy/.env.example`、已有本地 env 初始化/检查和 `start:local`；有配置的现存 `.env` 采用合并，不覆盖 JWT/DB/实名参数。local 为默认，cos 缺必填项即拒绝；无论默认驱动是什么，router 始终能读 local 历史行。`open` 流式且支持精确单段 Range，禁止整视频 Buffer；COS-only SDK 不在前端使用。
 - [ ] **Step 4 — 验证。** 重跑 Step 2，要求通过；另跑 `npm --prefix server run build`，要求退出 0。单测只用 SDK stub，不连接真实桶。
-- [ ] **Step 5 — 本地提交。** 仅暂存本任务 Files 中实际改动，提交 `feat(media): 添加本地与 COS 存储适配`。
+- [ ] **Step 5 — 本地提交。** 仅暂存本任务代码、模板和测试，明确排除真实 `.env`，确认 `git check-ignore .env` 命中；提交 `feat(media): 添加本地与 COS 存储适配`。
 
 ## Task 2: 媒体定位字段、上传会话与可续跑迁移
 
 **Files:** Modify `server/src/entities/media-asset.entity.ts`、`database/init.sql`、`server/src/app.module.ts`、`docs/design/03-数据库设计.md`、`docs/design/README.md`、`AGENTS.md`、`tests/run-e2e.mjs`；Create `server/src/entities/media-upload-session.entity.ts`、`server/src/modules/media/uploads/media-upload.contract.ts`、`database/migrations/<N>_cos_media_storage.sql`、`tests/cos-media-migration.test.mjs`、`tests/cos-media-schema.mjs`；extend `tests/migration-catalog.test.mjs`。
 
-**Interfaces:** Produces `MediaUploadSession` entity；原 `MediaAsset` 增量字段 `storageProvider`、`cosBucket`、`cosRegion`、`cosVersionId`、`etag`、`crc64`。执行第一步选定 N 并更新本计划为准确路径；当前 028 之后的第一个空号，不在写计划时预占。
+**Interfaces:** Produces `MediaUploadSession` entity；原 `MediaAsset` 增量字段 `storageProvider`、`cosBucket`、`cosRegion`、`cosVersionId`、`etag`、`crc64`。执行第一步重查迁移目录，选定 N 并更新本计划为准确路径；已有并行 029 不可占用，不在写计划时预占编号。
 
 - [ ] **Step 1 — 写 schema 失败用例并绑定编号。** 新字段使用 provider VARCHAR(16) NOT NULL DEFAULT 'local'，bucket VARCHAR(255)、region VARCHAR(64)、version VARCHAR(255)、etag VARCHAR(255)、crc64 VARCHAR(64) 均 nullable。会话含 UUID PK、owner/uploaded_by BIGINT、request UUID、request_digest CHAR(64)、用途/原名/声明类型/大小/指纹、staging locator、uploadId、state、expiresAt、lastCredentialExpiresAt、claimId/leaseUntil、候选对象 JSON、assetId/receipt JSON、错误和时间戳。唯一键 `(uploaded_by, client_request_id)`；队列/清理索引覆盖 state+lease/expiry。断言旧行仍为 local、原 ID/引用不变、重复 request 冲突、无外键、漂移探针拒绝缺列或错误索引。
 - [ ] **Step 2 — 验证失败。** `node --test tests/cos-media-migration.test.mjs tests/migration-catalog.test.mjs`；新 DDL/探针断言失败。
@@ -184,9 +199,9 @@ type UploadGrant =
 
 - [ ] **Step 1 — 写失败用例。** `cache_hit_still_calls_authorize`：每次请求 authorize 一次；`direct_internal_path_and_forged_headers_are_denied`：403 且无 origin fetch；`auth_timeout_is_fail_closed`；`range_206_is_streamed_without_buffer`：保留 Content-Range/Length/Accept-Ranges 且不调用 arrayBuffer；`ticket_cookie_bearer_never_reach_cos`。
 - [ ] **Step 2 — 验证失败。** `node --test tests/media-edge-function.test.mjs`。
-- [ ] **Step 3 — 实现函数/配置提案。** 覆盖媒体域名全部对外路径；只有票据内容和品牌白名单路由可进入鉴权。授权后用服务端返回的不可变键构造同 Host 内部 fetch，内部对象路径直接外访一律拒绝；不得依赖用户可伪造的“内部”头。函数转发流；只有通过授权后才能取共享缓存，失败 no-store；私有浏览器响应保持 private/no-store，品牌沿用 300 秒。配置 S3 兼容源站与限前缀身份，不使用默认全桶授权。记录缓存键、映射路径、函数递归/子请求行为和回源认证的具体配置；保护 identity/staging 不在分发源站允许范围。
-- [ ] **Step 4 — 自动验证及具体变更审阅。** Step 2 通过；`node scripts/media/cos-preflight.mjs --inspect` 仅在运行期凭据可用时运行；核对现有桶 ACL/版本/CORS/前缀/域名，输出不含秘密的 proposed diff。取得该具体云配置变更授权后再人工/受控执行，未授权时保留 G0 待验，继续无依赖任务。
-- [ ] **Step 5 — G0 真云验证和提交。** 用批准的探针对象验证前缀越界拒绝、缓存热后授权撤销拒绝、伪造内部请求拒绝、Range 206/416、CORS、版本读写及 gooodwork 原规则未被覆盖。任一不满足：记录限制，停止生产分发接入，不用公开桶/静态 COS 链接替代。将真实证据或明确待验状态写入 review，提交本任务代码/模板/脱敏记录，`feat(media): 接入边缘鉴权分发并记录云端验证门`；秘密与临时对象清单不入库。
+- [ ] **Step 3 — 实现函数/配置提案。** 覆盖媒体域名全部对外路径；只有票据内容和品牌白名单路由可进入鉴权。授权后用服务端返回的不可变键构造同 Host 内部 fetch，内部对象路径直接外访一律拒绝；不得依赖用户可伪造的“内部”头。函数转发流；只有通过授权后才能取共享缓存，失败 no-store；私有浏览器响应保持 private/no-store，品牌沿用 300 秒。两边后端使用共享 COS 密钥；EdgeOne 优先使用 COS 源站的服务回源授权，审阅策略并限制到 RuleExam 正式媒体前缀，不将共享长期密钥写进函数，也不再要求新增一套 RuleExam 长期密钥。记录缓存键、映射路径、函数递归/子请求行为和回源认证的具体配置；保护 identity/staging 不在分发源站允许范围。
+- [ ] **Step 4 — 自动验证及具体变更审阅。** Step 2 通过；从仓库根运行 `node --env-file=.env scripts/media/cos-preflight.mjs --inspect`，使用同一份本地共享 COS 配置；核对共享身份现有权限/STS 能力、桶 ACL/版本/CORS/前缀/域名，输出不含秘密的 proposed diff。不得为了测试隔离擅自收窄 gooodwork 正在使用的共享权限。取得该具体云配置变更授权后再人工/受控执行，未授权时保留 G0 待验，继续无依赖任务。
+- [ ] **Step 5 — G0 真云验证和提交。** 用批准的探针对象验证 RuleExam 适配器对其他前缀不发请求、下发给浏览器的临时授权对其他前缀被 COS 拒绝、边缘外访不能访问 gooodwork/identity/staging，以及缓存热后授权撤销、伪造内部请求、Range 206/416、CORS、版本读写和 gooodwork 原规则未被覆盖。不要求共享长期密钥访问 gooodwork 自身范围得到 403，也不拿它绕过适配器执行跨项目写探针。任一必要边界不满足：记录限制，停止生产分发接入，不用公开桶/静态 COS 链接替代。将真实证据或明确待验状态写入 review，提交本任务代码/模板/脱敏记录，`feat(media): 接入边缘鉴权分发并记录云端验证门`；秘密与临时对象清单不入库。
 
 ## Task 8: PC 统一上传、进度、暂停和恢复
 
@@ -229,6 +244,8 @@ type UploadGrant =
 **Files:** Create `server/src/modules/media/migration/media-storage-migration.service.ts`、`server/src/modules/media/migration/migration-manifest.ts`、`scripts/media/migrate-local-to-cos.mjs`、`server/test/media-storage-migration.spec.ts`、`tests/media-storage-migration.mjs`、`deploy/cos/migration-runbook.md`；Modify `tests/run-e2e.mjs`。
 
 **Interfaces:** `migration-manifest.ts` 定义 `MigrationItem={assetId:string;purpose:string;source:StorageLocator;sha256:string;sizeBytes:number;updatedAt:string}`、`MigrationState='planned'|'uploaded'|'verified'|'switched'|'rolled_back'|'skipped'|'failed'`、`MigrationCheckpoint={item:MigrationItem;target:StorageLocator|null;state:MigrationState;verifiedSha256:string|null;reason:string|null}`。`MigrationManifest.get(assetId:string):Promise<MigrationCheckpoint|null>`、`save(value:MigrationCheckpoint):Promise<void>`；`MediaStorageMigrationService.plan():AsyncIterable<MigrationItem>`、`apply(item:MigrationItem,manifest:MigrationManifest):Promise<MigrationCheckpoint>`、`rollback(item:MigrationItem,manifest:MigrationManifest):Promise<MigrationCheckpoint>`。manifest 不含姓名、原件字节、签名或凭据。CLI 默认 `--plan`，显式 `--apply`/`--rollback` 与受控 `--manifest` 路径；无 delete-local 命令。
+
+本地命令统一从仓库根用 `node --env-file=.env scripts/media/migrate-local-to-cos.mjs --plan --manifest <受控清单路径>`；apply/rollback 使用同一加载方式，仅切换动作参数。脚本只读取已加载的配置，不再要求把 COS 密钥写入 shell 配置，也不把 `.env` 或密钥复制到清单中。
 
 - [ ] **Step 1 — 写失败用例。** `missing_or_changed_source_is_reported_not_switched`；`crash_after_put_resumes_same_candidate`；`delete_race_does_not_resurrect_row`；`referenced_history_id_and_links_stay_equal`：前后引用集合全等；`rollback_requires_matching_local_sha`；`pdf_docx_rows_are_never_selected`；`new_cos_only_asset_cannot_claim_local_rollback`。
 - [ ] **Step 2 — 验证失败。** `npm --prefix server test -- test/media-storage-migration.spec.ts`。
