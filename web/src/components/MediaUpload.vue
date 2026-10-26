@@ -103,6 +103,7 @@ import { getMediaLimits, getMediaMetadata, uploadMedia, type MediaMetadata, type
 import { createMediaUploadTask, type MediaUploadTask } from '../services/media-upload';
 import { invalidatePcMedia, resolvePcMedia } from '../services/media-content';
 import { onMediaContextChange } from '../services/media-context';
+import { mediaTicketRenewalDelay, mediaTicketRetryDelay } from '../services/media-ticket-timing';
 import {
   createMediaUploadState,
   mediaKindForPurpose,
@@ -305,7 +306,7 @@ async function openPreview() {
         if (attempt === 0 && (code <= 0 || (code >= 500 && code < 600) || (code >= 50000 && code < 60000))) {
           const retry = await new Promise<boolean>(resolve => {
             const stop = () => { clearTimeout(timer); resolve(false); };
-            const timer = setTimeout(() => { controller.signal.removeEventListener('abort', stop); resolve(true); }, 1000);
+            const timer = setTimeout(() => { controller.signal.removeEventListener('abort', stop); resolve(true); }, mediaTicketRetryDelay(previewExpiresAt));
             controller.signal.addEventListener('abort', stop, { once: true });
             if (controller.signal.aborted) stop();
           });
@@ -324,7 +325,7 @@ async function openPreview() {
 
 function schedulePreviewRefresh() {
   clearTimeout(previewRefreshTimer);
-  previewRefreshTimer = setTimeout(() => { if (previewVisible.value) void refreshVideoPreview(); }, Math.min(2147483647, Math.max(1000, previewExpiresAt - Date.now() - 10000)));
+  previewRefreshTimer = setTimeout(() => { if (previewVisible.value) void refreshVideoPreview(); }, mediaTicketRenewalDelay(previewExpiresAt));
 }
 
 function abortCurrentRequest() {

@@ -90,6 +90,10 @@ export function createMediaUploadTask(file: File, purpose: MediaPurpose, options
       }
     }
     if (view.state !== 'completed' || !view.result || view.result.status !== 'ready' || !view.result.asset_id) {
+      if (['failed', 'aborted', 'expired'].includes(view.state)) {
+        await checked(mediaResumeStore.remove(context.userId, view.session_id), generation);
+        record = null;
+      }
       throw new Error(view.state === 'expired' ? '上传会话已过期，请重新选择文件' : '文件内容处理失败，请重新选择文件');
     }
     assertCurrent(generation);

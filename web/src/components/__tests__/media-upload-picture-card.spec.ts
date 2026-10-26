@@ -80,6 +80,17 @@ describe('MediaUpload picture cards', () => {
     expect(renewed.currentTime).toBe(123); expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
     expect(mocks.ticket).toHaveBeenCalledTimes(2); expect(wrapper.emitted('update:modelValue')).toBeUndefined();
   });
+  it.each([1000, 5000, 300000].flatMap(ttl => [0, 200, 800].map(latency => ({ ttl, latency }))))('starts renewing before a $ttl ms ticket expires after $latency ms response latency', async ({ ttl, latency }) => {
+    vi.useFakeTimers(); const started = Date.now(), calls: number[] = [];
+    mocks.ticket.mockImplementation(() => {
+      const issued = Date.now(); calls.push(issued);
+      return new Promise(resolve => setTimeout(() => resolve({ content_url: `${remoteUrl}?fixture=${calls.length}`, expires_at: new Date(issued + ttl).toISOString() }), latency));
+    });
+    const wrapper = await render({ purpose: 'video', listType: 'drag', currentAssetId: '12' });
+    await wrapper.get('button[aria-label="播放预览"]').trigger('click'); await flushPromises();
+    await vi.advanceTimersByTimeAsync(ttl - 1); await flushPromises();
+    expect(calls.length).toBeGreaterThanOrEqual(2); expect(calls[1]).toBeLessThan(started + ttl);
+  });
 
   it('retries a transient preview renewal once and retains the captured position across the failed request', async () => {
     vi.useFakeTimers();

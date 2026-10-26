@@ -2,7 +2,8 @@ import { reactive } from 'vue'
 import { ApiError } from '@/api/client'
 import { getMediaTicket, type MediaTicketView } from '@/api/media'
 import { closeVideoSession, heartbeatVideoSession, startVideoSession, type VideoPlaybackState, type VideoProgress, type VideoSessionView } from '@/api/video'
-import { toHeartbeat, type NativeVideoEvent } from '@/platform/media-player'
+import { toHeartbeat, type NativeVideoEvent, type NativeVideoFailure } from '@/platform/media-player'
+import { mediaTicketRenewalDelay, mediaTicketRetryDelay } from '@/platform/media-ticket-timing'
 
 interface VideoClientOptions {
   controls: { play(): void; pause(): void; seek(positionMs: number): void }
@@ -22,6 +23,11 @@ interface ActiveSession {
   pendingStates: VideoPlaybackState[]
   heartbeatFlight: Promise<void> | null
   completionRefreshed: boolean
+  ticketExpiresAt: number
+  ticketFlight: Promise<void> | null
+  networkRecoveries: number
+  recovering: boolean
+  recoverySource: string
 }
 
 /** One client belongs to one player page; no learning proof is persisted locally. */
@@ -33,10 +39,11 @@ export function createVideoSessionClient(options: VideoClientOptions) {
   let lifecycleTail: Promise<void> = Promise.resolve()
   let clickNumber = 0, minimumClick = 0
   let beatTimer: ReturnType<typeof setInterval> | undefined, ticketTimer: ReturnType<typeof setTimeout> | undefined
+  let cancelTicketWait: (() => void) | undefined
 
   function current(handle: ActiveSession) { return !disposed && handle === active && handle.revision === revision && handle.epoch === options.getEpoch() }
   function clearBeat() { if (beatTimer) clearInterval(beatTimer); beatTimer = undefined }
-  function clearTicket() { if (ticketTimer) clearTimeout(ticketTimer); ticketTimer = undefined }
+  function clearTicket() { if (ticketTimer) clearTimeout(ticketTimer); ticketTimer = undefined; cancelTicketWait?.(); cancelTicketWait = undefined }
   function pausePlayer() { options.controls.pause() }
   function reset() {
     clearBeat(); clearTicket(); intent = false; restoring = false
@@ -97,27 +104,46 @@ export function createVideoSessionClient(options: VideoClientOptions) {
   function displayTicket(handle: ActiveSession, ticket: MediaTicketView) {
     const remaining = Date.parse(ticket.expires_at) - Date.now()
     if (!Number.isFinite(remaining) || remaining <= 0) throw new ApiError(-2, '视频播放地址已过期，请重试')
-    state.src = options.resolveUrl(ticket.content_url); restoring = true
+    const src = options.resolveUrl(ticket.content_url)
+    handle.ticketExpiresAt = Date.parse(ticket.expires_at); restoring = true; state.src = src
     clearTicket()
-    ticketTimer = setTimeout(() => { if (current(handle)) void renewTicket(handle) }, Math.min(2147483647, Math.max(1000, remaining - 10000)))
+    ticketTimer = setTimeout(() => { if (current(handle)) void renewTicket(handle) }, mediaTicketRenewalDelay(handle.ticketExpiresAt))
   }
-  async function renewTicket(handle: ActiveSession, attempt = 0) {
+  async function failPlayback(handle: ActiveSession) {
+    if (!current(handle)) return
+    intent = false; restoring = false; handle.recovering = false
+    state.status = 'error'; state.error = '视频加载失败，请重试'; clearBeat(); clearTicket(); pausePlayer()
+    await report(handle, 'paused')
+  }
+  function renewTicket(handle: ActiveSession): Promise<void> {
     const renewable = () => current(handle) && !['ended', 'error', 'stopped'].includes(state.status)
-    if (!renewable()) return
-    try {
-      const ticket = await getMediaTicket(handle.view.media.asset_id, 'lesson_version_video', handle.view.version_id)
-      if (renewable()) displayTicket(handle, ticket)
-    } catch (error) {
-      if (!renewable()) return
-      if (attempt === 0 && error instanceof ApiError && (error.code === -1 || error.status >= 500)) {
-        clearTicket()
-        ticketTimer = setTimeout(() => { if (current(handle)) void renewTicket(handle, 1) }, 1000)
-        return
+    if (!renewable()) return Promise.resolve()
+    if (handle.ticketFlight) return handle.ticketFlight
+    clearTicket()
+    const pending = (async () => {
+      for (let attempt = 0; attempt < 2 && renewable(); attempt++) {
+        try {
+          const ticket = await getMediaTicket(handle.view.media.asset_id, 'lesson_version_video', handle.view.version_id)
+          if (renewable()) displayTicket(handle, ticket)
+          return
+        } catch (error) {
+          if (!renewable()) return
+          if (attempt === 0 && error instanceof ApiError && (error.code === -1 || error.status >= 500)) {
+            const retry = await new Promise<boolean>(resolve => {
+              ticketTimer = setTimeout(() => { ticketTimer = undefined; cancelTicketWait = undefined; resolve(true) }, mediaTicketRetryDelay(handle.ticketExpiresAt))
+              cancelTicketWait = () => resolve(false)
+            })
+            if (retry) continue
+            return
+          }
+          await handleFailure(handle, error)
+          if (current(handle)) await failPlayback(handle)
+          return
+        }
       }
-      await handleFailure(handle, error)
-      // Retry only the address request; the existing session remains authoritative.
-      if (current(handle)) { await event('error'); if (current(handle)) state.error = '视频加载失败，请重试' }
-    }
+    })().finally(() => { if (handle.ticketFlight === pending) handle.ticketFlight = null })
+    handle.ticketFlight = pending
+    return pending
   }
   function startBeat(handle: ActiveSession) {
     clearBeat()
@@ -150,13 +176,13 @@ export function createVideoSessionClient(options: VideoClientOptions) {
   }
   function ready() {
     if (!active || !current(active) || !restoring) return
-    restoring = false; options.controls.seek(state.positionMs)
+    restoring = false; active.recovering = false; options.controls.seek(state.positionMs)
     if (intent && foreground) options.controls.play()
   }
   function play(): Promise<void> {
     if (disposed || !foreground || state.status === 'starting') return Promise.resolve()
     if (active && current(active) && !['error', 'ended', 'stopped'].includes(state.status)) {
-      intent = true; state.error = ''; options.controls.play(); return Promise.resolve()
+      intent = true; state.error = ''; if (!active.recovering) options.controls.play(); return Promise.resolve()
     }
     const replayFromStart = state.status === 'ended'
     const clicked = ++clickNumber, startedRevision = ++revision, epoch = options.getEpoch()
@@ -177,7 +203,8 @@ export function createVideoSessionClient(options: VideoClientOptions) {
         if (error instanceof ApiError && [40950, 40951].includes(error.code)) { state.status = 'stopped'; await refresh(courseId) }
         return
       }
-      const handle: ActiveSession = { view: result, revision: startedRevision, epoch, courseId, lessonId, nextSeq: result.progress.last_seq, pendingStates: [], heartbeatFlight: null, completionRefreshed: result.progress.completed }
+      const handle: ActiveSession = { view: result, revision: startedRevision, epoch, courseId, lessonId, nextSeq: result.progress.last_seq, pendingStates: [], heartbeatFlight: null, completionRefreshed: result.progress.completed,
+        ticketExpiresAt: 0, ticketFlight: null, networkRecoveries: 0, recovering: false, recoverySource: '' }
       if (disposed || startedRevision !== revision || epoch !== options.getEpoch()) { await close(handle); return }
       active = handle
       state.sessionId = result.session_id; state.progress = result.progress; state.positionMs = replayFromStart ? 0 : result.progress.confirmed_position_ms
@@ -191,23 +218,37 @@ export function createVideoSessionClient(options: VideoClientOptions) {
       }
     })
   }
-  async function event(nativeEvent: NativeVideoEvent) {
+  async function event(nativeEvent: NativeVideoEvent, failure: NativeVideoFailure = 'unknown') {
     const handle = active
     if (!handle || !current(handle) || state.status === 'stopped') return
     if (state.status === 'ended') { if (nativeEvent === 'play') pausePlayer(); return }
     if (nativeEvent === 'play') {
       if (!foreground) { pausePlayer(); return }
+      if (handle.recovering && restoring) { pausePlayer(); return }
       intent = true; restoring = false; state.status = 'playing'; state.error = ''
       playingSince = Date.now(); playingFrom = state.positionMs; windowFurthest = furthestPosition; startBeat(handle)
     } else if (nativeEvent === 'pause') {
       if (state.status === 'background' || state.status === 'error') return
+      if (handle.recovering && restoring) return
       if (!restoring) intent = false
       state.status = 'paused'; clearBeat()
     } else if (nativeEvent === 'waiting') {
       if (!intent || !foreground) return
       state.status = 'buffering'; bufferingPosition = state.positionMs; clearBeat()
     } else if (nativeEvent === 'app-hide') { intent = false; state.status = 'background'; clearBeat(); pausePlayer() }
-    else if (nativeEvent === 'error') { intent = false; state.status = 'error'; state.error = '视频加载失败，请重试'; clearBeat(); clearTicket(); pausePlayer() }
+    else if (nativeEvent === 'error') {
+      if (state.status === 'error') return
+      const recoverable = failure === 'network' || (failure === 'unknown' && (handle.ticketFlight !== null || Date.now() >= handle.ticketExpiresAt))
+      if (recoverable && handle.recovering && handle.ticketFlight && state.src === handle.recoverySource) return
+      if (recoverable && handle.networkRecoveries === 0) {
+        handle.networkRecoveries++; handle.recovering = true; handle.recoverySource = state.src
+        restoring = true; state.status = 'buffering'; state.error = ''; clearBeat(); pausePlayer()
+        void renewTicket(handle)
+        await report(handle, 'buffering')
+        return
+      }
+      await failPlayback(handle); return
+    }
     else { intent = false; state.status = 'ended'; state.error = ''; clearBeat(); clearTicket() }
     await report(handle, toHeartbeat(nativeEvent, state.positionMs).state)
     if (nativeEvent === 'ended' && current(handle)) { state.src = ''; restoring = false; await refresh(handle.courseId) }

@@ -273,6 +273,18 @@ describe('video session client', () => {
     client.ready(); expect(controls.seek).toHaveBeenLastCalledWith(13000)
     await client.dispose()
   })
+  it.each([1000, 5000, 300000].flatMap(ttl => [0, 200, 800].map(latency => ({ ttl, latency }))))('renews a $ttl ms video ticket before expiry after $latency ms response latency', async ({ ttl, latency }) => {
+    const started = Date.now(), renewals: number[] = []
+    install(wire => {
+      if (wire.url.endsWith('/video-sessions')) { const issued = Date.now(); return new Promise(resolve => setTimeout(() => resolve(ok({ ...response(), media: { asset_id: '91', ticket: { content_url: '/api/v1/media/tickets/initial/content', expires_at: new Date(issued + ttl).toISOString() } } })), latency)) }
+      if (wire.url.includes('/tickets')) { const issued = Date.now(); renewals.push(issued); return new Promise(resolve => setTimeout(() => resolve(ok({ content_url: '/api/v1/media/tickets/renewed/content', expires_at: new Date(issued + ttl).toISOString() })), latency)) }
+      return ok(progress)
+    })
+    const { client } = setup(); const opening = client.play(); await settle(); await vi.advanceTimersByTimeAsync(latency); await opening
+    await vi.advanceTimersByTimeAsync(ttl - latency - 1)
+    expect(renewals.length).toBeGreaterThanOrEqual(1); expect(renewals[0]).toBeLessThan(started + ttl)
+    await client.dispose()
+  })
   it('renews COS URLs before the five-minute expiry and restores playing position in the same session', async () => {
     const origin = 'https://shared-123456.cos.ap-guangzhou.myqcloud.com'
     vi.stubEnv('VITE_COS_MEDIA_ORIGIN', origin); vi.stubEnv('VITE_COS_MEDIA_PREFIX', 'ruleexam/dev/media/')
@@ -306,16 +318,46 @@ describe('video session client', () => {
     expect(requests.filter(r => r.url === '/api/v1/me/video-sessions')).toHaveLength(1)
     await client.dispose()
   })
-  it('ignores a renewal that arrives after a native playback error', async () => {
+  it('recovers an old-source error through the in-flight renewal without losing position, intent or the learning session', async () => {
     const renew = deferred<unknown>()
     install(wire => wire.url.includes('/tickets') ? renew.promise : ok(wire.url.endsWith('/video-sessions') ? response() : progress))
-    const { client } = setup(); await client.play(); await client.event('play')
-    await vi.advanceTimersByTimeAsync(50000); const previous = client.state.src
-    await client.event('error')
+    const { client, controls } = setup(); await client.play(); client.ready(); await client.event('play'); client.timeUpdate(13000); controls.play.mockClear()
+    await vi.advanceTimersByTimeAsync(50000)
+    await client.event('error'); await client.event('pause'); await client.event('error')
+    expect(client.state.status).not.toBe('error'); expect(requests.filter(r => r.url.includes('/tickets'))).toHaveLength(1)
     renew.resolve(ok({ content_url: '/api/v1/media/tickets/late/content', expires_at: new Date(Date.now() + 60000).toISOString() })); await settle()
-    expect(client.state.src).toBe(previous); expect(client.state.status).toBe('error')
-    await vi.advanceTimersByTimeAsync(60000)
-    expect(requests.filter(r => r.url.includes('/tickets'))).toHaveLength(1)
+    expect(client.state.src).toContain('/late/content'); expect(client.state.sessionId).toBe('81')
+    client.ready(); expect(controls.seek).toHaveBeenLastCalledWith(13000); expect(controls.play).toHaveBeenCalledTimes(1)
+    expect(requests.filter(r => r.url === '/api/v1/me/video-sessions')).toHaveLength(1)
+    await client.dispose()
+  })
+  it('allows one classified network recovery, then stops a repeated failing source without another automatic renewal', async () => {
+    const { client, controls } = setup(); await client.play(); client.ready(); await client.event('play'); client.timeUpdate(13000)
+    await client.event('error', 'network'); await settle(); client.ready(); await client.event('play')
+    expect(client.state.sessionId).toBe('81'); expect(controls.seek).toHaveBeenLastCalledWith(13000)
+    await client.event('error', 'network'); await vi.advanceTimersByTimeAsync(120000)
+    expect(client.state.status).toBe('error'); expect(requests.filter(r => r.url.includes('/tickets'))).toHaveLength(1)
+    expect(requests.filter(r => r.url === '/api/v1/me/video-sessions')).toHaveLength(1)
+    await client.dispose()
+  })
+  it('does not revive a terminal decode error from an in-flight renewal', async () => {
+    const renew = deferred<unknown>()
+    install(wire => wire.url.includes('/tickets') ? renew.promise : ok(wire.url.endsWith('/video-sessions') ? response() : progress))
+    const { client, controls } = setup(); await client.play(); client.ready(); await client.event('play'); controls.play.mockClear()
+    await vi.advanceTimersByTimeAsync(50000); const previous = client.state.src
+    await client.event('error', 'decode')
+    renew.resolve(ok({ content_url: '/api/v1/media/tickets/late/content', expires_at: new Date(Date.now() + 60000).toISOString() })); await settle()
+    expect(client.state.src).toBe(previous); expect(client.state.status).toBe('error'); expect(controls.play).not.toHaveBeenCalled()
+    await client.dispose()
+  })
+  it('does not revive playback when an in-flight recovery is rejected by business authorization', async () => {
+    const renew = deferred<unknown>()
+    install(wire => wire.url.includes('/tickets') ? renew.promise : ok(wire.url.endsWith('/video-sessions') ? response() : progress))
+    const { client, controls } = setup(); await client.play(); client.ready(); await client.event('play'); controls.play.mockClear()
+    await vi.advanceTimersByTimeAsync(50000); await client.event('error')
+    renew.resolve({ statusCode: 403, data: { code: 40302, message: '课程已不可播放', data: { reason_code: 'LESSON_OFFLINE' } } }); await settle()
+    expect(client.state.status).toBe('error'); expect(controls.play).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(120000); expect(requests.filter(r => r.url.includes('/tickets'))).toHaveLength(1)
     await client.dispose()
   })
   it('waits for an old in-flight start, closes that successful session, then starts the latest lesson', async () => {
@@ -349,6 +391,7 @@ describe('video session client', () => {
     const renew = deferred<unknown>()
     install(wire => wire.url.includes('/tickets') ? renew.promise : ok(wire.url.endsWith('/video-sessions') ? response() : progress))
     const { client } = setup(); await client.play(); await vi.advanceTimersByTimeAsync(50000)
+    await client.event('error')
     client.select({ courseId: '42', lessonId: '43' }); useSessionStore().expireSession()
     renew.resolve(ok({ content_url: '/api/v1/media/tickets/old/content', expires_at: new Date(Date.now() + 60000).toISOString() })); await settle()
     expect(client.state.src).toBe(''); expect(client.state.sessionId).toBe('')

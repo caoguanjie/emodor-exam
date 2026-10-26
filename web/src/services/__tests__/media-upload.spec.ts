@@ -126,6 +126,37 @@ describe('resumable upload task', () => {
     expect(mocks.begin.mock.calls[1][0].client_request_id).toBe(first);
     expect(mocks.part).not.toHaveBeenCalled();
   });
+  it.each(['failed', 'aborted', 'expired'] as const)('clears a confirmed %s recovery session and starts fresh only after the next explicit upload', async state => {
+    await mediaResumeStore.put({ userId: '11', sessionId: 'session-1', requestId: 'old-request', fingerprint, sizeBytes: 9, expiresAt: '2099-01-01T00:00:00.000Z', purpose: 'video' });
+    const otherFingerprint = 'b'.repeat(64);
+    await mediaResumeStore.put({ userId: '11', sessionId: 'other-session', requestId: 'other-request', fingerprint: otherFingerprint, sizeBytes: 9, expiresAt: '2099-01-01T00:00:00.000Z', purpose: 'video' });
+    mocks.status.mockResolvedValue(session({ state }));
+    await expect(createMediaUploadTask(file(), 'video').result).rejects.toThrow();
+    expect(await mediaResumeStore.get('11', fingerprint)).toBeNull();
+    expect((await mediaResumeStore.get('11', otherFingerprint))?.sessionId).toBe('other-session');
+    expect(mocks.begin).not.toHaveBeenCalled(); expect(mocks.part).not.toHaveBeenCalled();
+    mocks.begin.mockResolvedValue(completed());
+    expect((await createMediaUploadTask(file(), 'video').result).asset_id).toBe('25');
+    expect(mocks.begin).toHaveBeenCalledTimes(1);
+    expect(mocks.begin.mock.calls[0][0].client_request_id).not.toBe('old-request');
+  });
+  it('clears a newly failed completion receipt so an explicit same-file retry uses a new request id', async () => {
+    mocks.complete.mockResolvedValue(session({ state: 'failed' }));
+    await expect(createMediaUploadTask(file(), 'video').result).rejects.toThrow();
+    const first = mocks.begin.mock.calls[0][0].client_request_id;
+    expect(await mediaResumeStore.get('11', fingerprint)).toBeNull();
+    mocks.complete.mockResolvedValue(completed());
+    await createMediaUploadTask(file(), 'video').result;
+    expect(mocks.begin).toHaveBeenCalledTimes(2);
+    expect(mocks.begin.mock.calls[1][0].client_request_id).not.toBe(first);
+  });
+  it('retains a recovery receipt when status is unavailable and never guesses that it may upload again', async () => {
+    await mediaResumeStore.put({ userId: '11', sessionId: 'session-1', requestId: 'old-request', fingerprint, sizeBytes: 9, expiresAt: '2099-01-01T00:00:00.000Z', purpose: 'video' });
+    mocks.status.mockRejectedValue(new Error('status unavailable'));
+    await expect(createMediaUploadTask(file(), 'video').result).rejects.toThrow('status unavailable');
+    expect((await mediaResumeStore.get('11', fingerprint))?.requestId).toBe('old-request');
+    expect(mocks.begin).not.toHaveBeenCalled(); expect(mocks.part).not.toHaveBeenCalled();
+  });
   it('keeps local-mode uploads on the controlled compatibility transport', async () => {
     mocks.limits.mockResolvedValue({ upload_mode: 'proxy', allowed_video_types: ['video/mp4'], allowed_image_types: ['image/png'], video_max_bytes: 536870912, image_max_bytes: 10485760 });
     mocks.proxy.mockResolvedValue({ asset_id: '26', status: 'ready', duration_ms: 1200 });

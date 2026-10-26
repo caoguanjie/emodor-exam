@@ -9,6 +9,26 @@ let context: ProtectedImageContext
 beforeEach(() => { vi.resetAllMocks(); setActivePinia(createPinia()); context = { assetId: '901', ownerType: 'sys_user_avatar', ownerId: '17', epoch: 1, userId: '17', authenticated: true, loggingIn: false }; mocks.ticket.mockResolvedValue(ticket) })
 afterEach(() => { vi.useRealTimers() })
 describe('protected image account boundary', () => {
+  it.each([1000, 5000, 300000].flatMap(ttl => [0, 200, 800].map(latency => ({ ttl, latency }))))('renews a $ttl ms image ticket before expiry after $latency ms response latency', async ({ ttl, latency }) => {
+    vi.useFakeTimers(); const started = Date.now(), calls: number[] = [];
+    mocks.ticket.mockImplementation(() => { const issued = Date.now(); calls.push(issued); return new Promise(resolve => setTimeout(() => resolve({ ...ticket, expires_at: new Date(issued + ttl).toISOString() }), latency)) });
+    const image = createProtectedImageController({ read: () => context, show: vi.fn() }); image.update();
+    await vi.advanceTimersByTimeAsync(ttl - 1);
+    expect(calls.length).toBeGreaterThanOrEqual(2); expect(calls[1]).toBeLessThan(started + ttl); image.dispose();
+  });
+  it('shares an in-flight image renewal with an image-error retry instead of sending another request', async () => {
+    vi.useFakeTimers(); context = { ...context, initialTicket: { ...ticket, expires_at: new Date(Date.now() + 5000).toISOString() } };
+    let finish!: (value: typeof ticket) => void; mocks.ticket.mockImplementation(() => new Promise(resolve => { finish = resolve }));
+    const image = createProtectedImageController({ read: () => context, show: vi.fn() }); image.update();
+    await vi.advanceTimersByTimeAsync(4999); image.retry(); expect(mocks.ticket).toHaveBeenCalledTimes(1);
+    finish(ticket); await Promise.resolve(); image.dispose();
+  });
+  it('retries a failed image address request at most once and clears the image after both fail', async () => {
+    vi.useFakeTimers(); const show = vi.fn(); context = { ...context, initialTicket: { ...ticket, expires_at: new Date(Date.now() + 1000).toISOString() } };
+    mocks.ticket.mockRejectedValue(Object.assign(new Error('offline'), { code: -1, status: 0 }));
+    const image = createProtectedImageController({ read: () => context, show }); image.update();
+    await vi.advanceTimersByTimeAsync(5000); expect(mocks.ticket).toHaveBeenCalledTimes(2); expect(show).toHaveBeenLastCalledWith(''); image.dispose();
+  });
   it('does not turn an epoch invalidation into a new request using the old token', async () => {
     const show = vi.fn(); const image = createProtectedImageController({ read: () => context, show })
     image.update(); await vi.waitFor(() => expect(show).toHaveBeenLastCalledWith(expect.stringContaining('/api/v1/media/tickets/fixture/content')))

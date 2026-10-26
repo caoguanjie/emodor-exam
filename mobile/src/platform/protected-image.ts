@@ -1,6 +1,7 @@
 import type { MediaTicketView } from '@/api/media'
 import { getMediaTicket } from '@/api/media'
 import { resolveMediaUrl } from './media-url'
+import { mediaTicketRenewalDelay, mediaTicketRetryDelay } from './media-ticket-timing'
 export interface ProtectedImageContext {
   assetId: string; ownerType: string; ownerId: string; epoch: number; userId: string;
   authenticated: boolean; loggingIn: boolean; initialTicket?: MediaTicketView
@@ -9,25 +10,48 @@ export function createProtectedImageController(options: { read(): ProtectedImage
   const initial = { ...options.read() }
   let previous: ProtectedImageContext | null = null
   let revision = 0, retried = false, disposed = false, timer: ReturnType<typeof setTimeout> | undefined
+  let expiresAt = 0, cancelRetry: (() => void) | undefined
+  let flight: { generation: number; context: ProtectedImageContext; promise: Promise<void> } | null = null
   const sameOwner = (a: ProtectedImageContext, b: ProtectedImageContext) => a.assetId === b.assetId && a.ownerType === b.ownerType && a.ownerId === b.ownerId
   const sameSession = (a: ProtectedImageContext, b: ProtectedImageContext) => a.epoch === b.epoch && a.userId === b.userId && a.authenticated === b.authenticated && a.loggingIn === b.loggingIn
   const current = (generation: number, context: ProtectedImageContext) => !disposed && generation === revision && sameOwner(context, options.read()) && sameSession(context, options.read())
-  function clear() { revision++; clearTimeout(timer); timer = undefined; options.show('') }
+  function clear() { revision++; clearTimeout(timer); timer = undefined; cancelRetry?.(); cancelRetry = undefined; flight = null; expiresAt = 0; options.show('') }
   function display(ticket: MediaTicketView, generation: number, context: ProtectedImageContext) {
     if (!current(generation, context)) return
     const remaining = Date.parse(ticket.expires_at) - Date.now()
     if (!Number.isFinite(remaining) || remaining <= 0) throw new Error('图片地址已过期')
     options.show(resolveMediaUrl(ticket.content_url))
-    timer = setTimeout(() => { if (current(generation, context)) void load() }, Math.min(2147483647, Math.max(1000, remaining - 10000)))
+    expiresAt = Date.parse(ticket.expires_at)
+    timer = setTimeout(() => { if (current(generation, context)) void load() }, mediaTicketRenewalDelay(expiresAt))
   }
-  async function load() {
+  function load(): Promise<void> {
+    if (flight && current(flight.generation, flight.context)) return flight.promise
     const context = { ...options.read() }, generation = ++revision
     clearTimeout(timer); timer = undefined
-    if (!context.assetId || !context.ownerId || !context.authenticated || !context.userId || context.loggingIn) { options.show(''); return }
-    try {
-      const ticket = await getMediaTicket(context.assetId, context.ownerType, context.ownerId)
-      if (current(generation, context)) display(ticket, generation, context)
-    } catch { if (current(generation, context)) options.show('') }
+    if (!context.assetId || !context.ownerId || !context.authenticated || !context.userId || context.loggingIn) { options.show(''); return Promise.resolve() }
+    const promise = (async () => {
+      for (let attempt = 0; attempt < 2 && current(generation, context); attempt++) {
+        try {
+          const ticket = await getMediaTicket(context.assetId, context.ownerType, context.ownerId)
+          if (current(generation, context)) display(ticket, generation, context)
+          return
+        } catch (error) {
+          if (!current(generation, context)) return
+          const failure = error as { code?: number; status?: number }
+          if (attempt === 0 && (Number(failure?.code) <= 0 || Number(failure?.status) >= 500)) {
+            const retry = await new Promise<boolean>(resolve => {
+              const retryTimer = setTimeout(() => { cancelRetry = undefined; resolve(true) }, mediaTicketRetryDelay(expiresAt))
+              cancelRetry = () => { clearTimeout(retryTimer); resolve(false) }
+            })
+            if (retry) continue
+            return
+          }
+          options.show(''); return
+        }
+      }
+    })().finally(() => { if (flight?.promise === promise) flight = null })
+    flight = { generation, context, promise }
+    return promise
   }
   function update() {
     if (disposed) return

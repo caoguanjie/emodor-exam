@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { getCurrentInstance, ref } from 'vue'
 import AppIcon from '../common/AppIcon.vue'
-import type { NativeVideoEvent } from '@/platform/media-player'
+import { nativeVideoFailure, type NativeVideoEvent, type NativeVideoFailure } from '@/platform/media-player'
 const props = withDefaults(defineProps<{ hasVideo?: boolean; live?: boolean; src?: string; status?: string; error?: string; blocked?: boolean; positionMs?: number }>(), { hasVideo: true, live: false, src: '', status: 'idle', error: '', blocked: false, positionMs: 0 })
-const emit = defineEmits<{ requestPlay: []; native: [event: NativeVideoEvent, source: string]; timeupdate: [positionMs: number, source: string]; ready: [source: string] }>()
+const emit = defineEmits<{ requestPlay: []; native: [event: NativeVideoEvent, source: string, failure?: NativeVideoFailure]; timeupdate: [positionMs: number, source: string]; ready: [source: string] }>()
 const playing = ref(false)
 const initialTime = props.positionMs / 1000
 const instance = getCurrentInstance()
@@ -11,7 +11,7 @@ function context() { return uni.createVideoContext('course-native-video', instan
 function play() { context().play() }
 function pause() { if (props.live && props.src) context().pause() }
 function seek(positionMs: number) { context().seek(positionMs / 1000) }
-function native(event: NativeVideoEvent) { emit('native', event, props.src) }
+function native(event: NativeVideoEvent, error?: unknown) { emit('native', event, props.src, event === 'error' ? nativeVideoFailure(error) : undefined) }
 function update(event: unknown) {
   const seconds = (event as { detail?: { currentTime?: number } })?.detail?.currentTime
   if (typeof seconds === 'number' && Number.isFinite(seconds)) emit('timeupdate', Math.round(seconds * 1000), props.src)
@@ -22,7 +22,7 @@ defineExpose({ play, pause, seek })
 <template>
   <view class="video-panel">
     <view v-if="live && hasVideo" class="video-panel__native-stage">
-      <video v-if="src" id="course-native-video" class="video-panel__native" :src="src" :initial-time="initialTime" :autoplay="false" :controls="true" :show-center-play-btn="true" :show-play-btn="true" :enable-progress-gesture="false" object-fit="contain" @play="native('play')" @pause="native('pause')" @waiting="native('waiting')" @ended="native('ended')" @error="native('error')" @timeupdate="update" @loadedmetadata="emit('ready', src)" />
+      <video v-if="src" id="course-native-video" class="video-panel__native" :src="src" :initial-time="initialTime" :autoplay="false" :controls="true" :show-center-play-btn="true" :show-play-btn="true" :enable-progress-gesture="false" object-fit="contain" @play="native('play')" @pause="native('pause')" @waiting="native('waiting')" @ended="native('ended')" @error="native('error', $event)" @timeupdate="update" @loadedmetadata="emit('ready', src)" />
       <view v-if="!src || error" class="video-panel__stage video-panel__overlay" :role="blocked ? undefined : 'button'" :aria-label="error ? '重试播放' : status === 'ended' ? '重新播放' : '播放课程视频'" :aria-disabled="blocked || status === 'starting'" @click="requestPlay"><view class="video-panel__play"><AppIcon name="play" :size="28" color="#ffffff" /></view><text>{{ error || (status === 'starting' ? '视频加载中…' : blocked ? '请先完成实名认证' : status === 'ended' ? '重新播放课程视频' : '点击播放课程视频') }}</text><text v-if="error" class="video-panel__retry">点击重试</text></view>
     </view>
     <view v-else-if="hasVideo" class="video-panel__stage" role="button" aria-label="播放课程视频" @click="playing = !playing"><view class="video-panel__play"><AppIcon name="play" :size="28" color="#ffffff" /></view><text>{{ playing ? '视频加载中…' : '点击播放课程视频' }}</text></view>

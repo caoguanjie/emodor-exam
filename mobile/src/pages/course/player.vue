@@ -6,7 +6,7 @@ import VideoPanel from '@/components/course/VideoPanel.vue'
 import ChapterList from '@/components/course/ChapterList.vue'
 import { hazardChapters, videoChapters, useShellScenario } from '@/fixtures/ui-scenarios/shell'
 import { isStaticSessionPreview } from '@/platform/session'
-import { observeMediaVisibility, type NativeVideoEvent } from '@/platform/media-player'
+import { observeMediaVisibility, type NativeVideoEvent, type NativeVideoFailure } from '@/platform/media-player'
 import { resolveMediaUrl } from '@/platform/media-url'
 import { useCourseStore } from '@/stores/course'
 import { useSessionStore } from '@/stores/session'
@@ -40,7 +40,7 @@ function selectLesson(id: string) {
   if (preview.value) return
   lessonId.value = id; video.select({ courseId: courseId.value, lessonId: id })
 }
-function onNative(event: NativeVideoEvent, source: string) { if (source === video.state.src) void video.event(event) }
+function onNative(event: NativeVideoEvent, source: string, failure?: NativeVideoFailure) { if (source === video.state.src) void video.event(event, failure) }
 function onTimeupdate(position: number, source: string) { if (source === video.state.src) video.timeUpdate(position) }
 function ready(source: string) { if (source === video.state.src) video.ready() }
 function hide() { if (!preview.value) void video.hide() }
