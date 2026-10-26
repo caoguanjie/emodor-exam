@@ -31,6 +31,7 @@ export interface QuestionNodeRuntime {
   allowStructure?: () => boolean;
   onEditBlocked?: (message: string) => void;
   onUploadsChange?: (state: { pending: boolean; count: number }) => void;
+  onQuestionCopyRequest?: (clientId: string) => void;
   onQuestionRemoveRequest?: (clientId: string) => void;
   onQuestionMoveRequest?: (change: { client_id: string; to_index: number }) => void;
   getQuestionMeta?: (clientId: string) => QuestionRuntimeMeta | undefined;

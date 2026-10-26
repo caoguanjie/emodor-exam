@@ -38,7 +38,7 @@
         <button type="button" aria-label="无序列表" :aria-pressed="formatActive('question', 'bulletList')" @mousedown.prevent @click="format('question', 'bulletList')">☷</button>
         <button v-if="canUploadMedia" type="button" aria-label="插入题目图片" :disabled="pending" @mousedown.prevent @click="chooseImage('question')"><SvgIcon icon-class="image-line" /></button>
       </div>
-      <TiptapEditor v-if="!hydrateError" ref="questionEditor" :model-value="questionDocument" :runtime-questions="questions" :display-meta="displayMeta"
+      <TiptapEditor v-if="!hydrateError" ref="questionEditor" class="question-authoring-surface" :model-value="questionDocument" :runtime-questions="questions" :display-meta="displayMeta"
         profile="question" :mode="locked ? 'preview' : 'edit'" presentation="inline" compact :show-toolbar="false" :show-panels="false"
         protect-question-structure :allow-structure="false" reorder-options show-answer-labels :media-resolver="getMediaImageContent"
         @update:model-value="changeQuestion" @edit-blocked="reportError" @selection-change="toolbarRevision++" />
@@ -281,20 +281,6 @@ defineExpose({ getEditor, getAnalysisEditor, validate, getDraft });
 .manual-question-editor :deep(.ruleexam-tiptap .editor-main-wrapp) { border: 0; box-shadow: none; background: transparent; }
 .manual-question-editor :deep(.question-block) { margin: 0; border: 0; border-radius: 0; }
 .manual-question-editor :deep(.question-block__header) { display: none; }
-.manual-question-editor :deep(.question-block__content) { padding: 14px 16px; }
-.manual-question-editor :deep([data-question-stem]) { position: relative; box-sizing: border-box; min-height: 58px; padding: 4px 8px 14px; margin-bottom: 12px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); color: var(--el-text-color-primary, #303133); font-size: 15px; line-height: 1.6; }
-.manual-question-editor :deep([data-question-stem]:has(> p:only-child:empty))::before,
-.manual-question-editor :deep([data-question-stem]:has(> p:only-child > br.ProseMirror-trailingBreak:only-child))::before { content: '请输入题干'; position: absolute; top: 4px; left: 8px; color: var(--el-text-color-placeholder, #a8abb2); pointer-events: none; }
-.manual-question-editor :deep(.question-option) { align-items: center; min-height: 44px; box-sizing: border-box; margin-top: 4px; padding: 6px 8px; border-radius: 6px; transition: background-color .15s; }
-.manual-question-editor :deep(.question-option--manual:hover),.manual-question-editor :deep(.question-option--manual:focus-within) { background: #f5f7fa; }
-.manual-question-editor :deep(.question-option__toggle) { width: 30px; height: 30px; font-size: 14px; }
-.manual-question-editor :deep(.question-option[data-checked='true'] .question-option__toggle) { border-color: var(--el-color-primary, #3056d3); background: var(--el-color-primary, #3056d3); color: #fff; font-weight: 600; }
-.manual-question-editor :deep(.question-option__answer-label) { padding: 2px 9px; border-radius: 999px; background: var(--el-color-primary-light-9, #edf0fc); }
-.manual-question-editor :deep(.question-option__content) { font-size: 14px; line-height: 1.5; }
-.manual-question-editor :deep(.question-option__content p),.manual-question-editor :deep([data-question-stem] p) { margin: 0; }
-.manual-question-editor :deep(.question-block__options) { padding: 0 24px 14px; }
-.manual-question-editor :deep(.question-block__options button) { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 4px 0; font: inherit; font-size: 14px; }
-.manual-question-editor :deep(.question-block__options button)::before { content: '+'; display: inline-flex; align-items: center; justify-content: center; width: 16px; font-size: 21px; font-weight: 400; line-height: 1; }
 .manual-question-editor__analysis :deep(.ProseMirror) { box-sizing: border-box; min-height: 110px; padding: 12px 20px; }
 .manual-question-editor :deep(.question-image-upload-placeholder),.manual-question-editor :deep([data-manual-image-upload]) { padding: 2px 5px; border: 1px dashed #94a3b8; color: #64748b; font-size: 12px; }
 @media (max-width: 760px) { .manual-question-editor__grid { gap: 10px; } .manual-question-editor :deep(.question-option__order) { gap: 0; } }

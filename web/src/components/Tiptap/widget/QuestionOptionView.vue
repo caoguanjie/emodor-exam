@@ -238,7 +238,7 @@ function toggleChecked() {
 .question-option--manual:hover .question-option__unset-answer,.question-option--manual:focus-within .question-option__unset-answer { opacity: 1; pointer-events: auto; }
 .question-option--manual .question-option__remove { width: 24px; height: 24px; padding: 0; border-radius: 4px; color: var(--el-text-color-placeholder, #a8abb2); font-size: 19px; line-height: 24px; }
 .question-option--manual .question-option__remove:hover,.question-option--manual .question-option__remove:focus-visible { background: var(--el-color-danger-light-9, #fef0f0); color: var(--el-color-danger, #f56c6c); }
-.question-option__sort { display: flex; flex: none; align-items: center; gap: 0; }
+.question-option__sort { display: flex; flex-direction: row-reverse; flex: none; align-items: center; gap: 0; }
 .question-option__sort .question-option__drag { padding: 0; width: 14px; }
 .question-option__sort .question-option__order { flex-direction: column; gap: 0; opacity: 0; pointer-events: none; }
 .question-option__sort .question-option__order button { width: 18px; height: 13px; padding: 0; font-size: 12px; line-height: 13px; }
