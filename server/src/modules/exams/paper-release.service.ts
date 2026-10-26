@@ -12,7 +12,7 @@ import { Question } from '../../entities/question.entity';
 import { QuestionVersion } from '../../entities/question-version.entity';
 import { CategoryService } from '../training/category.service';
 import { QuestionVersionService, type QuestionVersionSnapshot } from '../questions/question-version.service';
-import { SamplingService } from './sampling.service';
+import { SamplingService, samplingGroupKey, type SamplingGrouping } from './sampling.service';
 import type { QuestionContentV3 } from '../../common/question-content-v3';
 import { parseQuestionContent } from '../questions/question-content-dispatch';
 import { activeDifficulties, assertActiveDifficulty, difficultyCatalog } from '../../common/question-difficulty';
@@ -86,8 +86,8 @@ function decimalToCents(value: string | number): number {
   return cents;
 }
 
-function questionGroupKey(version: Pick<QuestionVersion, 'conceptId' | 'questionId'>): string {
-  return version.conceptId ? `concept:${version.conceptId}` : `question:${version.questionId}`;
+function questionGroupKey(version: Pick<QuestionVersion, 'questionId'>): string {
+  return `question:${version.questionId}`;
 }
 
 /** Publication stores only examination facts, never the author's document or layout. */
@@ -134,7 +134,6 @@ function snapshotFromEntity(version: QuestionVersion): QuestionVersionSnapshot {
     options: deepClone(version.options as QuestionOption[]),
     answer: [...version.answer],
     analysis: version.analysis,
-    conceptId: version.conceptId || undefined,
     regulationId: version.regulationId || undefined,
     regulationVersionId: version.regulationVersionId || undefined,
     sourcePageGroup: version.sourcePageGroup ?? undefined,
@@ -161,7 +160,6 @@ function releaseSnapshotFromEntity(version: QuestionVersion, scoreCents: number)
     answer: [...version.answer],
     analysis: version.analysis,
     scoreCents,
-    conceptId: version.conceptId || undefined,
     regulationId: version.regulationId || undefined,
     regulationVersionId: version.regulationVersionId || undefined,
     sourcePageGroup: version.sourcePageGroup ?? undefined,
@@ -261,7 +259,7 @@ export class PaperReleaseService implements OnModuleInit {
     const regulationIds = (paper.regulationIds || []).map(String);
     for (const difficulty of activeDifficulties()) {
       for (const item of rule.rules) {
-        pool.push(...await this.questions.approvedCandidates({
+        pool.push(...await this.questions.enabledCandidates({
           categoryId: String(paper.categoryId),
           type: item.type,
           difficulty,
@@ -302,8 +300,14 @@ export class PaperReleaseService implements OnModuleInit {
     const versionIds = items.map((item) => String(item.questionVersionId));
     const versions = await manager.getRepository(QuestionVersion).findBy({ id: In(versionIds) });
     const versionMap = new Map(versions.map((item) => [String(item.id), item]));
-    const questionIds = versions.map((item) => String(item.questionId));
-    const questions = await manager.getRepository(Question).findBy({ id: In(questionIds) });
+    const questionIds = [...new Set(versions.map((item) => String(item.questionId)))].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+    const questions: Question[] = [];
+    for (const questionId of questionIds) {
+      const question = await manager.getRepository(Question).findOne({
+        where: { id: questionId }, ...(forPublication ? { lock: { mode: 'pessimistic_write' as const } } : {}),
+      });
+      if (question) questions.push(question);
+    }
     const questionMap = new Map(questions.map((item) => [String(item.id), item]));
     const regulationIds = new Set((paper.regulationIds || []).map(String));
     const seen = new Set<string>();
@@ -312,8 +316,8 @@ export class PaperReleaseService implements OnModuleInit {
     for (const item of items) {
       const version = versionMap.get(String(item.questionVersionId));
       const question = version && questionMap.get(String(version.questionId));
-      if (!version || !question || version.status !== 'approved' || String(question.currentVersionId) !== String(version.id)) {
-        throw Errors.paperReleaseConflict(`题目 ${item.questionId} 已不是当前审核通过版本`);
+      if (!version || !question || (forPublication && !question.isEnabled) || String(question.currentVersionId) !== String(version.id)) {
+        throw Errors.paperReleaseConflict(`题目 ${item.questionId} 已停用或不是当前版本，请重新选题`);
       }
       if (String(version.categoryId) !== String(paper.categoryId)) throw Errors.paperRuleInvalid('固定题目与试卷培训类别不一致');
       if (forPublication) this.assertPublishDifficulty(version);
@@ -321,7 +325,7 @@ export class PaperReleaseService implements OnModuleInit {
         throw Errors.paperRuleInvalid('固定题目不在试卷制度筛选范围内');
       }
       const key = questionGroupKey(version);
-      if (seen.has(key)) throw Errors.paperRuleInvalid('固定题单存在重复考点');
+      if (seen.has(key)) throw Errors.paperRuleInvalid('固定题单不能重复选择同一题目');
       seen.add(key);
       const scoreCents = decimalToCents(item.score);
       const snapshot = snapshotFromEntity(version);
@@ -374,13 +378,13 @@ export class PaperReleaseService implements OnModuleInit {
         throw Errors.paperReleaseConflict(`题目 ${item.questionId} 与试卷制度已不一致，请重新选题`);
       }
       const groupKey = questionGroupKey(version);
-      if (seen.has(groupKey)) throw Errors.paperRuleInvalid('固定题单存在重复考点');
+      if (seen.has(groupKey)) throw Errors.paperRuleInvalid('固定题单不能重复选择同一题目');
       seen.add(groupKey);
       const scoreCents = decimalToCents(item.score);
       const snapshot = releaseSnapshotFromEntity(version, scoreCents);
       pool.push(snapshot);
       item.questionVersionId = String(version.id);
-      item.conceptId = version.conceptId ? String(version.conceptId) : null;
+      item.conceptId = null;
       const key = `${snapshot.type}:${scoreCents}`;
       const existing = rules.get(key);
       if (existing) existing.count += 1;
@@ -537,18 +541,19 @@ export class PaperReleaseService implements OnModuleInit {
     } else {
       ({ rule, pool } = await this.dataSource.transaction((manager) => this.fixedPool(manager, paper, false)));
     }
+    const grouping: SamplingGrouping = published ? 'historical-concept' : 'question';
     const capacities = paper.mode === 'random'
       ? activeDifficulties().flatMap((poolDifficulty) => rule.rules.map((item) => ({
         difficulty: poolDifficulty,
         type: item.type,
         required: item.count,
         available: new Set(pool.filter((candidate) => candidate.difficulty === poolDifficulty && candidate.type === item.type)
-          .map((candidate) => candidate.conceptId ? `concept:${candidate.conceptId}` : `question:${candidate.questionId}`)).size,
+          .map((candidate) => samplingGroupKey(candidate, grouping))).size,
       })))
       : [];
     if (paper.mode === 'random' && !published) assertActiveDifficulty(difficulty);
     const questions = paper.mode === 'random'
-      ? this.sampling.draw(pool, rule.rules, difficulty)
+      ? this.sampling.draw(pool, rule.rules, difficulty, undefined, grouping)
       : pool;
     return {
       paper_id: String(paper.id),

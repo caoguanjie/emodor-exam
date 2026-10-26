@@ -9,7 +9,6 @@ import { assertActiveDifficulty } from '../../common/question-difficulty';
 import type { Difficulty, Id, ImportPreview, ImportResult, QuestionOption, QuestionType } from '../../common/training-contracts';
 import { ImportBatch } from '../../entities/import-batch.entity';
 import { Question } from '../../entities/question.entity';
-import { QuestionConcept } from '../../entities/question-concept.entity';
 import { TrainingCategory } from '../../entities/training-category.entity';
 import { ImportBatchService } from '../imports/import-batch.service';
 import {
@@ -45,7 +44,6 @@ export function questionImportFields(draft: QuestionDraft) {
     category: draft.categoryId,
     type: draft.type,
     difficulty: draft.difficulty,
-    concept: draft.conceptId || '',
     stem: draft.stem,
     options: draft.options,
     answer: draft.answer,
@@ -59,7 +57,7 @@ interface CandidateRow extends NormalizedQuestionImportRow {
 
 const TYPES = new Set<QuestionType>(['single', 'multiple', 'judgment']);
 const RAW_KEYS = new Set([
-  'row', 'format_errors', 'category', 'type', 'difficulty', 'concept', 'stem',
+  'row', 'format_errors', 'legacy_score', 'category', 'type', 'difficulty', 'concept', 'stem',
   'options', 'answer', 'analysis', 'score',
 ]);
 
@@ -126,12 +124,55 @@ function answerIndexes(value: unknown[]): number[] {
   return value as number[];
 }
 
-function publicPreview(batch: ImportBatch): ImportPreview {
+const LEGACY_SCORE_WARNING = '旧模板分值已忽略，请在组卷时设置';
+
+/** Legacy draft storage is read explicitly; retired fields never enter current writes. */
+function bankDraft(value: QuestionDraft): QuestionDraft {
+  const { conceptId: _concept, scoreCents: _scoreCents, score: _score, concept: _legacyConcept, ...draft } = value as QuestionDraft & {
+    scoreCents?: unknown; score?: unknown; concept?: unknown;
+  };
+  return draft;
+}
+
+function batchRows(batch: ImportBatch): NormalizedQuestionImportRow[] {
+  return (batch.normalizedRows || []).filter((row) => row.draft && Number.isInteger(Number(row.row)))
+    .map((row) => {
+      const draft = bankDraft(row.draft as unknown as QuestionDraft);
+      return { row: Number(row.row), draft, fingerprint: fingerprint(draft) };
+    });
+}
+
+function batchWarnings(batch: ImportBatch): string[] {
+  const metadata = (batch.normalizedRows || []).find((row) => row.question_import_meta)?.question_import_meta as { warnings?: unknown } | undefined;
+  const legacy = (batch.normalizedRows || []).some((row) => row.draft && (
+    Object.hasOwn(row.draft as object, 'scoreCents') || Object.hasOwn(row.draft as object, 'score')
+  ));
+  return metadata?.warnings instanceof Array && metadata.warnings.includes(LEGACY_SCORE_WARNING) || legacy
+    ? [LEGACY_SCORE_WARNING] : [];
+}
+
+function batchMetadata(warnings: string[]) {
+  return { question_import_meta: { contract: 2, warnings: warnings.includes(LEGACY_SCORE_WARNING) ? [LEGACY_SCORE_WARNING] : [] } };
+}
+
+function committedResult(batch: ImportBatch): ImportResult {
+  const current = (batch.normalizedRows || []).some((row) => (row.question_import_meta as any)?.contract === 2);
+  return {
+    batch_id: String(batch.id), created_ids: batch.createdIds || [], committed_rows: batch.committedRows || [],
+    ...(current ? { enabled: true } : {}),
+  };
+}
+
+function publicPreview(batch: ImportBatch) {
   return {
     batch_id: String(batch.id),
     valid_rows: Array.isArray(batch.validRows) ? batch.validRows : [],
     errors: Array.isArray(batch.errors) ? batch.errors : [],
     duplicates: Array.isArray(batch.duplicates) ? batch.duplicates : [],
+    warnings: batchWarnings(batch),
+    rows: batchRows(batch).map((row) => ({
+      row_number: row.row, ...questionImportFields(row.draft), errors: [] as string[],
+    })),
   };
 }
 
@@ -141,7 +182,6 @@ export class QuestionImportService implements OnModuleInit {
     @InjectRepository(ImportBatch) private readonly batchRepo: Repository<ImportBatch>,
     @InjectRepository(Question) private readonly questionRepo: Repository<Question>,
     @InjectRepository(TrainingCategory) private readonly categoryRepo: Repository<TrainingCategory>,
-    @InjectRepository(QuestionConcept) private readonly conceptRepo: Repository<QuestionConcept>,
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
     private readonly config: AppConfig,
@@ -164,12 +204,19 @@ export class QuestionImportService implements OnModuleInit {
     return buildQuestionImportTemplate(format);
   }
 
+  async readBatch(ownerId: string, id: string) {
+    const batch = await this.batchRepo.findOne({ where: { id } });
+    if (!batch) throw Errors.notFound('导入批次不存在');
+    if (String(batch.ownerId) !== ownerId || batch.kind !== 'questions') throw Errors.dataForbidden();
+    return batch.status === 'committed' ? committedResult(batch) : publicPreview(batch);
+  }
+
   async preview(
     ownerId: Id,
     file: Buffer,
     format: QuestionImportFormat,
     defaults: QuestionImportDefaults = {},
-  ): Promise<ImportPreview> {
+  ): Promise<ReturnType<typeof publicPreview>> {
     if (defaults.categoryId !== undefined && !/^[1-9]\d*$/.test(String(defaults.categoryId))) {
       throw Errors.param('defaults.category_id 非法');
     }
@@ -183,7 +230,7 @@ export class QuestionImportService implements OnModuleInit {
       category: row.category || String(defaults.categoryId || ''),
       difficulty: row.difficulty || String(defaults.difficulty || ''),
     }));
-    return this.importBatches.preview(String(ownerId), 'questions', merged);
+    return await this.importBatches.preview(String(ownerId), 'questions', merged) as ReturnType<typeof publicPreview>;
   }
 
   private rawRow(value: unknown, index: number): ParsedQuestionImportRow {
@@ -203,6 +250,7 @@ export class QuestionImportService implements OnModuleInit {
       type: String(record.type ?? '').trim(),
       difficulty: String(record.difficulty ?? '').trim(),
       concept: String(record.concept ?? '').trim(),
+      legacy_score: record.legacy_score === true || Object.hasOwn(record, 'score'),
       stem: String(record.stem ?? '').trim(),
       options: String(record.options ?? '').trim(),
       answer: String(record.answer ?? '').trim(),
@@ -227,36 +275,14 @@ export class QuestionImportService implements OnModuleInit {
     return category;
   }
 
-  private async resolveConcept(
-    value: string,
-    categoryId: string,
-    type: QuestionType,
-    cache: Map<string, QuestionConcept | null>,
-  ): Promise<QuestionConcept | undefined> {
-    if (!value) return undefined;
-    const key = `${categoryId}:${type}:${value}`;
-    if (!cache.has(key)) {
-      const concept = /^[1-9]\d*$/.test(value)
-        ? await this.conceptRepo.findOne({ where: { id: value } })
-        : await this.conceptRepo.findOne({ where: { categoryId, type, name: value } });
-      cache.set(key, concept || null);
-    }
-    const concept = cache.get(key);
-    if (!concept) throw Errors.notFound('考点不存在');
-    if (String(concept.categoryId) !== categoryId || concept.type !== type) {
-      throw Errors.param('考点必须与题目属于同一类别和题型');
-    }
-    return concept;
-  }
-
   private async candidate(
     ownerId: string,
     row: ParsedQuestionImportRow,
     categoryCache: Map<string, TrainingCategory | null>,
-    conceptCache: Map<string, QuestionConcept | null>,
     kind: QuestionImportKind = 'questions',
   ): Promise<CandidateRow> {
     if (row.format_errors?.length) throw Errors.param(row.format_errors.join('；'));
+    if (row.concept) throw Errors.param('考点组已取消，请清空后重试');
     if (!TYPES.has(row.type as QuestionType)) throw Errors.param('题型 type 必须是 single / multiple / judgment');
     assertActiveDifficulty(row.difficulty);
     if (row.stem.length > 100_000 || row.analysis.length > 100_000) {
@@ -264,7 +290,6 @@ export class QuestionImportService implements OnModuleInit {
     }
     const category = await this.resolveCategory(row.category, categoryCache);
     const type = row.type as QuestionType;
-    const concept = await this.resolveConcept(row.concept, String(category.id), type, conceptCache);
     const draft: QuestionDraft = {
       categoryId: String(category.id),
       difficulty: row.difficulty as Difficulty,
@@ -273,12 +298,12 @@ export class QuestionImportService implements OnModuleInit {
       options: questionOptions(parseJsonArray(row.options, 'options')),
       answer: answerIndexes(parseJsonArray(row.answer, 'answer')),
       analysis: row.analysis || null,
-      conceptId: concept ? String(concept.id) : undefined,
       source: kind === 'questions_ai' ? 'ai' : 'import',
     };
-    const normalizedDraft = kind === 'questions_ai'
+    const validated = kind === 'questions_ai'
       ? await this.versions.validateAiImportDraft(draft, ownerId)
       : await this.versions.validateImportDraft(draft, ownerId);
+    const normalizedDraft = bankDraft(validated);
     return {
       row: row.row,
       fingerprint: fingerprint(normalizedDraft),
@@ -330,23 +355,23 @@ export class QuestionImportService implements OnModuleInit {
     return result;
   }
 
-  private async previewRows(ownerId: string, values: unknown[], kind: QuestionImportKind = 'questions'): Promise<ImportPreview> {
+  private async previewRows(ownerId: string, values: unknown[], kind: QuestionImportKind = 'questions', warnings: string[] = []) {
     const errors: Array<{ row: number; message: string }> = [];
     const duplicates: number[] = [];
     const candidates: CandidateRow[] = [];
     const categoryCache = new Map<string, TrainingCategory | null>();
-    const conceptCache = new Map<string, QuestionConcept | null>();
     const seenRows = new Set<number>();
 
     for (let index = 0; index < values.length; index++) {
       const row = this.rawRow(values[index], index);
+      if (row.legacy_score && !warnings.includes(LEGACY_SCORE_WARNING)) warnings.push(LEGACY_SCORE_WARNING);
       if (seenRows.has(row.row)) {
         errors.push({ row: row.row, message: '导入行号重复' });
         continue;
       }
       seenRows.add(row.row);
       try {
-        candidates.push(await this.candidate(ownerId, row, categoryCache, conceptCache, kind));
+        candidates.push(await this.candidate(ownerId, row, categoryCache, kind));
       } catch (error: any) {
         errors.push({ row: row.row, message: error?.message || '导入行校验失败' });
       }
@@ -371,7 +396,7 @@ export class QuestionImportService implements OnModuleInit {
       kind,
       inputHash: inputHash(values),
       status: 'previewed',
-      normalizedRows: normalizedRows as unknown as Record<string, unknown>[],
+      normalizedRows: [...normalizedRows, batchMetadata(warnings)] as unknown as Record<string, unknown>[],
       validRows,
       errors,
       duplicates,
@@ -388,7 +413,7 @@ export class QuestionImportService implements OnModuleInit {
   }
 
   private storedRows(batch: ImportBatch, requested: number[]): NormalizedQuestionImportRow[] {
-    const rows = (batch.normalizedRows || []) as unknown as NormalizedQuestionImportRow[];
+    const rows = batchRows(batch);
     const selected = rows.filter((row) => requested.includes(Number(row.row)));
     if (selected.length !== requested.length) throw Errors.importBatchConflict('导入批次数据已不完整');
     return selected.sort((left, right) => left.row - right.row);
@@ -414,10 +439,11 @@ export class QuestionImportService implements OnModuleInit {
         if (batch.status === 'committed') {
           const committed = [...(batch.committedRows || [])].map(Number).sort((a, b) => a - b);
           if (JSON.stringify(committed) !== JSON.stringify(requested)) throw Errors.importBatchConflict();
-          return { batch_id: String(batch.id), created_ids: batch.createdIds || [], committed_rows: committed };
+          return committedResult(batch);
         }
         if (batch.status === 'committing') throw Errors.importBatchConflict('导入批次正在确认，请稍后查询状态');
         const rows = this.storedRows(batch, requested);
+        batch.normalizedRows = [...batchRows(batch), batchMetadata(batchWarnings(batch))] as unknown as Record<string, unknown>[];
         batch.status = 'committing';
         await manager.save(batch);
         const create = kind === 'questions_ai'
@@ -442,7 +468,7 @@ export class QuestionImportService implements OnModuleInit {
         batch.committedRows = requested;
         batch.createdIds = createdIds;
         await manager.save(batch);
-        return { batch_id: String(batch.id), created_ids: createdIds, committed_rows: requested };
+        return committedResult(batch);
       });
       this.audit.log({
         actor_id: ownerId, actor_name: `user:${ownerId}`, action: 'question.import.commit',
@@ -467,30 +493,30 @@ export class QuestionImportService implements OnModuleInit {
   /** Validate references without calling any preview/DB/cache/audit writer. */
   async normalizeAiReferences(ownerId: string, rows: ParsedQuestionImportRow[]): Promise<QuestionDraft[]> {
     const categoryCache = new Map<string, TrainingCategory | null>();
-    const conceptCache = new Map<string, QuestionConcept | null>();
     const drafts: QuestionDraft[] = [];
     for (const row of rows) {
       try {
-        const candidate = await this.candidate(ownerId, { ...row, difficulty: 'easy' }, categoryCache, conceptCache);
+        const candidate = await this.candidate(ownerId, { ...row, difficulty: 'easy' }, categoryCache);
         drafts.push(candidate.draft);
-      } catch {
+      } catch (error) {
+        if (error instanceof BizError && error.message === '考点组已取消，请清空后重试') throw error;
         // Reference text or arbitrary cell contents must not escape in errors.
-        throw Errors.param(`参考题第 ${row.row} 行无效，请检查类别、考点和题目格式`);
+        throw Errors.param(`参考题第 ${row.row} 行无效，请检查类别和题目格式`);
       }
     }
     return drafts;
   }
 
   async validateAiGenerated(ownerId: string, draft: QuestionDraft): Promise<QuestionDraft> {
-    return this.versions.validateAiImportDraft(draft, ownerId);
+    return bankDraft(await this.versions.validateAiImportDraft(bankDraft(draft), ownerId));
   }
 
-  async previewAiGenerated(ownerId: string, drafts: QuestionDraft[]): Promise<ImportPreview> {
+  async previewAiGenerated(ownerId: string, drafts: QuestionDraft[], warnings: string[] = []): Promise<ImportPreview> {
     const rows = drafts.map((draft, index) => {
       const fields = questionImportFields(draft);
       return { row: index + 2, ...fields, options: JSON.stringify(fields.options), answer: JSON.stringify(fields.answer) };
     });
-    return this.previewRows(ownerId, rows, 'questions_ai');
+    return this.previewRows(ownerId, rows, 'questions_ai', warnings);
   }
 
   private assertAiBatchActive(batch: ImportBatch): void {
@@ -515,10 +541,7 @@ export class QuestionImportService implements OnModuleInit {
     return {
       ...publicPreview(batch),
       status: batch.status,
-      rows: ((batch.normalizedRows || []) as unknown as NormalizedQuestionImportRow[]).map((row) => ({
-        row_number: row.row, ...questionImportFields(row.draft), errors: [] as string[],
-      })),
-      ...(batch.status === 'committed' ? { created_ids: batch.createdIds || [], committed_rows: batch.committedRows || [] } : {}),
+      ...(batch.status === 'committed' ? committedResult(batch) : {}),
     };
   }
 
@@ -546,8 +569,9 @@ export class QuestionImportService implements OnModuleInit {
     await this.dataSource.transaction(async (manager) => {
       const batch = await this.aiBatch(ownerId, id, manager);
       if (batch.status !== 'previewed') throw Errors.importBatchConflict('已确认批次不能修改');
-      const rows = batch.normalizedRows as unknown as NormalizedQuestionImportRow[];
-      const row = this.storedRows(batch, [rowNumber])[0];
+      const rows = batchRows(batch);
+      const row = rows.find((value) => value.row === rowNumber);
+      if (!row) throw Errors.importBatchConflict('导入批次数据已不完整');
       if (expected && fingerprint(expected) !== row.fingerprint) throw Errors.importBatchConflict('题目已被修改，请刷新后重试');
       const input = {
         ...row.draft, ...patch,
@@ -555,13 +579,14 @@ export class QuestionImportService implements OnModuleInit {
         ...(patch.options !== undefined ? { options: questionOptions(patch.options) } : {}),
         ...(patch.answer !== undefined ? { answer: answerIndexes(patch.answer) } : {}),
       };
-      const draft = await this.versions.validateAiImportDraft(input, ownerId, manager);
+      const draft = bankDraft(await this.versions.validateAiImportDraft(input, ownerId, manager));
       const nextFingerprint = fingerprint(draft);
       if (rows.some((other) => other.row !== row.row && other.fingerprint === nextFingerprint)) {
         throw Errors.importBatchConflict('批次中已存在相同题目');
       }
       row.draft = draft;
       row.fingerprint = nextFingerprint;
+      batch.normalizedRows = [...rows, batchMetadata(batchWarnings(batch))] as unknown as Record<string, unknown>[];
       await manager.save(batch);
     });
     return this.readAiGenerated(ownerId, id);

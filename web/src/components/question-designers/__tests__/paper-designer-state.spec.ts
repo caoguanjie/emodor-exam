@@ -70,6 +70,12 @@ describe('paper-local question copies', () => {
 });
 
 describe('single-question fingerprints and save routing', () => {
+  it('ignores historical concepts in content equality', () => {
+    const document = single();
+    const changed = clone(document);
+    changed.questions['source-client'].concept_id = 'different-legacy-concept';
+    expect(questionFingerprint(changed, 'source-client')).toBe(questionFingerprint(document, 'source-client'));
+  });
   it('normalizes default attributes added by the real question schema without detaching a bound item', () => {
     const document = single();
     document.content.content![0].content![0].content = [
@@ -115,10 +121,8 @@ describe('single-question fingerprints and save routing', () => {
     ['format', (doc: QuestionAuthoringDocument) => { doc.content.content![0].content![0].content![0].content![0].marks = [{ type: 'italic' }]; }],
     ['media', (doc: QuestionAuthoringDocument) => { doc.content.content![0].content![0].content![0].content![1].attrs!.asset_id = '89'; }],
     ['difficulty', (doc: QuestionAuthoringDocument) => { doc.questions['source-client'].difficulty = 'hard'; }],
-    ['concept', (doc: QuestionAuthoringDocument) => { doc.questions['source-client'].concept_id = '21'; }],
     ['regulation', (doc: QuestionAuthoringDocument) => { doc.questions['source-client'].regulation_id = '32'; }],
     ['regulation version', (doc: QuestionAuthoringDocument) => { doc.questions['source-client'].regulation_version_id = '33'; }],
-
     ['analysis', (doc: QuestionAuthoringDocument) => { doc.questions['source-client'].analysis.content = []; }],
     ['type', (doc: QuestionAuthoringDocument) => { doc.questions['source-client'].type = 'multiple'; }],
   ])('detects a changed %s', (_name, change) => {
@@ -181,15 +185,13 @@ describe('paper preflight and atomic insertion', () => {
   // Catches dropping only one conflicting source item or changing the current paper category on append.
   it.each([
     ['category', 'category-mismatch'],
-    ['version', 'duplicate-version'],
-    ['concept', 'duplicate-concept'],
+    ['question', 'duplicate-question'],
     ['limit', 'question-limit'],
   ])('rejects %s conflicts without changing either draft', (conflict, code) => {
     const target = paper(single('current', '10', '20'), bound('current-baseline', '50'));
     const source = paper(single('incoming', '10', '21'), bound('incoming-baseline', '51'));
     if (conflict === 'category') { source.paper.category_id = '11'; source.document.questions.incoming.category_id = '11'; }
-    if (conflict === 'version') source.bindings.incoming = bound('incoming-baseline', '50');
-    if (conflict === 'concept') source.document.questions.incoming.concept_id = '20';
+    if (conflict !== 'question') (source.bindings.incoming as Extract<PaperQuestionBinding, { kind: 'bound' }>).question_id = '41';
     if (conflict === 'limit') {
       const blocks = Array.from({ length: 100 }, (_, index) => single(`current-${index}`, '10', null));
       target.document = { schema_version: 1, content: { type: 'doc', content: blocks.flatMap((doc) => doc.content.content!) }, questions: Object.assign({}, ...blocks.map((doc) => doc.questions)) };
@@ -222,6 +224,7 @@ describe('paper preflight and atomic insertion', () => {
   it('appends in source order and keeps current paper settings', () => {
     const target = paper(single('current', '10', '20'), bound('first', '50'));
     const source = paper(single('incoming', '10', '21'), bound('second', '51'));
+    (source.bindings.incoming as Extract<PaperQuestionBinding, { kind: 'bound' }>).question_id = '41';
     const ids = ['current', 'copy-client', 'copy-a', 'copy-b'];
     const result = insertPaper(target, source, 'append', () => ids.shift()!);
     expect(result.ok).toBe(true);

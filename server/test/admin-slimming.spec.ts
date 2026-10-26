@@ -4,7 +4,7 @@ import { MODULE_METADATA } from '@nestjs/common/constants';
 import { PermissionsGuard } from '../src/common/guards/permissions.guard';
 import { QuestionGenerationService } from '../src/modules/ai/question-generation.service';
 import { AiController } from '../src/modules/ai/ai.controller';
-import { QuestionReviewService } from '../src/modules/ai/question-review.service';
+import { QuestionBankService } from '../src/modules/questions/question-bank.service';
 import { PaperService } from '../src/modules/ai/paper.service';
 
 const MATERIAL_SERVICE_MODULE = '../src/modules/question-materials/question-materials.service';
@@ -263,27 +263,19 @@ describe('training demo admin slimming', () => {
     );
   });
 
-  it('forwards both explicit material identifiers from the AI generation request', async () => {
-    const start = vi.fn(async (input: unknown) => input);
-    const controller = new AiController(
-      {} as any, {} as any, { start } as any, {} as any, {} as any, {} as any, {} as any,
-    );
-    const body = {
-      material_id: '41', material_version_id: '52', category_id: '7', difficulty: 'easy',
-      question_count_single: 3, question_count_multiple: 2, score_single: 4, score_multiple: 6,
-    };
-
-    await controller.generate(body as any, { id: 9, username: 'admin' } as any, { body } as any);
-
-    expect(start).toHaveBeenCalledWith({
-      materialId: '41', materialVersionId: '52', categoryId: '7', difficulty: 'easy',
-      questionCountSingle: 3, questionCountMultiple: 2,
-      actor: { id: 9, name: 'admin' },
+  it('retires direct AI writing, review and concept routes while retaining historical task reads', () => {
+    const routes = Object.getOwnPropertyNames(AiController.prototype).flatMap((name) => {
+      const handler = (AiController.prototype as any)[name];
+      const path = Reflect.getMetadata('path', handler);
+      return typeof path === 'string' ? [path] : [];
     });
+    expect(routes).toContain('generate-status/:taskId');
+    expect(routes).toContain('questions/:id/enabled');
+    expect(routes).not.toEqual(expect.arrayContaining(['generate-questions', 'questions/:id/regenerate', 'questions/:id/review', 'question-concepts', 'question-concept-options']));
   });
 
   it('exposes material source names and no removed rubric in reviewed question views', async () => {
-    const service = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
+    const service = Object.create(QuestionBankService.prototype) as QuestionBankService & Record<string, any>;
     service.versions = { current: vi.fn(async () => null) };
 
     const view = await (service as any).questionView({
@@ -309,7 +301,7 @@ describe('training demo admin slimming', () => {
     const candidateTypes: string[] = [];
     Object.assign(service, {
       paperRepo: { findOne: vi.fn(async () => ({ id: '91', businessScope: 'training', categoryId: '7', regulationIds: [] })) },
-      versions: { approvedCandidates: vi.fn(async ({ type }: any) => { candidateTypes.push(type); return []; }) },
+      versions: { enabledCandidates: vi.fn(async ({ type }: any) => { candidateTypes.push(type); return []; }) },
     });
     await service.trainingCandidates('91', {});
     expect(new Set(candidateTypes)).toEqual(new Set(['single', 'multiple', 'judgment']));

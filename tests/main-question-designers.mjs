@@ -102,8 +102,8 @@ export async function run(ctx) {
     stage = 'ordinary form revision synchronizes the author copy';
     const original = await api(ctx, admin.actor, 'GET', `/ai/questions/${questionId}`);
     check.equal(original.content_schema_version, 3);
-    const revised = await api(ctx, admin.actor, 'PUT', `/ai/questions/${questionId}`, { expected_version_id: originalVersion, difficulty: 'hard', answer: [1] });
-    check.equal(revised.status, 'pending');
+    const revised = await api(ctx, admin.actor, 'PUT', `/ai/questions/${questionId}`, { expected_version_id: originalVersion, expected_enabled: true, difficulty: 'hard', answer: [1] });
+    check.equal(revised.enabled, true);
     check.equal(revised.content_schema_version, 3);
     check.deepEqual(revised.content_json.stem, original.content_json.stem);
     check.deepEqual(revised.content_json.options, original.content_json.options);
@@ -115,8 +115,6 @@ export async function run(ctx) {
     check.deepEqual(reopened.layouts, bundle.layouts);
     check.equal(reopened.document.questions.question_fixture_00001.difficulty, 'hard');
     check.deepEqual(reopened.document.content.content[0].content.slice(1).map((node) => node.attrs.checked), [false, true]);
-    const approved = await api(ctx, admin.actor, 'PUT', `/ai/questions/${questionId}/review`, { expected_version_id: revised.saved_version_id, status: 'approved' });
-    check.equal(approved.status, 'approved');
     stage = 'fixed layout and publication';
     const { paperId, releaseId } = await fixedPaper(ctx, admin.actor, categoryId, revised.saved_version_id, 'main固定富文卷');
     const detail = await api(ctx, admin.actor, 'GET', `/admin/papers/${paperId}`);

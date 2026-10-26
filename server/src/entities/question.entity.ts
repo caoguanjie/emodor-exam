@@ -31,6 +31,9 @@ export class Question {
   @Column({ name: 'current_version_id', type: 'bigint', unsigned: true, nullable: true })
   currentVersionId: string | null;
 
+  @Column({ name: 'is_enabled', type: 'tinyint', width: 1, default: true })
+  isEnabled: boolean;
+
   /** single / multiple */
   @Column({ type: 'varchar', length: 16 })
   type: string;

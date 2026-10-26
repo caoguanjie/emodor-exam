@@ -3,6 +3,7 @@ import { ExamPaper } from '../src/entities/exam-paper.entity';
 import { PaperQuestion } from '../src/entities/paper-question.entity';
 import { Question } from '../src/entities/question.entity';
 import { QuestionVersion } from '../src/entities/question-version.entity';
+import { TrainingCategory } from '../src/entities/training-category.entity';
 import { PaperReleaseService } from '../src/modules/exams/paper-release.service';
 import { PaperService } from '../src/modules/ai/paper.service';
 import { QuestionVersionService } from '../src/modules/questions/question-version.service';
@@ -14,14 +15,14 @@ const rule = { totalCents: 10000, passCents: 6000, durationMinutes: 30, maxAttem
 function fixedFixture(difficulty: string | null = 'medium') {
   const paper: any = { id: '1', title: '历史试卷', businessScope: 'training', mode: 'fixed', status: 'draft', categoryId: '7', regulationIds: [], totalScore: 100, passScore: 60, durationMinutes: 30, maxAttempts: 3, partialCreditRatio: 0.5 };
   const version: any = { id: '101', questionId: '10', categoryId: '7', difficulty, revision: 1, status: 'approved', type: 'single', stem: '历史题', options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }], answer: [0], analysis: '历史解析', scoreCents: 10000, source: 'manual' };
-  const question: any = { ...version, id: '10', currentVersionId: '101' };
+  const question: any = { ...version, id: '10', currentVersionId: '101', isEnabled: true };
   const rows: any[] = [{ id: '21', paperId: '1', questionId: '10', questionVersionId: '101', sort: 0, score: '100.00' }];
   const writes: any[] = [];
   const paperRepo = { findOne: async () => paper, create: (value: any) => value, save: async (value: any) => { writes.push(value); return value; } };
   const pqRepo = { find: async () => rows, create: (value: any) => value, delete: async () => { writes.push('delete'); }, save: async (value: any) => { writes.push(value); return value; } };
   const versionRepo = { findBy: async () => [version], find: async () => [version], findOne: async () => version, save: async (value: any) => { writes.push(value); return value; } };
   const questionRepo = { findBy: async () => [question], findOne: async () => question, save: async (value: any) => { writes.push(value); return value; } };
-  const repos = new Map<any, any>([[ExamPaper, paperRepo], [PaperQuestion, pqRepo], [QuestionVersion, versionRepo], [Question, questionRepo]]);
+  const repos = new Map<any, any>([[ExamPaper, paperRepo], [PaperQuestion, pqRepo], [QuestionVersion, versionRepo], [Question, questionRepo], [TrainingCategory, { findOne: async () => ({ id: '7', status: 1 }) }]]);
   const manager = { getRepository: (entity: any) => { const repo = repos.get(entity); if (!repo) throw new Error(`unexpected ${entity.name}`); return repo; } };
   const release = Object.create(PaperReleaseService.prototype);
   Object.assign(release, { paperRepo, releaseRepo: { findOne: async () => null }, dataSource: { transaction: async (fn: any) => fn(manager) }, categories: { lockActive: async () => undefined }, sampling: new SamplingService() });
@@ -86,12 +87,12 @@ describe('disabled and unknown difficulty compatibility', () => {
     expect(fixture.writes).toEqual([]);
   });
 
-  it('rejects approval of a disabled current revision before changing its state', async () => {
+  it('rejects restoring a disabled difficulty without modifying historical review metadata', async () => {
     const fixture = fixedFixture();
     fixture.version.status = 'pending'; fixture.question.status = 'pending';
     const service = Object.create(QuestionVersionService.prototype);
     service.dataSource = fixture.release.dataSource;
-    await expect(service.reviewCurrent('10', '101', 'approved', '1')).rejects.toMatchObject({ code: 40001 });
+    await expect(service.assertCurrentUsable('10', fixture.manager)).rejects.toMatchObject({ code: 40001 });
     expect(fixture.version.status).toBe('pending');
     expect(fixture.question.status).toBe('pending');
     expect(fixture.writes).toEqual([]);
@@ -112,7 +113,7 @@ describe('disabled and unknown difficulty compatibility', () => {
   it('does not substitute easy questions when the required hard pool is empty', async () => {
     const fixture = fixedFixture('easy');
     fixture.paper.mode = 'random'; fixture.paper.ruleConfig = rule;
-    fixture.release.questions = { approvedCandidates: async ({ difficulty }: any) => difficulty === 'easy' ? [{ ...fixture.version, questionId: '10', versionId: '101' }] : [] };
+    fixture.release.questions = { enabledCandidates: async ({ difficulty }: any) => difficulty === 'easy' ? [{ ...fixture.version, questionId: '10', versionId: '101' }] : [] };
     await expect(fixture.release.randomPool(undefined, fixture.paper)).rejects.toMatchObject({ code: 40971 });
     expect(fixture.writes).toEqual([]);
   });
@@ -124,7 +125,7 @@ describe('disabled and unknown difficulty compatibility', () => {
     service.versionRepo = { findOne: async () => fixture.version };
     service.dataSource = { transaction: () => { throw new Error('unexpected write transaction'); } };
     service.assertSource = async () => undefined;
-    await expect(service.revise('10', { categoryId: '7', difficulty: 'medium', source: 'manual', type: 'single', stem: '修订题', options: fixture.version.options, answer: [0], analysis: '解析', scoreCents: 10000 }, '1', '101'))
+    await expect(service.revise('10', { categoryId: '7', difficulty: 'medium', source: 'manual', type: 'single', stem: '修订题', options: fixture.version.options, answer: [0], analysis: '解析' }, '1', '101', true))
       .rejects.toMatchObject({ code: 40001 });
     expect(fixture.version.difficulty).toBe('medium');
     expect(fixture.version.stem).toBe('历史题');

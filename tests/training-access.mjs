@@ -1,6 +1,5 @@
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
-import { startMockAi } from './e2e-smoke.mjs';
 import { randomStrongPassword } from './support/password-fixture.mjs';
 import { learnerSession, randomLearnerPhone } from './support/learner-session-fixture.mjs';
 
@@ -14,6 +13,24 @@ const fixtureJwt = new JwtService({});
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function referenceTaskUpload(categoryId) {
+  const boundary = `----ruleexam-access-reference-${randomBytes(12).toString('hex')}`;
+  const rows = [
+    ['category', 'type', 'difficulty', 'stem', 'options', 'answer', 'analysis'],
+    [String(categoryId), 'single', 'easy', 'A3 权限参考题', JSON.stringify([{ key: 'A', text: '先检测' }, { key: 'B', text: '直接进入' }]), '[0]', '先检测再进入'],
+  ];
+  const tsv = Buffer.from(rows.map((row) => row.join('\t')).join('\r\n'), 'utf8');
+  return {
+    headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+    body: Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="format"\r\n\r\ntxt\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="references.txt"\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n`),
+      tsv,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]),
+  };
 }
 
 async function readCaptchaAnswer(ctx, captchaId) {
@@ -633,9 +650,10 @@ async function runBody(ctx, mockPort) {
     category_id: String(createdCategory.data.id), difficulty: 'easy',
     type: 'single', stem: 'A3 delegated question',
     options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }],
-    answer: [0], score: 10,
+    answer: [0],
   });
   assert(delegatedQuestion.status === 200 && delegatedQuestion.data?.id, `employee custom question write denied: ${delegatedQuestion.status}/${delegatedQuestion.code}/${delegatedQuestion.message}`);
+  assert(delegatedQuestion.data.enabled === true, 'delegated question was not enabled on creation');
   const delegatedPaper = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/papers', {
     regulation_id: scopedRegulationId, title: 'A3 delegated paper', pass_score: 60,
   });
@@ -649,19 +667,17 @@ async function runBody(ctx, mockPort) {
     ownedAiConfig.status === 200 && ownedAiConfig.data?.configured === true && ownedAiConfig.data?.api_key_masked,
     `run-owned AI config setup failed: ${ownedAiConfig.status}/${ownedAiConfig.code}`,
   );
-  const delegatedGeneration = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/generate-questions', {
-    material_id: scopedRegulationId, material_version_id: scopedMaterial.versionId,
-    category_id: String(createdCategory.data.id), difficulty: 'easy',
-    question_count_single: 1, question_count_multiple: 0,
-    score_single: 100, score_multiple: 1,
-  });
+  const retiredGeneration = await ctx.request(employeeAdminLogin.actor, 'POST', '/ai/generate-questions', {});
+  assert(retiredGeneration.status === 404, `retired direct AI generation route remained callable: ${retiredGeneration.status}`);
+  const delegatedReference = referenceTaskUpload(String(createdCategory.data.id));
+  const delegatedGeneration = await ctx.request(employeeAdminLogin.actor, 'POST', '/admin/questions/ai-import-tasks', delegatedReference.body, delegatedReference.headers);
   assert(
     delegatedGeneration.status === 200 && delegatedGeneration.data?.task_id,
-    `employee custom AI generation was not accepted: ${delegatedGeneration.status}/${delegatedGeneration.code}`,
+    `employee custom AI reference task was not accepted: ${delegatedGeneration.status}/${delegatedGeneration.code}`,
   );
   let delegatedTask;
   for (let attempt = 0; attempt < 40; attempt++) {
-    delegatedTask = await ctx.request(employeeAdminLogin.actor, 'GET', `/ai/generate-status/${delegatedGeneration.data.task_id}`);
+    delegatedTask = await ctx.request(employeeAdminLogin.actor, 'GET', `/admin/questions/ai-import-tasks/${delegatedGeneration.data.task_id}`);
     assert(delegatedTask.status === 200 && delegatedTask.data?.task_id, `employee custom AI task status failed: ${delegatedTask.status}/${delegatedTask.code}`);
     if (delegatedTask.data.status === 'completed' || delegatedTask.data.status === 'failed') break;
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -891,19 +907,15 @@ async function runBody(ctx, mockPort) {
     await captchaLogin(ctx, restricted.data.username, restoredRestrictedPassword),
     restricted.data.username, restoredRestrictedPassword, 'RestrictedAfterRemoval',
   );
-  const deniedRemovedGeneration = await ctx.request(postRemovalLogin.actor, 'POST', '/ai/generate-questions', {
-    material_id: scopedRegulationId, material_version_id: scopedMaterial.versionId,
-    category_id: String(createdCategory.data.id), difficulty: 'easy',
-    question_count_single: 1, question_count_multiple: 0,
-    score_single: 100, score_multiple: 1,
-  });
+  const deniedReference = referenceTaskUpload(String(createdCategory.data.id));
+  const deniedRemovedGeneration = await ctx.request(postRemovalLogin.actor, 'POST', '/admin/questions/ai-import-tasks', deniedReference.body, deniedReference.headers);
   assert(deniedRemovedGeneration.status === 403, `removed role AI generation expected 403, got ${deniedRemovedGeneration.status}`);
   const deniedRemovedQuestionRead = await ctx.request(postRemovalLogin.actor, 'GET', '/ai/questions');
   assert(deniedRemovedQuestionRead.status === 403, `removed role question read expected 403, got ${deniedRemovedQuestionRead.status}`);
   const deniedRemovedQuestionWrite = await ctx.request(postRemovalLogin.actor, 'POST', '/ai/questions', {
     category_id: String(createdCategory.data.id), difficulty: 'easy',
     type: 'single', stem: 'removed role question',
-    options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], answer: [0], score: 10,
+    options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], answer: [0],
   });
   assert(deniedRemovedQuestionWrite.status === 403, `removed role question write expected 403, got ${deniedRemovedQuestionWrite.status}`);
   const deniedRemovedPaperWrite = await ctx.request(postRemovalLogin.actor, 'POST', '/ai/papers', {
@@ -980,7 +992,10 @@ async function runBody(ctx, mockPort) {
 export async function run(ctx) {
   // This suite owns its Mock AI rather than relying on a developer service or
   // the API child's environment. Port 0 delegates isolation to the kernel.
-  const mockServer = await startMockAi(0);
+  // Reuse the current reference-task provider fixture after this module has
+  // finished loading; that suite imports the shared password fixture above.
+  const { startMockAi } = await import('./training-ai-question-import.mjs');
+  const mockServer = await startMockAi();
   const address = mockServer.address();
   const mockPort = address && typeof address !== 'string' ? address.port : null;
   if (!Number.isInteger(mockPort) || mockPort < 1024) {

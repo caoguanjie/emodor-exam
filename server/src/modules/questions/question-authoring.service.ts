@@ -3,6 +3,7 @@ import { DataSource } from 'typeorm';
 import { Errors } from '../../common/errors';
 import type { AuthoringBundle, AuthoringCommitRequest, AuthoringReceipt } from '../../common/question-authoring';
 import { QuestionAuthoringCommit } from '../../entities/question-authoring-commit.entity';
+import { Question } from '../../entities/question.entity';
 import { QuestionVersion } from '../../entities/question-version.entity';
 import { AccessService } from '../access/access.service';
 import { canonicalAuthoringHash, decodeAuthoringBundle, joinAuthoringBundles, assembleVersionAuthoring, type AuthoringQuestionWrite, type AuthoringSavedItem } from './question-authoring-codec';
@@ -42,7 +43,9 @@ export class QuestionAuthoringService {
       let client = Object.keys(version.authoringJson?.document.questions || {})[0] || `version_${exactId}`;
       if (used.has(client)) client = `version_${exactId}`;
       used.add(client);
-      const bundle = assembleVersionAuthoring(version, client);
+      const identity = await this.dataSource.getRepository(Question).findOne({ where: { id: String(version.questionId) } });
+      if (!identity) throw Errors.notFound('题目不存在');
+      const bundle = assembleVersionAuthoring(version, client, Boolean(identity.isEnabled));
       bundles.push(bundle);
     }
     return joinAuthoringBundles(bundles);

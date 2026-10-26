@@ -9,50 +9,70 @@
       <el-button link :loading="catalogLoading" @click="loadAuthoringOptions">重试加载难度</el-button>
     </el-alert>
 
-    <section v-if="mode === 'file'">
-    <el-alert
-      type="info"
-      :closable="false"
-      show-icon
-      title="标准模板为 8 列：category/type/difficulty/concept/stem/options/answer/analysis。TXT 固定使用 UTF-8 TSV；options 与 answer 必须填写 JSON 数组。"
-      style="margin-bottom:16px"
-    />
+    <section v-if="mode === 'file'" class="file-import-panel">
+      <el-steps class="import-steps" :active="preview ? 2 : previewBusy ? 1 : 0" finish-status="success" align-center>
+        <el-step title="下载并填写模板" description="已有文件可跳过" />
+        <el-step title="上传并预览" description="检查试题与错误提示" />
+        <el-step title="确认导入" description="确认后导入所选试题" />
+      </el-steps>
 
-    <el-form label-width="110px" class="import-form">
-      <el-form-item label="文件格式" required>
-        <el-radio-group v-model="format" :disabled="interactionLocked">
-          <el-radio-button value="xlsx">Excel (.xlsx)</el-radio-button>
-          <el-radio-button value="txt">TXT (.txt)</el-radio-button>
-        </el-radio-group>
-      </el-form-item>
-      <el-form-item label="默认类别">
-        <el-select v-model="defaults.category_id" clearable filterable placeholder="文件 category 为空时使用" style="width:320px" :disabled="interactionLocked">
-          <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="默认难度">
-        <el-select v-model="defaults.difficulty" clearable placeholder="文件 difficulty 为空时使用" style="width:320px" :disabled="interactionLocked || !catalogReady">
-          <el-option v-for="item in difficultyOptions" :key="item.value" :label="item.label" :value="item.value" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="导入文件" required>
-        <div class="file-actions">
-          <el-button :disabled="previewBusy || commitBusy || statusBusy" @click="downloadTemplate">下载 {{ format.toUpperCase() }} 模板</el-button>
+      <section class="import-guide-section">
+        <h3 class="import-section-title"><span class="import-step-number" aria-hidden="true">1</span>下载模板</h3>
+        <div class="import-section-body">
+          <p class="import-section-description">首次使用请下载模板，按示例填写试题并保存。已有填写好的文件，可直接进行第 2 步。</p>
+          <div class="file-actions">
+            <el-button :disabled="previewBusy || commitBusy || statusBusy" @click="downloadTemplate('xlsx')">下载 Excel 模板（推荐）</el-button>
+            <el-button :disabled="previewBusy || commitBusy || statusBusy" @click="downloadTemplate('txt')">下载 TXT 模板</el-button>
+          </div>
+          <el-collapse class="import-help">
+            <el-collapse-item title="查看填写说明" name="instructions">
+              <p>请保留模板首行的列名与顺序，按示例填写培训类别、题型、难度、题干、选项、答案和解析。</p>
+              <p>标准模板为 7 列：<code>category/type/difficulty/stem/options/answer/analysis</code>。</p>
+              <p>TXT 文件请使用 UTF-8 编码，以制表符分列。选项与答案须填写 JSON 数组，请参照模板中的示例。</p>
+            </el-collapse-item>
+          </el-collapse>
+        </div>
+      </section>
+
+      <section class="import-guide-section">
+        <h3 class="import-section-title"><span class="import-step-number" aria-hidden="true">2</span>上传试题文件</h3>
+        <div class="import-section-body">
+          <p class="import-section-description">上传已填写的模板，预览并检查结果后，再确认导入。</p>
           <el-upload
             :key="uploadKey"
             :show-file-list="false"
-            :accept="format === 'xlsx' ? '.xlsx' : '.txt,text/plain'"
+            accept=".xlsx,.txt,text/plain"
             :auto-upload="false"
             :disabled="interactionLocked"
             :on-change="previewFile"
           >
-            <el-button type="primary" :loading="previewBusy">选择文件并预览</el-button>
+            <el-button type="primary" :loading="previewBusy" :disabled="interactionLocked">选择文件并预览</el-button>
           </el-upload>
+          <p class="import-file-tip">支持 Excel（.xlsx）和 TXT（.txt），文件不超过 5MB。系统自动识别文件格式。</p>
+          <el-collapse class="import-help">
+            <el-collapse-item title="可选设置：默认类别、默认难度" name="defaults">
+              <p class="import-default-tip">仅补充文件中未填写的类别和难度，已填写的内容不会被覆盖。</p>
+              <el-form label-width="90px" class="import-form">
+                <el-form-item label="默认类别">
+                  <el-select v-model="defaults.category_id" clearable filterable placeholder="文件未填写培训类别时使用" class="import-default-select" :disabled="interactionLocked">
+                    <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="默认难度">
+                  <el-select v-model="defaults.difficulty" clearable placeholder="文件未填写难度时使用" class="import-default-select" :disabled="interactionLocked || !catalogReady">
+                    <el-option v-for="item in difficultyOptions" :key="item.value" :label="item.label" :value="item.value" />
+                  </el-select>
+                </el-form-item>
+              </el-form>
+            </el-collapse-item>
+          </el-collapse>
         </div>
-      </el-form-item>
-    </el-form>
+      </section>
 
-    <section v-if="preview" class="preview-panel">
+    <section v-if="preview" class="preview-panel import-guide-section">
+      <h3 class="import-section-title"><span class="import-step-number" aria-hidden="true">3</span>检查并确认</h3>
+      <div class="import-section-body">
+      <p class="import-section-description">核对可导入行和错误提示，确认后所选试题将导入并启用。</p>
       <div class="preview-summary">
         <el-tag type="success">可导入 {{ preview.valid_rows.length }} 行</el-tag>
         <el-tag v-if="preview.errors.length" type="danger">错误 {{ preview.errors.length }} 行</el-tag>
@@ -60,6 +80,14 @@
         <span class="batch-id">批次 {{ preview.batch_id }}</span>
       </div>
 
+      <el-alert v-for="warning in [...new Set(preview.warnings || [])]" :key="warning" type="warning" :closable="false" :title="warning" />
+      <el-table v-if="preview.rows?.length" :data="preview.rows" row-key="row_number" max-height="420">
+        <el-table-column label="选择" width="64"><template #default="{ row }"><el-checkbox :model-value="fileSelectedRows.includes(row.row_number)" :disabled="!preview.valid_rows.includes(row.row_number) || commitBusy || statusBusy || commitUnknown" :aria-label="`选择第 ${row.row_number} 行`" @update:model-value="(checked: unknown) => selectFileRow(row.row_number, checked)" /></template></el-table-column>
+        <el-table-column prop="row_number" label="行号" width="80" />
+        <el-table-column prop="stem" label="题干" min-width="280" show-overflow-tooltip />
+        <el-table-column label="题型/难度" width="140"><template #default="{ row }">{{ typeLabel[row.type as QuestionType] }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column>
+        <el-table-column label="操作" width="90"><template #default="{ row }"><FitsTableAction :disabled="commitUnknown || statusBusy" @click="previewFileRow(row)">预览</FitsTableAction></template></el-table-column>
+      </el-table>
       <el-alert
         v-if="preview.duplicates.length"
         type="warning"
@@ -79,17 +107,18 @@
         <el-button
           type="primary"
           :loading="commitBusy"
-          :disabled="!catalogReady || !preview.valid_rows.length || commitBusy || statusBusy || commitUnknown"
+          :disabled="!catalogReady || !fileSelectedRows.length || commitBusy || statusBusy || commitUnknown"
           @click="commitImport"
         >
-          确认导入 {{ preview.valid_rows.length }} 行
+          确认导入并启用 {{ fileSelectedRows.length }} 行
         </el-button>
+      </div>
       </div>
     </section>
     </section>
 
     <section v-else class="ai-import-panel">
-      <el-alert type="info" :closable="false" show-icon title="上传标准 8 列 Excel / UTF-8 TSV 模板（最多 50 道参考题、5MB）。每题生成简单与困难两个版本；参考题不入库，文件不保留。" />
+      <el-alert type="info" :closable="false" show-icon title="上传标准 7 列 Excel / UTF-8 TSV 模板（最多 50 道参考题、5MB）。每题生成简单与困难两个版本；参考题不入库，文件不保留。" />
       <el-alert v-if="!auth.can('ai:read') || !auth.can('ai:write')" type="warning" :closable="false" title="发起并查看生成任务需要 AI 读取和编辑权限。" />
       <el-form label-width="110px" class="import-form ai-import-form">
         <el-form-item label="文件格式" required>
@@ -132,7 +161,8 @@
           <el-tag>已选 {{ ai.selectedRows.value.length }} 道</el-tag>
           <span class="batch-id">批次 {{ ai.preview.value.batch_id }}</span>
         </div>
-        <el-alert type="info" :closable="false" title="生成题确认后统一进入待审核；人工审核通过后方可组卷。下载包含本批次全部有效生成题。" />
+        <el-alert v-for="warning in [...new Set(ai.preview.value.warnings || [])]" :key="warning" type="warning" :closable="false" :title="warning" />
+        <el-alert type="info" :closable="false" title="生成题经确认后直接启用，可用于组卷。下载包含本批次全部有效生成题。" />
         <el-alert v-if="ai.commitUnknown.value" type="warning" :closable="false" title="本批次的操作结果尚未确认，请先查询原批次状态。核对服务器最新题目后才能继续操作。" />
         <div class="preview-toolbar">
           <el-radio-group v-model="ai.difficulty.value">
@@ -172,7 +202,7 @@
           <el-button v-if="ai.commitUnknown.value" :loading="ai.statusBusy.value" @click="reconcileAiBatch">查询原批次状态</el-button>
           <el-button type="primary" :loading="ai.commitBusy.value"
             :disabled="!catalogReady || !auth.can('questions:write') || !ai.selectedRows.value.length || ai.rowBusy.value || ai.commitBusy.value || ai.statusBusy.value || ai.commitUnknown.value"
-            @click="ai.commitImport">确认导入 {{ ai.selectedRows.value.length }} 道待审核题目</el-button>
+            @click="ai.commitImport">确认导入并启用 {{ ai.selectedRows.value.length }} 道题目</el-button>
         </div>
       </section>
       <div v-if="ai.canReset.value" class="preview-actions"><el-button @click="resetAi">放弃本次结果并重新上传</el-button></div>
@@ -182,7 +212,7 @@
       <QuestionPreview v-if="generatedPreview" :question="generatedPreview" :reveal-answer="true" />
     </el-dialog>
     <el-dialog v-model="editVisible" title="修改生成题" width="760px" class="re-form-dialog" :close-on-click-modal="false" :close-on-press-escape="!ai.rowBusy.value" :show-close="!ai.rowBusy.value">
-      <el-alert type="info" :closable="false" title="培训类别、题型、难度和考点沿用生成约定；可校对题干、选项、答案和解析。" />
+      <el-alert type="info" :closable="false" title="培训类别、题型和难度沿用生成约定；可校对题干、选项、答案和解析。" />
       <el-alert v-if="ai.commitUnknown.value" type="warning" :closable="false" title="修改结果尚未确认。请查询原批次状态，核对服务器上的最新题目后再确认导入。" />
       <el-form label-width="90px" class="generated-edit-form">
         <el-form-item label="题干"><el-input v-model="editForm.stem" type="textarea" :rows="4" placeholder="修改生成题题干" :disabled="ai.rowBusy.value" /></el-form-item>
@@ -222,10 +252,10 @@ const { difficultyOptions, difficultyLabel, load: loadAuthoringOptions, loading:
 );
 const catalogReady = computed(() => !catalogLoading.value && !catalogError.value && difficultyOptions.value.length > 0);
 const mode = ref<'file' | 'ai'>('file');
-const format = ref<'xlsx' | 'txt'>('xlsx');
 const categories = ref<CategoryOption[]>([]);
 const defaults = reactive<{ category_id: Id | ''; difficulty: Difficulty | '' }>({ category_id: '', difficulty: '' });
 const uploadKey = ref(0);
+const fileSelectedRows = ref<number[]>([]);
 const aiFormat = ref<'xlsx' | 'txt'>('xlsx');
 const aiUploadKey = ref(0);
 const taskStatusLabel = { queued: '等待生成', running: '正在生成', completed: '生成完成', failed: '生成失败' };
@@ -272,7 +302,16 @@ const unsaved = useUnsavedChanges(dirty, {
   },
 });
 
-watch(format, () => { uploadKey.value += 1; });
+watch(() => preview.value?.batch_id, () => { fileSelectedRows.value = [...(preview.value?.valid_rows || [])]; }, { flush: 'sync' });
+function selectFileRow(row: number, checked: unknown) {
+  if (!preview.value?.valid_rows.includes(row) || commitBusy.value || statusBusy.value || commitUnknown.value) return;
+  fileSelectedRows.value = checked ? [...new Set([...fileSelectedRows.value, row])] : fileSelectedRows.value.filter((id) => id !== row);
+}
+function previewFileRow(row: AiQuestionImportRow) {
+  if (commitUnknown.value || statusBusy.value) return;
+  generatedPreview.value = JSON.parse(JSON.stringify(row));
+  generatedPreviewVisible.value = true;
+}
 watch(aiFormat, () => { aiUploadKey.value += 1; });
 
 async function changeMode(value: string | number) {
@@ -354,11 +393,11 @@ async function loadCategories() {
   categories.value = result.items || [];
 }
 
-function downloadTemplate() {
+function downloadTemplate(fileFormat: 'xlsx' | 'txt') {
   void download(
     '/admin/questions/import-template',
-    `题库导入模板.${format.value}`,
-    { format: format.value },
+    `题库导入模板.${fileFormat}`,
+    { format: fileFormat },
   );
 }
 
@@ -370,9 +409,9 @@ async function resetPreview() {
 async function previewFile(value: UploadFile) {
   const file = value.raw;
   if (!(file instanceof File)) return;
-  const expected = format.value === 'xlsx' ? /\.xlsx$/i : /\.txt$/i;
-  if (!expected.test(file.name)) {
-    ElMessage.warning(`请选择 .${format.value} 文件`);
+  const fileFormat = /\.xlsx$/i.test(file.name) ? 'xlsx' : /\.txt$/i.test(file.name) ? 'txt' : null;
+  if (!fileFormat) {
+    ElMessage.warning('请选择 Excel (.xlsx) 或 TXT (.txt) 文件');
     uploadKey.value += 1;
     return;
   }
@@ -383,7 +422,7 @@ async function previewFile(value: UploadFile) {
   }
   try {
     const fields = Object.fromEntries(Object.entries({
-      format: format.value,
+      format: fileFormat,
       category_id: defaults.category_id,
       difficulty: defaults.difficulty,
     }).filter(([, item]) => item !== '')) as Record<string, string>;
@@ -394,7 +433,9 @@ async function previewFile(value: UploadFile) {
 }
 
 async function finish(result: ImportResult, generated = false) {
-  ElMessage.success(`成功导入 ${result.created_ids.length} 道${generated ? '待审核' : ''}题目`);
+  ElMessage.success(result.enabled === true
+    ? `成功导入 ${result.created_ids.length} 道题目，已启用`
+    : `已确认原批次导入 ${result.created_ids.length} 道题目的结果`);
   await router.push('/admin/questions');
 }
 
@@ -404,7 +445,7 @@ async function queryBatchStatus() {
 
 async function commitImport() {
   if (!catalogReady.value) return;
-  await workflow.commitImport();
+  await workflow.commitImport(fileSelectedRows.value);
 }
 
 onMounted(loadCategories);
@@ -416,6 +457,19 @@ onBeforeUnmount(() => { workflow.deactivate(); ai.deactivate(); });
 
 <style scoped>
 .import-form { max-width: 720px; }
+.import-steps { max-width: 840px; margin: 12px 0 30px; }
+.import-guide-section + .import-guide-section { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--el-border-color-lighter); }
+.import-section-title { display: flex; align-items: center; gap: 12px; margin: 0; color: var(--el-text-color-primary); font-size: 18px; font-weight: 600; }
+.import-step-number { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; height: 28px; border-radius: 50%; background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-size: 15px; }
+.import-section-body { margin-left: 40px; }
+.import-section-description { margin: 10px 0 16px; color: var(--el-text-color-regular); line-height: 1.7; }
+.import-help { max-width: 720px; margin-top: 16px; border-top: 0; }
+.import-help :deep(.el-collapse-item__header) { height: auto; min-height: 40px; font-weight: 400; }
+.import-help :deep(.el-collapse-item__content) { color: var(--el-text-color-regular); line-height: 1.8; }
+.import-help p { margin: 8px 0; overflow-wrap: anywhere; }
+.import-file-tip, .import-default-tip { color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.7; }
+.import-file-tip { margin: 10px 0 0; }
+.import-default-select { width: 100%; max-width: 320px; }
 .file-actions, .preview-summary, .preview-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .preview-panel { margin-top: 22px; border-top: 1px solid #ebeef5; padding-top: 20px; }
 .preview-summary { margin-bottom: 14px; }
@@ -427,4 +481,9 @@ onBeforeUnmount(() => { workflow.deactivate(); ai.deactivate(); });
 .preview-toolbar { justify-content: space-between; }
 .generated-option { display: flex; align-items: center; gap: 12px; width: 100%; }
 .row-error { color: var(--el-color-danger); font-size: 13px; }
+@media (max-width: 640px) {
+  .import-section-body { margin-left: 0; }
+  .import-steps :deep(.el-step__title) { font-size: 13px; }
+  .import-steps :deep(.el-step__description) { padding-right: 6px; padding-left: 6px; }
+}
 </style>

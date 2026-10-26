@@ -9,7 +9,8 @@ export interface QuestionMeta {
   category_id: Id;
   /** Legacy medium remains readable until the author explicitly chooses an enabled value. */
   difficulty: Difficulty;
-  concept_id: Id | null;
+  /** Historical JSON only; new authoring submissions omit this property. */
+  concept_id?: Id | null;
   regulation_id: Id | null;
   regulation_version_id: Id | null;
   analysis: JSONContent;
@@ -33,7 +34,7 @@ export interface DesignerLayoutV1 {
   };
 }
 export type StableOptionIds = Record<string, Record<string, string>>;
-export type VersionTokens = Record<string, { question_id: Id; expected_version_id: Id | null }>;
+export type VersionTokens = Record<string, { question_id: Id; expected_version_id: Id | null; expected_enabled: boolean }>;
 export interface AuthoringBundle {
   document: QuestionAuthoringDocument;
   option_ids: StableOptionIds;

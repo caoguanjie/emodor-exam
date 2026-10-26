@@ -53,7 +53,7 @@ const permissions = [
   ['training_categories:read', '查看培训类别'], ['training_categories:write', '维护培训类别'],
   ['students:read', '查看学员'], ['students:write', '维护学员'],
   ['ai:read', '查看 AI 任务'], ['ai:write', '发起 AI 出题任务'], ['ai_config:read', '查看 AI 服务配置'], ['ai_config:write', '维护 AI 服务配置'], ['ai:publish', '发布 AI 题目'], ['ai:review', '审核 AI 题目'],
-  ['questions:read', '查看题库'], ['questions:write', '维护题库'], ['questions:publish', '发布题库'], ['questions:review', '审核题目'], ['questions:export', '导出题库'],
+  ['questions:read', '查看题库'], ['questions:write', '维护题库'], ['questions:publish', '发布题库'], ['questions:export', '导出题库'],
   ['papers:read', '查看试卷'], ['papers:write', '维护试卷'], ['papers:publish', '发布试卷'], ['papers:review', '审核试卷'], ['papers:export', '导出试卷'],
   ['exam_records:read', '查看考试记录'],
   ['statistics:read', '查看统计'], ['statistics:export', '导出统计'],
@@ -70,7 +70,7 @@ for (const [code, name] of permissions) {
   );
 }
 const legacyRegulation = [
-  'ai:read', 'ai:write', 'ai:review', 'questions:read', 'questions:write', 'questions:review',
+  'ai:read', 'ai:write', 'ai:review', 'questions:read', 'questions:write',
   'papers:read', 'papers:write', 'papers:publish', 'statistics:read', 'statistics:export',
 ];
 const allPermissionCodes = permissions.map(([code]) => code);

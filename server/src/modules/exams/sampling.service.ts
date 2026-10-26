@@ -9,6 +9,7 @@ export interface RandomSource {
 }
 
 export type SelectedQuestion = QuestionVersionSnapshot & { scoreCents: number };
+export type SamplingGrouping = 'question' | 'historical-concept';
 
 export class CryptoRandomSource implements RandomSource {
   nextInt(maxExclusive: number): number {
@@ -19,8 +20,10 @@ export class CryptoRandomSource implements RandomSource {
   }
 }
 
-function poolKey(item: QuestionVersionSnapshot): string {
-  return item.conceptId ? `concept:${item.conceptId}` : `question:${item.questionId}`;
+export function samplingGroupKey(item: QuestionVersionSnapshot, grouping: SamplingGrouping = 'question'): string {
+  const historicalConcept = (item as QuestionVersionSnapshot & { conceptId?: string }).conceptId;
+  if (grouping === 'historical-concept' && historicalConcept) return `concept:${historicalConcept}`;
+  return `question:${item.questionId}`;
 }
 
 function cloneSelected(item: QuestionVersionSnapshot, scoreCents: number): SelectedQuestion {
@@ -38,6 +41,7 @@ export class SamplingService {
     pool: QuestionVersionSnapshot[],
     rules: PoolRule[],
     difficulty: Difficulty,
+    grouping: SamplingGrouping = 'question',
   ): { ok: boolean; deficits: { type: QuestionType; required: number; available: number }[] } {
     const requiredByType = new Map<QuestionType, number>();
     for (const rule of rules) {
@@ -48,7 +52,7 @@ export class SamplingService {
       const available = new Set(
         pool
           .filter((item) => item.type === type && item.difficulty === difficulty)
-          .map(poolKey),
+          .map((item) => samplingGroupKey(item, grouping)),
       ).size;
       if (available < required) deficits.push({ type, required, available });
     }
@@ -60,10 +64,11 @@ export class SamplingService {
     rules: PoolRule[],
     difficulty: Difficulty,
     rng: RandomSource = new CryptoRandomSource(),
+    grouping: SamplingGrouping = 'question',
   ): SelectedQuestion[] {
     const totalCents = rules.reduce((total, rule) => total + rule.count * rule.scoreCents, 0);
     if (totalCents !== 10000) throw Errors.paperRuleInvalid(`题型规则总分必须为 10000 分，当前为 ${totalCents}`);
-    const validation = this.validatePool(pool, rules, difficulty);
+    const validation = this.validatePool(pool, rules, difficulty, grouping);
     if (!validation.ok) throw Errors.paperPoolInsufficient(validation.deficits);
 
     const selected: SelectedQuestion[] = [];
@@ -72,7 +77,7 @@ export class SamplingService {
       const grouped = new Map<string, QuestionVersionSnapshot[]>();
       for (const item of pool) {
         if (item.type !== rule.type || item.difficulty !== difficulty) continue;
-        const key = poolKey(item);
+        const key = samplingGroupKey(item, grouping);
         if (used.has(key)) continue;
         const variants = grouped.get(key) || [];
         variants.push(item);

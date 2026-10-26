@@ -6,7 +6,7 @@ export const PERMISSION_CATALOG = [
   'training_categories:read', 'training_categories:write',
   'students:read', 'students:write',
   'ai:read', 'ai:write', 'ai_config:read', 'ai_config:write', 'ai:publish', 'ai:review',
-  'questions:read', 'questions:write', 'questions:publish', 'questions:review', 'questions:export',
+  'questions:read', 'questions:write', 'questions:publish', 'questions:export',
   'papers:read', 'papers:write', 'papers:publish', 'papers:review', 'papers:export',
   'exam_records:read',
   'statistics:read', 'statistics:export',
@@ -35,7 +35,6 @@ export const PERMISSION_NAMES: Record<PermissionCode, string> = {
   'questions:read': '查看题库',
   'questions:write': '维护题库',
   'questions:publish': '发布题库',
-  'questions:review': '审核题目',
   'questions:export': '导出题库',
   'papers:read': '查看试卷',
   'papers:write': '维护试卷',
@@ -66,7 +65,7 @@ export function isRegisteredPermission(code: string): code is PermissionCode {
 
 export const LEGACY_REGULATION_ADMIN_PERMISSIONS: PermissionCode[] = [
   'ai:read', 'ai:write', 'ai:review',
-  'questions:read', 'questions:write', 'questions:review',
+  'questions:read', 'questions:write',
   'papers:read', 'papers:write', 'papers:publish',
   'statistics:read', 'statistics:export',
 ];

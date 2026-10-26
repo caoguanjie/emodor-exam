@@ -29,9 +29,9 @@ beforeAll(() => {
 afterAll(() => { if (!rangeRects) Reflect.deleteProperty(Range.prototype, 'getClientRects'); if (!rangeBounds) Reflect.deleteProperty(Range.prototype, 'getBoundingClientRect'); });
 const base = paperFixture();
 function detail(overrides = {}) { return { ...base.paper, business_scope: 'training', status: 'draft', total_score: 100, latest_release_id: null, sum_score_cents: 10000, rules: [], designer_layout: null,
-  questions: [{ question_id: '40', question_version_id: '50', sort: 0, score_cents: 10000, type: 'single', difficulty: 'easy', concept_id: '20', regulation_id: null, stem: '题干', options: [], status: 'approved' }], ...overrides }; }
+  questions: [{ question_id: '40', question_version_id: '50', sort: 0, score_cents: 10000, type: 'single', difficulty: 'easy', concept_id: '20', regulation_id: null, stem: '题干', options: [], enabled: true }], ...overrides }; }
 function bundle(): AuthoringBundle { const document = copy(base.document); document.questions.question_one!.question_id = '40'; document.questions.question_one!.base_revision = 1;
-  return { document, option_ids: { question_one: { question_one_a: 'A', question_one_b: 'B' } }, identities: { question_one: { question_id: '40', expected_version_id: '50' } }, layouts: {} }; }
+  return { document, option_ids: { question_one: { question_one_a: 'A', question_one_b: 'B' } }, identities: { question_one: { question_id: '40', expected_version_id: '50', expected_enabled: true } }, layouts: {} }; }
 beforeEach(() => {
   transport.calls = []; transport.permissions = new Set(['papers:read', 'papers:write', 'questions:read', 'questions:write']);
   transport.respond = async (method, path, body) => {
@@ -58,6 +58,16 @@ async function show(component: typeof PaperDetail | typeof Papers, url: string) 
 }
 
 describe('main fixed paper entry', () => {
+  it('shows a disabled draft question and prevents saving it through the designer', async () => {
+    const fallback = transport.respond;
+    transport.respond = async (method, path, body, config) => path === '/admin/papers/100'
+      ? detail({ questions: [{ ...detail().questions[0], enabled: false }] }) : fallback(method, path, body, config);
+    const { wrapper } = await show(PaperDetail, '/admin/papers/100?scope=training&designer=1');
+    const designer = wrapper.getComponent(PaperDesigner);
+    expect(designer.text()).toContain('题单包含已停用题目');
+    await designer.vm.save(); await flushPromises();
+    expect(transport.calls.filter((call) => call.method === 'put')).toHaveLength(0);
+  });
   it.each([undefined, 7300])('assigns a paper score on insertion, ignoring candidate score %s', async (oldScore) => {
     const candidate = { question_id: '41', question_version_id: '51', type: 'single', difficulty: 'easy',
       concept_id: null, regulation_id: null, stem: '新候选', options: [], ...(oldScore === undefined ? {} : { score_cents: oldScore }) };

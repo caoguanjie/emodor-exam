@@ -16,7 +16,8 @@ export interface QuestionMeta {
   category_id: Id;
   /** Historical medium may be assembled; this type does not permit new writes. */
   difficulty: Difficulty;
-  concept_id: Id | null;
+  /** Read-only compatibility for stored historical authoring. New output omits it. */
+  concept_id?: Id | null;
   regulation_id: Id | null;
   regulation_version_id: Id | null;
   analysis: JSONContent;
@@ -31,7 +32,7 @@ export interface QuestionAuthoringDocument {
   questions: Record<string, QuestionMeta>;
 }
 export type StableOptionIds = Record<string, Record<string, string>>;
-export type VersionTokens = Record<string, { question_id: string; expected_version_id: string | null }>;
+export type VersionTokens = Record<string, { question_id: string; expected_version_id: string | null; expected_enabled: boolean }>;
 export interface DesignerLayoutV1 {
   schema_version: 1;
   settings: {

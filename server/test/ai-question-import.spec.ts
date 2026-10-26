@@ -17,8 +17,8 @@ const options = [{ key: 'A', text: '先确认风险' }, { key: 'B', text: '直�
 const generatedOptions = [{ key: 'A', text: '复核许可证后依规实施' }, { key: 'B', text: '无视监护人的提示' }];
 const refCells = ['10', 'single', 'medium', '', reference, JSON.stringify(options), '[0]', '参考解析', '5'];
 const draft = (difficulty = 'easy', stem = '新生成的题目') => ({
-  categoryId: '10', type: 'single', difficulty, conceptId: undefined, stem,
-  options, answer: [0], analysis: '生成解析', scoreCents: 500, source: 'ai',
+  categoryId: '10', type: 'single', difficulty, stem,
+  options, answer: [0], analysis: '生成解析', source: 'ai',
 });
 const generated = (difficulty: string, overrides: Record<string, unknown> = {}) => ({
   category: '999', type: 'essay', difficulty, concept: '999', stem: `${difficulty}生成题`,
@@ -27,7 +27,7 @@ const generated = (difficulty: string, overrides: Record<string, unknown> = {}) 
 });
 
 function file(rows = [refCells]) {
-  return Buffer.from([[...QUESTION_IMPORT_HEADERS, 'score'].join('\t'), ...rows.map((row) => row.join('\t'))].join('\n'));
+  return Buffer.from(['category\ttype\tdifficulty\tconcept\tstem\toptions\tanswer\tanalysis\tscore', ...rows.map((row) => row.join('\t'))].join('\n'));
 }
 
 function fixture() {
@@ -36,6 +36,7 @@ function fixture() {
   const revisions: any[] = [];
   const cache = new Map<string, string>();
   const logs: unknown[] = [];
+  const prompts: any[] = [];
   const batchRepo: any = {
     create: (value: any) => ({ ...value }),
     save: async (value: any) => {
@@ -108,8 +109,11 @@ function fixture() {
     set: async (key: string, value: string) => { cache.set(key, value); },
     get: async (key: string) => cache.get(key) || null,
   };
-  const gateway: any = { chat: vi.fn(async () => JSON.stringify([generated('easy'), generated('hard')])) };
-  return { batches, questions, revisions, cache, logs, importer, imports, versions, gateway, redis, config, vRepo };
+  const gateway: any = { chat: vi.fn(async (messages: unknown) => {
+    prompts.push(structuredClone(messages));
+    return JSON.stringify([generated('easy'), generated('hard')]);
+  }) };
+  return { batches, questions, revisions, cache, logs, prompts, importer, imports, versions, gateway, redis, config, vRepo };
 }
 
 async function aiFixture() {
@@ -131,7 +135,7 @@ async function finished(ai: any, id: string) {
 afterEach(() => vi.useRealTimers());
 
 describe('AI import transaction boundary', () => {
-  it('keeps generated preview separate and commits selected rows as pending AI revision 1 exactly once', async () => {
+  it('keeps generated preview separate and commits selected rows as enabled AI revision 1 exactly once', async () => {
     const f = fixture();
     const preview = await f.importer.previewAiGenerated('1', [draft(), draft('hard', '困难新题')]);
     expect(f.questions).toEqual([]);
@@ -139,15 +143,44 @@ describe('AI import transaction boundary', () => {
     expect(f.batches[0].kind).toBe('questions_ai');
     await expect(f.imports.commitQuestions('1', preview.batch_id, [2])).rejects.toMatchObject({ code: 40302 });
     const first = await f.importer.commitAiGenerated('1', preview.batch_id, [2]);
+    expect(first.enabled).toBe(true);
     expect(await f.importer.commitAiGenerated('1', preview.batch_id, [2])).toEqual(first);
     expect(f.questions).toHaveLength(1);
     expect(f.questions[0].score).toBeNull();
     expect(f.revisions[0].scoreCents).toBeNull();
-    expect(f.questions[0]).toMatchObject({ status: 'pending', source: 'ai', regulationId: null, versionId: null });
-    expect(f.revisions[0]).toMatchObject({ revision: 1, status: 'pending', source: 'ai',
+    expect(f.questions[0]).toMatchObject({ status: 'approved', isEnabled: true, source: 'ai', regulationId: null, versionId: null, conceptId: null });
+    expect(f.revisions[0]).toMatchObject({ revision: 1, status: 'approved', source: 'ai', conceptId: null,
       approvedBy: null, approvedAt: null, reviewedBy: null, reviewedAt: null,
       regulationId: null, regulationVersionId: null });
     await expect(f.importer.commitAiGenerated('1', preview.batch_id, [3])).rejects.toMatchObject({ code: 40911 });
+  });
+
+  it('projects legacy uncommitted drafts without concept or score and preserves committed legacy receipts', async () => {
+    const f = fixture();
+    const preview = await f.importer.previewAiGenerated('1', [draft()]);
+    const batch = f.batches[0];
+    batch.normalizedRows = [{ row: 2, fingerprint: 'legacy-fingerprint', draft: { ...draft(), conceptId: '31', scoreCents: 725 } }];
+    const legacyStorage = structuredClone(batch.normalizedRows);
+    const read = await f.importer.readAiGenerated('1', preview.batch_id);
+    expect(read.rows[0]).not.toHaveProperty('concept'); expect(read.rows[0]).not.toHaveProperty('score');
+    const pending = await f.importer.readAiGeneratedDraft('1', preview.batch_id, 2);
+    expect(pending).not.toHaveProperty('conceptId'); expect(pending).not.toHaveProperty('scoreCents');
+    expect(batch.normalizedRows).toEqual(legacyStorage);
+    await f.importer.updateAiGenerated('1', preview.batch_id, 2, { stem: '旧批次无分值修订' }, pending);
+    expect(f.questions).toEqual([]); expect(f.revisions).toEqual([]);
+    const revised = await f.importer.readAiGeneratedDraft('1', preview.batch_id, 2);
+    expect(revised).not.toHaveProperty('conceptId'); expect(revised).not.toHaveProperty('scoreCents');
+    await expect(f.importer.updateAiGenerated('1', preview.batch_id, 2, { stem: '过期重生成结果' }, pending))
+      .rejects.toMatchObject({ code: 40911 });
+    const receipt = await f.importer.commitAiGenerated('1', preview.batch_id, [2]);
+    expect(receipt.enabled).toBe(true);
+    expect(f.questions[0]).toMatchObject({ conceptId: null, score: null, isEnabled: true });
+
+    f.batches[0].normalizedRows = legacyStorage;
+    const before = structuredClone(f.batches[0]);
+    const legacyReceipt = { batch_id: batch.id, created_ids: ['100'], committed_rows: [2] };
+    expect(await f.importer.commitAiGenerated('1', batch.id, [2])).toEqual(legacyReceipt);
+    expect(f.batches[0]).toEqual(before); expect(f.questions).toHaveLength(1);
   });
 
   it('rolls back questions, revisions and receipt when any revision write fails', async () => {
@@ -172,7 +205,7 @@ describe('ephemeral AI references', () => {
     if (format === 'xlsx') {
       const book = new ExcelJS.Workbook();
       const sheet = book.addWorksheet('refs');
-      sheet.addRow([...QUESTION_IMPORT_HEADERS, 'score']); sheet.addRow(refCells);
+      sheet.addRow(['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'score']); sheet.addRow(refCells);
       buffer = Buffer.from(await book.xlsx.writeBuffer());
     }
     const task = await f.ai.start('1', buffer, format);
@@ -180,7 +213,14 @@ describe('ephemeral AI references', () => {
     expect(done).toMatchObject({ status: 'completed', total_count: 1, completed_count: 1, generated_count: 2, failed_count: 0 });
     const batch = await f.ai.readBatch('1', done.batch_id);
     expect(batch.rows.map((row: any) => row.difficulty)).toEqual(['easy', 'hard']);
-    for (const row of batch.rows) expect(row).toMatchObject({ category: '10', type: 'single', concept: '', errors: [] });
+    for (const row of batch.rows) {
+      expect(row).toMatchObject({ category: '10', type: 'single', errors: [] });
+      expect(row).not.toHaveProperty('concept'); expect(row).not.toHaveProperty('score');
+    }
+    expect(batch.warnings).toEqual(['旧模板分值已忽略，请在组卷时设置']);
+    const prompt = JSON.parse(f.prompts[0][1].content);
+    expect(prompt.reference).toMatchObject({ category: '10', type: 'single', stem: reference });
+    expect(prompt.reference).not.toHaveProperty('concept'); expect(prompt.reference).not.toHaveProperty('score');
     const persistent = JSON.stringify({ cache: [...f.cache.values()], batches: f.batches, logs: f.logs });
     expect(persistent).not.toContain(reference);
     expect(persistent).not.toContain('参考解析');
@@ -247,10 +287,10 @@ describe('ephemeral AI references', () => {
     expect(await f.importer.commitAiGenerated('1', preview.batch_id, [2])).toEqual(receipt);
   });
 
-  it('supports multiple and judgment references with the original concept and without a bank score', async () => {
+  it('supports multiple and judgment references without concepts or bank scores', async () => {
     const f = await aiFixture();
     const cases = [
-      { type: 'multiple', options, answer: [0, 1], concept: '31' },
+      { type: 'multiple', options, answer: [0, 1], concept: '' },
       { type: 'judgment', options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], answer: [1], concept: '' },
     ];
     f.importer.conceptRepo = { findOne: async () => ({ id: '31', categoryId: '10', type: 'multiple', name: '检查' }) };
@@ -268,7 +308,7 @@ describe('ephemeral AI references', () => {
     const done = await finished(f.ai, task.task_id);
     const batch = await f.ai.readBatch('1', done.batch_id);
     expect(batch.rows).toHaveLength(4);
-    expect(batch.rows.filter((row) => row.type === 'multiple').every((row) => row.concept === '31' && !('score' in row))).toBe(true);
+    expect(batch.rows.every((row) => !('concept' in row) && !('score' in row))).toBe(true);
     await f.ai.commit('1', done.batch_id, batch.valid_rows);
     expect(f.questions.map((row) => row.type).sort()).toEqual(['judgment', 'judgment', 'multiple', 'multiple']);
   });
@@ -306,7 +346,7 @@ describe('ephemeral AI references', () => {
     await expect(f.ai.commit('1', done.batch_id, [2])).rejects.toMatchObject({ code: 40302 });
   });
 
-  it('edits only generated content, regenerates with trusted fields fixed, and exports strict eight columns', async () => {
+  it('edits only generated content, regenerates with trusted fields fixed, and exports strict seven columns', async () => {
     const f = await aiFixture();
     const task = await f.ai.start('1', file(), 'txt');
     const done = await finished(f.ai, task.task_id);

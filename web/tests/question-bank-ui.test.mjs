@@ -359,6 +359,7 @@ function registerUi(app) {
     'el-alert', 'el-empty', 'el-tag', 'el-input', 'el-form', 'el-form-item', 'el-select', 'el-option',
     'el-input-number', 'el-checkbox', 'el-radio-group', 'el-radio', 'el-text', 'el-divider', 'el-timeline',
     'el-timeline-item', 'el-result', 'el-tabs', 'el-tab-pane', 'el-upload', 'el-icon', 'el-radio-button',
+    'el-step', 'el-steps', 'el-collapse', 'el-collapse-item',
   ];
   for (const name of wrappers) app.component(name, Wrapper);
   app.component('el-button', Button);
@@ -550,6 +551,8 @@ function legacyRow(overrides = {}) {
     current_version_id: null,
     revision: null,
     status: 'pending',
+    enabled: true,
+    updated_at: '2026-10-26T00:00:00Z',
     source: 'ai',
     type: 'single',
     stem: '<img src="https://attacker.invalid/a.png" onerror="globalThis.pwned=1"><script>globalThis.pwned=2</script><p>旧题</p>',
@@ -625,7 +628,6 @@ before(async () => {
     configFile: resolve(webRoot, 'vite.config.ts'),
     server: { middlewareMode: true, hmr: false, ws: false },
     appType: 'custom',
-
     plugins: [plugin()],
   });
   trainingTypes = await vite.ssrLoadModule('/src/api/training-types.ts');
@@ -1041,7 +1043,8 @@ test('question management exposes manual editing and single-question regeneratio
   try {
     assert.ok(button(mounted.root, '人工录题'));
     assert.ok(button(mounted.root, '修订'));
-    assert.ok(button(mounted.root, '重生成'));
+    assert.equal(button(mounted.root, '重生成'), null);
+    assert.ok(button(mounted.root, '试题导入'));
     assert.equal(!!button(mounted.root, 'AI 出题'), false, 'bulk AI generation belongs in the import page');
     assert.equal(!!button(mounted.root, 'Excel / TXT 导题'), false, 'file import belongs in its standalone menu');
     assert.equal(walk(mounted.root, (node) => node.type === 'dialog' && /AI 出题|出题资料管理/.test(node.props.title || '')).length, 0);
@@ -1175,34 +1178,94 @@ test('the existing form saves schema 3 answers with exact revision identity and 
   } finally { mounted.unmount(); }
 });
 
-test('sends the exact decimal expected version for review and regenerate', async () => {
+test('sends the exact decimal expected version for lifecycle changes', async () => {
   context.row = legacyRow({ current_version_id: '900719925474099312345', revision: 3, difficulty: 'medium' });
   const mounted = mount(Questions);
   await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
   await nextTick();
-  await click(button(mounted.root, '通过'));
-  await click(button(mounted.root, '重生成'));
-  const review = context.calls.find((call) => call.method === 'put' && call.url.endsWith('/review'));
-  const regenerate = context.calls.find((call) => call.method === 'post' && call.url.endsWith('/regenerate'));
-  assert.deepEqual(review.body, { expected_version_id: '900719925474099312345', status: 'approved', reason: undefined });
-  assert.deepEqual(regenerate.body, { expected_version_id: '900719925474099312345' });
+  await mounted.instance.$.setupState.setQuestionEnabled(context.row, false);
+  const mutation = context.calls.find((call) => call.method === 'put' && call.url.endsWith('/enabled'));
+  assert.deepEqual(mutation.body, { expected_version_id: '900719925474099312345', enabled: false });
   mounted.unmount();
 });
 
-test('consumes and pages the questions:read concept Page without changing the legacy question list shape', async () => {
+test('keeps all five question filters visible with grouped query actions after the fields', async () => {
+  const mounted = mount(Questions);
+  try {
+    await waitFor(() => context.calls.some((call) => call.url === '/ai/questions'), 'question list');
+    const search = walk(mounted.root, (node) => node.props.class === 'fits-list-search')[0];
+    assert.ok(search);
+    const labels = ['培训类别', '题干', '题型', '难度', '启用状态'];
+    const fields = walk(search, (node) => labels.includes(node.props.label));
+    assert.deepEqual(fields.map((node) => node.props.label), labels);
+    assert.equal(button(search, '更多筛选'), null);
+    const actions = walk(search, (node) => node.props.class === 'fits-list-search__actions')[0];
+    assert.ok(actions, 'query and reset should use the responsive action group');
+    assert.deepEqual(walk(actions, (node) => node.type === 'button').map(nodeText), ['查询', '重置']);
+    assert.ok(search.children.indexOf(actions) > search.children.indexOf(fields.at(-1)), 'actions should follow all filter fields');
+  } finally { mounted.unmount(); }
+});
+
+test('explicit filter submit resets pagination and never requests concepts', async () => {
   const mounted = mount(Questions);
   await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
   const categorySelect = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '培训类别')[0];
   assert.ok(categorySelect);
   categorySelect.props['onUpdate:modelValue']?.('7');
-  await categorySelect.props.onChange?.('7');
-  await waitFor(() => context.calls.some((call) => call.url === '/ai/question-concepts'), 'filter concepts');
-  const first = context.calls.find((call) => call.url === '/ai/question-concepts');
-  assert.deepEqual(first.config.params, { category_id: '7', page: 1, page_size: 20 });
-  await click(button(mounted.root, `page-${context.conceptTotal}-2`));
-  await waitFor(() => context.calls.some((call) => call.url === '/ai/question-concepts' && call.config?.params?.page === 2), 'second filter concept page');
-  assert.ok(context.calls.some((call) => call.url === '/ai/questions' && call.method === 'get'));
+  const state = mounted.instance.$.setupState;
+  state.query.page = 3;
+  await state.submitFilters();
+  assert.equal(context.calls.at(-1).config.params.page, 1);
+  assert.equal(context.calls.at(-1).config.params.enabled, true);
+  assert.equal(context.calls.some((call) => call.url.includes('question-concept')), false);
+  state.query.page = 2;
+  await state.resetFilters();
+  assert.deepEqual(context.calls.at(-1).config.params, { page: 1, page_size: 20, enabled: true });
   mounted.unmount();
+});
+
+test('stale enabled baseline retains edits until an explicit refresh and save', async () => {
+  context.row = legacyRow({ difficulty: 'easy', current_version_id: '21' });
+  const normalHttp = context.http;
+  let conflict = true;
+  context.http = async (method, url, body, config) => {
+    if (method === 'get' && url === '/ai/questions/' + context.row.question_id) return { ...context.row, enabled: false };
+    if (method === 'put' && url === '/ai/questions/' + context.row.question_id && conflict) {
+      context.calls.push({ method, url, body, config });
+      throw Object.assign(new Error('题目状态已改变'), { code: 40940 });
+    }
+    return normalHttp(method, url, body, config);
+  };
+  const mounted = mount(Questions);
+  try {
+    await waitFor(() => button(mounted.root, '修订'), 'question list');
+    await click(button(mounted.root, '修订'));
+    const state = mounted.instance.$.setupState;
+    state.editorForm.stem = '保留的编辑';
+    await state.saveQuestion();
+    assert.equal(state.editorForm.stem, '保留的编辑');
+    assert.equal(context.calls.find((call) => call.method === 'put').body.expected_enabled, true);
+    await click(button(mounted.root, '刷新题目状态'));
+    assert.equal(state.editorForm.stem, '保留的编辑');
+    conflict = false;
+    await click(button(mounted.root, '保存并启用'));
+    assert.equal(context.calls.filter((call) => call.method === 'put').at(-1).body.expected_enabled, false);
+  } finally { mounted.unmount(); }
+});
+
+test('current preview opens when history fails and offers a retry', async () => {
+  const normalHttp = context.http;
+  context.http = async (method, url, body, config) => {
+    if (url.endsWith('/history')) throw new Error('历史不可用');
+    return normalHttp(method, url, body, config);
+  };
+  const mounted = mount(Questions);
+  try {
+    await waitFor(() => button(mounted.root, '预览'), 'question list');
+    await click(button(mounted.root, '预览'));
+    assert.ok(walk(mounted.root, (node) => node.type === 'question-preview-stub').length);
+    assert.ok(button(mounted.root, '重试加载历史'));
+  } finally { mounted.unmount(); }
 });
 
 test('manual authoring does not request concept options or show concept pagination', async () => {
@@ -1250,10 +1313,8 @@ test('protects the real question edit draft across cancel, stale failure, discar
     }
     return normalHttp(method, url, body, config);
   };
-  await assert.rejects(
-    () => button(mounted.root, '保存').props.onClick(),
-    (error) => error?.code === 40940,
-  );
+  await button(mounted.root, '保存').props.onClick();
+  assert.equal(mounted.instance.$.setupState.editorStateConflict, true);
   await nextTick();
   assert.equal(source.dirty.value, true, 'stale save must keep the draft dirty');
   assert.ok(button(mounted.root, '保存'), 'stale save must keep the editor open');
@@ -1423,10 +1484,8 @@ test('uses the mutation receipt instead of a later view pointer for the next que
   assert.equal(mounted.instance.$.setupState.editingExpectedVersionId, '102');
   assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'easy');
   assert.equal(source.dirty.value, true);
-  await assert.rejects(
-    () => button(mounted.root, '保存').props.onClick(),
-    (error) => error?.code === 40940,
-  );
+  await button(mounted.root, '保存').props.onClick();
+  assert.equal(mounted.instance.$.setupState.editorStateConflict, true);
   const secondRequest = context.calls.filter((call) => call.method === 'put' && call.url === `/ai/questions/${context.row.question_id}`).at(-1);
   assert.equal(secondRequest.body.expected_version_id, '102', 'next edit must use the mutation receipt, not view current v3');
   assert.equal(mounted.instance.$.setupState.editorVisible, true);
@@ -1457,6 +1516,9 @@ test('keeps a question draft when a successful mutation response has no valid re
   assert.equal(mounted.instance.$.setupState.editingExpectedVersionId, '101');
   assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'hard');
   assert.equal(source.dirty.value, true);
+  assert.equal(button(mounted.root, '保存').props.disabled, true);
+  await mounted.instance.$.setupState.saveQuestion();
+  assert.equal(context.calls.filter((call) => call.method === 'put').length, 1, 'unknown receipt must not resend the mutation');
   mounted.unmount();
 });
 
@@ -1594,7 +1656,7 @@ test('AI import uploads a transient reference file, polls its task and renders o
     const rows = walk(mounted.root, (node) => node.type === 'table').at(-1).props.data;
     assert.deepEqual(rows.map((row) => row.difficulty), ['easy', 'hard', 'easy']);
     assert.equal(rows.some((row) => row.stem.includes('原始参考题')), false);
-    assert.ok(button(mounted.root, '确认导入 2 道待审核题目'));
+    assert.ok(button(mounted.root, '确认导入并启用 2 道题目'));
     const stateValues = Object.values(mounted.instance.$.setupState);
     assert.equal(stateValues.some((value) => value instanceof File), false, 'the page must not retain reference files');
   } finally { mounted.unmount(); }
@@ -1686,8 +1748,43 @@ test('AI preview edits only generated content, regenerates one row, downloads an
     await click(button(mounted.root, '下载 Excel'));
     await click(button(mounted.root, '下载 TXT'));
     assert.deepEqual(context.downloads.map((item) => item.params.format), ['xlsx', 'txt']);
-    await click(button(mounted.root, '确认导入 2 道待审核题目'));
+    await click(button(mounted.root, '确认导入并启用 2 道题目'));
     assert.deepEqual(context.calls.find((call) => call.url.endsWith('/commit')).body, { row_numbers: [2, 3] });
+    assert.deepEqual(context.navigations, ['/admin/questions']);
+  } finally { mounted.unmount(); }
+});
+
+test('ordinary valid rows can be previewed and only selected valid row IDs are confirmed', async () => {
+  const normalHttp = context.http;
+  context.http = async (method, url, body, config) => {
+    if (method === 'upload') return { batch_id: '401', valid_rows: [2, 5], duplicates: [], errors: [], warnings: ['旧模板分值已忽略，请在组卷时设置'], rows: [
+      { row_number: 2, category: '7', type: 'single', difficulty: 'easy', stem: '普通有效题', options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }], answer: [0], analysis: '', errors: [] },
+      { row_number: 5, category: '7', type: 'judgment', difficulty: 'hard', stem: '另一有效题', options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }], answer: [1], analysis: '', errors: [] },
+    ] };
+    if (method === 'post' && url.endsWith('/commit')) {
+      context.calls.push({ method, url, body, config });
+      return { batch_id: '401', created_ids: ['801'], committed_rows: body.row_numbers, enabled: true };
+    }
+    return normalHttp(method, url, body, config);
+  };
+  const mounted = mount(QuestionImport);
+  try {
+    await waitFor(() => button(mounted.root, '选择文件并预览'), 'import form');
+    const uploader = walk(mounted.root, (node) => node.type === 'el-wrapper' && (node.props['on-change'] || node.props.onChange))[0];
+    await (uploader.props['on-change'] || uploader.props.onChange)({ raw: new File(['ordinary'], 'ordinary.xlsx') });
+    await nextTick();
+    const state = mounted.instance.$.setupState;
+    await state.previewFileRow(state.preview.rows[0]);
+    assert.equal(walk(mounted.root, (node) => node.type === 'question-preview-stub')[0].props.stem, '普通有效题');
+    const warning = '旧模板分值已忽略，请在组卷时设置';
+    assert.equal(walk(mounted.root, (node) => node.props.title === warning).length, 1);
+    state.preview.warnings.push(warning);
+    await nextTick();
+    assert.equal(walk(mounted.root, (node) => node.props.title === warning).length, 1);
+    state.fileSelectedRows = [5, 999];
+    await state.commitImport();
+    assert.deepEqual(context.calls.find((call) => call.url.endsWith('/commit')).body, { row_numbers: [5] });
+    assert.match(context.messages.at(-1).message, /已启用/);
     assert.deepEqual(context.navigations, ['/admin/questions']);
   } finally { mounted.unmount(); }
 });
@@ -1706,16 +1803,16 @@ test('ordinary file import keeps template defaults and commits its original vali
   const mounted = mount(QuestionImport);
   try {
     await nextTick();
-    const category = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '文件 category 为空时使用')[0];
+    const category = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '文件未填写培训类别时使用')[0];
     category.props['onUpdate:modelValue']('7');
-    const difficulty = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '文件 difficulty 为空时使用')[0];
+    const difficulty = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '文件未填写难度时使用')[0];
     difficulty.props['onUpdate:modelValue']('medium');
-    await click(button(mounted.root, '下载 XLSX 模板'));
+    await click(button(mounted.root, '下载 Excel 模板（推荐）'));
     const uploader = walk(mounted.root, (node) => node.type === 'el-wrapper' && (node.props['on-change'] || node.props.onChange))[0];
     await (uploader.props['on-change'] || uploader.props.onChange)({ raw: new File(['ordinary'], 'ordinary.xlsx') });
     await nextTick();
     assert.deepEqual(context.calls.find((call) => call.method === 'upload').body.fields, { format: 'xlsx', category_id: '7', difficulty: 'medium' });
-    await click(button(mounted.root, '确认导入 2 行'));
+    await click(button(mounted.root, '确认导入并启用 2 行'));
     assert.deepEqual(context.calls.find((call) => call.url.endsWith('/commit')).body, { row_numbers: [2, 5] });
     assert.equal(context.downloads[0].url, '/admin/questions/import-template');
     assert.deepEqual(context.navigations, ['/admin/questions']);
@@ -1929,7 +2026,7 @@ test('AI editing reconciles a lost write response from inside the dialog before 
     const dialog = walk(mounted.root, (node) => node.type === 'dialog' && node.props.title === '修改生成题')[0];
     assert.ok(dialog);
     assert.equal(button(dialog, '保存修改').props.disabled, true);
-    assert.equal(button(mounted.root, '确认导入 2 道待审核题目').props.disabled, true);
+    assert.equal(button(mounted.root, '确认导入并启用 2 道题目').props.disabled, true);
     assert.equal(button(mounted.root, '下载 Excel').props.disabled, true);
     assert.equal(button(mounted.root, '预览').props.disabled, true);
     await click(button(dialog, '查询原批次状态'));
@@ -1938,7 +2035,7 @@ test('AI editing reconciles a lost write response from inside the dialog before 
     assert.equal(walk(mounted.root, (node) => node.type === 'dialog' && node.props.title === '修改生成题').length, 0);
     const rows = walk(mounted.root, (node) => node.type === 'table').at(-1).props.data;
     assert.equal(rows[0].stem, '服务端已修改的新题干');
-    assert.equal(button(mounted.root, '确认导入 2 道待审核题目').props.disabled, false);
+    assert.equal(button(mounted.root, '确认导入并启用 2 道题目').props.disabled, false);
   } finally { mounted.unmount(); }
 });
 

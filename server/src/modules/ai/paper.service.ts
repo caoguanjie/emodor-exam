@@ -8,7 +8,7 @@ import { QuestionVersion } from '../../entities/question-version.entity';
 import { Regulation } from '../../entities/regulation.entity';
 import { TrainingCourse } from '../../entities/training-course.entity';
 import { PaperRelease } from '../../entities/paper-release.entity';
-import { Errors, PaperStatus, QuestionStatus } from '../../common/errors';
+import { Errors, PaperStatus } from '../../common/errors';
 import { activeDifficulties, assertActiveDifficulty } from '../../common/question-difficulty';
 import { AuditService } from '../../common/audit.service';
 import type { Difficulty, PoolRule, QuestionType, RuleSnapshot } from '../../common/training-contracts';
@@ -33,7 +33,7 @@ function cloneJson<T>(value: T): T {
 }
 
 /**
- * 组卷服务（05 册 4.4.7）：试卷策略配置、选题入卷校验（approved + 同制度 + 不重复）、
+ * 组卷服务：试卷策略配置、选题入卷校验（启用 + 同制度 + 题目身份不重复）、
  * 发布校验 SUM(paper_question.score) = 100（C-04）、发布后 paper_question 锁定（40907）。
  * 升级后新发布的制度卷冻结题目版本、实际分值和策略；真正升级前无 release 的 published 卷保留兼容语义。
  */
@@ -262,7 +262,7 @@ export class PaperService {
         if (!q) throw Errors.param(`题目 ${it.question_id} 不存在`);
         this.assertLegacyFixedQuestion(q);
         assertActiveDifficulty(q.difficulty);
-        if (q.status !== QuestionStatus.APPROVED) throw Errors.param(`题目 ${it.question_id} 未审核通过，不能入卷`);
+        if (!q.isEnabled) throw Errors.paperReleaseConflict(`题目 ${it.question_id} 已停用，不能入卷`);
         if (q.regulationId !== paper.regulationId) throw Errors.param(`题目 ${it.question_id} 与试卷不属于同一制度`);
         if (seen.has(q.id)) throw Errors.param(`题目 ${it.question_id} 重复`);
         seen.add(q.id);
@@ -272,7 +272,7 @@ export class PaperService {
           paperId: id,
           questionId: q.id,
           questionVersionId: q.currentVersionId ? String(q.currentVersionId) : null,
-          conceptId: q.conceptId ? String(q.conceptId) : null,
+          conceptId: null,
           sort: i,
           score: String(it.score),
         }));
@@ -346,12 +346,12 @@ export class PaperService {
       const rows = release?.businessScope === 'regulation'
         ? release.pool.map((snapshot, index) => itemRepo.create({
           paperId: String(created.id), questionId: String(snapshot.questionId),
-          questionVersionId: String(snapshot.versionId), conceptId: snapshot.conceptId || null,
+          questionVersionId: String(snapshot.versionId), conceptId: null,
           sort: index, score: (Number(snapshot.scoreCents) / 100).toFixed(2),
         }))
         : links.map((item) => itemRepo.create({
           paperId: String(created.id), questionId: item.questionId, questionVersionId: item.questionVersionId,
-          conceptId: item.conceptId, sort: item.sort, score: item.score,
+          conceptId: null, sort: item.sort, score: item.score,
         }));
       if (rows.length) await itemRepo.save(rows);
       return created;
@@ -485,6 +485,8 @@ export class PaperService {
     const versionIds = links.map((item) => item.questionVersionId).filter((value): value is string => Boolean(value));
     const versions = versionIds.length ? await this.versionRepo.findBy({ id: In(versionIds) }) : [];
     const versionMap = new Map(versions.map((item) => [String(item.id), item]));
+    const questions = links.length ? await this.questionRepo.findBy({ id: In(links.map((item) => String(item.questionId))) }) : [];
+    const questionMap = new Map(questions.map((item) => [String(item.id), item]));
     const latestRelease = await this.releaseRepo.findOne({ where: { paperId: String(id) }, order: { versionNo: 'DESC' } });
     return {
       ...this.trainingPaperView(paper),
@@ -500,11 +502,10 @@ export class PaperService {
           score_cents: Math.round(Number(item.score) * 100),
           type: version?.type || null,
           difficulty: version?.difficulty || null,
-          concept_id: version?.conceptId ? String(version.conceptId) : null,
           regulation_id: version?.regulationId ? String(version.regulationId) : null,
           stem: version?.stem || '',
           options: cloneJson(version?.options || []),
-          status: version?.status || null,
+          enabled: Boolean(questionMap.get(String(item.questionId))?.isEnabled),
         };
       }),
     };
@@ -619,31 +620,35 @@ export class PaperService {
       const versions = await manager.getRepository(QuestionVersion).findBy({ id: In(versionIds) });
       if (versions.length !== versionIds.length) throw Errors.paperRuleInvalid('固定题单包含不存在的题目版本');
       const versionMap = new Map(versions.map((item) => [String(item.id), item]));
-      const questionIds = versions.map((item) => String(item.questionId));
-      const questions = await manager.getRepository(Question).findBy({ id: In(questionIds) });
+      const questionIds = [...new Set(versions.map((item) => String(item.questionId)))].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+      const questions: Question[] = [];
+      for (const questionId of questionIds) {
+        const question = await manager.getRepository(Question).findOne({ where: { id: questionId }, lock: { mode: 'pessimistic_write' } });
+        if (question) questions.push(question);
+      }
       const questionMap = new Map(questions.map((item) => [String(item.id), item]));
       const regulationIds = new Set((paper.regulationIds || []).map(String));
-      const concepts = new Set<string>();
+      const selectedQuestions = new Set<string>();
       const rows: PaperQuestion[] = [];
       const groupedRules = new Map<string, PoolRule>();
       for (let index = 0; index < items.length; index += 1) {
         const input = items[index];
         const version = versionMap.get(String(input.question_version_id));
         const question = version && questionMap.get(String(version.questionId));
-        if (!version || !question || version.status !== 'approved' || String(question.currentVersionId) !== String(version.id)) {
-          throw Errors.paperReleaseConflict(`题目版本 ${input.question_version_id} 已不是当前审核通过版本`);
+        if (!version || !question || !question.isEnabled || String(question.currentVersionId) !== String(version.id)) {
+          throw Errors.paperReleaseConflict(`题目版本 ${input.question_version_id} 已停用或不是当前版本，请重新选题`);
         }
         if (String(version.categoryId) !== categoryId) throw Errors.paperRuleInvalid('固定题目必须与试卷属于同一培训类别');
         assertActiveDifficulty(version.difficulty);
         if (regulationIds.size && (!version.regulationId || !regulationIds.has(String(version.regulationId)))) {
           throw Errors.paperRuleInvalid('固定题目不在试卷制度筛选范围内');
         }
-        const conceptKey = version.conceptId ? `concept:${version.conceptId}` : `question:${version.questionId}`;
-        if (concepts.has(conceptKey)) throw Errors.paperRuleInvalid('固定题单存在重复考点');
-        concepts.add(conceptKey);
+        const questionId = String(version.questionId);
+        if (selectedQuestions.has(questionId)) throw Errors.paperRuleInvalid('固定题单不能重复选择同一题目');
+        selectedQuestions.add(questionId);
         rows.push(manager.getRepository(PaperQuestion).create({
           paperId: String(id), questionId: String(version.questionId), questionVersionId: String(version.id),
-          conceptId: version.conceptId ? String(version.conceptId) : null, sort: index,
+          conceptId: null, sort: index,
           score: (Number(input.score_cents) / 100).toFixed(2),
         }));
         const ruleKey = `${version.type}:${input.score_cents}`;
@@ -661,7 +666,7 @@ export class PaperService {
         sum_score_cents: totalCents,
         questions: rows.map((row) => ({
           question_id: String(row.questionId), question_version_id: String(row.questionVersionId),
-          concept_id: row.conceptId, sort: row.sort, score_cents: Math.round(Number(row.score) * 100),
+          enabled: true, sort: row.sort, score_cents: Math.round(Number(row.score) * 100),
         })),
       };
     });
@@ -683,7 +688,7 @@ export class PaperService {
     const snapshots: QuestionVersionSnapshot[] = [];
     for (const difficulty of difficulties) {
       for (const type of types) {
-        snapshots.push(...await this.versions.approvedCandidates({
+        snapshots.push(...await this.versions.enabledCandidates({
           categoryId: String(paper.categoryId), type, difficulty,
           ...(regulationIds.length ? { regulationIds } : {}),
         }));
@@ -696,7 +701,7 @@ export class PaperService {
     const items = unique.slice((page - 1) * pageSize, page * pageSize).map((item) => ({
       question_id: String(item.questionId), question_version_id: String(item.versionId), revision: item.revision,
       category_id: String(item.categoryId), difficulty: item.difficulty, type: item.type, stem: item.stem,
-      options: cloneJson(item.options), concept_id: item.conceptId || null,
+      options: cloneJson(item.options), enabled: true,
       regulation_id: item.regulationId || null, source: item.source,
     }));
     return { items, total: unique.length, page, page_size: pageSize };
@@ -756,7 +761,7 @@ export class PaperService {
       }));
       if (links.length) await manager.getRepository(PaperQuestion).save(links.map((item) => manager.getRepository(PaperQuestion).create({
         paperId: String(created.id), questionId: item.questionId, questionVersionId: item.questionVersionId,
-        conceptId: item.conceptId, sort: item.sort, score: item.score,
+        conceptId: null, sort: item.sort, score: item.score,
       })));
       return created;
     });

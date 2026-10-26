@@ -89,7 +89,6 @@ export async function run(ctx) {
     options: [{ text: '正确项' }, { text: '错误项' }],
     answer: [0],
     analysis: '<p>记录回归解析</p>',
-    score: 100,
   });
   assert.equal(question.status, 200, JSON.stringify(question));
   const paper = await ctx.request(admin.actor, 'POST', '/admin/papers', {

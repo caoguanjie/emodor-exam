@@ -62,6 +62,9 @@ async function historyDigest(connection) {
   const facts = {};
   for (const table of ['question', 'question_version', 'exam_paper', 'paper_release', 'paper_release_question', 'exam_record', 'exam_record_question', 'exam_answer']) {
     [facts[table]] = await connection.query(`SELECT * FROM \`${table}\` ORDER BY id`);
+    // 026 adds a lifecycle fact; this 025 test protects all pre-existing values.
+    // Lifecycle backfill and replay behavior have their own migration suite.
+    if (table === 'question') facts[table] = facts[table].map(({ is_enabled: _lifecycle, ...historical }) => historical);
   }
   return createHash('sha256').update(JSON.stringify(facts)).digest('hex');
 }

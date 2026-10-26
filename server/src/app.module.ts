@@ -85,7 +85,7 @@ import { AiConfigService } from './modules/ai/ai-config.service';
 import { AiGatewayService } from './modules/ai/ai-gateway.service';
 import { PdfVisionService } from './modules/ai/pdf-vision.service';
 import { QuestionGenerationService } from './modules/ai/question-generation.service';
-import { QuestionReviewService } from './modules/ai/question-review.service';
+import { QuestionBankService } from './modules/questions/question-bank.service';
 import { PaperService } from './modules/ai/paper.service';
 import { QuestionMaterialsController } from './modules/question-materials/question-materials.controller';
 import { QuestionMaterialsService } from './modules/question-materials/question-materials.service';
@@ -134,7 +134,6 @@ import { CourseService } from './modules/courses/course.service';
 import { LessonVersionService } from './modules/courses/lesson-version.service';
 import { VideoLearningController } from './modules/video-learning/video-learning.controller';
 import { VideoSessionService } from './modules/video-learning/video-session.service';
-import { QuestionConceptService } from './modules/questions/question-concept.service';
 import { QuestionVersionService } from './modules/questions/question-version.service';
 import { QuestionAuthoringController } from './modules/questions/question-authoring.controller';
 import { QuestionAuthoringService } from './modules/questions/question-authoring.service';
@@ -185,7 +184,7 @@ const config = loadConfig();
     { provide: SMS_PROVIDER, useExisting: YunxinSmsProvider },
     AccessService, DepartmentService, UsersService, CategoryService, ImportBatchService,
     RegulationVersionService, RegulationScopeService, ParsePipelineService, ContentService, QuestionMaterialsService,
-    AiConfigService, AiGatewayService, PdfVisionService, QuestionGenerationService, QuestionReviewService, PaperService,
+    AiConfigService, AiGatewayService, PdfVisionService, QuestionGenerationService, QuestionBankService, PaperService,
     LearningSessionService, ExamService, AttemptService, AttemptReaderService, LegacyExamAdapter, AnswerDraftService, SubmissionService,
     ExamHistoryService, ExamRecordsService,
     ShuffleService, GradingService, PaperReleaseService, SamplingService, StatisticsService, TrainingStatisticsService,
@@ -204,7 +203,7 @@ const config = loadConfig();
     },
     CourseService, LessonVersionService,
     VideoSessionService,
-    QuestionConceptService, QuestionVersionService, QuestionAuthoringService, QuestionImportService, AiQuestionImportService,
+    QuestionVersionService, QuestionAuthoringService, QuestionImportService, AiQuestionImportService,
     SystemService, AuditQueryService,
     // 守卫链（07 册 2.3.2）：① JWT 认证 → ② 细权限映射 → ③ 兼容角色边界
     { provide: APP_GUARD, useClass: JwtAuthGuard },

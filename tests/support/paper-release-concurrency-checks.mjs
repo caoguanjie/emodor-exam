@@ -10,6 +10,9 @@ const { PaperReleaseQuestion } = require('./dist/entities/paper-release-question
 const { Question } = require('./dist/entities/question.entity.js');
 const { QuestionVersion } = require('./dist/entities/question-version.entity.js');
 const { Regulation } = require('./dist/entities/regulation.entity.js');
+const { RegulationVersion } = require('./dist/entities/regulation-version.entity.js');
+const { MediaAsset } = require('./dist/entities/media-asset.entity.js');
+const { MediaReference } = require('./dist/entities/media-reference.entity.js');
 const { TrainingCategory } = require('./dist/entities/training-category.entity.js');
 const { TrainingCourse } = require('./dist/entities/training-course.entity.js');
 const { CategoryService } = require('./dist/modules/training/category.service.js');
@@ -39,11 +42,12 @@ function dataSourceOptions(ctx) {
     entities: [
       TrainingCategory, TrainingCourse, Regulation, ExamPaper, PaperQuestion,
       PaperRelease, PaperReleaseQuestion, Question, QuestionVersion,
+      RegulationVersion, MediaAsset, MediaReference,
     ],
     synchronize: false,
     logging: false,
     // The publication transaction owns this sole connection. Any accidental
-    // global-repository borrow from approvedCandidates would stall here.
+    // global-repository borrow from enabledCandidates would stall here.
     extra: { connectionLimit: 1 },
   };
 }
@@ -170,6 +174,58 @@ export async function provePaperReleaseSingleConnectionPools(ctx, paperIds, acto
       try { await dataSource.destroy(); } catch (error) { failures.push(error); }
     }
     if (failures.length) throw new AggregateError(failures, 'paper release concurrency DataSource cleanup failed');
+  }
+}
+
+/** Disable commits after publication has begun, but before its identity lock. */
+export async function proveDisableWinsPublication(ctx, paperId, questionId, actorId) {
+  const pair = await createPair(ctx);
+  const disabled = deferred();
+  const allowCommit = deferred();
+  const publishLockEntered = deferred();
+  let disabling;
+  let publishing;
+  try {
+    disabling = capture(pair.dataSourceB.transaction(async (manager) => {
+      const repo = manager.getRepository(Question);
+      const question = await repo.findOne({ where: { id: String(questionId) }, lock: { mode: 'pessimistic_write' } });
+      assert(question?.isEnabled, 'concurrent fixture must initially be enabled');
+      question.isEnabled = false;
+      await repo.save(question);
+      disabled.resolve();
+      await allowCommit.promise;
+    }));
+    await withTimeout(disabled.promise, 10_000, 'disable did not acquire its identity lock');
+    pair.serviceA.dataSource = {
+      transaction: (work) => pair.dataSourceA.transaction((manager) => work(new Proxy(manager, {
+        get(target, property) {
+          if (property !== 'getRepository') return Reflect.get(target, property);
+          return (entity) => {
+            const repo = target.getRepository(entity);
+            if (entity !== Question) return repo;
+            return new Proxy(repo, {
+              get(repository, method) {
+                if (method !== 'findOne') return Reflect.get(repository, method);
+                return (options) => { publishLockEntered.resolve(); return repository.findOne(options); };
+              },
+            });
+          };
+        },
+      }))),
+    };
+    publishing = capture(pair.serviceA.publish(String(paperId), String(actorId)));
+    await withTimeout(publishLockEntered.promise, 10_000, 'publication did not re-lock the selected identity');
+    allowCommit.resolve();
+    const [disableResult, publishResult] = await withTimeout(Promise.all([disabling, publishing]), 10_000, 'disable/publication race stalled');
+    assert(disableResult.status === 'fulfilled', 'disable transaction did not commit');
+    assert(publishResult.status === 'rejected' && publishResult.reason?.code === 40970, 'publication did not reject the concurrently disabled identity');
+    const [row] = await pair.dataSourceA.query('SELECT status,(SELECT COUNT(*) FROM paper_release WHERE paper_id=?) AS releases FROM exam_paper WHERE id=?', [String(paperId), String(paperId)]);
+    assert(row.status === 'draft' && Number(row.releases) === 0, 'conflicting publication left partial release facts');
+    return { connection_ids: pair.connectionIds, conflict_code: publishResult.reason.code };
+  } finally {
+    allowCommit.resolve();
+    await Promise.allSettled([disabling, publishing].filter(Boolean));
+    for (const source of [pair.dataSourceA, pair.dataSourceB]) if (source.isInitialized) await source.destroy();
   }
 }
 

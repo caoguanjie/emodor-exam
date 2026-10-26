@@ -103,7 +103,7 @@ function releaseFixture(regulationIds: string[]) {
       throw new Error(`unexpected repository ${(entity as any)?.name}`);
     },
   };
-  const approvedCandidates = vi.fn(async (filter: { difficulty: Difficulty; regulationIds?: string[] }) => candidates.filter((item) => (
+  const enabledCandidates = vi.fn(async (filter: { difficulty: Difficulty; regulationIds?: string[] }) => candidates.filter((item) => (
     item.difficulty === filter.difficulty
       && (!filter.regulationIds?.length || Boolean(item.regulationId && filter.regulationIds.includes(item.regulationId)))
   )));
@@ -115,7 +115,7 @@ function releaseFixture(regulationIds: string[]) {
     releaseQuestionRepo,
     dataSource: { transaction: (work: (value: any) => Promise<unknown>) => work(manager) },
     categories: { lockActive: vi.fn(async () => ({ id: '7', status: 1 })) },
-    questions: { approvedCandidates, registerRandomDraftMediaResolver },
+    questions: { enabledCandidates, registerRandomDraftMediaResolver },
     sampling: new SamplingService(),
     audit: { log: vi.fn() },
   });
@@ -123,7 +123,7 @@ function releaseFixture(regulationIds: string[]) {
     service,
     paper,
     candidates,
-    approvedCandidates,
+    enabledCandidates,
     paperRepo,
     releaseRepo,
     releaseQuestionRepo,
@@ -169,7 +169,7 @@ describe('immutable paper releases', () => {
   it('registers a random-draft media lookup that reuses the fully validated candidate pool without writes', async () => {
     const {
       service,
-      approvedCandidates,
+      enabledCandidates,
       paperRepo,
       releaseRepo,
       releaseQuestionRepo,
@@ -186,11 +186,11 @@ describe('immutable paper releases', () => {
       where: { businessScope: 'training', mode: 'random', status: 'draft', categoryId: '7' },
       order: { id: 'ASC' },
     });
-    expect(approvedCandidates).toHaveBeenCalledWith(
+    expect(enabledCandidates).toHaveBeenCalledWith(
       expect.objectContaining({ categoryId: '7', type: 'single', difficulty: 'easy' }),
       undefined,
     );
-    expect(approvedCandidates).toHaveBeenCalledWith(
+    expect(enabledCandidates).toHaveBeenCalledWith(
       expect.objectContaining({ categoryId: '7', type: 'single', difficulty: 'hard' }),
       undefined,
     );
@@ -201,14 +201,14 @@ describe('immutable paper releases', () => {
 
   it('skips only explicit non-previewable random drafts while surfacing unexpected lookup failures', async () => {
     const inactive = releaseFixture([]);
-    inactive.approvedCandidates.mockRejectedValue(Errors.categoryInactive());
+    inactive.enabledCandidates.mockRejectedValue(Errors.categoryInactive());
     inactive.service.onModuleInit();
     const inactiveResolver = inactive.registerRandomDraftMediaResolver.mock.calls[0]?.[0];
 
     await expect(inactiveResolver('v-101', '7')).resolves.toBeNull();
 
     const invalid = releaseFixture([]);
-    invalid.approvedCandidates.mockResolvedValue([]);
+    invalid.enabledCandidates.mockResolvedValue([]);
     invalid.service.onModuleInit();
     const invalidResolver = invalid.registerRandomDraftMediaResolver.mock.calls[0]?.[0];
 
@@ -225,7 +225,7 @@ describe('immutable paper releases', () => {
     await expect(invalidRuleResolver('v-101', '7')).resolves.toBeNull();
 
     const unexpected = releaseFixture([]);
-    unexpected.approvedCandidates.mockRejectedValue(new Error('candidate lookup failed'));
+    unexpected.enabledCandidates.mockRejectedValue(new Error('candidate lookup failed'));
     unexpected.service.onModuleInit();
     const unexpectedResolver = unexpected.registerRandomDraftMediaResolver.mock.calls[0]?.[0];
 
@@ -259,7 +259,7 @@ describe('immutable paper releases', () => {
 
     expect(withoutRegulationFilter).toContain('101');
     expect(withRegulationFilter).not.toContain('101');
-    expect(withFilter.approvedCandidates).toHaveBeenCalledWith(
+    expect(withFilter.enabledCandidates).toHaveBeenCalledWith(
       expect.objectContaining({ regulationIds: ['9'] }),
       expect.anything(),
     );
@@ -281,6 +281,18 @@ describe('immutable paper releases', () => {
       rule: RULE,
     });
     expect(paper.status).toBe('published');
+  });
+
+  it('keeps the grouping and capacity of an already-frozen concept-based random release', async () => {
+    const fixture = releaseFixture([]);
+    const result = await fixture.service.publish('11', '9');
+    const frozen = await fixture.service.get(result.releaseId);
+    for (const item of frozen.pool) (item as any).conceptId = item.difficulty === 'easy' ? 'old-easy' : 'old-hard';
+    fixture.service.latestForPaper = vi.fn(async () => frozen);
+    const draw = vi.spyOn(fixture.service.sampling, 'draw');
+    const preview = await fixture.service.preview('11', 'easy');
+    expect(preview.capacities.find((item) => item.difficulty === 'easy')?.available).toBe(1);
+    expect(draw).toHaveBeenCalledWith(expect.any(Array), expect.any(Array), 'easy', undefined, 'historical-concept');
   });
 
   it('does not present random-pool capacity rows for a fixed-paper preview', async () => {
@@ -390,7 +402,14 @@ function paperAdminFixture(paperOverride: Record<string, unknown> = {}) {
     approvedBy: '9', approvedAt: new Date('2026-10-21T08:00:00.000Z'), reviewedBy: '9', reviewedAt: new Date(),
     reviewReason: null, createdBy: '9', legacyCapturedAt: null, createdAt: new Date(),
   }));
-  const questions = versions.map((version) => ({ id: version.questionId, currentVersionId: version.id }));
+  const questions = versions.map((version) => ({ id: version.questionId, currentVersionId: version.id, isEnabled: true }));
+  const questionRepo = {
+    findBy: vi.fn(async ({ id }: any) => {
+      const requested = Array.isArray(id?._value) ? id._value.map(String) : [];
+      return questions.filter((question) => requested.includes(String(question.id)));
+    }),
+    findOne: vi.fn(async ({ where }: any) => questions.find((question) => question.id === String(where.id)) || null),
+  };
   const manager = {
     getRepository(entity: unknown) {
       if (entity === ExamPaper) return paperRepo;
@@ -399,10 +418,7 @@ function paperAdminFixture(paperOverride: Record<string, unknown> = {}) {
         const requested = Array.isArray(id?._value) ? id._value.map(String) : [];
         return versions.filter((version) => requested.includes(String(version.id)));
       }) };
-      if (entity === Question) return { findBy: vi.fn(async ({ id }: any) => {
-        const requested = Array.isArray(id?._value) ? id._value.map(String) : [];
-        return questions.filter((question) => requested.includes(String(question.id)));
-      }) };
+      if (entity === Question) return questionRepo;
       if (entity === Regulation || entity === TrainingCourse) return { findBy: vi.fn(async () => []) };
       throw new Error(`unexpected repository ${(entity as any)?.name}`);
     },
@@ -411,11 +427,14 @@ function paperAdminFixture(paperOverride: Record<string, unknown> = {}) {
   Object.assign(service, {
     paperRepo,
     pqRepo: paperQuestionRepo,
+    questionRepo,
+    versionRepo: manager.getRepository(QuestionVersion),
+    releaseRepo: { findOne: vi.fn(async () => null) },
     dataSource: { transaction: (work: (value: any) => Promise<unknown>) => work(manager) },
     categories: { lockActive: vi.fn(async () => ({ id: '7', status: 1 })) },
     audit: { log: vi.fn() },
   });
-  return { service, paper, paperRepo, paperQuestionRepo, savedQuestions, versions };
+  return { service, paper, paperRepo, paperQuestionRepo, savedQuestions, versions, questions, questionRepo, manager };
 }
 
 describe('training paper draft configuration', () => {
@@ -433,7 +452,7 @@ describe('training paper draft configuration', () => {
     expect(paper.ruleConfig).toMatchObject({ totalCents: 10000, passCents: 6000, rules: [{ scoreCents: 5000 }] });
   });
 
-  it('accepts all three approved types and enabled difficulty in one fixed same-category paper across regulations', async () => {
+  it('accepts all three enabled types without carrying legacy concept grouping into new paper links', async () => {
     const { service, savedQuestions } = paperAdminFixture();
 
     const detail = await service.setTrainingQuestions('11', [
@@ -443,7 +462,7 @@ describe('training paper draft configuration', () => {
     ], { id: '9', name: 'admin' }, null);
 
     expect(savedQuestions.map((item) => item.questionVersionId)).toEqual(['501', '502', '503']);
-    expect(new Set(savedQuestions.map((item) => item.conceptId)).size).toBe(3);
+    expect(savedQuestions.every((item) => item.conceptId === null)).toBe(true);
     expect(detail.sum_score_cents).toBe(10000);
   });
 
@@ -465,15 +484,48 @@ describe('training paper draft configuration', () => {
     ]));
   });
 
-  it('rejects a duplicate concept before replacing the saved fixed question list', async () => {
+  it('allows different identities sharing a legacy concept', async () => {
     const fixture = paperAdminFixture();
     fixture.versions[1].conceptId = fixture.versions[0].conceptId;
 
     await expect(fixture.service.setTrainingQuestions('11', [
       { question_version_id: '501', score_cents: 5000 },
       { question_version_id: '502', score_cents: 5000 },
-    ], { id: '9', name: 'admin' }, null)).rejects.toMatchObject({ code: 40972 });
+    ], { id: '9', name: 'admin' }, null)).resolves.toMatchObject({ sum_score_cents: 10000 });
+  });
+
+  it('rejects disabled identities before deleting any saved draft links and locks identities in stable order', async () => {
+    const fixture = paperAdminFixture();
+    fixture.questions[0].isEnabled = false;
+    await expect(fixture.service.setTrainingQuestions('11', [
+      { question_version_id: '502', score_cents: 5000 },
+      { question_version_id: '501', score_cents: 5000 },
+    ], { id: '9', name: 'admin' }, null)).rejects.toMatchObject({ code: 40970 });
     expect(fixture.paperQuestionRepo.delete).not.toHaveBeenCalled();
+    expect(fixture.questionRepo.findOne).toHaveBeenNthCalledWith(1, {
+      where: { id: '101' }, lock: { mode: 'pessimistic_write' },
+    });
+    expect(fixture.questionRepo.findOne).toHaveBeenNthCalledWith(2, {
+      where: { id: '102' }, lock: { mode: 'pessimistic_write' },
+    });
+  });
+
+  it('keeps disabled draft selections visible without changing their paper-owned score', async () => {
+    const fixture = paperAdminFixture();
+    fixture.savedQuestions.push({ id: '91', questionId: '101', questionVersionId: '501', sort: 0, score: '100.00' });
+    fixture.questions[0].isEnabled = false;
+    const detail = await fixture.service.trainingDetail('11');
+    expect(detail.questions).toEqual([expect.objectContaining({ question_id: '101', enabled: false, score_cents: 10000 })]);
+    expect(detail.questions[0]).not.toHaveProperty('concept_id');
+    expect(detail.questions[0]).not.toHaveProperty('status');
+  });
+
+  it('uses enabled lifecycle rather than historical review status to select current content', async () => {
+    const fixture = paperAdminFixture();
+    fixture.versions[0].status = 'rejected';
+    await expect(fixture.service.setTrainingQuestions('11', [
+      { question_version_id: '501', score_cents: 10000 },
+    ], { id: '9', name: 'admin' }, null)).resolves.toMatchObject({ sum_score_cents: 10000 });
   });
 
   it('keeps a published training paper immutable while leaving the legacy strategy method separate', async () => {

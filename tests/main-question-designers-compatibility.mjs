@@ -5,7 +5,7 @@ import { assertPureTimeout, assertTimeoutFacts } from './support/exam-mobile-fix
 import { flowLogin } from './training-full-flow.mjs';
 import { randomStrongPassword } from './training-access.mjs';
 
-const plainDraft = (categoryId) => ({ category_id: categoryId, difficulty: 'easy', type: 'single', stem: '<p>旧表单题干</p>', options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }], answer: [0], analysis: '<p>旧解析</p>', score: 100 });
+const plainDraft = (categoryId) => ({ category_id: categoryId, difficulty: 'easy', type: 'single', stem: '<p>旧表单题干</p>', options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }], answer: [0], analysis: '<p>旧解析</p>' });
 
 export async function run(ctx) {
   const { check, count } = assertions(); let stage = 'setup';
@@ -58,12 +58,12 @@ export async function run(ctx) {
     }
     stage = 'existing form rejects lossy edits with zero revisions';
     const item = first.items[0];
-    const lossy = await ctx.request(admin.actor, 'PUT', `/ai/questions/${item.question_id}`, { expected_version_id: item.saved_version_id, stem: '<p>打平整个复杂题干</p>' });
+    const lossy = await ctx.request(admin.actor, 'PUT', `/ai/questions/${item.question_id}`, { expected_version_id: item.saved_version_id, expected_enabled: true, stem: '<p>打平整个复杂题干</p>' });
     check.equal(lossy.status, 400);
     check.deepEqual(await writeFacts(ctx), committedFacts);
     stage = 'ordinary form schema3 create and schema2 compatibility';
     const rich = await api(ctx, admin.actor, 'GET', `/ai/questions/${item.question_id}`);
-    const formCreated = await api(ctx, admin.actor, 'POST', '/ai/questions', { category_id: categoryId, difficulty: 'hard', type: 'single', score: 100, content_schema_version: 3, content_json: rich.content_json });
+    const formCreated = await api(ctx, admin.actor, 'POST', '/ai/questions', { category_id: categoryId, difficulty: 'hard', type: 'single', content_schema_version: 3, content_json: rich.content_json });
     check.equal(formCreated.content_schema_version, 3);
     const formBundle = await api(ctx, admin.actor, 'POST', '/admin/question-documents/assemble', { version_ids: [formCreated.saved_version_id] });
     check.ok(JSON.stringify(formBundle.document.content).includes('表格事实'));

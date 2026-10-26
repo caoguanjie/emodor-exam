@@ -8,7 +8,7 @@ import { randomStrongPassword } from './training-access.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
-const HEADERS = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis'];
+const HEADERS = ['category', 'type', 'difficulty', 'stem', 'options', 'answer', 'analysis'];
 
 async function captchaAnswer(ctx, captchaId) {
   const redis = new Redis({
@@ -70,7 +70,6 @@ function referenceFile(categoryId, count = 20) {
     options,
     answer: '[0]',
     analysis: `一次性参考解析-${index + 1}`,
-
   }));
   return Buffer.from(`\uFEFF${[
     HEADERS.join('\t'),
@@ -78,7 +77,7 @@ function referenceFile(categoryId, count = 20) {
   ].join('\r\n')}\r\n`, 'utf8');
 }
 
-function startMockAi() {
+export function startMockAi() {
   const server = http.createServer((request, response) => {
     if (request.method !== 'POST' || !request.url.endsWith('/chat/completions')) {
       response.writeHead(404); response.end(); return;
@@ -87,9 +86,12 @@ function startMockAi() {
     request.on('data', (chunk) => { body += chunk; });
     request.on('end', () => {
       let prompt = '';
+      let requested = ['easy', 'hard'];
       try {
         const parsed = JSON.parse(body);
         prompt = (parsed.messages || []).map((message) => message.content).join('\n');
+        const input = JSON.parse(parsed.messages.find((message) => message.role === 'user')?.content || '{}');
+        if (Array.isArray(input.requested_difficulties)) requested = input.requested_difficulties;
       } catch { /* malformed provider requests fail below */ }
       const content = prompt.includes('请回复 OK')
         ? 'OK'
@@ -97,18 +99,18 @@ function startMockAi() {
           {
             difficulty: 'easy',
             stem: `简单生成题-${randomBytes(4).toString('hex')}`,
-            options: [{ key: 'A', text: '正确措施' }, { key: 'B', text: '错误措施' }],
+            options: [{ key: 'A', text: '正确措施（正确）' }, { key: 'B', text: '错误措施' }],
             answer: [0],
             analysis: '简单题解析',
           },
           {
             difficulty: 'hard',
             stem: `困难生成题-${randomBytes(4).toString('hex')}`,
-            options: [{ key: 'A', text: '错误措施' }, { key: 'B', text: '综合判断后的正确措施' }],
+            options: [{ key: 'A', text: '错误措施' }, { key: 'B', text: '综合判断后的正确措施（正确）' }],
             answer: [1],
             analysis: '困难题解析',
           },
-        ]);
+        ].filter((question) => requested.includes(question.difficulty)));
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ choices: [{ message: { content } }] }));
     });
@@ -225,6 +227,7 @@ async function runBody(ctx, mockPort) {
   assert.equal(batch.data.rows.filter((row) => row.difficulty === 'easy').length, 20);
   assert.equal(batch.data.rows.filter((row) => row.difficulty === 'hard').length, 20);
   assert.ok(batch.data.rows.every((row) => row.category === categoryId && row.type === 'single'));
+  assert.ok(batch.data.rows.every((row) => !Object.hasOwn(row, 'concept') && !Object.hasOwn(row, 'score')));
   assert.equal(JSON.stringify(batch.data).includes('一次性参考题'), false, '预览批次不得包含参考题正文');
   assert.equal(JSON.stringify(batch.data).includes('一次性参考解析'), false, '预览批次不得包含参考题解析');
 
@@ -235,6 +238,24 @@ async function runBody(ctx, mockPort) {
   const downloadText = download.body.toString('utf8').replace(/^\uFEFF/, '');
   assert.equal(downloadText.split(/\r?\n/)[0], HEADERS.join('\t'));
   assert.equal(downloadText.includes('一次性参考题'), false);
+
+  const editableRow = batch.data.rows[0].row_number;
+  const crossUpdate = await ctx.request(other.actor, 'PATCH', `/admin/questions/ai-import-batches/${task.batch_id}/rows/${editableRow}`, { stem: '跨 owner 修改' });
+  assert.equal(crossUpdate.status, 403);
+  const rejectedScore = await ctx.request(admin.actor, 'PATCH', `/admin/questions/ai-import-batches/${task.batch_id}/rows/${editableRow}`, { score: 7 });
+  assert.equal(rejectedScore.status, 400);
+  const updated = await ctx.request(admin.actor, 'PATCH', `/admin/questions/ai-import-batches/${task.batch_id}/rows/${editableRow}`, { stem: `人工修订生成题-${suffix}`, answer: [1] });
+  assert.equal(updated.status, 200, JSON.stringify(updated));
+  assert.equal(updated.data.rows.find((row) => row.row_number === editableRow).stem, `人工修订生成题-${suffix}`);
+  const regenerated = await ctx.request(admin.actor, 'POST', `/admin/questions/ai-import-batches/${task.batch_id}/rows/${editableRow}/regenerate`, {});
+  assert.equal(regenerated.status, 200, JSON.stringify(regenerated));
+  const regeneratedRow = regenerated.data.rows.find((row) => row.row_number === editableRow);
+  assert.equal(regeneratedRow.category, categoryId); assert.equal(regeneratedRow.type, 'single');
+  assert.equal(regeneratedRow.difficulty, batch.data.rows[0].difficulty);
+  assert.notEqual(regeneratedRow.stem, `人工修订生成题-${suffix}`);
+  assert.equal(Object.hasOwn(regeneratedRow, 'score'), false); assert.equal(Object.hasOwn(regeneratedRow, 'concept'), false);
+  assert.deepEqual(await ctx.queryTestDb('SELECT COUNT(*) AS total FROM question'), beforeQuestions, '编辑和重生成不能提前写题库');
+  assert.deepEqual(await ctx.queryTestDb('SELECT COUNT(*) AS total FROM question_version'), beforeVersions);
 
   const selectedRows = batch.data.rows.slice(0, 2).map((row) => row.row_number);
   const crossCommit = await ctx.request(other.actor, 'POST', `/admin/questions/ai-import-batches/${task.batch_id}/commit`, {
@@ -249,19 +270,29 @@ async function runBody(ctx, mockPort) {
   assert.equal(concurrentRetry.status, 200, JSON.stringify(concurrentRetry));
   assert.deepEqual(concurrentRetry.data, committed.data, '并发同集合确认必须只产生一份回执');
   assert.equal(committed.data.created_ids.length, 2);
+  assert.equal(committed.data.enabled, true);
   const retried = await ctx.request(admin.actor, 'POST', `/admin/questions/ai-import-batches/${task.batch_id}/commit`, {
     row_numbers: selectedRows,
   });
   assert.equal(retried.status, 200, JSON.stringify(retried));
   assert.deepEqual(retried.data, committed.data, '相同行号重复确认必须幂等');
+  const committedStatus = await ctx.request(admin.actor, 'GET', `/admin/questions/ai-import-batches/${task.batch_id}`);
+  assert.deepEqual({ batch_id: committedStatus.data.batch_id, created_ids: committedStatus.data.created_ids, committed_rows: committedStatus.data.committed_rows, enabled: committedStatus.data.enabled }, committed.data, '原批次 GET 对账必须返回原启用回执');
+  const changedRows = await ctx.request(admin.actor, 'POST', `/admin/questions/ai-import-batches/${task.batch_id}/commit`, { row_numbers: [selectedRows[0]] });
+  assert.equal(changedRows.status, 409); assert.equal(changedRows.code, 40911);
+  const committedEdit = await ctx.request(admin.actor, 'PATCH', `/admin/questions/ai-import-batches/${task.batch_id}/rows/${editableRow}`, { stem: '已确认不可修改' });
+  assert.equal(committedEdit.status, 409);
 
   const placeholders = committed.data.created_ids.map(() => '?').join(',');
   const created = await ctx.queryTestDb(
-    `SELECT id,status,source,regulation_id,version_id,difficulty FROM question WHERE id IN (${placeholders}) ORDER BY id`,
+    `SELECT q.id,q.status,q.is_enabled,q.concept_id,q.score,q.source,q.regulation_id,q.version_id,q.difficulty,v.score_cents,v.concept_id AS version_concept_id,v.approved_by,v.approved_at,v.reviewed_by,v.reviewed_at FROM question q JOIN question_version v ON v.id=q.current_version_id WHERE q.id IN (${placeholders}) ORDER BY q.id`,
     committed.data.created_ids,
   );
   assert.equal(created.length, 2);
-  assert.ok(created.every((row) => row.status === 'pending' && row.source === 'ai'));
+  assert.ok(created.every((row) => row.status === 'approved' && Number(row.is_enabled) === 1 && row.source === 'ai'));
+  for (const row of created) {
+    for (const key of ['concept_id', 'version_concept_id', 'score', 'score_cents', 'approved_by', 'approved_at', 'reviewed_by', 'reviewed_at']) assert.equal(row[key], null);
+  }
   assert.ok(created.every((row) => row.regulation_id === null && row.version_id === null));
   assert.ok(created.every((row) => row.difficulty === 'easy' || row.difficulty === 'hard'));
 

@@ -8,7 +8,7 @@
       </el-select>
     </el-form-item>
     <el-form-item label="培训类别" required>
-      <el-select aria-label="培训类别" :model-value="meta.category_id" :disabled="readonly || categoryReadonly" filterable @update:model-value="patch({ category_id: String($event), concept_id: null })">
+      <el-select aria-label="培训类别" :model-value="meta.category_id" :disabled="readonly || categoryReadonly" filterable @update:model-value="patch({ category_id: String($event) })">
         <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
       </el-select>
     </el-form-item>
@@ -17,21 +17,13 @@
         <el-radio-button v-for="item in difficultyOptions" :key="item.value" :value="item.value">{{ item.label }}</el-radio-button>
       </el-radio-group>
     </el-form-item>
-    <el-form-item label="考点">
-      <el-select aria-label="考点" :model-value="meta.concept_id" clearable filterable remote :remote-method="searchConcepts" :loading="conceptLoading"
-        :disabled="readonly || !meta.category_id || !conceptSource" placeholder="搜索或选择考点" @update:model-value="patch({ concept_id: $event || null })">
-        <el-option v-for="item in concepts" :key="item.id" :label="item.name" :value="item.id" />
-      </el-select>
-      <el-pagination v-if="conceptTotal > 20" size="small" layout="prev, pager, next" :current-page="conceptPage" :page-size="20" :total="conceptTotal" :disabled="readonly || conceptLoading" @current-change="loadConcepts" />
-      <div v-if="conceptError" role="alert">{{ conceptError }} <el-button link @click="loadConcepts(conceptPage)">重试</el-button></div>
-    </el-form-item>
     <el-form-item v-if="regulations.length" label="资料来源">
       <span>{{ regulations.find((item) => String(item.id) === meta.regulation_id)?.title || (meta.regulation_id ? `资料 ${meta.regulation_id}` : '无来源') }}</span>
     </el-form-item>
     </div>
     <h3 class="designer-property-group-title">答案设置</h3>
     <div class="designer-property-content">
-    <el-form-item label="分值" required>
+    <el-form-item label="本卷分值" required>
       <el-input-number aria-label="分值" :model-value="meta.score_cents / 100" :min="0.01" :max="100" :precision="2" :step="0.5" :disabled="readonly" @update:model-value="patch({ score_cents: Math.round(Number($event) * 100) })" />
     </el-form-item>
     <el-form-item label="答案摘要"><span>{{ answerSummary || '未设置' }}</span></el-form-item>
@@ -51,12 +43,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { onBeforeUnmount, ref, watch } from 'vue';
 import type { Editor } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { QuestionMeta } from '../../api/question-document-types';
-import type { QuestionConceptApi, QuestionConceptOptionsApi } from '../../api/question-authoring';
 import type { QuestionType as SingleQuestionType } from '../../api/training-types';
 import type { DesignerMediaAdapter, DesignerOption } from './contracts';
 import TiptapEditor from '../Tiptap/index.vue';
@@ -66,15 +57,12 @@ import type { QuestionRegulationOption } from '../Tiptap/components/QuestionSett
 
 const props = withDefaults(defineProps<{
   clientId: string; meta: QuestionMeta; answerSummary?: string; categories?: Array<{ id: string; name: string }>;
-  regulations?: QuestionRegulationOption[]; conceptApi?: QuestionConceptApi; conceptOptionsApi?: QuestionConceptOptionsApi;
+  regulations?: QuestionRegulationOption[];
   readonly?: boolean; categoryReadonly?: boolean; mediaResolver?: MediaResolver; difficultyOptions?: DesignerOption[];
   canUploadMedia?: boolean; mediaAdapter?: DesignerMediaAdapter;
 }>(), { answerSummary: '', categories: () => [], regulations: () => [], readonly: false, categoryReadonly: false,
   difficultyOptions: () => [] });
 const emit = defineEmits<{ change: [patch: Partial<QuestionMeta>]; 'type-change': [type: SingleQuestionType]; 'upload-state-change': [state: { pending: boolean }] }>();
-const concepts = ref<Array<{ id: string; name: string }>>([]); const conceptLoading = ref(false); const conceptError = ref('');
-const conceptPage = ref(1); const conceptTotal = ref(0); const keyword = ref(''); let serial = 0;
-const conceptSource = computed(() => props.conceptOptionsApi || props.conceptApi?.list);
 const analysisEditor = ref<InstanceType<typeof TiptapEditor> | null>(null);
 const analysisInput = ref<HTMLInputElement | null>(null); const analysisUploading = ref(false); const analysisPending = ref(false); const analysisError = ref('');
 let analysisFile: File | null = null; let analysisSerial = 0;
@@ -83,18 +71,6 @@ function patch(value: Partial<QuestionMeta>) {
   if (props.readonly || props.categoryReadonly && Object.prototype.hasOwnProperty.call(value, 'category_id')) return;
   emit('change', value);
 }
-async function loadConcepts(page = 1) {
-  const ticket = ++serial; conceptPage.value = page; conceptError.value = '';
-  if (!props.meta.category_id || !conceptSource.value) { concepts.value = []; conceptTotal.value = 0; conceptLoading.value = false; return; }
-  conceptLoading.value = true;
-  try {
-    const result = await conceptSource.value({ category_id: props.meta.category_id, type: props.meta.type,
-      query: keyword.value || undefined, page, page_size: 20 });
-    if (ticket === serial) { concepts.value = result.items; conceptTotal.value = result.total; }
-  } catch (failure) { if (ticket === serial) conceptError.value = failure instanceof Error ? failure.message : '考点加载失败'; }
-  finally { if (ticket === serial) conceptLoading.value = false; }
-}
-function searchConcepts(value: string) { keyword.value = value; void loadConcepts(1); }
 function chooseAnalysisPosition() {
   const editor = analysisEditor.value?.getEditor();
   if (!editor || props.readonly || !props.canUploadMedia || analysisPending.value || !editor.state.selection.$from.parent.isTextblock) return;
@@ -153,10 +129,9 @@ async function uploadAnalysisImage() {
   } catch (failure) { if (ticket === analysisSerial) analysisError.value = failure instanceof Error ? failure.message : '解析图片上传失败'; }
   finally { if (ticket === analysisSerial) analysisUploading.value = false; }
 }
-watch([() => props.meta.category_id, () => props.meta.type, () => props.clientId], () => { keyword.value = ''; void loadConcepts(); }, { immediate: true });
 watch(() => props.clientId, cancelAnalysisImage);
 watch([() => props.readonly, () => props.canUploadMedia], ([readonly, allowed]) => { if (readonly || !allowed) cancelAnalysisImage(); });
-onBeforeUnmount(() => { serial += 1; cancelAnalysisImage(); });
+onBeforeUnmount(cancelAnalysisImage);
 </script>
 
 <style scoped>

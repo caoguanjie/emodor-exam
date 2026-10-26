@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { getMetadataArgsStorage } from 'typeorm';
 import { SchemaMigration } from '../src/entities/schema-migration.entity';
+import { Question } from '../src/entities/question.entity';
 
 describe('schema_migration entity contract', () => {
+  it('maps a separate enabled identity fact without replacing historical review columns', () => {
+    const columns = getMetadataArgsStorage().columns.filter((item) => item.target === Question);
+    expect(columns.find((item) => item.propertyName === 'isEnabled')?.options).toMatchObject({ name: 'is_enabled', type: 'tinyint', width: 1, default: true });
+    expect(columns.map((item) => item.propertyName)).toEqual(expect.arrayContaining(['status', 'conceptId', 'score', 'currentVersionId']));
+  });
   it('maps the migration registry columns without widening business entities', () => {
     const table = getMetadataArgsStorage().tables.find((item) => item.target === SchemaMigration);
     expect(table?.name).toBe('schema_migration');

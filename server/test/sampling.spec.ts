@@ -41,18 +41,18 @@ class SequenceRandom implements RandomSource {
 }
 
 describe('release pool sampling', () => {
-  it('reports one available question when ten approved variants share one concept', () => {
+  it('counts distinct question identities even when legacy concept metadata is shared', () => {
     const service = new SamplingService();
     const variants = Array.from({ length: 10 }, (_, index) => candidate(String(index + 1), 'single', 'easy', 'concept-1'));
     const rules: PoolRule[] = [{ type: 'single', count: 2, scoreCents: 5000 }];
 
     expect(service.validatePool(variants, rules, 'easy')).toEqual({
-      ok: false,
-      deficits: [{ type: 'single', required: 2, available: 1 }],
+      ok: true,
+      deficits: [],
     });
   });
 
-  it('draws without repeating a concept and applies the configured score instead of the suggested score', () => {
+  it('draws without repeating a question identity and applies only the paper rule score', () => {
     const service = new SamplingService();
     const pool = [
       candidate('1', 'single', 'easy', 'concept-1'),
@@ -71,10 +71,21 @@ describe('release pool sampling', () => {
     const draw = service.draw(pool, rules, 'easy', new SequenceRandom([1, 0, 1, 0, 0]));
 
     expect(draw).toHaveLength(3);
-    expect(new Set(draw.map((item) => item.conceptId ?? `q:${item.questionId}`)).size).toBe(draw.length);
+    expect(new Set(draw.map((item) => item.questionId)).size).toBe(draw.length);
     expect(draw.reduce((total, item) => total + item.scoreCents, 0)).toBe(10000);
     expect(draw.every((item) => item.difficulty === 'easy')).toBe(true);
     expect(draw.find((item) => item.type === 'multiple')?.scoreCents).toBe(5000);
+  });
+
+  it('allows distinct questions sharing a legacy concept but counts multiple versions of one question once', () => {
+    const service = new SamplingService();
+    const first = candidate('1', 'single', 'easy', 'legacy');
+    const second = candidate('2', 'single', 'easy', 'legacy');
+    const rules: PoolRule[] = [{ type: 'single', count: 2, scoreCents: 5000 }];
+    expect(service.draw([first, second], rules, 'easy', new SequenceRandom([0])))
+      .toHaveLength(2);
+    expect(service.validatePool([first, { ...first, versionId: 'v-other' }], rules, 'easy'))
+      .toEqual({ ok: false, deficits: [{ type: 'single', required: 2, available: 1 }] });
   });
 
   it('rejects a draw when the requested rules do not total exactly one hundred points', () => {
@@ -87,5 +98,15 @@ describe('release pool sampling', () => {
       'easy',
       new SequenceRandom([0]),
     )).toThrow('10000');
+  });
+
+  it('preserves concept grouping only when explicitly sampling an existing frozen release', () => {
+    const service = new SamplingService();
+    const pool = [candidate('1', 'single', 'easy', 'legacy'), candidate('2', 'single', 'easy', 'legacy')];
+    const rules: PoolRule[] = [{ type: 'single', count: 2, scoreCents: 5000 }];
+    expect(() => service.draw(pool, rules, 'easy', new SequenceRandom([0]), 'historical-concept')).toThrow('容量不足');
+    expect(service.validatePool(pool, rules, 'easy', 'historical-concept')).toEqual({
+      ok: false, deficits: [{ type: 'single', required: 2, available: 1 }],
+    });
   });
 });

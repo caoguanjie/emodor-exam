@@ -19,9 +19,6 @@ export interface QuestionConceptApi {
   remove(id: Id): Promise<void>;
 }
 export type QuestionConceptOptionsApi = (query: QuestionConceptQuery & { type: QuestionType }) => Promise<Page<Pick<ConceptSummary, 'id' | 'name'>>>;
-export const listQuestionConceptOptions: QuestionConceptOptionsApi = ({ query, ...input }) => (
-  http.get('/ai/question-concept-options', { params: { ...input, ...(query ? { keyword: query } : {}) } }) as Promise<Page<Pick<ConceptSummary, 'id' | 'name'>>>
-);
 
 export const questionAuthoringApi = {
   assemble(input: AssembleInput): Promise<AuthoringBundle> {

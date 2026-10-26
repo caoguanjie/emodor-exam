@@ -15,7 +15,7 @@ function input(count = 1): AuthoringBundle {
   const doc = (text: string) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
   return { document: { schema_version: 1, content: { type: 'doc', content: Array.from({ length: count }, (_, n) => ({ type: 'questionBlock', attrs: { client_id: `q${n}` }, content: [
     { type: 'questionStem', content: doc('题干').content }, { type: 'questionOption', attrs: { option_id: 'A', checked: true }, content: doc('是').content }, { type: 'questionOption', attrs: { option_id: 'B', checked: false }, content: doc('否').content },
-  ] })) }, questions: Object.fromEntries(Array.from({ length: count }, (_, n) => [`q${n}`, { category_id: '11', type: 'single', difficulty: 'easy', concept_id: null, regulation_id: null, regulation_version_id: null, analysis: doc('解析'), score_cents: 500 }])) }, option_ids: {}, identities: {}, layouts: {} };
+  ] })) }, questions: Object.fromEntries(Array.from({ length: count }, (_, n) => [`q${n}`, { category_id: '11', type: 'single', difficulty: 'easy', regulation_id: null, regulation_version_id: null, analysis: doc('解析'), score_cents: 500 }])) }, option_ids: {}, identities: {}, layouts: {} };
 }
 
 describe('authoring request identity', () => {

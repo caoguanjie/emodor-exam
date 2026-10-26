@@ -4,19 +4,21 @@ import {
   type QuestionDraftInput,
 } from '../src/modules/questions/question-validator';
 import { QuestionVersionService } from '../src/modules/questions/question-version.service';
-import { QuestionConceptService } from '../src/modules/questions/question-concept.service';
 import { Question } from '../src/entities/question.entity';
 import { QuestionVersion } from '../src/entities/question-version.entity';
-import { QuestionConcept } from '../src/entities/question-concept.entity';
+import { TrainingCategory } from '../src/entities/training-category.entity';
+import { MediaAsset } from '../src/entities/media-asset.entity';
+import { MediaReference } from '../src/entities/media-reference.entity';
 import { ExamPaper } from '../src/entities/exam-paper.entity';
 import { PaperQuestion } from '../src/entities/paper-question.entity';
-import { QuestionReviewService } from '../src/modules/ai/question-review.service';
+import { QuestionBankService as QuestionReviewService } from '../src/modules/questions/question-bank.service';
 import { QuestionGenerationService } from '../src/modules/ai/question-generation.service';
 import { PaperService } from '../src/modules/ai/paper.service';
 import { ExamService } from '../src/modules/exams/exam.service';
 import { DtoValidationPipe, StrictDtoValidationPipe } from '../src/common/dto-validation.pipe';
 import {
   CreateQuestionDto, EditQuestionDto, GenerateQuestionsDto, QUESTION_CREATE_KEYS, QUESTION_EDIT_KEYS,
+  QuestionListQueryDto, QUESTION_LIST_KEYS,
 } from '../src/modules/questions/question.dto';
 
 function baseDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraftInput {
@@ -37,17 +39,18 @@ function baseDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraftIn
 }
 
 describe('training question bank validation', () => {
-  it('accepts score-free manual creation and revision contracts and ignores the old score field', async () => {
+  it('accepts score-free writes and rejects retired bank fields', async () => {
     const input = { category_id: '11', difficulty: 'easy', type: 'single', stem: '<p>题干</p>',
       options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }], answer: [0] };
     for (const [metatype, keys, body] of [
       [CreateQuestionDto, QUESTION_CREATE_KEYS, input],
-      [EditQuestionDto, QUESTION_EDIT_KEYS, { expected_version_id: '101', analysis: '新解析' }],
+      [EditQuestionDto, QUESTION_EDIT_KEYS, { expected_version_id: '101', expected_enabled: false, analysis: '新解析' }],
     ] as const) {
       const pipe = new StrictDtoValidationPipe(keys);
       await expect(pipe.transform(body, { type: 'body', metatype } as any)).resolves.toMatchObject(body);
-      const legacy = await pipe.transform({ ...body, score: 'ignored-invalid-score' }, { type: 'body', metatype } as any);
-      expect(legacy).toMatchObject(body); expect(legacy).not.toHaveProperty('score');
+      for (const field of ['score', 'concept_id', 'status']) {
+        await expect(pipe.transform({ ...body, [field]: 'retired' }, { type: 'body', metatype } as any)).rejects.toMatchObject({ status: 400 });
+      }
     }
   });
 
@@ -55,6 +58,18 @@ describe('training question bank validation', () => {
     const input: any = baseDraft(); delete input.scoreCents;
     const result = validateAndSanitizeQuestionDraft(input);
     expect(result).not.toHaveProperty('scoreCents');
+  });
+
+  it.each([undefined, null, 1, 'true'])('rejects a non-boolean revision enabled baseline %s', async (expected_enabled) => {
+    await expect(new StrictDtoValidationPipe(QUESTION_EDIT_KEYS).transform({ expected_version_id: null, expected_enabled, analysis: '解析' }, { type: 'body', metatype: EditQuestionDto } as any)).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('parses explicit enabled query booleans and rejects retired query fields', async () => {
+    const pipe = new StrictDtoValidationPipe(QUESTION_LIST_KEYS);
+    await expect(pipe.transform({ enabled: 'false' }, { type: 'query', metatype: QuestionListQueryDto } as any)).resolves.toMatchObject({ enabled: false });
+    for (const query of [{ enabled: '1' }, { status: 'approved' }, { concept_id: '7' }, { score: 5 }]) {
+      await expect(pipe.transform(query, { type: 'query', metatype: QuestionListQueryDto } as any)).rejects.toMatchObject({ status: 400 });
+    }
   });
 
   it('keeps category and difficulty fixed while accepting a manual question without regulation source', () => {
@@ -186,6 +201,7 @@ function versionServiceFixture() {
     analysis: '<p>原解析</p>',
     score: '2.50',
     status: 'approved',
+    isEnabled: true,
     source: 'ai',
     createdBy: '1',
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -212,6 +228,7 @@ function versionServiceFixture() {
     getRepository(entity: any) {
       if (entity === Question) return questionRepo;
       if (entity === QuestionVersion) return versionRepo;
+      if (entity === TrainingCategory) return { findOne: async () => ({ id: '11', status: 1 }) };
       throw new Error(`unexpected repository ${entity?.name}`);
     },
   };
@@ -229,7 +246,7 @@ function versionServiceFixture() {
   service.access = { permissions: vi.fn(async () => ['questions:read']) };
   service.regulationRepo = { findOne: vi.fn(async () => ({ id: '2', currentVersionId: '3' })) };
   service.regulationVersionRepo = { findOne: vi.fn(async () => ({ id: '3', regulationId: '2' })) };
-  return { service, question, versions };
+  return { service, question, versions, manager };
 }
 
 function questionMediaPolicyFixture(input: {
@@ -261,6 +278,110 @@ function questionMediaPolicyFixture(input: {
 }
 
 describe('versioned question bank', () => {
+  it('captures an unversioned legacy attempt without inventing category, difficulty, enablement or score', async () => {
+    const f = versionServiceFixture();
+    f.question.isEnabled = false;
+    expect(typeof (f.service as any).currentOrCaptureForLegacyAttempt).toBe('function');
+    const version = await (f.service as any).currentOrCaptureForLegacyAttempt(f.manager, '5');
+    expect(version).toMatchObject({ questionId: '5', revision: 1, categoryId: null, difficulty: null, scoreCents: 250, status: 'approved', approvedBy: null });
+    expect(f.question.isEnabled).toBe(false);
+    expect(f.question.score).toBe('2.50');
+    expect(f.versions).toHaveLength(1);
+    const again = await (f.service as any).currentOrCaptureForLegacyAttempt(f.manager, '5', version.id);
+    expect(again.id).toBe(version.id);
+    expect(f.versions).toHaveLength(1);
+  });
+
+  it('rejects a stale exact legacy attempt version without capturing or mutating current facts', async () => {
+    const f = versionServiceFixture();
+    f.question.currentVersionId = '99';
+    f.question.isEnabled = false;
+    f.versions.push({ id: '99', questionId: '5', revision: 3, difficulty: 'unknown', scoreCents: 250, status: 'rejected', approvedBy: null });
+    expect(typeof (f.service as any).currentOrCaptureForLegacyAttempt).toBe('function');
+    await expect((f.service as any).currentOrCaptureForLegacyAttempt(f.manager, '5', '98')).rejects.toMatchObject({ code: 40940 });
+    const exact = await (f.service as any).currentOrCaptureForLegacyAttempt(f.manager, '5', '99');
+    expect(exact).toMatchObject({ id: '99', difficulty: 'unknown', scoreCents: 250, status: 'rejected' });
+    expect(f.versions).toHaveLength(1);
+    expect(f.question).toMatchObject({ currentVersionId: '99', isEnabled: false });
+  });
+
+  it('disables and restores idempotently without creating revisions or rewriting historical review facts', async () => {
+    const f = versionServiceFixture();
+    Object.assign(f.question, { categoryId: '11', difficulty: 'easy', source: 'manual', regulationId: null, versionId: null, status: 'rejected' });
+    const entries: any[] = [];
+    const bank: any = Object.create(QuestionReviewService.prototype);
+    Object.assign(bank, { questionRepo: f.service.questionRepo, dataSource: f.service.dataSource, versions: f.service, audit: { log: (entry: any) => entries.push(entry) } });
+    const versionBefore = f.question.currentVersionId;
+    const first = await bank.setEnabled('5', false, null, { id: 9, name: 'admin' }, '127.0.0.1');
+    expect(first).toMatchObject({ enabled: false, current_version_id: null });
+    for (const field of ['status', 'concept_id', 'score', 'approved_by', 'reviewed_by']) expect(first).not.toHaveProperty(field);
+    await bank.setEnabled('5', false, null, { id: 9, name: 'admin' }, '127.0.0.1');
+    expect(entries).toHaveLength(1);
+    const restored = await bank.setEnabled('5', true, null, { id: 9, name: 'admin' }, '127.0.0.1');
+    await bank.setEnabled('5', true, null, { id: 9, name: 'admin' }, '127.0.0.1');
+    expect(restored.enabled).toBe(true);
+    expect(entries).toHaveLength(2);
+    expect(entries[1]).toMatchObject({ actor_id: 9, source_ip: '127.0.0.1', detail: { from_enabled: false, to_enabled: true } });
+    expect(f.question.status).toBe('rejected');
+    expect(f.question.currentVersionId).toBe(versionBefore);
+    expect(f.versions).toHaveLength(0);
+  });
+
+  it('rejects stale lifecycle version tokens and invalid restore content without changing state or audit', async () => {
+    const f = versionServiceFixture();
+    Object.assign(f.question, { categoryId: '11', difficulty: 'easy', source: 'manual', regulationId: null, versionId: null, isEnabled: false, answer: [99] });
+    const entries: any[] = [];
+    const bank: any = Object.create(QuestionReviewService.prototype);
+    Object.assign(bank, { questionRepo: f.service.questionRepo, dataSource: f.service.dataSource, versions: f.service, audit: { log: (entry: any) => entries.push(entry) } });
+    await expect(bank.setEnabled('5', true, '999', { id: 9, name: 'admin' }, null)).rejects.toMatchObject({ code: 40940 });
+    await expect(bank.setEnabled('5', true, null, { id: 9, name: 'admin' }, null)).rejects.toMatchObject({ code: 40001 });
+    expect(f.question.isEnabled).toBe(false);
+    expect(f.versions).toHaveLength(0);
+    expect(entries).toHaveLength(0);
+  });
+
+  it('restores only exact current version media bindings without requiring the upload owner to operate it', async () => {
+    const f = versionServiceFixture();
+    Object.assign(f.question, { currentVersionId: '99', categoryId: '11', difficulty: 'easy', source: 'manual', regulationId: null, versionId: null, isEnabled: false });
+    f.versions.push({ ...f.question, id: '99', questionId: '5', revision: 1, stem: '<p>题干<img data-media-id="42"></p>', regulationVersionId: null });
+    let reference: any = { assetId: '42', ownerType: 'question_version', ownerId: '99' };
+    const baseRepo = f.manager.getRepository;
+    f.manager.getRepository = (entity: any): any => {
+      if (entity === MediaAsset) return { findOne: async () => ({ id: '42', ownerId: '777', status: 'ready', purpose: 'question', mediaKind: 'image' }) };
+      if (entity === MediaReference) return { findOne: async ({ where }: any) => reference && Object.entries(where).every(([key, value]) => reference[key] === value) ? reference : null };
+      return baseRepo(entity);
+    };
+    const bank: any = Object.create(QuestionReviewService.prototype);
+    Object.assign(bank, { questionRepo: f.service.questionRepo, dataSource: f.service.dataSource, versions: f.service, audit: { log: () => undefined } });
+    reference = { ...reference, ownerId: '98' };
+    await expect(bank.setEnabled('5', true, '99', { id: 9, name: 'admin' }, null)).rejects.toMatchObject({ code: 40001 });
+    expect(f.question.isEnabled).toBe(false);
+    reference.ownerId = '99';
+    await expect(bank.setEnabled('5', true, '99', { id: 9, name: 'admin' }, null)).resolves.toMatchObject({ enabled: true });
+    expect(f.versions).toHaveLength(1);
+  });
+  it('rejects a same-version stale enabled baseline without creating or enabling a revision', async () => {
+    const { service, question, versions } = versionServiceFixture();
+    question.isEnabled = false;
+    await expect((service as any).revise('5', baseDraft({ regulationId: '2', regulationVersionId: '3' }), '9', null, true))
+      .rejects.toMatchObject({ code: 40940 });
+    expect(versions).toHaveLength(0);
+    expect(question.isEnabled).toBe(false);
+  });
+
+  it('requires an explicit version baseline at the internal revision boundary too', async () => {
+    const f = versionServiceFixture();
+    await expect((f.service as any).revise('5', baseDraft({ regulationId: '2', regulationVersionId: '3' }), '9', undefined, true)).rejects.toMatchObject({ code: 40001 });
+    expect(f.versions).toHaveLength(0);
+  });
+
+  it('explicitly saves a disabled question as enabled with no synthetic review metadata', async () => {
+    const { service, question, versions } = versionServiceFixture();
+    question.isEnabled = false;
+    await (service as any).revise('5', baseDraft({ regulationId: '2', regulationVersionId: '3' }), '9', null, false);
+    expect(question.isEnabled).toBe(true);
+    expect(versions[1]).toMatchObject({ status: 'approved', approvedBy: null, approvedAt: null, reviewedBy: null, reviewedAt: null, reviewReason: null, conceptId: null, scoreCents: null });
+  });
   it('sanitizes malicious legacy rich text at the response boundary without rewriting storage', async () => {
     const service = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
     const storedStem = '<p onclick="steal()">旧题<script>alert(1)</script><img src="https://evil.test/x" onerror="steal()"><img data-media-id="42" alt="现场"></p>';
@@ -283,10 +404,10 @@ describe('versioned question bank', () => {
     expect(storedStem).toContain('onclick');
   });
 
-  it('captures a legacy row before saving a pending revision', async () => {
+  it('captures a legacy row before saving an enabled score-free revision', async () => {
     const { service, question, versions } = versionServiceFixture();
 
-    const newVersionId = await service.revise('5', baseDraft({ stem: '<p>修订题干</p>', regulationId: '2', regulationVersionId: '3' }), '9');
+    const newVersionId = await service.revise('5', baseDraft({ stem: '<p>修订题干</p>', regulationId: '2', regulationVersionId: '3' }), '9', null, true);
 
     expect(newVersionId).toBe('101');
     expect(versions).toHaveLength(2);
@@ -295,15 +416,25 @@ describe('versioned question bank', () => {
     expect(versions[0].scoreCents).toBe(250);
     expect(versions[1].scoreCents).toBeNull();
     expect(question.score).toBeNull();
-    expect(versions[1]).toMatchObject({ revision: 2, stem: '<p>修订题干</p>', status: 'pending', createdBy: '9' });
-    expect(question).toMatchObject({ currentVersionId: '101', stem: '<p>修订题干</p>', status: 'pending' });
+    expect(versions[1]).toMatchObject({ revision: 2, stem: '<p>修订题干</p>', status: 'approved', createdBy: '9' });
+    expect(question).toMatchObject({ currentVersionId: '101', stem: '<p>修订题干</p>', status: 'approved', isEnabled: true });
+  });
+
+  it('preserves exact rich legacy JSON when capturing the first immutable version', async () => {
+    const f = versionServiceFixture();
+    const legacy = validateAndSanitizeQuestionDraft(baseDraft());
+    Object.assign(f.question, { contentSchemaVersion: 2, contentJson: legacy.contentJson });
+    const previous = structuredClone(f.question.contentJson);
+    await f.service.revise('5', baseDraft({ regulationId: '2', regulationVersionId: '3' }), '9', null, true);
+    expect(f.versions[0].contentSchemaVersion).toBe(2);
+    expect(f.versions[0].contentJson).toEqual(previous);
   });
 
   it.each([
-    { patch: { analysis: '新解析' }, concept: '7' },
+    { patch: { analysis: '新解析' }, concept: null },
     { patch: { category_id: '22' }, concept: null },
     { patch: { type: 'multiple' as const, answer: [0, 1] }, concept: null },
-  ])('preserves hidden concept on ordinary edits and detaches it only from a changed category/type: $patch', async ({ patch, concept }) => {
+  ])('drops historical concept from every new revision while preserving the captured history: $patch', async ({ patch, concept }) => {
     const f = versionServiceFixture();
     Object.assign(f.question, { categoryId: '11', difficulty: 'easy', conceptId: '7' });
     f.service.concepts.assertCompatible = async (_manager: unknown, _id: string, category: string, type: string) => {
@@ -314,25 +445,14 @@ describe('versioned question bank', () => {
     const review = Object.create(QuestionReviewService.prototype);
     Object.assign(review, { questionRepo: { findOne: async () => f.question }, versions: f.service,
       dataSource: { createQueryBuilder: () => builder }, audit: { log: () => undefined } });
-    const result = await review.edit('5', patch, { id: 9, name: 'admin' }, null, null);
-    expect(result.concept_id).toBe(concept);
+    const result = await review.edit('5', patch, { id: 9, name: 'admin' }, null, null, true);
+    expect(result).not.toHaveProperty('concept_id');
     expect(f.versions[0].conceptId).toBe('7');
-    expect(f.versions[1].conceptId).toBe(concept);
+    expect(f.versions[1].conceptId).toBeNull();
     expect(f.versions[1].regulationId).toBe('2');
     expect(f.versions[1].regulationVersionId).toBe('3');
   });
 
-  it('records the actual administrator and time when approving the current revision', async () => {
-    const { service, question, versions } = versionServiceFixture();
-    await service.revise('5', baseDraft({ regulationId: '2', regulationVersionId: '3' }), '9');
-
-    await service.approve('101', '27');
-
-    expect(versions[1].status).toBe('approved');
-    expect(versions[1].approvedBy).toBe('27');
-    expect(versions[1].approvedAt).toBeInstanceOf(Date);
-    expect(question.status).toBe('approved');
-  });
 
   it('rejects a stale expected version before creating a revision', async () => {
     const { service, question, versions } = versionServiceFixture();
@@ -354,26 +474,6 @@ describe('versioned question bank', () => {
     expect(question.currentVersionId).toBe('99');
   });
 
-  it('rejects a stale review without changing the current version or review state', async () => {
-    const { service, question, versions } = versionServiceFixture();
-    question.categoryId = '11';
-    question.difficulty = 'medium';
-    question.currentVersionId = '99';
-    const current = {
-      id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'medium', type: 'single',
-      stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
-      scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
-      source: 'ai', status: 'pending', approvedBy: null, approvedAt: null, reviewedBy: null,
-      reviewedAt: null, reviewReason: null, createdBy: '1', legacyCapturedAt: null,
-    };
-    versions.push(current);
-
-    await expect(service.reviewCurrent('5', '98', 'approved', '9'))
-      .rejects.toMatchObject({ code: 40940 });
-    expect(versions).toHaveLength(1);
-    expect(current).toMatchObject({ status: 'pending', approvedBy: null, reviewedBy: null });
-    expect(question).toMatchObject({ currentVersionId: '99', status: 'approved' });
-  });
 
   it('binds each controlled rich-text image to the immutable question version', async () => {
     const { service } = versionServiceFixture();
@@ -381,7 +481,7 @@ describe('versioned question bank', () => {
     await service.revise('5', baseDraft({
       stem: '<p>带图题干<img data-media-id="42" alt="现场图"></p>',
       regulationId: '2', regulationVersionId: '3',
-    }), '9');
+    }), '9', null, true);
 
     expect((service as any).media.assertUsable).toHaveBeenCalledWith('9', '42', 'question');
     expect((service as any).media.bind).toHaveBeenCalledWith(expect.anything(), '42', 'question_version', '101');
@@ -404,7 +504,7 @@ describe('versioned question bank', () => {
     const nextId = await service.revise('5', baseDraft({
       stem: question.stem,
       regulationId: '2', regulationVersionId: '3',
-    }), '9');
+    }), '9', '99', true);
 
     expect(nextId).toBe('100');
     expect((service as any).media.assertUsable).not.toHaveBeenCalled();
@@ -512,7 +612,7 @@ describe('versioned question bank', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
-  it('returns only immutable current approved candidates for the exact pool dimensions', async () => {
+  it('returns only immutable current enabled candidates for the exact pool dimensions', async () => {
     const service = Object.create(QuestionVersionService.prototype) as QuestionVersionService & Record<string, any>;
     const calls: Array<{ method: string; sql?: string; params?: unknown }> = [];
     const builder: any = {
@@ -529,13 +629,15 @@ describe('versioned question bank', () => {
     };
     service.versionRepo = { createQueryBuilder: vi.fn(() => builder) };
     service.categories = { assertActive: vi.fn(async () => undefined) };
+    service.regulationRepo = { findOne: async () => ({ id: '2' }) };
+    service.regulationVersionRepo = { findOne: async () => ({ id: '3' }) };
 
-    const result = await service.approvedCandidates({
+    const result = await service.enabledCandidates({
       categoryId: '11', regulationIds: ['2'], type: 'multiple', difficulty: 'hard',
     });
 
     expect(calls.some((call) => call.sql?.includes('question.current_version_id = version.id'))).toBe(true);
-    expect(calls.some((call) => call.sql?.includes('version.status = :status'))).toBe(true);
+    expect(calls.some((call) => call.sql?.includes('question.is_enabled = :enabled'))).toBe(true);
     expect(calls.some((call) => call.sql?.includes('version.regulation_id IN'))).toBe(true);
     expect(service.categories.assertActive).toHaveBeenCalledWith('11');
     expect(result[0]).toMatchObject({ questionId: '41', versionId: '501', categoryId: '11', type: 'multiple', difficulty: 'hard' });
@@ -543,63 +645,20 @@ describe('versioned question bank', () => {
     expect(Object.isFrozen(result[0])).toBe(true);
   });
 
-  it('rejects linking a concept from another category or question type', async () => {
-    const service = Object.create(QuestionConceptService.prototype) as QuestionConceptService & Record<string, any>;
-    const manager = {
-      getRepository(entity: any) {
-        if (entity !== QuestionConcept) throw new Error('unexpected repository');
-        return { findOne: async () => ({ id: '7', categoryId: '12', type: 'single' }) };
-      },
-    };
-
-    await expect(service.assertCompatible(manager as any, '7', '11', 'single')).rejects.toMatchObject({ httpStatus: 400 });
+  it('omits invalid current contents and missing source facts from the read-only enabled candidate list', async () => {
+    const service: any = Object.create(QuestionVersionService.prototype);
+    const base = { id: '501', questionId: '41', revision: 1, categoryId: '11', difficulty: 'easy', type: 'single',
+      stem: '<p>题干</p>', options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }], answer: [0], analysis: null,
+      source: 'manual', regulationId: null, regulationVersionId: null, approvedBy: null, approvedAt: null };
+    const rows = [base, { ...base, id: '502', questionId: '42', answer: [99] }, { ...base, id: '503', questionId: '43', source: 'ai', regulationId: '2', regulationVersionId: '3' }];
+    const qb: any = { innerJoin: () => qb, where: () => qb, andWhere: () => qb, orderBy: () => qb, getMany: async () => rows };
+    Object.assign(service, { versionRepo: { createQueryBuilder: () => qb }, categories: { assertActive: async () => undefined }, regulationRepo: { findOne: async () => null } });
+    const candidates = await service.enabledCandidates({ categoryId: '11', type: 'single', difficulty: 'easy' });
+    expect(candidates.map((row: any) => row.questionId)).toEqual(['41']);
   });
 
-  it('scopes write-only concept options to an active category and exact question type', async () => {
-    const service = Object.create(QuestionConceptService.prototype) as QuestionConceptService & Record<string, any>;
-    const calls: Array<{ sql: string; params: unknown }> = [];
-    const builder: any = {
-      where: (sql: string, params: unknown) => { calls.push({ sql, params }); return builder; },
-      andWhere: (sql: string, params: unknown) => { calls.push({ sql, params }); return builder; },
-      getCount: vi.fn(async () => 1),
-      orderBy: () => builder,
-      skip: () => builder,
-      take: () => builder,
-      getMany: vi.fn(async () => [{ id: '7', categoryId: '11', type: 'single', name: '受限空间' }]),
-    };
-    service.categories = { assertActive: vi.fn(async () => undefined) };
-    service.conceptRepo = { createQueryBuilder: vi.fn(() => builder) };
 
-    const page = await service.options({ categoryId: '11', type: 'single', page: 1, pageSize: 20 });
 
-    expect(service.categories.assertActive).toHaveBeenCalledWith('11');
-    expect(calls).toContainEqual({ sql: 'concept.category_id = :categoryId', params: { categoryId: '11' } });
-    expect(calls).toContainEqual({ sql: 'concept.type = :type', params: { type: 'single' } });
-    expect(page).toEqual({ items: [{ id: '7', name: '受限空间' }], total: 1, page: 1, page_size: 20 });
-  });
-
-  it('paginates the new concept list contract with Page.items', async () => {
-    const service = Object.create(QuestionConceptService.prototype) as QuestionConceptService & Record<string, any>;
-    const builder: any = {
-      where: () => builder,
-      andWhere: () => builder,
-      getCount: vi.fn(async () => 41),
-      orderBy: () => builder,
-      skip: vi.fn(() => builder),
-      take: vi.fn(() => builder),
-      getMany: vi.fn(async () => [{ id: '21', categoryId: '11', type: 'single', name: '第二页考点' }]),
-    };
-    service.conceptRepo = { createQueryBuilder: vi.fn(() => builder) };
-
-    const page = await (service as any).list({ categoryId: '11', type: 'single', page: 2, pageSize: 20 });
-
-    expect(page).toEqual({
-      items: [{ id: '21', category_id: '11', type: 'single', name: '第二页考点' }],
-      total: 41, page: 2, page_size: 20,
-    });
-    expect(builder.skip).toHaveBeenCalledWith(20);
-    expect(builder.take).toHaveBeenCalledWith(20);
-  });
 
   it('paginates version history instead of returning an unbounded array', async () => {
     const service = Object.create(QuestionVersionService.prototype) as QuestionVersionService & Record<string, any>;
@@ -677,73 +736,8 @@ describe('versioned question bank', () => {
     expect(parsed).toEqual({ valid: [], invalidCount: 2 });
   });
 
-  it('regenerates a scanned PDF question from its actual second page group with a complete hard-question contract', async () => {
-    const q: any = {
-      id: '5', currentVersionId: '101', regulationId: '2', versionId: '3', categoryId: '11', difficulty: 'hard',
-      conceptId: '7', type: 'single', stem: '<p>旧题干</p>', options: [{ key: 'A', text: '旧 A' }, { key: 'B', text: '旧 B' }],
-      answer: [0], analysis: '<p>旧解析</p>', score: '5.00', status: 'rejected', source: 'ai',
-    };
-    const cleanup = vi.fn(async () => undefined);
-    const renderGroup = vi.fn(async (group: number) => ({
-      startPage: group * 2 + 1, endPage: group * 2 + 2, images: [`data:image/png;base64,${group}`],
-    }));
-    const revise = vi.fn(async () => '102');
-    const gateway = {
-      chat: vi.fn(async (messages: any[]) => {
-        expect(Array.isArray(messages[1].content)).toBe(true);
-        expect(messages[1].content.some((item: any) => item.type === 'image_url')).toBe(true);
-        const serialized = messages.flatMap((message: any) => {
-          if (typeof message.content === 'string') return [message.content];
-          return message.content
-            .filter((part: any) => part.type === 'text')
-            .map((part: any) => part.text);
-        }).join('\n');
-        expect(serialized).toContain('高级（hard）');
-        expect(serialized).toContain('恰好 4 个选项');
-        expect(serialized).toContain('"answer"');
-        expect(serialized).toContain('"analysis"');
-        return JSON.stringify([{
-          type: 'single', stem: '新题干',
-          options: [{ text: '新 A' }, { text: '新 B' }, { text: '新 C' }, { text: '新 D' }],
-          answer: [1], analysis: '新解析',
-        }]);
-      }),
-    };
-    const service = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
-    service.questionRepo = { findOne: async () => q };
-    service.versionRepo = { findOne: async () => ({ id: '3', regulationId: '2', fileType: 'pdf', textContent: null }) };
-    service.gateway = gateway;
-    service.pdfVision = {
-      shouldUseVision: vi.fn(() => true),
-      prepare: vi.fn(async () => ({ groupCount: 2, pageCount: 4, renderGroup, cleanup })),
-    };
-    service.versions = {
-      revise,
-      current: vi.fn(async () => ({
-        id: '101', revision: 1, sourcePageGroup: 1, sourcePageStart: 3, sourcePageEnd: 4,
-        approvedBy: null, approvedAt: null, reviewedBy: null,
-        reviewedAt: null, reviewReason: null, legacyCapturedAt: null,
-      })),
-    };
-    service.dataSource = {
-      createQueryBuilder: () => {
-        const builder: any = { select: () => builder, from: () => builder, innerJoin: () => builder, where: () => builder, andWhere: () => builder, limit: () => builder, getRawOne: async () => null };
-        return builder;
-      },
-    };
-    service.audit = { log: vi.fn() };
 
-    await (service as any).regenerate('5', { id: 9, name: 'admin' }, null, '101');
-
-    expect(renderGroup).toHaveBeenCalledWith(1);
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(revise).toHaveBeenCalledWith('5', expect.objectContaining({
-      categoryId: '11', difficulty: 'hard', regulationId: '2', regulationVersionId: '3', source: 'ai',
-      sourcePageGroup: 1, sourcePageStart: 3, sourcePageEnd: 4,
-    }), '9', '101');
-  });
-
-  it('preserves the actual PDF page group through an analysis edit and uses it for the next regeneration', async () => {
+  it('preserves the actual PDF page group through a score-free enabled revision', async () => {
     const { service: versions, question, versions: rows } = versionServiceFixture();
     Object.assign(question, {
       categoryId: '11', difficulty: 'hard', currentVersionId: '99', status: 'rejected',
@@ -790,7 +784,7 @@ describe('versioned question bank', () => {
     review.audit = { log: vi.fn() };
 
     const edited = await review.edit(
-      '5', { analysis: '<p>管理员仅修改解析</p>' }, { id: 9, name: 'admin' }, null, '99',
+      '5', { analysis: '<p>管理员仅修改解析</p>' }, { id: 9, name: 'admin' }, null, '99', true,
     );
 
     expect(edited.current_version_id).toBe('100');
@@ -799,13 +793,7 @@ describe('versioned question bank', () => {
       sourcePageGroup: 1, sourcePageStart: 3, sourcePageEnd: 4,
     });
 
-    await review.regenerate('5', { id: 9, name: 'admin' }, null, '100');
 
-    expect(renderGroup).toHaveBeenCalledWith(1);
-    expect(rows[2]).toMatchObject({
-      regulationId: '2', regulationVersionId: '3',
-      sourcePageGroup: 1, sourcePageStart: 3, sourcePageEnd: 4,
-    });
   });
 
   it('returns the revision written by edit separately from a later current-version view', async () => {
@@ -821,13 +809,13 @@ describe('versioned question bank', () => {
     service.audit = { log: vi.fn() };
 
     const edited = await service.edit(
-      '5', { analysis: '<p>本次修改</p>' }, { id: 9, name: 'admin' }, null, '101',
+      '5', { analysis: '<p>本次修改</p>' }, { id: 9, name: 'admin' }, null, '101', true,
     );
 
     expect(edited).toMatchObject({
       question_id: '5', current_version_id: '103', saved_version_id: '102', stem: '<p>并发后的题目</p>',
     });
-    expect(service.versions.revise).toHaveBeenCalledWith('5', expect.any(Object), '9', '101');
+    expect(service.versions.revise).toHaveBeenCalledWith('5', expect.any(Object), '9', '101', true);
   });
 
   it('returns the revision written by manual creation separately from a later current-version view', async () => {
@@ -847,65 +835,10 @@ describe('versioned question bank', () => {
     expect(created).toMatchObject({
       question_id: '7', current_version_id: '202', saved_version_id: '201', stem: '<p>并发后的题目</p>',
     });
-    expect(service.versions.approve).toHaveBeenCalledWith('201', '9');
+    expect(service.versions.approve).not.toHaveBeenCalled();
     expect(service.versions.create.mock.calls[0][0]).not.toHaveProperty('scoreCents');
   });
 
-  it('rejects a delayed regeneration when the current version changes and creates no wrong version', async () => {
-    const { service: versions, question, versions: rows } = versionServiceFixture();
-    question.categoryId = '11';
-    question.difficulty = 'easy';
-    question.currentVersionId = '99';
-    rows.push({
-      id: '99', questionId: '5', revision: 1, categoryId: '11', difficulty: 'easy', type: 'single',
-      stem: question.stem, options: question.options, answer: question.answer, analysis: question.analysis,
-      scoreCents: 250, conceptId: null, regulationId: '2', regulationVersionId: '3',
-      source: 'ai', status: 'rejected', approvedBy: null, approvedAt: null, reviewedBy: '1',
-      reviewedAt: new Date(), reviewReason: '重做', createdBy: '1', legacyCapturedAt: null,
-    });
-
-    let enterGateway!: () => void;
-    const gatewayEntered = new Promise<void>((resolve) => { enterGateway = resolve; });
-    let releaseGateway!: (value: string) => void;
-    const gatewayResult = new Promise<string>((resolve) => { releaseGateway = resolve; });
-    const review = Object.create(QuestionReviewService.prototype) as QuestionReviewService & Record<string, any>;
-    review.questionRepo = { findOne: vi.fn(async () => question) };
-    review.versionRepo = {
-      findOne: vi.fn(async () => ({ id: '3', regulationId: '2', fileType: 'docx', textContent: '制度原文' })),
-    };
-    review.gateway = {
-      chat: vi.fn(async () => {
-        enterGateway();
-        return gatewayResult;
-      }),
-    };
-    review.pdfVision = { shouldUseVision: vi.fn(() => false) };
-    review.versions = versions;
-    review.dataSource = {
-      createQueryBuilder: () => {
-        const builder: any = {
-          select: () => builder, from: () => builder, innerJoin: () => builder, where: () => builder,
-          andWhere: () => builder, limit: () => builder, getRawOne: async () => null,
-        };
-        return builder;
-      },
-    };
-    review.audit = { log: vi.fn() };
-
-    const pending = review.regenerate('5', { id: 9, name: 'admin' }, null, '99');
-    await gatewayEntered;
-    question.currentVersionId = '100';
-    releaseGateway(JSON.stringify([{
-      type: 'single', stem: '延迟返回的新题干',
-      options: [{ text: 'A' }, { text: 'B' }, { text: 'C' }, { text: 'D' }],
-      answer: [0], analysis: '解析',
-    }]));
-
-    await expect(pending).rejects.toMatchObject({ code: 40940 });
-    expect(rows).toHaveLength(1);
-    expect(question.currentVersionId).toBe('100');
-    expect(review.audit.log).not.toHaveBeenCalled();
-  });
 
   it('rejects judgment questions at legacy fixed-paper editing and publish boundaries', async () => {
     const unsupported = { id: '7', regulationId: '2', type: 'judgment', status: 'approved', score: '100.00', options: [{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }] } as any;

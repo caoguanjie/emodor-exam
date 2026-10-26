@@ -8,6 +8,8 @@ import { LearningRecord } from '../src/entities/learning-record.entity';
 import { PaperQuestion } from '../src/entities/paper-question.entity';
 import { Regulation } from '../src/entities/regulation.entity';
 import { SysUser } from '../src/entities/sys-user.entity';
+import { TrainingCategory } from '../src/entities/training-category.entity';
+import { SamplingService } from '../src/modules/exams/sampling.service';
 import type { PublishedPaper, PublishedQuestionSnapshot } from '../src/modules/exams/paper-release.service';
 import {
   AttemptService,
@@ -201,13 +203,13 @@ function legacyAttemptFixture(input: {
     shuffleQuestionOrder: vi.fn((pool: PublishedQuestionSnapshot[]) => pool),
     snapshotOptionMapping: vi.fn((_type: string, length: number) => Array.from({ length }, (_value, index) => index)),
   };
-  service.versions = { currentOrCaptureForRelease: versionCapture };
+  service.versions = { currentOrCaptureForLegacyAttempt: versionCapture };
   service.scope = { isUserInScope: vi.fn(async () => true) };
   service.reader = { forStudent: vi.fn(async (_userId: string, recordId: string) => ({ record_id: recordId })) };
   service.media = { bind: vi.fn(async () => undefined) };
   service.redis = { set: vi.fn(async () => undefined) };
   service.audit = { log: vi.fn() };
-  return { service, savedAssignments, savedRecords, savedItems, versionCapture };
+  return { service, savedAssignments, savedRecords, savedItems, versionCapture, paper, repositories };
 }
 
 function frozenAssignment(overrides: Record<string, any> = {}) {
@@ -230,6 +232,27 @@ function frozenRecord(id: string, status: string, attemptNo: number, overrides: 
 }
 
 describe('atomic attempt policy', () => {
+  it('preserves historical concept grouping when creating a first attempt from an existing random release', async () => {
+    const release = published({
+      rule: { ...structuredClone(RULE), rules: [{ type: 'single', count: 2, scoreCents: 5000 }] },
+      pool: [
+        question('101', 'easy', { conceptId: 'old-group' }),
+        question('102', 'easy', { conceptId: 'old-group' }),
+        question('103', 'easy', { conceptId: 'other-group' }),
+      ],
+    });
+    const fixture = legacyAttemptFixture({ release });
+    fixture.paper.businessScope = 'training';
+    fixture.paper.regulationId = null as any;
+    fixture.repositories.set(SysUser, { findOne: vi.fn(async () => ({ id: '9', username: 'learner', role: 'employee', status: 1, categoryId: '7', source: 'institution' })) });
+    fixture.repositories.set(TrainingCategory, { findOne: vi.fn(async () => ({ id: '7', status: 1 })) });
+    fixture.service.sampling = new SamplingService();
+    const draw = vi.spyOn(fixture.service.sampling, 'draw');
+    await fixture.service.start('9', '11');
+    expect(draw).toHaveBeenCalledWith(release.pool, release.rule.rules, 'easy', undefined, 'historical-concept');
+    expect(fixture.savedItems).toHaveLength(2);
+    expect(new Set(fixture.savedItems.map((item) => item.snapshotJson.conceptId)).size).toBe(2);
+  });
   it('recovers a still-active third attempt before applying the attempt limit', () => {
     expect(decideAttemptTransition({
       nowMs: Date.parse('2026-10-21T10:00:00.000Z'),
@@ -402,6 +425,16 @@ describe('frozen assignment facts', () => {
     });
     expect(fixture.versionCapture).not.toHaveBeenCalled();
     expect(fixture.savedRecords).toEqual([]);
+  });
+
+  it('captures an already-published legacy paper without applying the new enabled/difficulty publication rules', async () => {
+    const fixture = legacyAttemptFixture({
+      currentPool: [question('101', 'unknown', { categoryId: null })],
+    });
+
+    await expect(fixture.service.start('9', '11')).resolves.toMatchObject({ record_id: '71' });
+    expect(fixture.versionCapture).toHaveBeenCalledTimes(1);
+    expect(fixture.savedItems[0].snapshotJson.difficulty).toBe('unknown');
   });
 
   it('still rejects unsupported current content when genuinely capturing the first legacy_start', async () => {

@@ -9,7 +9,7 @@ function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; 
 
 function withoutWriteIdentity(meta: QuestionMeta): QuestionMeta {
   const result = clone(meta) as QuestionMeta & Record<string, unknown>;
-  for (const key of ['question_id', 'base_revision', 'generation_ref', 'rubric']) delete result[key];
+  for (const key of ['question_id', 'base_revision', 'generation_ref', 'rubric', 'concept_id']) delete result[key];
   return result;
 }
 
@@ -150,19 +150,15 @@ function questionSetIssues(sets: PaperQuestionSet[], categoryId?: string): Desig
   if (issues.length) return issues;
   const ids = sets.flatMap((set) => Object.keys(set.document.questions));
   if (ids.length > 100) issues.push(issue('question-limit', '每份试卷最多 100 题'));
-  const versions = new Set<string>();
-  const concepts = new Set<string>();
+  const questions = new Set<string>();
   for (const set of sets) {
     for (const [id, meta] of Object.entries(set.document.questions)) {
       if (meta.category_id !== categoryId) issues.push(issue('category-mismatch', '题目培训类别必须与试卷一致', id));
       const binding = set.bindings[id];
       if (binding.kind === 'bound') {
-        if (versions.has(binding.question_version_id)) issues.push(issue('duplicate-version', '同一题目版本不能重复加入试卷', id));
-        versions.add(binding.question_version_id);
-      }
-      if (meta.concept_id) {
-        if (concepts.has(meta.concept_id)) issues.push(issue('duplicate-concept', '同一考点不能重复加入试卷', id));
-        concepts.add(meta.concept_id);
+        if (questions.has(binding.question_id)) issues.push(issue('duplicate-question', '同一道题不能重复加入试卷', id));
+        questions.add(binding.question_id);
+        if (binding.enabled === false) issues.push(issue('disabled-question', '题单包含已停用题目，请移除或替换', id));
       }
     }
   }
@@ -405,9 +401,13 @@ export function toAuthoringBundle(value: QuestionAuthoringDocument, session: Des
       used.add(stableId); options[localId] = stableId;
     }
     result.option_ids[id] = options;
-    if (session.identities[id]) result.identities[id] = clone(session.identities[id]);
+    if (session.identities[id]) {
+      if (typeof session.identities[id].expected_enabled !== 'boolean') throw new Error('既有题目缺少编辑时的启用状态，请重新加载');
+      result.identities[id] = clone(session.identities[id]);
+    }
     if (session.layouts[id]) result.layouts[id] = validateDesignerLayout(session.layouts[id]);
     result.document.questions[id] = withoutWriteIdentity(result.document.questions[id]!);
+    delete (result.document.questions[id] as Partial<QuestionMeta>).score_cents;
   }
   if (Object.keys(value.questions).length !== seen.size) throw new Error('题目原稿身份不一致');
   return result;
@@ -426,7 +426,7 @@ export function applyAuthoringReceipt(value: DesignerState, receipt: AuthoringRe
     if (canonical(value.option_ids[id]) !== canonical(next.option_ids[id])) throw new Error('提交回执改变了选项稳定身份');
   }
   for (const item of receipt.items) {
-    next.identities[item.client_id] = { question_id: item.question_id, expected_version_id: item.saved_version_id };
+    next.identities[item.client_id] = { question_id: item.question_id, expected_version_id: item.saved_version_id, expected_enabled: true };
   }
   return next;
 }

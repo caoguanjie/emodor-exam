@@ -16,7 +16,7 @@ const wrappers: VueWrapper[] = [];
 const draft = () => ({ category_id: '7', difficulty: 'easy' as const, type: 'single' as const, stem: '先做什么？',
   options: [{ key: 'A', text: '检查' }, { key: 'B', text: '作业' }], answer: [0], analysis: '' });
 const row = () => ({ ...draft(), id: 40, question_id: '40', current_version_id: '50', revision: 1,
-  concept_id: '9', status: 'approved', source: 'manual', score: 17 });
+  concept_id: '9', enabled: true, source: 'manual', score: 17 });
 beforeEach(() => {
   vi.clearAllMocks();
   api.get.mockImplementation(async (path: string) => {
@@ -62,6 +62,18 @@ async function changeRichStem(form: { vm: unknown }, text: string, image = false
 }
 
 describe('question bank has no scores', () => {
+  it('makes re-enabling explicit when revising a disabled question and preserves its CAS baseline', async () => {
+    const previous = api.get.getMockImplementation()!;
+    api.get.mockImplementation(async (path: string, ...args: unknown[]) => path === '/ai/questions'
+      ? { list: [{ ...row(), enabled: false }], total: 1 } : previous(path, ...args));
+    const { wrapper } = await show();
+    await click(wrapper, '修订');
+    expect(editorDialog().text()).toContain('该题当前已停用，保存本次修订后将启用。');
+    await click(wrapper, '保存并启用');
+    expect(api.put.mock.calls[0]).toEqual(['/ai/questions/40', expect.objectContaining({
+      expected_version_id: '50', expected_enabled: false,
+    })]);
+  });
   it.each(['人工录题', '修订'])('mounts the %s overlay on body outside the animated page containing block', async (action) => {
     const { wrapper } = await show();
     const page = wrapper.get('.question-page').element as HTMLElement;
@@ -140,15 +152,15 @@ describe('question bank has no scores', () => {
     expect(wrapper.text()).not.toContain('0 分');
   });
 
-  it('omits bank scores, authoring concept/source fields and concept option requests, retaining the list filter', async () => {
+  it('omits bank scores, authoring concept/source fields and concept option requests, without list concept filters', async () => {
     const { wrapper } = await show();
     expect(wrapper.text()).not.toMatch(/建议分|默认分/);
-    expect(wrapper.text()).toContain('考点组');
+    expect(wrapper.text()).not.toContain('考点组');
     await click(wrapper, '修订');
     expect(editorDialog().text()).not.toMatch(/考点|资料来源|分值/);
     expect(api.get.mock.calls.some(([path]) => path === '/ai/question-concept-options')).toBe(false);
-    expect(wrapper.findComponent(ManualQuestionEditor).props('modelValue')).toMatchObject({ concept_id: '9' });
-    expect(editorDialog().text()).toContain('保存会生成待审核新版本');
+    expect(wrapper.findComponent(ManualQuestionEditor).props('modelValue')).not.toHaveProperty('concept_id');
+    expect(editorDialog().text()).toContain('保存会生成新版本并启用');
   });
 
   it('shows answer summary and dirty state and protects cancel and route leave without saving', async () => {
@@ -189,7 +201,10 @@ describe('question bank has no scores', () => {
     expect(JSON.stringify(request[1].content_json)).toContain('"type":"bold"');
     expect(JSON.stringify(request[1].content_json)).toContain('"asset_id":"44"');
     expect(request[1]).not.toHaveProperty('concept_id');
-    if (mode === 'edit') expect(request[1].expected_version_id).toBe('50');
+    if (mode === 'edit') {
+      expect(request[1].expected_version_id).toBe('50');
+      expect(request[1].expected_enabled).toBe(true);
+    }
   });
 
   it('saves an untouched legacy rich question as canonical schema 3 without making open dirty', async () => {
@@ -206,6 +221,7 @@ describe('question bank has no scores', () => {
     expect(body.content_json.stem.content[0].content[0].marks).toEqual([{ type: 'bold' }]);
     expect(body.content_json.analysis.content[0].content[0].marks).toEqual([{ type: 'italic' }]);
     expect(body.expected_version_id).toBe('50');
+    expect(body.expected_enabled).toBe(true);
   });
 
   it.each(['question', 'analysis'])('protects an invalid first %s edit on cancel and route leave', async (target) => {

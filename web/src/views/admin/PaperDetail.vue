@@ -46,7 +46,7 @@
       <el-button @click="openPreview(false)">预览</el-button>
       <el-button v-if="canAnswerPreview" @click="openPreview(true)">答案版</el-button>
       <el-button v-if="auth.can('papers:write')" :loading="copyingPaper" :disabled="copyingPaper" @click="copyPaper">复制</el-button>
-      <el-button v-if="paper.status === 'draft' && auth.can('papers:publish')" type="success" :disabled="dirty" @click="publishPaper">发布</el-button>
+      <el-button v-if="paper.status === 'draft' && auth.can('papers:publish')" type="success" :disabled="dirty || fixedQuestions.some((item) => item.enabled === false)" @click="publishPaper">发布</el-button>
       <el-button v-if="paper.status === 'published' && auth.can('papers:publish')" type="warning" plain @click="withdrawPaper">撤回</el-button>
       <el-button v-if="['published', 'withdrawn'].includes(paper.status) && auth.can('papers:publish')" type="danger" plain @click="archivePaper">归档</el-button>
     </div>
@@ -67,7 +67,7 @@
         <el-form-item label="及格线 / 限时"><el-input-number v-model="form.pass_score" :min="1" :max="100" :disabled="!editable" /><el-input-number v-model="form.duration_minutes" :min="1" :max="1440" :disabled="!editable" style="margin-left:12px" /></el-form-item>
         <el-form-item label="次数 / 漏选比例"><el-input-number v-model="form.max_attempts" :min="1" :max="100" :disabled="!editable" /><el-input-number v-model="form.partial_credit_ratio" :min="0" :max="1" :step="0.1" :disabled="!editable" style="margin-left:12px" /></el-form-item>
         <el-form-item v-if="form.mode === 'random'" label="题型规则">
-          <div class="rules"><div v-for="(rule, index) in form.rules" :key="rule.type" class="rule-row"><span>{{ typeLabel(rule.type) }}</span><el-input-number v-model="rule.count" :min="1" :disabled="!editable" /><el-input-number v-model="rule.score_cents" :min="1" :max="10000" :disabled="!editable" /><span>整数分</span><el-button v-if="editable" text type="danger" @click="form.rules.splice(index, 1)">移除</el-button></div><el-button v-if="editable" size="small" @click="addRule">添加题型规则</el-button><div :class="['hint', ruleTotal === 10000 ? 'ok' : 'danger']">规则总分 {{ ruleTotal / 100 }} / 100；发布同时验证初级和高级考点容量。</div></div>
+          <div class="rules"><div v-for="(rule, index) in form.rules" :key="rule.type" class="rule-row"><span>{{ typeLabel(rule.type) }}</span><el-input-number v-model="rule.count" :min="1" :disabled="!editable" /><el-input-number v-model="rule.score_cents" :min="1" :max="10000" :disabled="!editable" /><span>整数分</span><el-button v-if="editable" text type="danger" @click="form.rules.splice(index, 1)">移除</el-button></div><el-button v-if="editable" size="small" @click="addRule">添加题型规则</el-button><div :class="['hint', ruleTotal === 10000 ? 'ok' : 'danger']">规则总分 {{ ruleTotal / 100 }} / 100；发布同时验证简单和困难题池容量。</div></div>
         </el-form-item>
       </el-form>
     </el-card>
@@ -77,6 +77,7 @@
       <el-table :data="fixedQuestions">
         <el-table-column prop="sort" label="顺序" width="70" /><el-table-column prop="stem" label="题干" min-width="260" show-overflow-tooltip />
         <el-table-column label="题型 / 难度" width="130"><template #default="{ row }">{{ typeLabel(row.type) }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column>
+        <el-table-column label="启用状态" width="100"><template #default="{ row }"><el-tag :type="row.enabled === false ? 'danger' : 'success'">{{ row.enabled === false ? '已停用' : '启用' }}</el-tag></template></el-table-column>
         <el-table-column label="来源" width="120"><template #default="{ row }">{{ row.regulation_id ? `资料 ${row.regulation_id}` : '无资料来源' }}</template></el-table-column>
         <el-table-column label="分值" width="180"><template #default="{ row }"><el-input-number v-model="row.score_cents" :min="1" :max="10000" :disabled="!editable" /><span class="hint inline">整数分</span></template></el-table-column>
         <el-table-column label="操作" width="90"><template #default="{ row }"><FitsTableActions><FitsTableAction v-if="editable" type="danger" @click="removeFixed(row)">移除</FitsTableAction></FitsTableActions></template></el-table-column>
@@ -88,9 +89,9 @@
       <el-descriptions :column="2" border><el-descriptions-item label="本机构学员">简单题池</el-descriptions-item><el-descriptions-item label="外来学员">困难题池</el-descriptions-item><el-descriptions-item label="课程关联">仅说明，不过滤题池</el-descriptions-item></el-descriptions>
     </el-card>
 
-    <el-dialog v-model="candidateVisible" title="选择当前审核通过的题目版本" width="900px">
+    <el-dialog v-model="candidateVisible" title="选择当前启用的题目版本" width="900px">
       <div class="toolbar"><el-select v-model="candidateQuery.type" placeholder="题型" clearable style="width:140px" @change="changeCandidateFilter"><el-option v-for="item in questionTypes" :key="item" :label="typeLabel(item)" :value="item" /></el-select><el-select v-model="candidateQuery.difficulty" placeholder="难度" clearable style="width:140px" @change="changeCandidateFilter"><el-option v-for="item in authoringOptions.difficultyOptions.value" :key="item.value" :label="item.label" :value="item.value" /></el-select></div>
-      <el-table :key="candidateSession" :data="candidates" row-key="question_version_id" @selection-change="updateCandidateSelection"><el-table-column type="selection" width="50" :reserve-selection="true" /><el-table-column prop="question_version_id" label="版本 ID" width="100" /><el-table-column prop="stem" label="题干" min-width="280" show-overflow-tooltip /><el-table-column label="题型/难度" width="120"><template #default="{ row }">{{ typeLabel(row.type) }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column><el-table-column label="考点" width="110"><template #default="{ row }">{{ row.concept_id || '独立题' }}</template></el-table-column></el-table>
+      <el-table :key="candidateSession" :data="candidates" row-key="question_version_id" @selection-change="updateCandidateSelection"><el-table-column type="selection" width="50" :reserve-selection="true" /><el-table-column prop="question_version_id" label="版本 ID" width="100" /><el-table-column prop="stem" label="题干" min-width="280" show-overflow-tooltip /><el-table-column label="题型/难度" width="120"><template #default="{ row }">{{ typeLabel(row.type) }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column></el-table>
       <div class="candidate-pagination"><span class="hint inline">已选 {{ pickedCandidates.length }} 题</span><el-pagination :current-page="candidatePage.page" :page-size="candidatePage.page_size" :total="candidatePage.total" layout="total, prev, pager, next" @current-change="changeCandidatePage" /></div>
       <template #footer><el-button @click="candidateVisible = false">取消</el-button><el-button type="primary" @click="addCandidates">加入题单</el-button></template>
     </el-dialog>
@@ -114,7 +115,7 @@
       <PaperDesigner v-if="designerValue && designerHost && designerVisible" :model-value="designerValue" mode="edit"
         :save-draft="saveDesignerDraft" :categories="categories" :regulations="designerRegulations" :courses="designerCourses"
         :question-library-source="designerHost.questionLibrarySource" :paper-library-source="designerHost.paperLibrarySource"
-        :difficulty-options="authoringOptions.difficultyOptions.value" :concept-options-api="designerConceptOptions"
+        :difficulty-options="authoringOptions.difficultyOptions.value"
         :media-resolver="designerMediaResolver" :media-adapter="designerMediaAdapter"
         @update:model-value="designerValue = $event" @dirty-change="designerDirty = $event" @close="closeDesigner" />
     </el-dialog>
@@ -156,7 +157,6 @@ import PaperDesigner from '../../components/question-designers/PaperDesigner.vue
 import type { PaperDesignerValue, SaveContext } from '../../components/question-designers/contracts';
 import { createPaperDesignerHost } from '../../composables/paper-designer-host';
 import { useAuthoringOptions } from '../../composables/useAuthoringOptions';
-import { listQuestionConceptOptions } from '../../api/question-authoring';
 import { getMediaImageContent, uploadMedia } from '../../api/media';
 
 interface Draft {
@@ -276,7 +276,6 @@ const designerRelationOptions = ref<{ category: Id; regulations: NamedOption[]; 
 const designerHistoricalDifficulties = computed(() => Object.values(designerValue.value?.document.questions || {}).some((meta) => !authoringOptions.difficultyOptions.value.some((option) => option.value === meta.difficulty)));
 const designerRegulations = computed(() => designerRelationOptions.value.regulations.map((item) => ({ id: item.id, title: item.title || item.name || String(item.id), category_id: designerRelationOptions.value.category })));
 const designerCourses = computed(() => designerRelationOptions.value.courses.map((item) => ({ id: item.id, title: item.title || item.name || String(item.id), category_id: designerRelationOptions.value.category })));
-const designerConceptOptions = listQuestionConceptOptions;
 const designerMediaResolver = (id: string) => { if (!auth.can('media:read')) return Promise.reject(new Error('无图片读取权限')); return getMediaImageContent(id); };
 const designerMediaAdapter = computed(() => auth.can('media:write') && auth.can('questions:write') ? { upload: (file: File) => uploadMedia(file, 'question') } : undefined);
 const designerGuardDirty = computed(() => designerVisible.value && (designerDirty.value || !!designerHost.value?.busy.value || !!designerHost.value?.pending.value));
@@ -507,7 +506,7 @@ function updateCandidateSelection(rows: TrainingPaperCandidate[]) {
   for (const item of rows) selected.set(String(item.question_version_id), item);
   pickedCandidates.value = [...selected.values()];
 }
-function addCandidates() { const versionIds = new Set(fixedQuestions.value.map((item) => item.question_version_id)); const concepts = new Set(fixedQuestions.value.map((item) => item.concept_id ? `concept:${item.concept_id}` : `question:${item.question_id}`)); for (const item of pickedCandidates.value) { const key = item.concept_id ? `concept:${item.concept_id}` : `question:${item.question_id}`; if (versionIds.has(item.question_version_id) || concepts.has(key)) continue; versionIds.add(item.question_version_id); concepts.add(key); fixedQuestions.value.push({ ...clone(item), score_cents: 500, sort: fixedQuestions.value.length }); } candidateVisible.value = false; }
+function addCandidates() { const versionIds = new Set(fixedQuestions.value.map((item) => item.question_version_id)); const questionIds = new Set(fixedQuestions.value.map((item) => item.question_id)); for (const item of pickedCandidates.value) { const key = item.question_id; if (versionIds.has(item.question_version_id) || questionIds.has(key)) continue; versionIds.add(item.question_version_id); questionIds.add(key); fixedQuestions.value.push({ ...clone(item), score_cents: 500, sort: fixedQuestions.value.length }); } candidateVisible.value = false; }
 function removeFixed(row: TrainingPaperQuestion) { fixedQuestions.value = fixedQuestions.value.filter((item) => item.question_version_id !== row.question_version_id); fixedQuestions.value.forEach((item, index) => { item.sort = index; }); }
 
 async function saveFixedQuestions() {
@@ -642,7 +641,6 @@ function ordinaryPreviewExport(data: PaperPreview) {
       question_version_id: question.question_version_id,
       type: question.type,
       difficulty: question.difficulty,
-      concept_id: question.concept_id,
       regulation_id: question.regulation_id,
       stem: question.stem,
       options: question.options.map((option) => ({ key: option.key, text: option.text })),
@@ -684,7 +682,7 @@ async function loadLegacy() {
   legacyPersistedSum.value = legacySum.value;
   legacyDirty.value = false;
   if (data.status !== 'draft' || data.rules_locked) { legacyCandidates.value = []; return; }
-  const candidatesPage = await http.get('/ai/questions', { params: { regulation_id: data.regulation_id, status: 'approved', page_size: 100 } }) as { list: any[] };
+  const candidatesPage = await http.get('/ai/questions', { params: { regulation_id: data.regulation_id, enabled: true, page_size: 100 } }) as { list: any[] };
   if (context !== viewContext || operation !== legacyLoadOperation) return;
   legacyCandidates.value = candidatesPage.list;
 }

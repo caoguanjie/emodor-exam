@@ -156,7 +156,7 @@ export function validateAndSanitizeQuestionDraft(
   if (!SOURCES.includes(input.source)) throw Errors.param('题目来源非法（ai / manual / import）');
 
   const categoryId = decimalId(input.categoryId, 'category_id', true)!;
-  const conceptId = decimalId(input.conceptId, 'concept_id');
+  if (input.conceptId !== undefined && input.conceptId !== null) throw Errors.param('考点组已取消，请移除 concept_id');
   const regulationId = decimalId(input.regulationId, 'regulation_id');
   const regulationVersionId = decimalId(input.regulationVersionId, 'regulation_version_id');
   if (regulationVersionId && !regulationId) throw Errors.param('regulation_version_id 必须同时提供 regulation_id');
@@ -179,7 +179,7 @@ export function validateAndSanitizeQuestionDraft(
     if (parsed.schema !== 3) throw Errors.param('题目内容版本不一致');
     const { schema, ...contentJson } = parsed;
     return {
-      ...input, categoryId, conceptId, regulationId, regulationVersionId,
+      ...input, categoryId, regulationId, regulationVersionId,
       stem: richCompatibilityHtml(parsed.stem),
       options: parsed.options.map((option) => ({ key: option.id, text: richCompatibilityHtml(option.content) })),
       answer: parsed.answer_option_ids.map((id) => parsed.options.findIndex((option) => option.id === id)).sort((a, b) => a - b),
@@ -203,7 +203,6 @@ export function validateAndSanitizeQuestionDraft(
     analysis,
     contentSchemaVersion: 2,
     contentJson,
-    conceptId,
     regulationId,
     regulationVersionId,
     source: input.source,

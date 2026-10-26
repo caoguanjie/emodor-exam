@@ -15,7 +15,7 @@
       <template #left-sidebar><slot name="libraries" /></template>
       <template #question-settings="{ client_id, meta, answer_summary, readonly, change }">
         <QuestionSetting v-if="client_id" :key="client_id" :client-id="client_id" :meta="meta" :answer-summary="answer_summary"
-          :categories="categories" :regulations="regulations" :concept-api="conceptApi" :concept-access="conceptAccess"
+          :categories="categories" :regulations="regulations" :concept-api="conceptApi || noConceptApi" :concept-access="conceptAccess || noConceptAccess"
           :concept-options-api="conceptOptionsApi"
           :readonly="readonly" :change="change" :media-resolver="mediaResolver" :can-upload-media="canUploadMedia" />
       </template>
@@ -52,8 +52,8 @@ const props = withDefaults(defineProps<{
   categories?: Array<{ id: string; name: string }>;
   regulations?: QuestionRegulationOption[];
   defaultCategoryId?: string;
-  conceptApi: QuestionConceptApi;
-  conceptAccess: QuestionConceptAccess;
+  conceptApi?: QuestionConceptApi;
+  conceptAccess?: QuestionConceptAccess;
   conceptOptionsApi?: QuestionConceptOptionsApi;
   disabled?: boolean;
   canUploadMedia?: boolean;
@@ -75,6 +75,13 @@ const emit = defineEmits<{
   'move-request': [change: { client_id: string; to_index: number }];
 }>();
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)); }
+const noConceptAccess: QuestionConceptAccess = { read: false, create: false, edit: false, delete: false };
+const noConceptApi: QuestionConceptApi = {
+  async list() { return { items: [], total: 0, page: 1, page_size: 20 }; },
+  async create() { throw new Error('考点管理已停用'); },
+  async update() { throw new Error('考点管理已停用'); },
+  async remove() { throw new Error('考点管理已停用'); },
+};
 const local = ref(clone(props.modelValue));
 // Creation commands announce the type before Tiptap dispatches their content.
 // Retain only that transaction's initial metadata, never arbitrary late patches.
@@ -90,7 +97,7 @@ function publish(value: QuestionAuthoringDocument) {
   local.value = clone(value); emit('update:modelValue', clone(value));
 }
 function metadata(type: QuestionType): QuestionMeta {
-  return { type, category_id: props.defaultCategoryId, difficulty: 'easy', concept_id: null,
+  return { type, category_id: props.defaultCategoryId, difficulty: 'easy',
     regulation_id: null, regulation_version_id: null, score_cents: 500, analysis: rich() };
 }
 function changeContent(content: JSONContent) {

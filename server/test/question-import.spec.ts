@@ -13,9 +13,9 @@ import { Errors } from '../src/common/errors';
 import ExcelJS from 'exceljs';
 
 describe('question import format', () => {
-  it('generates an eight-column template and accepts the old ninth score column without reading its value', async () => {
+  it('generates a seven-column template and accepts the old ninth score column without reading its value', async () => {
     const txt = await buildQuestionImportTemplate('txt');
-    expect(txt.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/)[0]).toBe('category\ttype\tdifficulty\tconcept\tstem\toptions\tanswer\tanalysis');
+    expect(txt.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/)[0]).toBe('category\ttype\tdifficulty\tstem\toptions\tanswer\tanalysis');
     const old = txtFile([singleRow('题干', { score: 'not-a-number' })]);
     const parsed = await parseQuestionImportFile(old, 'txt');
     expect(parsed[0]).not.toHaveProperty('score');
@@ -23,6 +23,63 @@ describe('question import format', () => {
     const preview = await service.preview('1', old, 'txt', { categoryId: '10' });
     expect(preview.valid_rows).toEqual([2]);
     expect(preview.errors).toEqual([]);
+    expect(preview.warnings).toEqual(['旧模板分值已忽略，请在组卷时设置']);
+    expect(await service.readBatch('1', preview.batch_id)).toEqual(preview);
+  });
+
+  it.each(['txt', 'xlsx'] as const)('maps all four compatible %s headers without shifting question fields', async (format) => {
+    for (const headers of [
+      ['category', 'type', 'difficulty', 'stem', 'options', 'answer', 'analysis'],
+      HEADER.split('\t'),
+      HEADER.split('\t').filter((key) => key !== 'concept'),
+      HEADER.split('\t').filter((key) => key !== 'score'),
+    ]) {
+      const cells = Object.fromEntries(HEADER.split('\t').map((key, index) => [key, singleRow('<p>映射题干</p>')[index]]));
+      let buffer = Buffer.from([headers.join('\t'), headers.map((key) => cells[key]).join('\t')].join('\n'));
+      if (format === 'xlsx') {
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet('导入');
+        sheet.addRow(headers); sheet.addRow(headers.map((key) => cells[key]));
+        buffer = Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer);
+      }
+      const { service, batches } = questionImportFixture();
+      const preview = await service.preview('1', buffer, format, { categoryId: '10' });
+      expect(preview.valid_rows).toEqual([2]);
+      expect(preview.errors).toEqual([]);
+      expect(preview.warnings).toEqual(headers.includes('score') ? ['旧模板分值已忽略，请在组卷时设置'] : []);
+      const row = batches[0].normalizedRows.find((item: any) => item.row === 2);
+      expect(row.draft).toMatchObject({ stem: '<p>映射题干</p>', answer: [0], analysis: '<p>应先检测。</p>' });
+      expect(row.draft).not.toHaveProperty('conceptId');
+      expect(row.draft).not.toHaveProperty('scoreCents');
+    }
+  });
+
+  it.each(['txt', 'xlsx'] as const)('rejects a nonempty retired concept explicitly and ignores every legacy %s score value', async (format) => {
+    const { service } = questionImportFixture();
+    const file = async (rows: string[][]) => {
+      if (format === 'txt') return txtFile(rows);
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('导入');
+      sheet.addRow(HEADER.split('\t')); rows.forEach((row) => sheet.addRow(row));
+      return Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer);
+    };
+    const rejected = await service.preview('1', await file([singleRow('旧考点题', { concept: '受限空间' })]), format, { categoryId: '10' });
+    expect(rejected.errors).toEqual([{ row: 2, message: '考点组已取消，请清空后重试' }]);
+    expect(rejected.warnings).toEqual(['旧模板分值已忽略，请在组卷时设置']);
+    expect(await service.readBatch('1', rejected.batch_id)).toEqual(rejected);
+    for (const score of ['5', '0', '', 'not-a-number']) {
+      const preview = await service.preview('1', await file([singleRow('分值不参与指纹'), singleRow('分值不参与指纹', { score })]), format, { categoryId: '10' });
+      expect(preview.valid_rows).toEqual([2]); expect(preview.duplicates).toEqual([3]); expect(preview.errors).toEqual([]);
+    }
+  });
+
+  it('ignores a retired Excel score formula without evaluating or validating it', async () => {
+    const workbook = sparseQuestionWorkbook();
+    workbook.worksheets[0].getRow(2).getCell(9).value = { formula: '1/0', result: { error: '#DIV/0!' } };
+    const { service } = questionImportFixture();
+    const preview = await service.preview('1', Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer), 'xlsx', { categoryId: '10' });
+    expect(preview.valid_rows).toEqual([2]); expect(preview.errors).toEqual([]);
+    expect(preview.warnings).toEqual(['旧模板分值已忽略，请在组卷时设置']);
   });
 
   it('round-trips the same template rows through xlsx and UTF-8 TSV', async () => {
@@ -132,7 +189,7 @@ function txtFile(rows: string[][]): Buffer {
 
 function singleRow(stem: string, overrides: Partial<Record<string, string>> = {}): string[] {
   const row = {
-    category: '', type: 'single', difficulty: 'easy', concept: '受限空间', stem,
+    category: '', type: 'single', difficulty: 'easy', concept: '', stem,
     options: JSON.stringify([{ key: 'A', text: '先检测' }, { key: 'B', text: '直接进入' }]),
     answer: JSON.stringify([0]), analysis: '<p>应先检测。</p>', score: '5',
     ...overrides,
@@ -235,6 +292,14 @@ const damagedLegacyContent = [
 ];
 
 describe('question import preview', () => {
+  it('retains the shared 1000-row import ceiling even when upload configuration allows more', async () => {
+    const { service, batches } = questionImportFixture();
+    service.config.upload.maxImportRows = 1001;
+    await expect(service.preview('1', txtFile(Array.from({ length: 1001 }, (_, index) => singleRow(`题干${index}`))), 'txt', { categoryId: '10' }))
+      .rejects.toMatchObject({ code: 40001, message: '单次导入上限 1000 行' });
+    expect(batches).toEqual([]);
+  });
+
   it('separates valid, invalid, and later duplicate rows after canonical validation', async () => {
     const { service, versions } = questionImportFixture();
     const file = txtFile([
@@ -384,7 +449,9 @@ describe('question import ownership and commit', () => {
     const second = await imports.commitQuestions('1', preview.batch_id, [2]);
 
     expect(first.created_ids).toEqual(['100']);
+    expect(first.enabled).toBe(true);
     expect(second).toEqual(first);
+    expect(await service.readBatch('1', preview.batch_id)).toEqual(first);
     expect(versions.createApprovedImportsInManager).toHaveBeenCalledTimes(1);
   });
 
@@ -412,6 +479,30 @@ describe('question import ownership and commit', () => {
     await expect(imports.commitQuestions('1', '9', [2])).rejects.toMatchObject({ code: 40302 });
     await expect(imports.questionStatus('2', preview.batch_id)).rejects.toMatchObject({ code: 40302 });
     await expect(imports.questionStatus('1', '9')).rejects.toMatchObject({ code: 40302 });
+    await expect(service.readBatch('2', preview.batch_id)).rejects.toMatchObject({ code: 40302 });
+    await expect(service.readBatch('1', '9')).rejects.toMatchObject({ code: 40302 });
+  });
+
+  it('projects a legacy ordinary batch on confirmation and preserves an old committed receipt', async () => {
+    const { service, imports, versions, batches } = questionImportFixture();
+    const preview = await service.preview('1', txtFile([singleRow('<p>旧批次题目</p>')]), 'txt', { categoryId: '10' });
+    const batch = batches[0];
+    batch.normalizedRows = [{ row: 2, fingerprint: 'old', draft: { ...importDraft(), conceptId: '20', scoreCents: 500 } }];
+    const raw = structuredClone(batch.normalizedRows);
+    const current = await service.readBatch('1', preview.batch_id);
+    expect(current.rows[0]).not.toHaveProperty('concept'); expect(current.rows[0]).not.toHaveProperty('score');
+    expect(batch.normalizedRows).toEqual(raw);
+    const receipt = await imports.commitQuestions('1', preview.batch_id, [2]);
+    expect(receipt.enabled).toBe(true);
+    const persistedDraft = versions.createApprovedImportsInManager.mock.calls[0][1][0];
+    expect(persistedDraft).not.toHaveProperty('conceptId'); expect(persistedDraft).not.toHaveProperty('scoreCents');
+    batch.normalizedRows = raw;
+    const original = structuredClone(batch);
+    const legacyReceipt = { batch_id: batch.id, created_ids: ['100'], committed_rows: [2] };
+    expect(await service.readBatch('1', batch.id)).toEqual(legacyReceipt);
+    expect(await imports.commitQuestions('1', batch.id, [2])).toEqual(legacyReceipt);
+    expect(batch).toEqual(original);
+    expect(versions.createApprovedImportsInManager).toHaveBeenCalledTimes(1);
   });
 
   it('leaves the batch uncommitted when approved question creation fails', async () => {
@@ -435,7 +526,7 @@ function importDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraft
   return {
     categoryId: '10', difficulty: 'easy', type: 'single', stem: '<p>导入题目</p>',
     options: [{ key: 'A', text: '正确项' }, { key: 'B', text: '干扰项' }], answer: [0],
-    analysis: '<p>解析</p>', scoreCents: 500, source: 'import', ...overrides,
+    analysis: '<p>解析</p>', source: 'import', ...overrides,
   };
 }
 
@@ -495,7 +586,7 @@ describe('approved import adapter for the versioned question bank', () => {
     expect(questionSave).not.toHaveBeenCalled();
   });
 
-  it('creates approved identity and version rows in the caller transaction with exact review metadata', async () => {
+  it('creates enabled identity and compatible approved versions without review metadata', async () => {
     const questions: any[] = [];
     const versions: any[] = [];
     const questionRepo = {
@@ -543,15 +634,13 @@ describe('approved import adapter for the versioned question bank', () => {
     expect(lockActive.mock.calls.map((call) => call[1])).toEqual(['10', '20']);
     for (const version of versions) {
       expect(version).toMatchObject({
-        status: 'approved', approvedBy: '7', reviewedBy: '7', reviewReason: null,
+        status: 'approved', approvedBy: null, reviewedBy: null, reviewReason: null,
+        approvedAt: null, reviewedAt: null, conceptId: null, scoreCents: null,
       });
-      expect(version.approvedAt).toBeInstanceOf(Date);
-      expect(version.reviewedAt).toBe(version.approvedAt);
     }
-    expect(versions[1].approvedAt).toBe(versions[0].approvedAt);
     expect(questions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ status: 'approved', currentVersionId: '21', source: 'import' }),
-      expect.objectContaining({ status: 'approved', currentVersionId: '22', source: 'import' }),
+      expect.objectContaining({ status: 'approved', isEnabled: true, currentVersionId: '21', source: 'import' }),
+      expect.objectContaining({ status: 'approved', isEnabled: true, currentVersionId: '22', source: 'import' }),
     ]));
   });
 });

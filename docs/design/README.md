@@ -10,7 +10,7 @@
 
 > **试卷设计器增量（2026-10-23）**：按[定向集成设计](../superpowers/specs/2026-10-23-main-question-paper-designer-integration-design.md)迁入完整 PaperDesigner 及共享 Tiptap 内核。人工新增和编辑按上方 2026-10-26 增量在现有弹窗内接入 Tiptap；不新增独立试题设计器或单题编辑路由。服务端增加 schema 3、版本作者原稿、幂等回执、试卷布局与客户端能力协商；当前只启用简单 `easy` / 困难 `hard`，历史 `medium` / unknown 不重分类。源码与自动化、浏览器和真实设备的证据以[本次验收记录](../../review/main-question-designers-acceptance-2026-10-23.md)分别登记。
 
-> **题库分值归属调整（2026-10-26）**：按[已确认实施范围](../superpowers/plans/2026-10-26-question-bank-without-scores.md)，题库不拥有建议/默认分值，分值只属于试卷关联和规则。人工录题仅提供题型、培训类别、难度、题干、选项、答案与可选解析，不展示考点/资料来源，也不提供新建考点组。025 将两个旧题库分数字段改为可空历史兼容列，新题与修订写 NULL；既有试卷、发布快照和考试结果不重算。当前文件导入/导出使用八列，兼容旧九列但忽略 score。下文历史九列描述以此增量及 04/05 册现行契约为准。
+> **题库生命周期与分值归属（2026-10-26）**：按[已批准题库瘦身设计](../superpowers/specs/2026-10-26-question-bank-slimming-design.md)，人工保存、文件确认、参考题 AI 选行确认和修订均直接启用，题库不再提供考点组或审核队列。025 将旧题库分值列改为可空历史兼容列；026 增加 `question.is_enabled` 并只把历史 approved 映射为启用；027 清理 `questions:review` 及其角色／菜单关联。新题与新版本的概念、分值和审核元数据写 NULL，分值仅属于试卷关联、规则和冻结快照。当前下载七列模板，兼容旧九列和两种过渡八列；非空 concept 明确拒绝，旧 score 忽略并返回批次 warnings。既有版本、原稿、发布快照与成绩不重写。
 
 ---
 
@@ -20,16 +20,16 @@
 
 EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考试与记录系统，同时保留旧制度阅读、旧固定卷考试及原统计的兼容链路：
 
-管理端考试管理依次为“试题管理、试卷管理、试题导入、考试记录”。试题管理承载列表、人工录题、修改、审核、预览和已有单题重新生成；独立试题导入页提供“文件导入 / AI 生成”两个 Tab。普通文件导入使用八列 Excel/TXT 预检与 approved 确认，兼容旧九列但忽略 score；AI Tab 上传一次性参考题，每题最多生成 easy/hard 两题，预览修改并选行确认后才创建 pending 版本，人工审核后入卷。参考文件与参考正文不留存，生成题以 `source=ai` 且无制度版本入库。
+管理端考试管理依次为“试题管理、试卷管理、试题导入、考试记录”。试题管理承载紧凑查询、人工录题、修订、预览和启用／停用，默认看启用题；独立试题导入页提供“文件导入 / AI 生成”两个 Tab。普通七列 Excel/TXT 文件经预检、有效题逐题预览及确认后直接启用；AI Tab 上传一次性参考题，每题最多生成 easy/hard 两题，生成、修改和批次内单行重生成只更新待确认批次，选行确认后才原子创建启用题。参考文件与参考正文不留存，生成题以 `source=ai` 且无制度版本入库。修订同时校验 `expected_version_id` 和 `expected_enabled`，旧页面不能隐式恢复已被停用的题。
 
-资料管理和资料 AI 的兼容后端仍以“资料/资料版本”提供 PDF/Word 解析，并通过 `material_id + material_version_id` 生成 single/multiple；底层复用 `regulation/regulation_version` 保存真实来源与旧数据，试题列表已移除相应整批操作入口。旧制度固定卷仍要求「有效学习」双条件；新培训考试默认关闭学习门槛。学习侧继续以心跳、失焦暂停、服务端容差和滚动位图计时；新培训移动考试以权威实名、稳定item/option ID、受限Tiptap题面、不可变题单/期限、本地草稿及幂等主动整卷保障一致性；不提供服务端draft/heartbeat。仅锁后accepted_at严格早于deadline的主动交卷由SubmissionService按冻结快照同事务评分；到期统一纯timeout，不提交、不评分、不生成答案。旧/exams数字及暂存协议只作制度固定卷兼容，到期同样纯timeout；历史已评分timeout保持只读。记录列表、详情和结果保持只读。
+资料管理继续以“资料/资料版本”提供 PDF/Word 上传与解析，底层复用 `regulation/regulation_version` 保存真实来源与旧数据。旧 `POST /ai/generate-questions` 与 `POST /ai/questions/{id}/regenerate` 写入口退场，AI 配置、旧任务／结果只读查询和历史来源保留。旧制度固定卷仍要求「有效学习」双条件；新培训考试默认关闭学习门槛。学习侧继续以心跳、失焦暂停、服务端容差和滚动位图计时；新培训移动考试以权威实名、稳定item/option ID、受限Tiptap题面、不可变题单/期限、本地草稿及幂等主动整卷保障一致性；不提供服务端draft/heartbeat。仅锁后accepted_at严格早于deadline的主动交卷由SubmissionService按冻结快照同事务评分；到期统一纯timeout，不提交、不评分、不生成答案。旧/exams数字及暂存协议只作制度固定卷兼容，到期同样纯timeout；历史已评分timeout保持只读。记录列表、详情和结果保持只读。
 
 系统底层仍识别 super_admin、regulation_admin、employee 三类兼容身份；现行管理端通过 `POST /admin/administrators` 创建管理员并显式提交 `role_ids`，通过学员管理维护无部门学员。部门、员工和制度 CRUD 不再提供菜单或控制器。
 
 ### 1.2 设计目标
 
 1. **制度数字化**：文件「上传即可读」，版本可追溯，发布范围可按部门圈定或面向全员。
-2. **出题低成本、质量可控**：AI 解读制度自动生成题目，管理员审核通过后才可入卷发布。
+2. **出题低成本、质量可控**：一次性参考题 AI 先生成预览，管理员选择、修改并确认后直接启用；启用题可供组卷，停用题退出新候选。
 3. **学习真实性可保障**：以「时长 + 滚动覆盖」双条件判定有效学习，辅以心跳、失焦暂停、容差校验、分段位图四道防线防止刷时长。
 4. **考试公平可量化**：实名/资格、冻结题单与乱序、稳定选项ID、服务端期限、主动整卷及规则化评分；到期只收口未交卷timeout。
 5. **落实情况可运营**：制度 / 部门 / 个人三维统计与 Excel 导出，未完成人员清单直达跟进闭环。
@@ -38,13 +38,13 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 
 | 范围 | 当前实现基线 | 已批准目标（计划，非当前部署声明） |
 |---|---|---|
-| 业务边界 | 制度学习、AI 出题审核、旧固定卷员工考试、原制度/部门/个人统计；A1—C6 已有源码证据的培训管理增量 | 单家机构 PC 管理端与完整后端；C7 自动验收收口、手动边界单列；不迁移旧站数据，学员H5已实现至Gate I，最终验收分级登记；不建设租户、班级、支付或证书平台 |
+| 业务边界 | 制度学习、题库启停与 AI 预览确认、旧固定卷员工考试、原制度/部门/个人统计；A1—C6 已有源码证据的培训管理增量 | 单家机构 PC 管理端与完整后端；C7 自动验收收口、手动边界单列；不迁移旧站数据，学员H5已实现至Gate I，最终验收分级登记；不建设租户、班级、支付或证书平台 |
 | 学习 | 制度阅读双条件；B1 课程/章节/视频课时与不可变内容版本；B2 视频 30 秒心跳、完整服务端 elapsed 跳播校验、45 秒单次确认上限、2 秒位置容差、95% 去重覆盖、DB 断点恢复、本人历史与当前应学汇总 | mobile H5课程/视频已实现并完成Gate H1自动验证；真实手机/微信播放另验，新培训考试默认无学习门槛 |
-| 学员与题库 | A2 学员类别与 `institution/external` 来源；三类客观题、当前简单/困难两档、可选考点与不可变版本；Excel/TXT 模板、预检与幂等确认；历史 medium 保留原值 | 原表单保留并无损适配 schema 3；完整固定卷设计器与作者原稿；参考题 AI 只生成启用难度，确认后 pending，无永久资料来源 |
+| 学员与题库 | A2 学员类别与 `institution/external` 来源；三类客观题、当前简单/困难两档、启停身份与不可变版本；七列 Excel/TXT 模板、预检与幂等确认；历史 medium 保留原值 | 当前弹窗无损适配 Tiptap/schema 3；完整固定卷设计器与作者原稿；参考题 AI 确认后直接启用，无永久资料来源 |
 | 考试与成绩 | legacy数字执行协议兼容；发布/个人快照、稳定ID、本地草稿、主动整卷评分及纯timeout；统一结果、历史与错题 | 最终总分只读，不提供图片答案或人工改分 |
 | 统计与记录 | 原统计后端继续兼容但管理菜单隐藏；考试记录列表、详情与结果保留；培训统计不再含待人工评分或切屏指标 | 不提供实时监控、连接状态或切屏采集 |
 
-**实现状态规则**：未具备源码与验收证据的能力不得写成已验收。当前源码定义39张业务表，另有schema_migration，合计40张物理表；迁移000—022，021增5兼容列，022追加版本作者原稿、试卷布局和一张持久回执表；`exam_review_event` 已从现行 schema 删除。迁移 `015_demo_slimming.sql` 以保留历史数据的方式收缩字段、枚举、权限和菜单；旧迁移仍作为不可变升级历史保留。版本化迁移用于升级当前 RuleExam 数据，不是旧站数据搬迁。
+**实现状态规则**：未具备源码与验收证据的能力不得写成已验收。当前源码定义39张业务表，另有schema_migration，合计40张物理表；迁移000—028，021增5兼容列，022追加版本作者原稿、试卷布局和一张持久回执表，025迁移题库历史分值，026增加启停字段与候选索引，027清理题目审核权限及菜单关联，028续接一次性密码回填探针且不改账号数据；`exam_review_event` 已从现行 schema 删除。迁移 `015_demo_slimming.sql` 以保留历史数据的方式收缩字段、枚举、权限和菜单；旧迁移仍作为不可变升级历史保留。版本化迁移用于升级当前 RuleExam 数据，不是旧站数据搬迁。
 
 菜单前向迁移 `017_exam_question_navigation.sql` 按 route_path 复用试题管理、试卷管理、试题导入、考试记录的既有 ID，考试目录按语义定位，不假定为 ID 3；只规范四个标准入口的名称、权限和排序，保留其它自定义菜单及历史 checksum。试题管理路由允许 `questions:read OR questions:write`，试题导入要求 `questions:write`；只缓存导入页，试题管理返回时重新加载，确保新导入题可见。
 
@@ -62,8 +62,8 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | A4 | 受控媒体与上传 | 内容探测、归属校验、引用保护；保留头像、课程、视频、题干/选项/解析图片 |
 | A5 | 菜单、字典、公开配置、审计、PC 公共框架 | 配置白名单；未保存提醒；敏感值不泄露 |
 | B1—B2 | 课程/视频课时与可恢复学习 | 版本、下架、重放/乱序/跳播、95% 覆盖、零必学课时口径 |
-| B3—B4 | 三类客观题版本题库与 Excel/TXT 导题 | 难度/题型/考点校验；资料 AI 绑定真实版本，参考题 AI 无永久来源且确认后 pending；预览确认与批次幂等 |
-| C1—C2 | 固定/随机发布、抽题、个人题单、旧卷适配 | 本机构初级/外来高级；同考点不重复；发布/开考快照不可变；三次机会含首次 |
+| B3—B4 | 三类客观题版本题库与 Excel/TXT 导题 | 难度/题型/类别/媒体校验；普通及参考题 AI 确认直接启用，无概念和题库分值；预览确认与批次幂等 |
+| C1—C2 | 固定/随机发布、抽题、个人题单、旧卷适配 | 本机构初级/外来高级；按稳定 question_id 去重；发布/开考快照不可变；三次机会含首次 |
 | C3 / Task13/14 | 本地草稿、主动整卷与纯timeout | 联网核验同attempt后恢复本地稳定ID答案；截止前主动受理才评分，到期不提交/不评分；终态幂等 |
 | C4 | 自动评分、历史结果、错题 | 三类客观题自动结算；最终总分只读；本人和管理员结果口径一致 |
 | C5 | 考试记录 | 管理员只读列表、详情和结果；不采集连接、设备或切屏数据 |
@@ -84,7 +84,7 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | 03 | [03-数据库设计.md](03-数据库设计.md) | 当前39张业务表、1张迁移元数据表、完整字段/索引，以及共享兼容层边界 | 后端开发、评审者 |
 | 04 | [04-API设计.md](04-API设计.md) | `/api/v1` REST 接口（含课程/视频、三类客观题题库、作答、自动评分、考试记录和培训统计）、统一信封与错误码 | 前后端开发 |
 | 05 | [05-模块设计.md](05-模块设计.md) | 六大模块的职责边界、内部组成，以及自动评分、记录与统计链路 | 开发人员 |
-| 06 | [06-关键流程.md](06-关键流程.md) | 端到端关键流程（解析、AI 出题审核、学习判定、考试、评分统计）的时序与状态流转 | 开发人员、评审者 |
+| 06 | [06-关键流程.md](06-关键流程.md) | 端到端关键流程（解析、AI 预览确认与题库启停、学习判定、考试、评分统计）的时序与状态流转 | 开发人员、评审者 |
 | 07 | [07-安全与非功能设计.md](07-安全与非功能设计.md) | 认证授权、防作弊纵深、数据安全，以及性能 / 可用性等非功能指标 | 评审者、运维 |
 | 旧证据 | [00-旧系统-培训机构端需求分析.md](00-旧系统-培训机构端需求分析.md)<br>[00-旧系统-学员移动端H5需求分析.md](00-旧系统-学员移动端H5需求分析.md) | 旧站取证与新增学员目标分开标记；学员H5现行范围按用户决定/Exam Contract执行，历史观察不冒充验收 | 产品、前端、测试 |
 
@@ -126,9 +126,9 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | 心跳上报 | 默认每 30 秒上报。制度阅读携带滚动段位并用 Redis 累计；视频携带递增 seq、position_ms 与播放状态并逐拍落库。视频先按完整服务端间隔 +2 秒判断跳播，再把单次确认封顶 45 秒；暂停/后台不计。 |
 | 滚动覆盖率 | 阅读内容按固定 10 段划分、以 JSON 位图记录的已读到位情况（learning_record.scroll_coverage）；其中底部段必须被覆盖，是「有效学习」的必要条件之一。 |
 | 考试资格 | legacy 制度固定卷仍必须完成有效学习并返回原差距详情。新training移动首次开考校验mobile employee/权威实名、发布、启用类别及首次来源/类别匹配，默认不检查学习门槛；有效 active 恢复优先，撤回只阻新开。 |
-| 试题 | 题库稳定身份（question）与不可变 question_version。支持 single/multiple/judgment、当前两档启用且历史中级保留、可选考点及 `ai/manual/import` 来源；普通文件导入直接 approved，参考题 AI 只产生 easy/hard 并在确认时 pending、无制度版本，不伪造审核人/时间。发布冻结真实 current approved version，后续修订不改写 release；旧题未知类别、难度与审核事实保持未知。 |
-| 试卷 | `exam_paper.business_scope` 区分制度 `regulation` 与新 `training`。培训卷支持 fixed/random、类别、可选制度筛选、课程说明关联和 10000 整数分规则；升级后新发布的制度卷和培训卷都通过 paper_release/paper_release_question 不可变冻结，所有新 fixed 发布按 `concept_id ?? question_id` 禁止重复考点，改动需复制新草稿。真正升级前 published 无 release 的制度卷保持兼容。 |
-| 试卷发布版本 | `paper_release` 冻结 RuleSnapshot、类别及关联条件；`paper_release_question` 冻结真实题目版本、考点、实际分值与完整内容。制度旧题可保留 `categoryId=null/difficulty=unknown`。撤回/归档或复制不删除、不改写源快照；题图读取按固定草稿、发布快照或随机草稿完整校验后的当前候选池做精确版本与字段授权，不回读替代版本，也不为预览伪造发布引用。 |
+| 试题 | 题库稳定身份（question）与不可变 question_version。支持 single/multiple/judgment、当前两档启用且历史中级保留、`ai/manual/import` 来源；人工、文件和参考题 AI 确认后直接启用，兼容status=approved但审核元数据NULL、无新考点或题库分值。发布冻结通过启用校验的精确当前版本，后续修订不改写 release；旧题未知类别、难度与审核事实保持未知。 |
+| 试卷 | `exam_paper.business_scope` 区分制度 `regulation` 与新 `training`。培训卷支持 fixed/random、类别、可选制度筛选、课程说明关联和 10000 整数分规则；升级后新发布的制度卷和培训卷都通过 paper_release/paper_release_question 不可变冻结，所有新 fixed 发布按 `question_id` 禁止重复题目身份，改动需复制新草稿。真正升级前published无release的制度卷保持兼容。既有随机release明确使用historical-concept模式，按冻结concept分组、无concept回退question_id，预览与开考保持历史语义。 |
+| 试卷发布版本 | `paper_release` 冻结 RuleSnapshot、类别及关联条件；`paper_release_question` 冻结通过启用校验的真实精确题目版本、卷内实际分值与完整内容；考点仅旧快照兼容保留。制度旧题可保留 `categoryId=null/difficulty=unknown`。撤回/归档或复制不删除、不改写源快照；题图读取按固定草稿、发布快照或随机草稿完整校验后的当前候选池做精确版本与字段授权，不回读替代版本，也不为预览伪造发布引用。 |
 | 个人考试归属与题单 | `exam_assignment` 冻结首次 release/source/category/difficulty/rule；补考沿用。`exam_record_question` 按每次作答冻结题面、实际分值、显示顺序和显示到原始选项映射；新答题主键是 `item_id`。 |
 | 考试记录 | 用户对某试卷的一次完整作答过程（exam_record），保存冻结期限、交卷方式、评分状态与得分；draft_*仅旧兼容列。主动受理才评分，到期进入不评分的纯timeout；`ExamRecordsService` 只投影管理端记录列表和详情。 |
 | 答题明细 | exam_answer只在新移动主动受理评分时保存稳定selected_option_ids及逐题得分，新纯timeout不创建答案；selected保留legacy兼容；不保存答题附件、人工评语或评分版本，最终结算后只读。 |
@@ -175,14 +175,14 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 
 | 表名 | 一句话职责 |
 |---|---|
-| question | 试题稳定身份及 legacy 兼容投影：三类客观题、难度、类别、可选考点、当前版本指针与021的content_schema_version/content_json，并保留旧固定卷兼容投影。 |
-| question_concept | 考点目录：在培训类别与题型范围内名称唯一，可被试题版本选择性关联。 |
-| question_version | 不可变试题版本：保存题型、难度、题干、选项、答案、解析、分值、考点、制度/制度版本来源、页组与审核快照；同题修订只追加 revision。 |
+| question | 试题稳定身份及 legacy 兼容投影：三类客观题、难度、类别、is_enabled、当前版本指针与021的content_schema_version/content_json，并保留旧固定卷兼容投影。 |
+| question_concept | 历史考点目录：保留原表及引用，不提供新 CRUD，不参与新题、新组卷与新发布。 |
+| question_version | 不可变试题版本：保存题型、难度、题干、选项、答案、解析与来源；旧分值、考点、页组及审核事实兼容保留，新版本不写概念、分值或审核事实；同题修订只追加 revision。 |
 | question_authoring_commit | 022 新增作者提交持久回执；owner/request 唯一，保存摘要和精确版本结果，与题目版本同事务提交，无短期 TTL。 |
 | exam_paper | 试卷配置：保留 legacy 制度固定卷；新增 business_scope/mode/category/requires_learning、可选制度筛选、课程说明关联与随机规则。 |
-| paper_question | 试卷与试题的关联；保留 question_id/sort/score，training fixed 及升级后制度卷发布/复制额外保留 question_version_id/concept_id。 |
+| paper_question | 试卷与试题的关联；保存 question_id/question_version_id/sort/score。旧 concept_id 只读兼容保留，新关联与新发布不写考点。 |
 | paper_release | 不可变发布主档：按试卷递增版次，冻结业务范围、类别、模式、规则、学习门槛与条件关联。 |
-| paper_release_question | 不可变发布题池：冻结题目/版本/考点、题型/难度、实际整数分与完整内容 JSON。 |
+| paper_release_question | 不可变发布题池：冻结通过启用校验的题目精确版本、题型/难度、卷内实际整数分与完整内容 JSON；旧考点只读保留。 |
 | exam_assignment | 同一试卷同一学员的冻结归属：首次 release、来源、类别、难度及规则；补考不重算。 |
 | exam_record | 考试记录：用户第 N 次作答、冻结归属/规则、唯一活动 assignment、状态、服务端截止、交卷方式、自动结算状态与得分；draft_*只作legacy兼容。 |
 | exam_record_question | 本次个人题单：冻结题目版本内容、实际分值、显示位置与选项映射；题干/选项题图按 item 精确授权。 |
@@ -241,7 +241,7 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 **数据库命名**
 
 - 表名与字段名一律使用小写 snake_case。
-- 当前表名严格使用 3.3 节清单中的 36 个业务表名称；旧迁移不可改写，现行 schema 由 015 后继迁移收缩。`schema_migration` 不计入业务表，精确结构见 03 册 1.10。后续变更继续遵循“迁移脚本 → `database/init.sql` → entities → 设计分册 → API/controller”同步政策，不能由文档另造第二定义。
+- 当前表名严格使用 3.3 节清单中的 39 个业务表名称；旧迁移不可改写，现行 schema 由 015 后继迁移收缩。`schema_migration` 不计入业务表，精确结构见 03 册 1.10。后续变更继续遵循“迁移脚本 → `database/init.sql` → entities → 设计分册 → API/controller”同步政策，不能由文档另造第二定义。
 
 **API 命名**
 
@@ -280,8 +280,8 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | regulation_version.parse_status | pending / parsed / failed | 解析状态：待解析 / 已解析 / 解析失败 |
 | question.type / question_version.type | single / multiple / judgment | 题型：单选题 / 多选题 / 判断题 |
 | question.difficulty / question_version.difficulty | easy / medium / hard | 当前简单easy / 困难hard启用；历史中级medium停用但可读，旧题未知可为NULL，不自动改值 |
-| question.status | pending / approved / rejected | 审核状态：待审核 / 已通过 / 已驳回 |
-| question_version.status | pending / approved / rejected | 不可变版本审核快照：待审核 / 已通过 / 已驳回 |
+| question.is_enabled | 1 / 0 | 当前启用／停用权威状态；026将历史approved映射1，其它映射0 |
+| question.status / question_version.status | pending / approved / rejected | 历史兼容状态；新版本approved，不再驱动审核流程，真实旧审核事实不重写 |
 | question.source / question_version.source | ai / manual / import | 试题来源：AI 生成 / 人工录入 / 导入 |
 | training_course.status | draft / published / offline | 课程状态：草稿 / 已上架 / 已下架 |
 | course_lesson.lesson_type | video | B1 本期仅视频课时 |

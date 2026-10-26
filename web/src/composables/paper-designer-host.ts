@@ -92,10 +92,10 @@ export function createPaperDesignerHost(options: { api?: PaperDesignerHostApi; p
       const id = byVersion.get(row.question_version_id); const meta = id && value.document.questions[id];
       if (!id || !meta || !blocks.has(id) || bundle.identities[id]!.question_id !== row.question_id || !Number.isInteger(meta.base_revision) || !meta.base_revision) throw new Error('试卷题目原稿与精确版本不一致');
       const revision = meta.base_revision;
-      delete meta.question_id; delete meta.base_revision;
+      delete meta.question_id; delete meta.base_revision; delete meta.concept_id;
       meta.score_cents = row.score_cents;
       value.bindings[id] = { kind: 'bound', question_id: row.question_id, question_version_id: row.question_version_id, revision,
-        baseline_fingerprint: questionFingerprint(value.document, id) };
+        baseline_fingerprint: questionFingerprint(value.document, id), enabled: row.enabled };
       return blocks.get(id)!;
     });
     if (Object.keys(value.document.questions).length !== rows.length) throw new Error('试卷原稿题数不一致');
@@ -109,22 +109,23 @@ export function createPaperDesignerHost(options: { api?: PaperDesignerHostApi; p
   const questionLibrarySource: QuestionLibrarySource = {
     async list(input) {
       requireAccess('questionsRead'); const ticket = serial;
-      const page = await api.get('/ai/questions', { params: { ...input, status: 'approved' } }) as { list: QuestionView[]; total: number };
+      const page = await api.get('/ai/questions', { params: { ...input, enabled: true } }) as { list: QuestionView[]; total: number };
       assertSession(ticket);
-      const rows = page.list.filter((row) => row.status === 'approved' && row.category_id === input.category_id && row.current_version_id && row.difficulty !== 'medium');
+      const rows = page.list.filter((row) => row.enabled === true && row.category_id === input.category_id && row.current_version_id && row.difficulty !== 'medium');
       rows.forEach((row) => questionRows.set(String(row.question_id), copy(row)));
       return { items: rows.map((row) => ({ id: String(row.question_id), stem: row.stem, category_id: row.category_id!, type: row.type, difficulty: row.difficulty as 'easy' | 'hard' })), total: page.total, page: input.page, page_size: input.page_size };
     },
     async get(id) {
       requireAccess('questionsRead'); const row = questionRows.get(id); const ticket = serial;
-      if (!row?.current_version_id || row.status !== 'approved') throw new Error('请重新查询当前审核通过版本');
+      if (!row?.current_version_id || row.enabled !== true) throw new Error('请重新查询当前启用版本');
       const bundle = await api.post('/admin/question-documents/assemble', { version_ids: [row.current_version_id] }) as AuthoringBundle;
       assertSession(ticket);
       const ids = Object.keys(bundle.document.questions); const client = ids[0]!; const token = bundle.identities[client];
       if (ids.length !== 1 || token?.question_id !== id || token.expected_version_id !== row.current_version_id) throw new Error('题库原稿版本不一致');
+      if (token.expected_enabled !== true) throw new Error('题目已停用或启用状态未确认，请刷新候选');
       const document = copy(bundle.document); const revision = document.questions[client]!.base_revision;
       if (!Number.isInteger(revision) || !revision) throw new Error('题库原稿缺少修订号');
-      delete document.questions[client]!.question_id; delete document.questions[client]!.base_revision;
+      delete document.questions[client]!.question_id; delete document.questions[client]!.base_revision; delete document.questions[client]!.concept_id;
       // This adapter inserts a bank question into the current paper; its initial score belongs only to that paper.
       document.questions[client]!.score_cents = 500;
       return { document, binding: { kind: 'bound', question_id: id, question_version_id: row.current_version_id, revision, baseline_fingerprint: questionFingerprint(document, client) }, session: session(bundle) };
@@ -139,7 +140,7 @@ export function createPaperDesignerHost(options: { api?: PaperDesignerHostApi; p
     },
     async get(id) { requireAccess('read'); requireAccess('questionsRead'); const ticket = serial;
       const detail = await api.get(`/admin/papers/${id}`) as MainPaperDetail; assertSession(ticket);
-      if (detail.questions.some((row) => row.status !== 'approved' || row.difficulty === 'medium')) throw new Error('来源试卷包含未审核或停用难度题，请先修订并重新选题');
+      if (detail.questions.some((row) => row.enabled !== true || row.difficulty === 'medium')) throw new Error('来源试卷包含已停用题或停用难度题，请先修订并重新选题');
       return assemble(detail);
     },
   };

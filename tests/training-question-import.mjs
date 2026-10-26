@@ -13,7 +13,8 @@ const { MediaAsset } = require('./dist/entities/media-asset.entity.js');
 const { MediaService } = require('./dist/modules/media/media.service.js');
 const { QuestionVersionService } = require('./dist/modules/questions/question-version.service.js');
 
-const HEADERS = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis'];
+const HEADERS = ['category', 'type', 'difficulty', 'stem', 'options', 'answer', 'analysis'];
+const LEGACY_HEADERS = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'score'];
 
 async function captchaAnswer(ctx, captchaId) {
   const redis = new Redis({
@@ -63,7 +64,7 @@ function multipart(fields, bytes, filename, contentType) {
 
 function baseRows() {
   const single = {
-    category: '', type: 'single', difficulty: 'easy', concept: '受限空间',
+    category: '', type: 'single', difficulty: 'easy', concept: '',
     stem: '<p>B4：进入受限空间前首先应做什么？</p>',
     options: JSON.stringify([{ key: 'A', text: '先通风检测' }, { key: 'B', text: '直接进入' }]),
     answer: JSON.stringify([0]), analysis: '<p>应先通风并检测。</p>', score: '5',
@@ -81,16 +82,16 @@ function baseRows() {
   ];
 }
 
-function txtBytes(rows) {
-  const lines = [HEADERS.join('\t'), ...rows.map((row) => HEADERS.map((header) => row[header] ?? '').join('\t'))];
+function txtBytes(rows, headers = HEADERS) {
+  const lines = [headers.join('\t'), ...rows.map((row) => headers.map((header) => row[header] ?? '').join('\t'))];
   return Buffer.from(`\uFEFF${lines.join('\r\n')}\r\n`, 'utf8');
 }
 
-async function xlsxBytes(rows) {
+async function xlsxBytes(rows, headers = HEADERS) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('题库导入');
-  sheet.addRow(HEADERS);
-  for (const row of rows) sheet.addRow(HEADERS.map((header) => row[header] ?? ''));
+  sheet.addRow(headers);
+  for (const row of rows) sheet.addRow(headers.map((header) => row[header] ?? ''));
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
@@ -167,7 +168,6 @@ async function validateMediaWithSaturatedCallerPool(ctx, actorId, categoryId, me
       options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }],
       answer: [0],
       analysis: null,
-      scoreCents: 500,
       source: 'import',
     };
     let entered = 0;
@@ -202,12 +202,6 @@ async function runBody(ctx) {
   const category = await ctx.request(admin.actor, 'POST', '/admin/training-categories', { name: `B4 类别 ${suffix}` });
   assert.equal(category.status, 200, JSON.stringify(category));
   const categoryId = String(category.data.id);
-  const concept = await ctx.request(admin.actor, 'POST', '/ai/question-concepts', {
-    category_id: categoryId,
-    type: 'single',
-    name: '受限空间',
-  });
-  assert.equal(concept.status, 200, JSON.stringify(concept));
 
   const mediaUpload = multipart(
     { purpose: 'question' },
@@ -227,6 +221,7 @@ async function runBody(ctx) {
   assert.equal(xlsxTemplate.status, 200);
   assert.match(txtTemplate.headers['content-type'], /text\/tab-separated-values/);
   assert.match(xlsxTemplate.headers['content-type'], /spreadsheetml\.sheet/);
+  assert.equal(txtTemplate.data.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/)[0], HEADERS.join('\t'));
   assert.deepEqual(await templateRows(xlsxTemplate.data, 'xlsx'), await templateRows(txtTemplate.data, 'txt'));
 
   const rows = baseRows();
@@ -237,6 +232,32 @@ async function runBody(ctx) {
     assert.deepEqual(preview.data.valid_rows, [2, 5]);
     assert.equal(preview.data.errors.some((item) => item.row === 3), true);
     assert.deepEqual(preview.data.duplicates, [4]);
+    assert.deepEqual(preview.data.warnings, []);
+    assert.equal(preview.data.rows.length, 2);
+    assert.ok(preview.data.rows.every((row) => !Object.hasOwn(row, 'concept') && !Object.hasOwn(row, 'score')));
+  }
+
+  for (const format of ['txt', 'xlsx']) {
+    for (const headers of [LEGACY_HEADERS, LEGACY_HEADERS.filter((key) => key !== 'concept'), LEGACY_HEADERS.filter((key) => key !== 'score')]) {
+      const legacyRows = [
+        { ...rows[0], stem: `B4旧模板映射-${format}-${headers.join('-')}`, score: 'not-a-number' },
+        { ...rows[0], stem: `B4旧模板映射-${format}-${headers.join('-')}`, score: '0' },
+      ];
+      const bytes = format === 'txt' ? txtBytes(legacyRows, headers) : await xlsxBytes(legacyRows, headers);
+      const legacy = await previewFile(ctx, admin.actor, format, bytes, categoryId);
+      assert.equal(legacy.status, 200, JSON.stringify(legacy));
+      assert.deepEqual(legacy.data.valid_rows, [2]); assert.deepEqual(legacy.data.duplicates, [3]); assert.deepEqual(legacy.data.errors, []);
+      assert.deepEqual(legacy.data.rows[0].answer, [0]);
+      assert.equal(legacy.data.rows[0].stem, legacyRows[0].stem);
+      assert.deepEqual(legacy.data.warnings, headers.includes('score') ? ['旧模板分值已忽略，请在组卷时设置'] : []);
+      const restored = await ctx.request(admin.actor, 'GET', `/admin/questions/import-batches/${legacy.data.batch_id}`);
+      assert.deepEqual(restored.data, legacy.data, '原批次 GET 必须保留预览题目及一次性旧分值提示');
+    }
+    const invalidRows = [{ ...rows[0], concept: '已取消的考点' }];
+    const invalidBytes = format === 'txt' ? txtBytes(invalidRows, LEGACY_HEADERS) : await xlsxBytes(invalidRows, LEGACY_HEADERS);
+    const retiredConcept = await previewFile(ctx, admin.actor, format, invalidBytes, categoryId);
+    assert.equal(retiredConcept.status, 200);
+    assert.deepEqual(retiredConcept.data.errors, [{ row: 2, message: '考点组已取消，请清空后重试' }]);
   }
 
   const committed = await ctx.request(admin.actor, 'POST', `/admin/questions/import-batches/${txtPreview.data.batch_id}/commit`, {
@@ -244,6 +265,7 @@ async function runBody(ctx) {
   });
   assert.equal(committed.status, 200, JSON.stringify(committed));
   assert.equal(committed.data.created_ids.length, 2);
+  assert.equal(committed.data.enabled, true);
   const retried = await ctx.request(admin.actor, 'POST', `/admin/questions/import-batches/${txtPreview.data.batch_id}/commit`, {
     row_numbers: txtPreview.data.valid_rows,
   });
@@ -507,7 +529,7 @@ async function runBody(ctx) {
   const allIds = [...committed.data.created_ids, ...correctedCommit.data.created_ids].map(String);
   const placeholders = allIds.map(() => '?').join(',');
   const stored = await ctx.queryTestDb(
-    `SELECT q.id, q.type, q.difficulty, q.status, q.source, q.current_version_id, v.id AS saved_version_id, v.status AS version_status, v.approved_by, v.approved_at, v.reviewed_by, v.reviewed_at FROM question q JOIN question_version v ON v.id = q.current_version_id WHERE q.id IN (${placeholders}) ORDER BY q.id`,
+    `SELECT q.id, q.type, q.difficulty, q.status, q.is_enabled, q.concept_id, q.score, q.source, q.current_version_id, v.id AS saved_version_id, v.status AS version_status, v.concept_id AS version_concept_id, v.score_cents, v.approved_by, v.approved_at, v.reviewed_by, v.reviewed_at FROM question q JOIN question_version v ON v.id = q.current_version_id WHERE q.id IN (${placeholders}) ORDER BY q.id`,
     allIds,
   );
   assert.equal(stored.length, 4);
@@ -518,7 +540,8 @@ async function runBody(ctx) {
     assert.equal(row.version_status, 'approved');
     assert.equal(row.source, 'import');
     assert.equal(String(row.current_version_id), String(row.saved_version_id));
-    assert.ok(row.approved_by && row.reviewed_by && row.approved_at && row.reviewed_at);
+    assert.equal(Number(row.is_enabled), 1);
+    for (const key of ['concept_id', 'version_concept_id', 'score', 'score_cents', 'approved_by', 'reviewed_by', 'approved_at', 'reviewed_at']) assert.equal(row[key], null, `${key} must not be written by current imports`);
   }
 
   const duplicatePreview = await previewFile(ctx, admin.actor, 'txt', txtBytes(rows), categoryId, 'hard');
@@ -527,7 +550,7 @@ async function runBody(ctx) {
   assert.equal(duplicatePreview.data.errors.some((item) => item.row === 3), true);
   assert.deepEqual(duplicatePreview.data.duplicates, [2, 4, 5]);
 
-  const listed = await ctx.request(admin.actor, 'GET', `/ai/questions?category_id=${categoryId}&status=approved&page=1&page_size=100`);
+  const listed = await ctx.request(admin.actor, 'GET', `/ai/questions?category_id=${categoryId}&enabled=true&page=1&page_size=100`);
   assert.equal(listed.status, 200, JSON.stringify(listed));
   for (const id of allIds) assert.ok(listed.data.list.some((row) => String(row.question_id) === id));
 }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { randomStrongPassword } from './training-access.mjs';
+import { learnerSession } from './support/learner-session-fixture.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const ExcelJS = require('exceljs');
@@ -525,7 +526,7 @@ export async function run(ctx) {
   const routes = flattenNavigation(navigation.data).map((item) => item.route_path).filter(Boolean);
   assert.ok(routes.includes('/admin/dashboard'));
   assert.ok(routes.includes('/admin/training-statistics'));
-  const learnerLogin = await login(ctx, learnerB.username, admin.password);
-  await assertTrainingOverviewAndSorting(ctx, admin, adminRow.id, narrowLogin.actor, learnerLogin.actor);
+  const learnerActor = await learnerSession(ctx, learnerB.id);
+  await assertTrainingOverviewAndSorting(ctx, admin, adminRow.id, narrowLogin.actor, learnerActor);
   await assertLegacyPureTimeoutStatistics(ctx, admin, adminRow.id);
 }

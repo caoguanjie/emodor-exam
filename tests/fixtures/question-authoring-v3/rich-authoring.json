@@ -13,7 +13,7 @@
   },
   "questions": {
     "question_fixture_00001": {
-      "type": "single", "category_id": "11", "difficulty": "easy", "concept_id": null,
+      "type": "single", "category_id": "11", "difficulty": "easy",
       "regulation_id": null, "regulation_version_id": null, "score_cents": 500,
       "analysis": { "type": "doc", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "先通风检测。" }] }] }
     }

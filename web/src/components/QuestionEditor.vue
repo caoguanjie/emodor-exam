@@ -18,7 +18,6 @@
           <el-option v-for="item in difficultyOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </el-form-item>
-
     </div>
 
     <el-form-item label="题干" required>
@@ -73,15 +72,12 @@ type CategoryOption = { id: Id; name: string };
 const props = withDefaults(defineProps<{
   modelValue: QuestionDraftPayload;
   categories?: CategoryOption[];
-
   disabled?: boolean;
   canUploadMedia?: boolean;
-
   difficultyOptions?: Array<{ value: string; label: string }>;
 }>(), { categories: () => [], disabled: false, canUploadMedia: false, difficultyOptions: () => [] });
 const emit = defineEmits<{
   (event: 'update:modelValue', value: QuestionDraftPayload): void;
-
 }>();
 
 const local = reactive<QuestionDraftPayload>(clone(props.modelValue));

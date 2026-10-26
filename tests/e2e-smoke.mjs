@@ -1,5 +1,5 @@
 // EmodorRuleExam 端到端冒烟测试：覆盖 README 1.1 全闭环
-// 资料上传 → AI 出题 → 自动评分；兼容既有只读学习和历史固定卷。
+// 资料上传、AI 配置、题库启停 → 自动评分；参考题 AI 导入由专门套件验证。
 // 运行前提：API 服务已启动（见 tests/run-e2e.sh）；管理员初始口令经环境变量注入（不落源码）。
 //
 // 用法：BASE_URL=http://127.0.0.1:3000/api/v1 ADMIN_INITIAL_PASSWORD=... \
@@ -490,46 +490,34 @@ async function main() {
     const test = await api('POST', '/ai/config/test', { token: state.tokens.admin });
     check('AI 连通性测试成功', test.status === 200 && test.json?.data?.ok === true, JSON.stringify(test.json));
 
-    const badSum = await api('POST', '/ai/generate-questions', {
+    const retiredGeneration = await api('POST', '/ai/generate-questions', {
       token: state.tokens.regadmin,
       body: {
         material_id: regId, material_version_id: versionId, category_id: trainingCategoryId, difficulty: 'easy',
         question_count_single: 10, question_count_multiple: 5, score_single: 5, score_multiple: 8,
       },
     });
-    check('分值合计 ≠ 100 被拦截（40001）', badSum.json?.code === 40001);
-    const gen = await api('POST', '/ai/generate-questions', {
-      token: state.tokens.regadmin,
-      body: {
-        material_id: regId, material_version_id: versionId, category_id: trainingCategoryId, difficulty: 'easy',
-        question_count_single: 10, question_count_multiple: 5, score_single: 6, score_multiple: 8,
-      },
-    });
-    check('发起出题（异步任务受理，回显分值策略）', gen.status === 200 && !!gen.json?.data?.task_id && gen.json.data.score_single === 6, JSON.stringify(gen.json));
-    const taskId = gen.json?.data?.task_id;
-    let completed = null;
-    for (let i = 0; i < 60; i++) {
-      await sleep(1000);
-      const st = await api('GET', `/ai/generate-status/${taskId}`, { token: state.tokens.regadmin });
-      if (st.json?.data?.status === 'completed') {
-        completed = st.json.data;
-        break;
-      }
-      if (st.json?.data?.status === 'failed') break;
-    }
-    check('出题任务完成，15 题落库为 pending（source=ai）', completed?.questions?.length === 15 && completed.questions.every((q) => q.status === 'pending' && q.source === 'ai'), JSON.stringify({ status: completed?.status, error: completed?.error, blocks: completed?.failed_blocks }));
-    questionIds = completed?.questions?.map((q) => String(q.id)) || [];
-
-    // 逐题审核通过（FR-AIQ-03）
-    let approved = 0;
-    for (const question of completed?.questions || []) {
-      const r = await api('PUT', `/ai/questions/${question.id}/review`, {
+    check('旧资料 AI 直写入口已退场（404）', retiredGeneration.status === 404);
+    let directlyEnabled = 0;
+    for (const question of MOCK_QUESTIONS) {
+      const created = await api('POST', '/ai/questions', {
         token: state.tokens.regadmin,
-        body: { expected_version_id: String(question.current_version_id), status: 'approved' },
+        body: { ...question, category_id: trainingCategoryId, difficulty: 'easy' },
       });
-      if (r.json?.data?.status === 'approved') approved++;
+      if (created.status !== 200) throw new Error(`smoke question create failed: ${JSON.stringify(created.json)}`);
+      const value = created.json.data;
+      questionIds.push(String(value.question_id));
+      if (value.enabled === true && !Object.hasOwn(value, 'score') && !Object.hasOwn(value, 'status')) directlyEnabled++;
+      // Historical regulation-paper fixtures retain their original source link;
+      // current manual DTOs intentionally cannot manufacture this relationship.
+      await db.query('UPDATE question SET regulation_id=?,version_id=? WHERE id=?', [regId, versionId, value.question_id]);
+      await db.query('UPDATE question_version SET regulation_id=?,regulation_version_id=? WHERE id=?', [regId, versionId, value.saved_version_id]);
     }
-    check('15 题全部审核通过（approved）', approved === 15, `approved=${approved}`);
+    check('15 题无分值、无审核流，创建后直接启用', directlyEnabled === 15);
+    const retiredReview = await api('PUT', `/ai/questions/${questionIds[0]}/review`, {
+      token: state.tokens.regadmin, body: { status: 'approved' },
+    });
+    check('旧审核写入口已退场（404）', retiredReview.status === 404);
   }
 
   console.log('\n== 5. 组卷与发布（FR-AIQ-07，SUM=100 校验） ==');
@@ -544,7 +532,7 @@ async function main() {
     // 取题目类型以匹配分值：single=6, multiple=8 → 10×6 + 5×8 = 100
     const qRows = questionIds.length ? await db.query('SELECT id, type FROM question WHERE id IN (?)', [questionIds]) : [[]];
     const items = qRows[0].map((r) => ({ question_id: Number(r.id), score: r.type === 'single' ? 6 : 8 }));
-    check('题库可检索到 15 道已审核题目', qRows[0].length === 15, `rows=${qRows[0].length}`);
+    check('题库可检索到 15 道已启用题目', qRows[0].length === 15, `rows=${qRows[0].length}`);
     const setQ = await api('PUT', `/ai/papers/${paperId}/questions`, { token: state.tokens.regadmin, body: { items } });
     check('组卷成功（sum_score=100）', setQ.json?.data?.sum_score === 100, JSON.stringify(setQ.json));
     const badPub = await api('POST', `/ai/papers/${paperId}/publish`, { token: state.tokens.regadmin });

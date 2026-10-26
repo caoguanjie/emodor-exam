@@ -157,11 +157,11 @@ describe('public paper designer', () => {
     const second = paperFixture('200', '10', 'library_two');
     source.document.content.content!.push(second.document.content.content![0]!);
     source.document.questions.library_two = second.document.questions.library_two!;
-    source.bindings.library_two = { kind: 'bound', question_id: '41', question_version_id: '51', revision: 1,
+    source.bindings.library_two = { kind: 'bound', question_id: '40', question_version_id: '51', revision: 1,
       baseline_fingerprint: questionFingerprint(second.document, 'library_two') };
     const wrapper = await show(blankPaper(), { source });
     await useSource(wrapper);
-    expect(wrapper.get('[role="alert"]').text()).toMatch(/重复.*考点|考点.*重复/);
+    expect(wrapper.get('[role="alert"]').text()).toMatch(/同一道题.*重复/);
     expect(dialog().exists()).toBe(false);
     expect(wrapper.emitted('update:modelValue')).toBeUndefined();
     expect(wrapper.findAll('.paper-designer__canvas [data-question-block]')).toHaveLength(0);

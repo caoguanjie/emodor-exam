@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
-import { startMockAi } from './e2e-smoke.mjs';
+import { startMockAi } from './training-ai-question-import.mjs';
 import { randomStrongPassword } from './training-access.mjs';
 import { assertAttemptView, assertPureTimeout, assertTimeoutFacts, examLearner } from './support/exam-mobile-fixtures.mjs';
 
@@ -128,16 +128,24 @@ export async function prepareTrainingFlow(ctx) {
   try {
     await ok(ctx, admin.actor, 'PUT', '/ai/config', { base_url: `http://127.0.0.1:${mock.address().port}/v1`, api_key: `mock-${randomBytes(18).toString('hex')}`, model: 'mock-model' });
     assert.equal((await ok(ctx, admin.actor, 'POST', '/ai/config/test')).ok, true);
-    const generated = await ok(ctx, admin.actor, 'POST', '/ai/generate-questions', {
-      material_id: regulationId, material_version_id: String(version.id), category_id: categoryId, difficulty: 'easy', question_count_single: 10, question_count_multiple: 5, score_single: 6, score_multiple: 8,
-    });
-    const task = await poll(() => ok(ctx, admin.actor, 'GET', `/ai/generate-status/${generated.task_id}`), (value) => value.status === 'completed', 'AI generation');
-    assert.equal(task.questions.length, 15);
-    assert.ok(task.questions.every((question) => question.source === 'ai' && question.status === 'pending'));
-    const aiQuestion = task.questions.find((question) => question.type === 'single');
-    await ok(ctx, admin.actor, 'PUT', `/ai/questions/${aiQuestion.id}/review`, { expected_version_id: String(aiQuestion.current_version_id), status: 'approved' });
-    // Materials are category-neutral. Their questions establish the source
-    // filter relationship; no removed regulation editor may be required.
+    const referenceHeaders = ['category', 'type', 'difficulty', 'stem', 'options', 'answer', 'analysis'];
+    const referenceRow = [categoryId, 'single', 'easy', `全链参考题 ${tag}`, JSON.stringify([{ text: '先核验' }, { text: '直接作业' }]), '[0]', '参考题解析'];
+    const beforeGeneration = await ctx.queryTestDb('SELECT COUNT(*) AS total FROM question');
+    const generated = await upload(ctx, admin.actor, '/admin/questions/ai-import-tasks', { format: 'txt' }, Buffer.from(`${referenceHeaders.join('\t')}\n${referenceRow.join('\t')}\n`), 'reference.txt', 'text/plain; charset=utf-8');
+    const task = await poll(() => ok(ctx, admin.actor, 'GET', `/admin/questions/ai-import-tasks/${generated.task_id}`), (value) => value.status === 'completed', 'AI reference generation');
+    const generatedBatch = await ok(ctx, admin.actor, 'GET', `/admin/questions/ai-import-batches/${task.batch_id}`);
+    assert.equal(generatedBatch.rows.length, 2);
+    assert.deepEqual(await ctx.queryTestDb('SELECT COUNT(*) AS total FROM question'), beforeGeneration, '生成与预览前不得入库');
+    const selected = generatedBatch.rows.filter((item) => item.difficulty === 'easy').map((item) => item.row_number);
+    const confirmed = await ok(ctx, admin.actor, 'POST', `/admin/questions/ai-import-batches/${task.batch_id}/commit`, { row_numbers: selected });
+    assert.equal(confirmed.enabled, true); assert.equal(confirmed.created_ids.length, 1);
+    const aiQuestion = await ok(ctx, admin.actor, 'GET', `/ai/questions/${confirmed.created_ids[0]}`);
+    assert.equal(aiQuestion.enabled, true); assert.equal(aiQuestion.source, 'ai');
+    assert.equal(Object.hasOwn(aiQuestion, 'score'), false); assert.equal(Object.hasOwn(aiQuestion, 'concept_id'), false);
+    // Seed only a historical material binding in this isolated fixture so the
+    // retained source filter contract remains covered after its write route retires.
+    await ctx.queryTestDb('UPDATE question SET regulation_id=?,version_id=? WHERE id=?', [regulationId, String(version.id), aiQuestion.question_id]);
+    await ctx.queryTestDb('UPDATE question_version SET regulation_id=?,regulation_version_id=? WHERE id=?', [regulationId, String(version.id), aiQuestion.current_version_id]);
     const sources = await ok(ctx, admin.actor, 'GET', `/admin/papers/regulation-options?category_id=${categoryId}`);
     assert.ok(sources.items.some(item => item.id === regulationId), 'new AI material must be selectable as a paper source');
     const sourcedPaper = await ok(ctx, admin.actor, 'POST', '/admin/papers', {
@@ -161,7 +169,7 @@ export async function prepareTrainingFlow(ctx) {
   }
 
   const question = (difficulty, type) => ({
-    category_id: categoryId, difficulty, type, stem: `<p>${difficulty} ${type} ${tag}</p>`, score: 25,
+    category_id: categoryId, difficulty, type, stem: `<p>${difficulty} ${type} ${tag}</p>`,
     options: type === 'judgment' ? [{ text: '正确' }, { text: '错误' }] : [{ text: '安全核验' }, { text: '现场监护' }, { text: '忽略隐患' }],
     answer: type === 'multiple' ? [0, 1] : [0],
     analysis: '<p>遵守安全制度。</p>',
@@ -169,17 +177,19 @@ export async function prepareTrainingFlow(ctx) {
   for (const difficulty of ['easy', 'hard']) {
     for (const type of ['single', 'multiple', 'judgment']) {
       if ((difficulty === 'easy' && type === 'single') || (difficulty === 'hard' && type === 'multiple')) continue;
-      await ok(ctx, admin.actor, 'POST', '/ai/questions', question(difficulty, type));
+      const created = await ok(ctx, admin.actor, 'POST', '/ai/questions', question(difficulty, type));
+      assert.equal(created.enabled, true);
     }
   }
   const imported = question('hard', 'multiple');
-  const headers = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'score'];
-  const row = { ...imported, category: '', concept: '', options: JSON.stringify(imported.options), answer: JSON.stringify(imported.answer) };
+  const headers = ['category', 'type', 'difficulty', 'stem', 'options', 'answer', 'analysis'];
+  const row = { ...imported, category: '', options: JSON.stringify(imported.options), answer: JSON.stringify(imported.answer) };
   const bytes = Buffer.from(`\uFEFF${headers.join('\t')}\r\n${headers.map((key) => row[key] ?? '').join('\t')}\r\n`);
   const preview = await upload(ctx, admin.actor, '/admin/questions/import-preview', { format: 'txt', category_id: categoryId }, bytes, 'questions.txt', 'text/plain; charset=utf-8');
   assert.deepEqual(preview.valid_rows, [2]);
   const committed = await ok(ctx, admin.actor, 'POST', `/admin/questions/import-batches/${preview.batch_id}/commit`, { row_numbers: [2] });
   assert.equal(committed.created_ids.length, 1);
+  assert.equal(committed.enabled, true);
 
   const course = await ok(ctx, admin.actor, 'POST', '/admin/courses', { title: `安全培训视频 ${tag}`, category_id: categoryId, regulation_ids: [regulationId] });
   const courseId = String(course.id);
@@ -324,5 +334,5 @@ export async function run(ctx) {
     assert.deepEqual(rows, ranking.items.map((row) => [row.rank, row.user_id, row.name, row.source, row.difficulty, row.score, row.duration_seconds, row.record_id]), 'export and screen must use identical query rows');
   }
   assert.equal((await ctx.request(flow.learners[0].actor, 'GET', `/statistics/training/summary?paper_id=${flow.paperId}`)).status, 403);
-  console.log('[training-full-flow] materials/AI/review/import/video/mobile-identity/stable-ID/restart/manual-scoring/pure-timeout/records/statistics/export passed');
+  console.log('[training-full-flow] materials/AI-preview-confirm/import/enabled/video/mobile-identity/stable-ID/restart/manual-scoring/pure-timeout/records/statistics/export passed');
 }

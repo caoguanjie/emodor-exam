@@ -13,7 +13,7 @@ import { PERMISSIONS_ANY_KEY } from '../src/common/decorators/permissions.decora
 import { PATH_METADATA } from '@nestjs/common/constants';
 
 const draft = (difficulty: string): QuestionDraftInput => ({
-  categoryId: '7', difficulty: difficulty as any, type: 'single', source: 'manual', scoreCents: 10000,
+  categoryId: '7', difficulty: difficulty as any, type: 'single', source: 'manual',
   stem: '<p>作业前先检查什么？</p>', options: [{ key: 'A', text: '风险' }, { key: 'B', text: '无需检查' }],
   answer: [0], analysis: '<p>先确认风险。</p>',
 });
@@ -65,9 +65,9 @@ describe('one authoritative difficulty catalog', () => {
       const { PaperReleaseService } = await import('../src/modules/exams/paper-release.service');
       const { SamplingService } = await import('../src/modules/exams/sampling.service');
       expect(validateFuture(draft('medium')).difficulty).toBe('medium');
-      await expect(new DtoValidationPipe().transform({ difficulty: 'medium' }, { type: 'body', metatype: FutureEditDto } as any))
+      await expect(new DtoValidationPipe().transform({ expected_version_id: '101', expected_enabled: true, difficulty: 'medium' }, { type: 'body', metatype: FutureEditDto } as any))
         .resolves.toMatchObject({ difficulty: 'medium' });
-      const versions = { approvedCandidates: async ({ difficulty }: any) => [{ ...draft(difficulty), questionId: String({ easy: 10, medium: 20, hard: 30 }[difficulty]), versionId: String({ easy: 101, medium: 201, hard: 301 }[difficulty]), revision: 1, approvedBy: '1', approvedAt: null }] };
+      const versions = { enabledCandidates: async ({ difficulty }: any) => [{ ...draft(difficulty), questionId: String({ easy: 10, medium: 20, hard: 30 }[difficulty]), versionId: String({ easy: 101, medium: 201, hard: 301 }[difficulty]), revision: 1, approvedBy: null, approvedAt: null }] };
       const paper: any = { id: '1', categoryId: '7', businessScope: 'training', mode: 'random', status: 'draft', regulationIds: [], passScore: 60, durationMinutes: 30, maxAttempts: 3, partialCreditRatio: 0.5, ruleConfig: { rules: [{ type: 'single', count: 1, scoreCents: 10000 }] } };
       const service = Object.create(PaperService.prototype);
       service.paperRepo = { findOne: async () => paper }; service.versions = versions;
@@ -107,7 +107,7 @@ describe('enabled difficulty at question write boundaries', () => {
     const service = Object.create(QuestionVersionService.prototype);
     service.categories = { assertActive: async () => undefined };
     service.versionRepo = { createQueryBuilder: () => { throw new Error('unexpected pool query'); } };
-    await expect(service.approvedCandidates({ categoryId: '7', type: 'single', difficulty: 'medium' }))
+    await expect(service.enabledCandidates({ categoryId: '7', type: 'single', difficulty: 'medium' }))
       .rejects.toMatchObject({ code: 40001 });
   });
 
@@ -130,7 +130,8 @@ describe('enabled difficulty at question write boundaries', () => {
       difficulty: 'hard', categoryId: '999', source: 'manual', status: 'approved', conceptId: '777',
       stem: '生成后不同的题干', options: [{ key: 'A', text: '先检测' }, { key: 'B', text: '直接进入' }], answer: [0], analysis: '完成风险检查。',
     }, 'easy');
-    expect(result).toMatchObject({ difficulty: 'easy', categoryId: '7', source: 'ai', conceptId: undefined });
+    expect(result).toMatchObject({ difficulty: 'easy', categoryId: '7', source: 'ai' });
+    expect(result).not.toHaveProperty('conceptId');
     expect(result).not.toHaveProperty('scoreCents');
   });
 
@@ -180,7 +181,8 @@ describe('enabled difficulty at question write boundaries', () => {
     const result = await service.previewRows('1', [row]);
     expect(result.valid_rows).toEqual([]);
     expect(result.errors).toEqual([{ row: 2, message: expect.stringMatching(/难度|difficulty/) }]);
-    expect(batches[0].normalizedRows).toEqual([]);
+    expect(batches[0].normalizedRows.filter((row: any) => row.draft)).toEqual([]);
+    expect(batches[0].normalizedRows).toEqual([{ question_import_meta: { contract: 2, warnings: ['旧模板分值已忽略，请在组卷时设置'] } }]);
     expect(row.difficulty).toBe('medium');
   });
 });

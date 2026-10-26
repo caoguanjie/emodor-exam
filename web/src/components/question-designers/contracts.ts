@@ -29,6 +29,7 @@ export type PaperQuestionBinding =
     question_version_id: Id;
     revision: number;
     baseline_fingerprint: string;
+    enabled?: boolean;
   };
 
 /** Only existing fixed-paper settings; identity always belongs to the current draft. */

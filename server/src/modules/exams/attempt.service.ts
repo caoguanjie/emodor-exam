@@ -186,7 +186,7 @@ export class AttemptService {
     if (!rows.length) throw Errors.paperRuleInvalid('固定组卷至少需要一道题');
     const resolved = new Map<string, QuestionVersion>();
     for (const row of [...rows].sort((left, right) => String(left.questionId).localeCompare(String(right.questionId), 'en', { numeric: true }))) {
-      resolved.set(String(row.questionId), await this.versions.currentOrCaptureForRelease(
+      resolved.set(String(row.questionId), await this.versions.currentOrCaptureForLegacyAttempt(
         manager,
         String(row.questionId),
         row.questionVersionId ? String(row.questionVersionId) : undefined,
@@ -379,7 +379,9 @@ export class AttemptService {
         if (!release) throw Errors.paperReleaseConflict('个人考试缺少冻结题池');
         if (release.businessScope === 'training' && release.mode === 'random') {
           if (difficulty !== 'easy' && difficulty !== 'hard') throw Errors.paperRuleInvalid('随机组卷难度必须是初级或高级');
-          pool = this.sampling.draw(release.pool, rule.rules, difficulty);
+          // Old releases retain their frozen concept grouping. New releases
+          // have no concepts, so this falls back to stable question identity.
+          pool = this.sampling.draw(release.pool, rule.rules, difficulty, undefined, 'historical-concept');
         } else {
           pool = release.pool.map((item) => deepClone(item));
         }

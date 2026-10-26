@@ -12,10 +12,26 @@ function document(): QuestionAuthoringDocument {
 }
 function session() {
   return { option_ids: { 'local-one': { 'editor-a': 'A', 'editor-b': 'B' } },
-    identities: { 'local-one': { question_id: '40', expected_version_id: '50' } }, layouts: {} };
+    identities: { 'local-one': { question_id: '40', expected_version_id: '50', expected_enabled: true } }, layouts: {} };
 }
 
 describe('main authoring contract adapter', () => {
+  it('rejects an existing identity without its original enabled baseline', () => {
+    const state = session();
+    delete (state.identities['local-one'] as { expected_enabled?: boolean }).expected_enabled;
+    expect(() => toAuthoringBundle(document(), state)).toThrow(/启用状态/);
+  });
+  it('strips paper scores and legacy concepts while preserving the original enabled baseline', () => {
+    const value = document();
+    value.questions['local-one']!.concept_id = '19';
+    const state = session();
+    Object.assign(state.identities['local-one']!, { expected_enabled: false });
+    const bundle = toAuthoringBundle(value, state);
+    expect(bundle.document.questions['local-one']).not.toHaveProperty('concept_id');
+    expect(bundle.document.questions['local-one']).not.toHaveProperty('score_cents');
+    expect(bundle.identities['local-one']).toMatchObject({ expected_enabled: false });
+    expect(value.questions['local-one']!.score_cents).toBe(10000);
+  });
   // Rebuilding stable IDs from display order would change the correct answer after reordering.
   it('preserves short A/B stable IDs and version tokens when editor options are reordered', () => {
     const value = document();
@@ -23,7 +39,7 @@ describe('main authoring contract adapter', () => {
     [children[1], children[2]] = [children[2]!, children[1]!];
     const bundle = toAuthoringBundle(value, session());
     expect(bundle.option_ids).toEqual({ 'local-one': { 'editor-b': 'B', 'editor-a': 'A' } });
-    expect(bundle.identities).toEqual({ 'local-one': { question_id: '40', expected_version_id: '50' } });
+    expect(bundle.identities).toEqual({ 'local-one': { question_id: '40', expected_version_id: '50', expected_enabled: true } });
     expect(bundle.document.content.content![0]!.content![2]!.attrs).toEqual({ option_id: 'editor-a', checked: true });
   });
 
@@ -41,7 +57,7 @@ describe('main authoring contract adapter', () => {
     const value = toAuthoringBundle(document(), session());
     const normalized: AuthoringBundle = structuredClone(value);
     normalized.document.questions['local-one']!.difficulty = 'hard';
-    normalized.identities['local-one'] = { question_id: '40', expected_version_id: '51' };
+    normalized.identities['local-one'] = { question_id: '40', expected_version_id: '51', expected_enabled: true };
     const receipt: AuthoringReceipt = { request_id: 'request-one', bundle: normalized,
       items: [{ client_id: 'local-one', question_id: '40', saved_version_id: '51', revision: 2 }] };
     expect(applyAuthoringReceipt(value, receipt)).toEqual(normalized);

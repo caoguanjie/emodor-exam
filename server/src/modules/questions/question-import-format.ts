@@ -5,7 +5,7 @@ import { activeDifficulties } from '../../common/question-difficulty';
 export type QuestionImportFormat = 'xlsx' | 'txt';
 
 export const QUESTION_IMPORT_HEADERS = [
-  'category', 'type', 'difficulty', 'concept', 'stem',
+  'category', 'type', 'difficulty', 'stem',
   'options', 'answer', 'analysis',
 ] as const;
 
@@ -13,6 +13,8 @@ type QuestionImportHeader = (typeof QUESTION_IMPORT_HEADERS)[number];
 
 export type ParsedQuestionImportRow = Record<QuestionImportHeader, string> & {
   row: number;
+  concept?: string;
+  legacy_score?: boolean;
   format_errors?: string[];
 };
 
@@ -28,19 +30,19 @@ const DEFAULT_LIMITS: QuestionImportLimits = {
 
 const TEMPLATE_ROWS: Array<Record<QuestionImportHeader, string>> = [
   {
-    category: '', type: 'single', difficulty: 'easy', concept: '',
+    category: '', type: 'single', difficulty: 'easy',
     stem: '<p>进入作业区域前首先应做什么？</p>',
     options: JSON.stringify([{ key: 'A', text: '完成风险确认' }, { key: 'B', text: '直接开始作业' }]),
     answer: JSON.stringify([0]), analysis: '<p>应先完成风险确认。</p>',
   },
   {
-    category: '', type: 'multiple', difficulty: 'hard', concept: '',
+    category: '', type: 'multiple', difficulty: 'hard',
     stem: '<p>以下哪些属于作业前检查？</p>',
     options: JSON.stringify([{ key: 'A', text: '检查防护用品' }, { key: 'B', text: '确认作业许可' }, { key: 'C', text: '跳过交底' }]),
     answer: JSON.stringify([0, 1]), analysis: '<p>防护用品和作业许可均须确认。</p>',
   },
   {
-    category: '', type: 'judgment', difficulty: 'hard', concept: '',
+    category: '', type: 'judgment', difficulty: 'hard',
     stem: '<p>未完成安全交底也可以开始作业。</p>',
     options: JSON.stringify([{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]),
     answer: JSON.stringify([1]), analysis: '<p>必须先完成安全交底。</p>',
@@ -56,28 +58,33 @@ function assertFile(file: Buffer, limits: QuestionImportLimits): void {
   if (file.length > limits.maxBytes) throw Errors.fileTooLarge('导入文件超过大小上限');
 }
 
-/** Legacy ninth score column is accepted and ignored, including nonnumeric values. */
+/** Recognize both retired columns by name; their removal must never shift cells. */
 function assertHeader(values: string[]): void {
-  const legacy = values.length === QUESTION_IMPORT_HEADERS.length + 1 && values.at(-1) === 'score';
-  if ((!legacy && values.length !== QUESTION_IMPORT_HEADERS.length)
-    || QUESTION_IMPORT_HEADERS.some((header, index) => values[index] !== header)) {
-    throw Errors.param('模板表头不符，请使用 8 列模板（旧第 9 列 score 已忽略，分值在组卷时设置）');
+  const current = values.filter((header) => header !== 'concept' && header !== 'score');
+  const legacyOrder = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'score'];
+  if (new Set(values).size !== values.length
+    || current.length !== QUESTION_IMPORT_HEADERS.length
+    || current.some((header, index) => header !== QUESTION_IMPORT_HEADERS[index])
+    || values.some((header, index) => index > 0 && legacyOrder.indexOf(header) <= legacyOrder.indexOf(values[index - 1]))) {
+    throw Errors.param('模板表头不符，请使用 7 列模板（兼容旧 concept / score 列）');
   }
 }
 
-function rowFromCells(row: number, cells: string[], formatErrors: string[] = []): ParsedQuestionImportRow {
+function rowFromCells(row: number, cells: string[], headers: string[], formatErrors: string[] = []): ParsedQuestionImportRow {
   const parsed = { row } as ParsedQuestionImportRow;
-  QUESTION_IMPORT_HEADERS.forEach((header, index) => {
-    parsed[header] = String(cells[index] ?? '').trim();
+  QUESTION_IMPORT_HEADERS.forEach((header) => {
+    parsed[header] = String(cells[headers.indexOf(header)] ?? '').trim();
   });
+  if (headers.includes('concept')) parsed.concept = String(cells[headers.indexOf('concept')] ?? '').trim();
+  if (headers.includes('score')) parsed.legacy_score = true;
   if (formatErrors.length) parsed.format_errors = formatErrors;
   return parsed;
 }
 
-function excelCellText(cell: ExcelJS.Cell): { text: string; error?: string } {
+function excelCellText(cell: ExcelJS.Cell, header?: string): { text: string; error?: string } {
   const value = cell.value as any;
   if (value && typeof value === 'object' && ('formula' in value || 'sharedFormula' in value)) {
-    return { text: '', error: `${QUESTION_IMPORT_HEADERS[Number(cell.col) - 1] || `第${cell.col}列`} 不允许使用公式` };
+    return { text: '', error: `${header || `第${cell.col}列`} 不允许使用公式` };
   }
   if (value === null || value === undefined) return { text: '' };
   if (typeof value === 'object') {
@@ -117,13 +124,15 @@ async function parseXlsx(file: Buffer, limits: QuestionImportLimits): Promise<Pa
       if (parsed.error) errors.push(parsed.error);
     });
     if (hasExtraCell) errors.unshift(`Excel 每行必须使用 ${header.length} 列`);
-    QUESTION_IMPORT_HEADERS.forEach((_header, index) => {
-      const parsed = excelCellText(excelRow.getCell(index + 1));
+    header.forEach((name, index) => {
+      // A retired score is never evaluated, validated or exposed.
+      if (name === 'score') { cells.push(''); return; }
+      const parsed = excelCellText(excelRow.getCell(index + 1), name);
       cells.push(parsed.text);
       if (parsed.error) errors.push(parsed.error);
     });
     if (cells.every((cell) => cell.trim() === '') && errors.length === 0) return;
-    rows.push(rowFromCells(rowNumber, cells, errors));
+    rows.push(rowFromCells(rowNumber, cells, header, errors));
   });
   if (!rows.length) throw Errors.param('文件为空或无数据行');
   if (rows.length > limits.maxRows) throw Errors.param(`单次导入上限 ${limits.maxRows} 行`);
@@ -146,10 +155,10 @@ function parseTxt(file: Buffer, limits: QuestionImportLimits): ParsedQuestionImp
     if (!line.trim()) return;
     const cells = line.split('\t');
     if (cells.length !== header.length) {
-      rows.push(rowFromCells(index + 2, cells.slice(0, QUESTION_IMPORT_HEADERS.length), [`TXT 每行必须使用 ${header.length} 列制表符分隔`]));
+      rows.push(rowFromCells(index + 2, cells, header, [`TXT 每行必须使用 ${header.length} 列制表符分隔`]));
       return;
     }
-    rows.push(rowFromCells(index + 2, cells));
+    rows.push(rowFromCells(index + 2, cells, header));
   });
   if (!rows.length) throw Errors.param('文件为空或无数据行');
   if (rows.length > limits.maxRows) throw Errors.param(`单次导入上限 ${limits.maxRows} 行`);
@@ -191,7 +200,7 @@ export async function buildQuestionImportFile(
   worksheet.addRow([...QUESTION_IMPORT_HEADERS]);
   for (const row of rows) worksheet.addRow(QUESTION_IMPORT_HEADERS.map((header) => row[header]));
   worksheet.getRow(1).font = { bold: true };
-  worksheet.getRow(1).getCell(8).note = '题库不设分值；分值在组卷时设置。旧模板第 9 列 score 兼容接收并忽略。';
+  worksheet.getRow(1).getCell(7).note = '题库不设分值；分值在组卷时设置。旧模板 score 列兼容接收并忽略；concept 必须为空。';
   worksheet.columns.forEach((column, index) => {
     column.width = ['stem', 'options', 'answer', 'analysis'].includes(QUESTION_IMPORT_HEADERS[index]) ? 36 : 16;
   });

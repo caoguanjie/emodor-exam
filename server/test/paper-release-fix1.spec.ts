@@ -35,6 +35,7 @@ describe('paper release fix1 transaction boundaries', () => {
     const managerVersionRepo = { createQueryBuilder: vi.fn(() => qb) };
     const manager = { getRepository: vi.fn((entity: unknown) => {
       if (entity === QuestionVersion) return managerVersionRepo;
+      if (entity === Question) return { findOne: vi.fn(async () => ({ id: '101', currentVersionId: '701', isEnabled: true, categoryId: '7', type: 'single', difficulty: 'easy' })) };
       throw new Error('unexpected repository');
     }) };
     const lockActive = vi.fn(async () => ({ id: '7', status: 1 }));
@@ -42,9 +43,10 @@ describe('paper release fix1 transaction boundaries', () => {
     Object.assign(service, {
       categories: { lockActive, assertActive: vi.fn(() => { throw new Error('global category lookup used'); }) },
       versionRepo: { createQueryBuilder: vi.fn(() => { throw new Error('global version repository used'); }) },
+      assertCurrentUsable: vi.fn(async () => undefined),
     });
 
-    const rows = await (service.approvedCandidates as any)({
+    const rows = await (service.enabledCandidates as any)({
       categoryId: '7', type: 'single', difficulty: 'easy',
     }, manager);
 
@@ -58,7 +60,7 @@ describe('paper release fix1 transaction boundaries', () => {
       id: '101', currentVersionId: null, categoryId: null, difficulty: null, conceptId: null,
       regulationId: '9', versionId: '19', type: 'single', stem: '实际旧题干',
       options: [{ key: 'A', text: '实际选项' }], answer: [0], analysis: null, rubric: null,
-      score: '30.00', status: 'approved', source: 'manual', createdBy: '3',
+      score: '30.00', status: 'approved', isEnabled: true, source: 'manual', createdBy: '3',
     };
     const questionRepo = {
       findOne: vi.fn(async () => question),
@@ -76,18 +78,18 @@ describe('paper release fix1 transaction boundaries', () => {
     } };
     const service = Object.create(QuestionVersionService.prototype) as QuestionVersionService & Record<string, any>;
 
-    const captured = await service.currentOrCaptureForRelease(manager as any, '101');
+    const captured = await (service as any).captureLegacy(manager, question);
 
     expect(captured).toMatchObject({
       id: '701', questionId: '101', categoryId: null, difficulty: null, stem: '实际旧题干',
       scoreCents: 3000, status: 'approved', approvedBy: null, approvedAt: null,
     });
     expect(captured.legacyCapturedAt).toBeInstanceOf(Date);
-    expect(question.currentVersionId).toBe('701');
+    expect(question.currentVersionId).toBeNull();
   });
 
   it('rejects a copied pinned version after the live current revision changes', async () => {
-    const questionRepo = { findOne: vi.fn(async () => ({ id: '101', currentVersionId: '702', status: 'approved' })) };
+    const questionRepo = { findOne: vi.fn(async () => ({ id: '101', currentVersionId: '702', status: 'approved', isEnabled: true })) };
     const manager = { getRepository(entity: unknown) {
       if (entity === Question) return questionRepo;
       if (entity === QuestionVersion) return { findOne: vi.fn() };
@@ -171,7 +173,7 @@ describe('paper release fix1 transaction boundaries', () => {
     expect(paper.status).toBe('published');
   });
 
-  it('rejects regulation fixed variants that share one concept before creating a release', async () => {
+  it('publishes distinct regulation questions sharing legacy concept metadata without carrying the grouping forward', async () => {
     const paper: any = {
       id: '11', regulationId: '9', businessScope: 'regulation', mode: 'fixed', categoryId: null,
       requiresLearning: 1, regulationIds: ['9'], courseIds: [], ruleConfig: null,
@@ -218,12 +220,13 @@ describe('paper release fix1 transaction boundaries', () => {
       audit: { log: vi.fn() },
     });
 
-    await expect(service.publish('11', '3'))
-      .rejects.toMatchObject({ code: 40972, message: expect.stringContaining('重复考点') });
-    expect(releaseRepo.save).not.toHaveBeenCalled();
-    expect(releaseQuestionRepo.save).not.toHaveBeenCalled();
-    expect(paperRepo.save).not.toHaveBeenCalled();
-    expect(paper.status).toBe('draft');
+    await expect(service.publish('11', '3')).resolves.toMatchObject({ releaseId: '21' });
+    expect(releaseQuestionRepo.save).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({ questionId: '101', conceptId: null }),
+      expect.objectContaining({ questionId: '102', conceptId: null }),
+    ]));
+    expect(paper.status).toBe('published');
+    expect(links.every((item) => item.conceptId === null)).toBe(true);
   });
 });
 
@@ -334,7 +337,7 @@ describe('release-backed legacy paper compatibility', () => {
 
     expect(copy).toMatchObject({ id: 12, status: 'draft', release_id: null, rules_locked: false, pass_score: 60 });
     expect(copiedLinks).toEqual([expect.objectContaining({
-      paperId: '12', questionId: '101', questionVersionId: '701', conceptId: '81', score: '100.00',
+      paperId: '12', questionId: '101', questionVersionId: '701', conceptId: null, score: '100.00',
     })]);
     expect(edited.pass_score).toBe(70);
     expect(source).toMatchObject({ id: '11', status: 'published', passScore: '55.00' });

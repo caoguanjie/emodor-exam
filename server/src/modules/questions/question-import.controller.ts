@@ -73,7 +73,7 @@ export class QuestionImportController {
   @Get('import-batches/:id')
   @Permissions('questions:write')
   status(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.batches.questionStatus(String(user.id), id);
+    return this.importer.readBatch(String(user.id), id);
   }
 
   @Post('import-preview')

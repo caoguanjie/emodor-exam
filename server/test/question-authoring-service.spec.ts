@@ -15,7 +15,7 @@ function bundle(ids = ['local1']): AuthoringBundle {
       { type: 'questionStem', content: [text(`题干 ${id}`)] },
       { type: 'questionOption', attrs: { option_id: 'A', checked: true }, content: [text('是')] },
       { type: 'questionOption', attrs: { option_id: 'B', checked: false }, content: [text('否')] },
-    ] })) }, questions: Object.fromEntries(ids.map((id) => [id, { type: 'single', category_id: '11', difficulty: 'easy', concept_id: null,
+    ] })) }, questions: Object.fromEntries(ids.map((id) => [id, { type: 'single', category_id: '11', difficulty: 'easy',
       regulation_id: null, regulation_version_id: null, score_cents: 500, analysis: { type: 'doc', content: [text('解析')] } }])) },
     identities: {}, option_ids: Object.fromEntries(ids.map((id) => [id, { A: 'A', B: 'B' }])), layouts: {},
   };
@@ -53,7 +53,6 @@ function fixture(options: { inProgress?: boolean; legacyLinked?: boolean } = {})
   const versions = new QuestionVersionService(repo('questions') as any, repo('versions') as any,
     { findOne: async () => ({ id: '2' }) } as any, { findOne: async () => ({ id: '3' }) } as any,
     dataSource, { lockActive: async (_m: unknown, id: string) => { if (id === '22') throw new Error('inactive category'); } } as any,
-    { assertCompatible: async () => undefined } as any,
     { assertUsable: async (_actor: string, id: string) => { if (id === '999') throw new Error('unusable media'); },
       bind: async (_m: unknown, assetId: string, ownerType: string, businessId: string) => { state.media.push({ assetId, ownerType, businessId }); } } as any, access);
   const service = new QuestionAuthoringService(dataSource, versions, access);
@@ -62,6 +61,47 @@ function fixture(options: { inProgress?: boolean; legacyLinked?: boolean } = {})
 const requestId = '75d17f2e-1c29-4bf7-b5da-660a3b116eba';
 
 describe('authoring transaction with the real version service', () => {
+  it('rejects stale enabled authoring tokens at the same revision and accepts only an explicit refreshed save', async () => {
+    const f = fixture();
+    const first = await f.service.commit({ request_id: requestId, bundle: bundle() }, '9');
+    f.state().questions[0].isEnabled = false;
+    const before = structuredClone(f.state());
+    const stale = structuredClone(first.bundle);
+    stale.document.questions.local1.difficulty = 'hard';
+    await expect(f.service.commit({ request_id: '84df8ef9-32a9-4112-ac24-3e8f5d2ef711', bundle: stale }, '9')).rejects.toMatchObject({ code: 40940 });
+    expect(f.state()).toEqual(before);
+    const refreshed = await f.service.assemble([first.items[0].saved_version_id], '9');
+    expect(refreshed.identities.local1.expected_enabled).toBe(false);
+    const next = await f.service.commit({ request_id: 'c938f798-b80e-4aba-a288-73467f12a0ee', bundle: refreshed }, '9');
+    expect(next.items[0].revision).toBe(2);
+    expect(f.state().questions[0].isEnabled).toBe(true);
+    expect(f.state().versions[1]).toMatchObject({ approvedBy: null, reviewedBy: null, conceptId: null, scoreCents: null });
+  });
+
+  it('requires an enabled baseline only for bound identities and strips historical concepts from edit projections', async () => {
+    const f = fixture();
+    const first = await f.service.commit({ request_id: requestId, bundle: bundle() }, '9');
+    const legacy = f.state().versions[0];
+    legacy.conceptId = '7'; legacy.authoringJson.document.questions.local1.concept_id = '7';
+    delete legacy.authoringJson.identities.local1.expected_enabled;
+    const history = structuredClone(legacy);
+    const assembled = await f.service.assemble([first.items[0].saved_version_id], '9');
+    expect(assembled.document.questions.local1).not.toHaveProperty('concept_id');
+    expect(legacy).toEqual(history);
+    const invalid = structuredClone(assembled); delete (invalid.identities.local1 as any).expected_enabled;
+    await expect(f.service.commit({ request_id: '84df8ef9-32a9-4112-ac24-3e8f5d2ef711', bundle: invalid }, '9')).rejects.toMatchObject({ code: 40001 });
+    const derived = structuredClone(assembled); derived.identities = {};
+    delete derived.document.questions.local1.question_id; delete derived.document.questions.local1.base_revision;
+    const copied = await f.service.commit({ request_id: 'c938f798-b80e-4aba-a288-73467f12a0ee', bundle: derived }, '9');
+    expect(copied.items[0].question_id).not.toBe(first.items[0].question_id);
+    expect(f.state().versions[1].conceptId).toBeNull();
+  });
+
+  it('rejects concept fields in new authoring requests before any persistence', async () => {
+    const f = fixture(); const input = bundle(); input.document.questions.local1.concept_id = null;
+    await expect(f.service.commit({ request_id: requestId, bundle: input }, '9')).rejects.toMatchObject({ code: 40001 });
+    expect(f.state()).toEqual({ questions: [], versions: [], receipts: [], media: [] });
+  });
   it('stores score-free question facts, assembles without a default and keeps paper score changes out of revisions', async () => {
     const f = fixture();
     const first = await f.service.commit({ request_id: requestId, bundle: bundle() }, '9');
@@ -100,7 +140,7 @@ describe('authoring transaction with the real version service', () => {
     const draft = { categoryId: '11', difficulty: 'easy' as const, type: 'single' as const, source: 'manual' as const,
       stem: '题干', options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }], answer: [0], analysis: null };
     const first = await f.versions.create(draft as any, '9');
-    const nextId = await f.versions.revise(first.questionId, { ...draft, analysis: '新解析' } as any, '9', first.versionId);
+    const nextId = await f.versions.revise(first.questionId, { ...draft, analysis: '新解析' } as any, '9', first.versionId, true);
     expect(f.state().questions[0].score).toBeNull();
     expect(f.state().versions).toHaveLength(2);
     for (const row of f.state().versions) {
@@ -133,9 +173,9 @@ describe('authoring transaction with the real version service', () => {
     expect(decodeAuthoringBundle(version.authoringJson)[0].content).toEqual(expectedAuthorExam);
     const assembled = await f.service.assemble([first.versionId], '9');
     expect(decodeAuthoringBundle(assembled)[0].content).toEqual(expectedAuthorExam);
-    const nextId = await f.versions.revise(first.questionId, { ...input, difficulty: 'hard' }, '9', first.versionId);
+    const nextId = await f.versions.revise(first.questionId, { ...input, difficulty: 'hard' }, '9', first.versionId, true);
     const next = f.state().versions.find((item) => item.id === nextId)!;
-    expect(next).toMatchObject({ contentSchemaVersion: 2, status: 'pending', difficulty: 'hard' });
+    expect(next).toMatchObject({ contentSchemaVersion: 2, status: 'approved', difficulty: 'hard' });
     expect(next.contentJson).toEqual(before);
     expect(projectStudentContent(parseQuestionContent(next))).toEqual({ stem: before.stem, options: before.options });
     expect(decodeAuthoringBundle(await f.service.assemble([nextId], '9'))[0].content).toEqual(expectedAuthorExam);
@@ -147,7 +187,7 @@ describe('authoring transaction with the real version service', () => {
     const receipt = await f.service.commit({ request_id: requestId, bundle: bundle() }, '9');
     expect(receipt.items).toHaveLength(1);
     const version = f.state().versions[0];
-    expect(version).toMatchObject({ revision: 1, status: 'approved', source: 'manual', approvedBy: '9', contentSchemaVersion: 3, authoringSchemaVersion: 1 });
+    expect(version).toMatchObject({ revision: 1, status: 'approved', source: 'manual', approvedBy: null, contentSchemaVersion: 3, authoringSchemaVersion: 1 });
     const assembled = await f.service.assemble([receipt.items[0].saved_version_id], '9');
     expect(Object.values(assembled.option_ids)[0]).toEqual({ A: 'A', B: 'B' });
     expect(assembled.document.content.content?.[0].content?.[0].content?.[0].content?.[0].text).toBe('题干 local1');
@@ -174,7 +214,7 @@ describe('authoring transaction with the real version service', () => {
     expect(f.state().versions[1]).toMatchObject({ source: 'manual', regulationId: null, regulationVersionId: null, difficulty: 'hard', status: 'approved', revision: 1 });
     const reopened = await f.service.assemble([saved.items[0].saved_version_id], '9');
     expect(reopened.document.questions.local1).toMatchObject({ regulation_id: null, regulation_version_id: null });
-    expect(reopened.identities.local1).toEqual({ question_id: saved.items[0].question_id, expected_version_id: saved.items[0].saved_version_id });
+    expect(reopened.identities.local1).toEqual({ question_id: saved.items[0].question_id, expected_version_id: saved.items[0].saved_version_id, expected_enabled: true });
   });
 
   it('rolls back the first question and reservation when the second relation fails', async () => {
@@ -194,12 +234,12 @@ describe('authoring transaction with the real version service', () => {
     await expect(f.service.getCommit(requestId, '8')).rejects.toMatchObject({ code: 40401 });
   });
 
-  it('keeps the actual source while revising and writes pending with exact conflict rollback', async () => {
+  it('keeps the actual source while revising and writes enabled with exact conflict rollback', async () => {
     const f = fixture(); const first = await f.service.commit({ request_id: requestId, bundle: bundle() }, '9');
     f.state().versions[0].source = 'import'; f.state().questions[0].source = 'import';
     const next = structuredClone(first.bundle); next.document.questions.local1.difficulty = 'hard';
     const updated = await f.service.commit({ request_id: '84df8ef9-32a9-4112-ac24-3e8f5d2ef711', bundle: next }, '9');
-    expect(f.state().versions[1]).toMatchObject({ source: 'import', status: 'pending', revision: 2 });
+    expect(f.state().versions[1]).toMatchObject({ source: 'import', status: 'approved', revision: 2 });
     const before = structuredClone(f.state());
     await expect(f.service.commit({ request_id: 'c938f798-b80e-4aba-a288-73467f12a0ee', bundle: next }, '9')).rejects.toMatchObject({ code: 40940 });
     expect(f.state()).toEqual(before);
@@ -235,10 +275,10 @@ describe('authoring transaction with the real version service', () => {
     const legacy = { id: '71', questionId: '4', revision: 1, categoryId: '11', difficulty: 'medium', type: 'single',
       stem: '<p>旧题</p>', options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }], answer: [0], analysis: null,
       contentSchemaVersion: 1, contentJson: null, authoringJson: null, scoreCents: 500, conceptId: null, regulationId: null, regulationVersionId: null };
-    f.state().versions.push(legacy); const before = structuredClone(f.state());
+    f.state().versions.push(legacy); f.state().questions.push({ id: '4', isEnabled: false, currentVersionId: '71' }); const before = structuredClone(f.state());
     const value = await f.service.assemble(['71'], '9');
     expect(value.option_ids.version_71).toEqual({ A: 'A', B: 'B' });
-    expect(value.identities.version_71).toEqual({ question_id: '4', expected_version_id: '71' });
+    expect(value.identities.version_71).toEqual({ question_id: '4', expected_version_id: '71', expected_enabled: false });
     expect(value.document.questions.version_71.difficulty).toBe('medium');
     expect(f.state()).toEqual(before);
   });
@@ -256,9 +296,9 @@ describe('authoring transaction with the real version service', () => {
     const first = await f.service.commit({ request_id: requestId, bundle: value }, '9'); const version = f.state().versions[0];
     const savedId = await f.versions.revise(first.items[0].question_id, { categoryId: '11', difficulty: 'hard', type: 'single', source: 'manual',
       scoreCents: 500, stem: version.stem, options: version.options, answer: [1], analysis: version.analysis,
-      contentSchemaVersion: 3, contentJson: { ...version.contentJson, answer_option_ids: ['B'] } }, '9', first.items[0].saved_version_id);
+      contentSchemaVersion: 3, contentJson: { ...version.contentJson, answer_option_ids: ['B'] } }, '9', first.items[0].saved_version_id, true);
     const next = f.state().versions.find((item) => item.id === savedId)!;
-    expect(next).toMatchObject({ contentSchemaVersion: 3, status: 'pending', difficulty: 'hard' });
+    expect(next).toMatchObject({ contentSchemaVersion: 3, status: 'approved', difficulty: 'hard' });
     expect(next.contentJson.stem).toEqual(version.contentJson.stem);
     const reopened = await f.service.assemble([savedId], '9');
     expect(reopened.document.questions.local1.difficulty).toBe('hard');
@@ -270,7 +310,7 @@ describe('authoring transaction with the real version service', () => {
     const f = fixture(); const value = bundle(); value.document.content.content![0].content![0].content![0].content![0].marks = [{ type: 'bold' }];
     const first = await f.service.commit({ request_id: requestId, bundle: value }, '9'); const version = f.state().versions[0];
     const saved = await f.versions.revise(first.items[0].question_id, { categoryId: '11', difficulty: 'hard', type: 'single', source: 'manual',
-      scoreCents: 600, stem: version.stem, options: version.options, answer: [1], analysis: version.analysis }, '9', first.items[0].saved_version_id);
+      scoreCents: 600, stem: version.stem, options: version.options, answer: [1], analysis: version.analysis }, '9', first.items[0].saved_version_id, true);
     const next = f.state().versions.find((item) => item.id === saved)!;
     expect(next.contentSchemaVersion).toBe(3); expect(next.contentJson.stem).toEqual(version.contentJson.stem);
     expect(next.contentJson.answer_option_ids).toEqual(['B']);
@@ -291,7 +331,7 @@ describe('authoring transaction with the real version service', () => {
     const first = await f.service.commit({ request_id: requestId, bundle: value }, '9'); const version = f.state().versions[0];
     const before = structuredClone(f.state());
     await expect(f.versions.revise(first.items[0].question_id, { categoryId: '11', difficulty: 'easy', type: 'single', source: 'manual',
-      scoreCents: 500, stem: '<p>被打平的新题干</p>', options: version.options, answer: [0], analysis: version.analysis }, '9', first.items[0].saved_version_id)).rejects.toMatchObject({ code: 40001 });
+      scoreCents: 500, stem: '<p>被打平的新题干</p>', options: version.options, answer: [0], analysis: version.analysis }, '9', first.items[0].saved_version_id, true)).rejects.toMatchObject({ code: 40001 });
     expect(f.state()).toEqual(before);
   });
 });

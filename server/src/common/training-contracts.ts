@@ -68,12 +68,14 @@ export interface ImportPreview {
   valid_rows: number[];
   errors: Array<{ row: number; message: string }>;
   duplicates: number[];
+  warnings?: string[];
 }
 
 export interface ImportResult {
   batch_id: Id;
   created_ids: Id[];
   committed_rows: number[];
+  enabled?: boolean;
 }
 
 export interface QuestionOption {

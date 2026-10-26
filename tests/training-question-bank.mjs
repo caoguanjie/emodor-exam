@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { startMockAi } from './e2e-smoke.mjs';
 import { randomStrongPassword } from './training-access.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
@@ -54,7 +53,6 @@ function singleDraft(categoryId, stem = '<p>进入受限空间前应做什么？
     options: [{ text: '先通风并检测' }, { text: '直接进入' }],
     answer: [0],
     analysis: '<p>应先通风、检测并审批。</p>',
-
   };
 }
 
@@ -90,18 +88,7 @@ async function seedParsedRegulation(ctx, actorId) {
   return { regulationId, versionId };
 }
 
-async function waitTask(ctx, actor, taskId) {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    const status = await ctx.request(actor, 'GET', `/ai/generate-status/${taskId}`);
-    assert.equal(status.status, 200, `AI status: ${JSON.stringify(status)}`);
-    if (status.data.status === 'completed' || status.data.status === 'failed') return status.data;
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error('B3 Mock AI task timed out');
-}
-
-async function runBody(ctx, mockPort) {
+async function runBody(ctx) {
   const admin = await adminLogin(ctx);
   const suffix = randomBytes(4).toString('hex');
   const category = await ctx.request(admin.actor, 'POST', '/admin/training-categories', { name: `B3 类别 ${suffix}` });
@@ -118,27 +105,11 @@ async function runBody(ctx, mockPort) {
     assert.equal(typeof options.data.items[0].id, 'string');
   }
 
-  const concept = await ctx.request(admin.actor, 'POST', '/ai/question-concepts', {
-    category_id: categoryId, type: 'single', name: `受限空间 ${suffix}`,
-  });
-  assert.equal(concept.status, 200, `concept: ${JSON.stringify(concept)}`);
-  const conceptList = await ctx.request(admin.actor, 'GET', `/ai/question-concepts?category_id=${categoryId}`);
-  assert.equal(conceptList.status, 200, `concept list: ${JSON.stringify(conceptList)}`);
-  assert.equal(conceptList.data.page, 1);
-  assert.equal(conceptList.data.page_size, 20);
-  assert.ok(conceptList.data.items.some((item) => item.id === String(concept.data.id)));
-  assert.deepEqual(
-    Object.keys(conceptList.data.items.find((item) => item.id === String(concept.data.id))).sort(),
-    ['category_id', 'id', 'name', 'type'],
-  );
-  const malformedConceptList = await ctx.request(admin.actor, 'GET', `/ai/question-concepts?category_id=${categoryId}&page_size=101`);
-  assert.equal(malformedConceptList.status, 400, '考点管理列表必须校验分页上限');
-  const conceptOptions = await ctx.request(admin.actor, 'GET', `/ai/question-concept-options?category_id=${categoryId}&type=single&page=1&page_size=100`);
-  assert.equal(conceptOptions.status, 200, `concept options: ${JSON.stringify(conceptOptions)}`);
-  assert.ok(conceptOptions.data.items.some((item) => item.id === String(concept.data.id)));
-  assert.equal(conceptOptions.data.page, 1);
-  assert.equal(conceptOptions.data.page_size, 100);
-  assert.deepEqual(Object.keys(conceptOptions.data.items[0]).sort(), ['id', 'name']);
+  for (const [method, path, body] of [
+    ['POST', '/ai/question-concepts', { category_id: categoryId, type: 'single', name: '已取消考点' }],
+    ['GET', `/ai/question-concepts?category_id=${categoryId}`],
+    ['GET', `/ai/question-concept-options?category_id=${categoryId}&type=single`],
+  ]) assert.equal((await ctx.request(admin.actor, method, path, body)).status, 404, `retired concept endpoint: ${path}`);
 
   const writerUsername = `b3_writer_${suffix}`;
   const writerRealName = `B3录题员${suffix}`;
@@ -158,50 +129,28 @@ async function runBody(ctx, mockPort) {
   const writerCategories = await ctx.request(writer.actor, 'GET', '/ai/question-category-options?page=1&page_size=100');
   assert.equal(writerCategories.status, 200, `writer category options: ${JSON.stringify(writerCategories)}`);
   assert.ok(writerCategories.data.items.some((item) => item.id === categoryId));
-  const writerConceptOptions = await ctx.request(
-    writer.actor,
-    'GET',
-    `/ai/question-concept-options?category_id=${categoryId}&type=single&page=1&page_size=100`,
-  );
-  assert.equal(writerConceptOptions.status, 200, `writer concept options: ${JSON.stringify(writerConceptOptions)}`);
-  assert.ok(writerConceptOptions.data.items.some((item) => item.id === String(concept.data.id)));
-  assert.ok(writerConceptOptions.data.items.every((item) => Object.keys(item).sort().join(',') === 'id,name'));
-  const malformedConceptOptions = await ctx.request(
-    writer.actor,
-    'GET',
-    `/ai/question-concept-options?category_id=${categoryId}&type=single&page=0`,
-  );
-  assert.equal(malformedConceptOptions.status, 400, '考点选项必须校验分页边界');
-  const unknownCategoryConceptOptions = await ctx.request(
-    writer.actor,
-    'GET',
-    '/ai/question-concept-options?category_id=9223372036854775807&type=single',
-  );
-  assert.equal(unknownCategoryConceptOptions.status, 409, '考点选项必须拒绝不存在/停用类别');
-  assert.equal(unknownCategoryConceptOptions.code, 40910);
-  const writerConcept = await ctx.request(writer.actor, 'POST', '/ai/question-concepts', {
-    category_id: categoryId, type: 'judgment', name: `写权限考点 ${suffix}`,
-  });
-  assert.equal(writerConcept.status, 200, `writer concept create: ${JSON.stringify(writerConcept)}`);
-  const writerQuestion = await ctx.request(writer.actor, 'POST', '/ai/questions', {
-    ...singleDraft(categoryId, '<p>写权限用户人工录题。</p>'),
-    concept_id: String(concept.data.id),
-  });
+  const writerQuestion = await ctx.request(writer.actor, 'POST', '/ai/questions', singleDraft(categoryId, '<p>写权限用户人工录题。</p>'));
   assert.equal(writerQuestion.status, 200, `writer question create: ${JSON.stringify(writerQuestion)}`);
-  assert.equal(writerQuestion.data.status, 'approved');
+  assert.equal(writerQuestion.data.enabled, true);
   assert.equal(String(writerQuestion.data.saved_version_id), String(writerQuestion.data.current_version_id));
+  const writerDisabled = await ctx.request(writer.actor, 'PUT', `/ai/questions/${writerQuestion.data.question_id}/enabled`, { expected_version_id: writerQuestion.data.current_version_id, enabled: false });
+  assert.equal(writerDisabled.status, 200); assert.equal(writerDisabled.data.enabled, false);
+  const writerRevised = await ctx.request(writer.actor, 'PUT', `/ai/questions/${writerQuestion.data.question_id}`, { expected_version_id: writerQuestion.data.current_version_id, expected_enabled: false, stem: '<p>停用题明确保存并启用。</p>' });
+  assert.equal(writerRevised.status, 200, JSON.stringify(writerRevised));
+  assert.equal(writerRevised.data.enabled, true); assert.equal(writerRevised.data.revision, 2);
 
   const manualWithoutRegulation = await ctx.request(admin.actor, 'POST', '/ai/questions', singleDraft(categoryId));
   assert.equal(manualWithoutRegulation.status, 200, JSON.stringify(manualWithoutRegulation));
   assert.equal(manualWithoutRegulation.data.material_id, null);
-  assert.equal(manualWithoutRegulation.data.status, 'approved');
+  assert.equal(manualWithoutRegulation.data.enabled, true);
   assert.equal(manualWithoutRegulation.data.category_id, categoryId);
   assert.match(manualWithoutRegulation.data.question_id, /^\d+$/);
   assert.match(manualWithoutRegulation.data.saved_version_id, /^\d+$/);
   assert.equal(String(manualWithoutRegulation.data.saved_version_id), String(manualWithoutRegulation.data.current_version_id));
-  assert.ok(manualWithoutRegulation.data.approved_by);
-  assert.ok(manualWithoutRegulation.data.approved_at);
+  for (const key of ['concept_id', 'status', 'approved_by', 'approved_at', 'reviewed_by', 'reviewed_at']) assert.equal(Object.hasOwn(manualWithoutRegulation.data, key), false, `current bank view omits ${key}`);
   assert.equal(Object.hasOwn(manualWithoutRegulation.data, 'score'), false, '题库响应不携带分值');
+  const rejectedScore = await ctx.request(admin.actor, 'POST', '/ai/questions', { ...singleDraft(categoryId), score: 5 });
+  assert.equal(rejectedScore.status, 400, '人工录题不接受题库分值');
   const scorelessRows = await ctx.queryTestDb(
     'SELECT q.score, v.score_cents FROM question q INNER JOIN question_version v ON v.id = q.current_version_id WHERE q.id = ?',
     [manualWithoutRegulation.data.question_id],
@@ -262,7 +211,7 @@ async function runBody(ctx, mockPort) {
   assert.equal(unsupportedSourceOverride.status, 400, '人工录题 API 不允许客户端伪造 source=ai');
 
   const crossCategoryConcept = await ctx.request(admin.actor, 'POST', '/ai/questions', {
-    ...singleDraft(otherCategoryId), concept_id: String(concept.data.id),
+    ...singleDraft(otherCategoryId), concept_id: '1',
   });
   assert.equal(crossCategoryConcept.status, 400, JSON.stringify(crossCategoryConcept));
 
@@ -275,17 +224,17 @@ async function runBody(ctx, mockPort) {
   assert.equal(sanitized.data.stem.includes('onclick'), false);
   const doc = (text) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
   const v2Content = { stem: doc('稳定 ID 题干'), options: [{ id: 'opt_red', content: doc('红色') }, { id: 'opt_blue', content: doc('蓝色') }], analysis: doc('冻结解析'), answer_option_ids: ['opt_blue'] };
-  const v2 = await ctx.request(admin.actor, 'POST', '/ai/questions', { category_id: categoryId, difficulty: 'easy', type: 'single', score: 5, content_schema_version: 2, content_json: v2Content });
+  const v2 = await ctx.request(admin.actor, 'POST', '/ai/questions', { category_id: categoryId, difficulty: 'easy', type: 'single', content_schema_version: 2, content_json: v2Content });
   assert.equal(v2.status, 200, `v2-only create: ${JSON.stringify(v2)}`);
   assert.deepEqual(v2.data.content_json, v2Content);
   assert.deepEqual(v2.data.options.map((option) => option.key), ['opt_red', 'opt_blue']);
   assert.deepEqual(v2.data.answer, [1]);
-  const reordered = await ctx.request(admin.actor, 'PUT', `/ai/questions/${v2.data.question_id}`, { expected_version_id: v2.data.current_version_id, content_schema_version: 2, content_json: { ...v2Content, options: [...v2Content.options].reverse() } });
+  const reordered = await ctx.request(admin.actor, 'PUT', `/ai/questions/${v2.data.question_id}`, { expected_version_id: v2.data.current_version_id, expected_enabled: true, content_schema_version: 2, content_json: { ...v2Content, options: [...v2Content.options].reverse() } });
   assert.equal(reordered.status, 200, `stable reorder: ${JSON.stringify(reordered)}`);
   assert.deepEqual(reordered.data.content_json.answer_option_ids, ['opt_blue']);
   assert.deepEqual(reordered.data.options.map((option) => option.key), ['opt_blue', 'opt_red']);
   assert.deepEqual(reordered.data.answer, [0]);
-  const badV2 = await ctx.request(admin.actor, 'POST', '/ai/questions', { category_id: categoryId, difficulty: 'easy', type: 'single', score: 5, content_schema_version: 2, content_json: { ...v2Content, stem: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '不透传', checked: true }] }] } } });
+  const badV2 = await ctx.request(admin.actor, 'POST', '/ai/questions', { category_id: categoryId, difficulty: 'easy', type: 'single', content_schema_version: 2, content_json: { ...v2Content, stem: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '不透传', checked: true }] }] } } });
   assert.equal(badV2.status, 400, 'v2 deep unknown fields must fail closed');
   const maliciousLegacyStem = '<p onclick="steal()">恶意旧题<script>alert(1)</script><img src="https://evil.test/tracker.png" onerror="steal()"></p>';
   const maliciousLegacy = await ctx.queryTestDb(
@@ -348,12 +297,14 @@ async function runBody(ctx, mockPort) {
     stem: '<p>不能省略版本前置条件</p>',
   });
   assert.equal(missingExpectedEdit.status, 400);
+  const missingExpectedState = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}`, { expected_version_id: firstVersionId, stem: '<p>不能省略启停前置条件</p>' });
+  assert.equal(missingExpectedState.status, 400);
   const edited = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}`, {
-    expected_version_id: firstVersionId,
+    expected_version_id: firstVersionId, expected_enabled: true,
     stem: '<p>修订后的题干</p>',
   });
   assert.equal(edited.status, 200, JSON.stringify(edited));
-  assert.equal(edited.data.status, 'pending');
+  assert.equal(edited.data.enabled, true);
   assert.equal(edited.data.revision, 2);
   assert.equal(Object.hasOwn(edited.data, 'score'), false, '修订不重新引入题库分值');
   const scoresAfterRevision = await ctx.queryTestDb(
@@ -369,7 +320,7 @@ async function runBody(ctx, mockPort) {
     [manualQuestionId],
   );
   const staleEdit = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}`, {
-    expected_version_id: firstVersionId,
+    expected_version_id: firstVersionId, expected_enabled: true,
     stem: '<p>旧页面覆盖</p>',
   });
   assert.equal(staleEdit.status, 409);
@@ -393,22 +344,26 @@ async function runBody(ctx, mockPort) {
   const malformedHistory = await ctx.request(admin.actor, 'GET', `/ai/questions/${manualQuestionId}/history?page_size=101`);
   assert.equal(malformedHistory.status, 400);
 
-  const missingExpectedReview = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}/review`, { status: 'approved' });
-  assert.equal(missingExpectedReview.status, 400);
-  const staleReview = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}/review`, {
-    expected_version_id: firstVersionId, status: 'approved',
-  });
-  assert.equal(staleReview.status, 409);
-  assert.equal(staleReview.code, 40940);
-  const afterStaleReview = await ctx.request(admin.actor, 'GET', `/ai/questions/${manualQuestionId}`);
-  assert.equal(afterStaleReview.data.status, 'pending');
-  assert.equal(String(afterStaleReview.data.current_version_id), secondVersionId);
-  const approved = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}/review`, {
-    expected_version_id: secondVersionId, status: 'approved',
-  });
-  assert.equal(approved.status, 200);
-  assert.equal(approved.data.status, 'approved');
-  assert.equal(String(approved.data.approved_by), admin.id);
+  assert.equal((await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}/review`, { expected_version_id: secondVersionId, status: 'approved' })).status, 404);
+  const disabled = await ctx.request(writer.actor, 'PUT', `/ai/questions/${manualQuestionId}/enabled`, { expected_version_id: secondVersionId, enabled: false });
+  assert.equal(disabled.status, 200, JSON.stringify(disabled)); assert.equal(disabled.data.enabled, false);
+  assert.equal(String(disabled.data.current_version_id), secondVersionId, '停用不创建内容版本');
+  const staleState = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}`, { expected_version_id: secondVersionId, expected_enabled: true, stem: '<p>过期启用页面不得恢复</p>' });
+  assert.equal(staleState.status, 409); assert.equal(staleState.code, 40940);
+  const stillDisabled = await ctx.request(admin.actor, 'GET', `/ai/questions/${manualQuestionId}`);
+  assert.equal(stillDisabled.data.enabled, false); assert.equal(String(stillDisabled.data.current_version_id), secondVersionId);
+  const stopped = await ctx.request(admin.actor, 'GET', `/ai/questions?category_id=${categoryId}&enabled=false`);
+  assert.ok(stopped.data.list.some((row) => row.question_id === manualQuestionId));
+  const sameDisable = await ctx.request(writer.actor, 'PUT', `/ai/questions/${manualQuestionId}/enabled`, { expected_version_id: secondVersionId, enabled: false });
+  assert.equal(sameDisable.status, 200); assert.equal(sameDisable.data.enabled, false);
+  const staleEnable = await ctx.request(admin.actor, 'PUT', `/ai/questions/${manualQuestionId}/enabled`, { expected_version_id: firstVersionId, enabled: true });
+  assert.equal(staleEnable.status, 409); assert.equal(staleEnable.code, 40940);
+  const restored = await ctx.request(writer.actor, 'PUT', `/ai/questions/${manualQuestionId}/enabled`, { expected_version_id: secondVersionId, enabled: true });
+  assert.equal(restored.status, 200, JSON.stringify(restored)); assert.equal(restored.data.enabled, true);
+  const restoredVersions = await ctx.queryTestDb('SELECT COUNT(*) AS total FROM question_version WHERE question_id=?', [manualQuestionId]);
+  assert.equal(Number(restoredVersions[0].total), 2, '启停和过期编辑不得新增内容版本');
+  const frozenAfterLifecycle = await ctx.queryTestDb('SELECT rq.score_cents FROM paper_release r JOIN paper_release_question rq ON rq.release_id=r.id WHERE r.paper_id IN (?, ?) AND rq.question_version_id=? ORDER BY r.paper_id', [scoredPapers[0].id, scoredPapers[1].id, firstVersionId]);
+  assert.deepEqual(frozenAfterLifecycle.map((row) => Number(row.score_cents)), [2000, 7000]);
 
   const legacyInsert = await ctx.queryTestDb(
     'INSERT INTO question (regulation_id, version_id, type, stem, options, answer, analysis, score, status, source, created_by) VALUES (NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -416,11 +371,11 @@ async function runBody(ctx, mockPort) {
   );
   const legacyId = String(legacyInsert.insertId);
   const upgraded = await ctx.request(admin.actor, 'PUT', `/ai/questions/${legacyId}`, {
-    expected_version_id: null,
+    expected_version_id: null, expected_enabled: true,
     category_id: categoryId, difficulty: 'easy', stem: '<p>升级后题干</p>',
   });
   assert.equal(upgraded.status, 200, JSON.stringify(upgraded));
-  assert.equal(upgraded.data.status, 'pending');
+  assert.equal(upgraded.data.enabled, true);
   const legacyHistory = await ctx.request(admin.actor, 'GET', `/ai/questions/${legacyId}/history`);
   assert.equal(legacyHistory.status, 200);
   assert.equal(legacyHistory.data.items[1].stem, '<p>升级前题干</p>');
@@ -430,7 +385,6 @@ async function runBody(ctx, mockPort) {
   const { regulationId, versionId } = await seedParsedRegulation(ctx, admin.id);
   const fixedSingle = await ctx.request(admin.actor, 'POST', '/ai/questions', {
     ...singleDraft(categoryId, '<p>固定卷单选题。</p>'),
-    score: 100,
   });
   assert.equal(fixedSingle.status, 200, JSON.stringify(fixedSingle));
   const fixedJudgment = await ctx.request(admin.actor, 'POST', '/ai/questions', {
@@ -438,7 +392,6 @@ async function runBody(ctx, mockPort) {
     type: 'judgment',
     options: [{ text: '正确' }, { text: '错误' }],
     answer: [1],
-    score: 100,
   });
   assert.equal(fixedJudgment.status, 200, JSON.stringify(fixedJudgment));
   for (const question of [fixedSingle.data, fixedJudgment.data]) {
@@ -464,7 +417,7 @@ async function runBody(ctx, mockPort) {
   });
   assert.equal(supportedSelection.status, 200, JSON.stringify(supportedSelection));
   const referencedTypeChange = await ctx.request(admin.actor, 'PUT', `/ai/questions/${fixedSingle.data.question_id}`, {
-    expected_version_id: String(fixedSingle.data.current_version_id),
+    expected_version_id: String(fixedSingle.data.current_version_id), expected_enabled: true,
     type: 'judgment', options: [{ text: '正确' }, { text: '错误' }], answer: [1],
   });
   assert.equal(referencedTypeChange.status, 409);
@@ -481,85 +434,19 @@ async function runBody(ctx, mockPort) {
   const unsupportedPublish = await ctx.request(admin.actor, 'POST', `/ai/papers/${corruptedPaper.data.id}/publish`);
   assert.equal(unsupportedPublish.status, 400, 'legacy 固定卷发布必须重新拒绝判断题');
 
-  const missingVersionMaterial = await ctx.request(admin.actor, 'POST', '/admin/question-materials', {
-    title: `B3 无版本 ${suffix}`, description: '尚未上传版本',
-  });
-  assert.equal(missingVersionMaterial.status, 200);
-  const missingVersionGenerate = await ctx.request(admin.actor, 'POST', '/ai/generate-questions', {
-    material_id: String(missingVersionMaterial.data.id), category_id: categoryId, difficulty: 'hard',
-    question_count_single: 10, score_single: 6, question_count_multiple: 5, score_multiple: 8,
-  });
-  assert.equal(missingVersionGenerate.status, 400);
-
-  const config = await ctx.request(admin.actor, 'PUT', '/ai/config', {
-    base_url: `http://127.0.0.1:${mockPort}/v1`, api_key: `test-${randomBytes(16).toString('hex')}`, model: 'mock-question-model',
-  });
-  assert.equal(config.status, 200, JSON.stringify(config));
-  const generated = await ctx.request(admin.actor, 'POST', '/ai/generate-questions', {
+  const beforeRetiredWrites = await ctx.queryTestDb('SELECT COUNT(*) AS total FROM question_version');
+  const retiredGeneration = await ctx.request(admin.actor, 'POST', '/ai/generate-questions', {
     material_id: regulationId, material_version_id: versionId, category_id: categoryId, difficulty: 'hard',
-    question_count_single: 10, score_single: 6, question_count_multiple: 5, score_multiple: 8,
+    question_count_single: 10, question_count_multiple: 5,
   });
-  assert.equal(generated.status, 200, JSON.stringify(generated));
-  const task = await waitTask(ctx, admin.actor, generated.data.task_id);
-  assert.equal(task.status, 'completed', JSON.stringify(task));
-  assert.ok(task.question_ids.length > 0);
-  const placeholders = task.question_ids.map(() => '?').join(',');
-  const generatedRows = await ctx.queryTestDb(
-    `SELECT q.id, q.type, q.category_id, q.difficulty, q.status, q.version_id, q.current_version_id, v.regulation_version_id, v.source, v.source_page_group, v.source_page_start, v.source_page_end FROM question q INNER JOIN question_version v ON v.id = q.current_version_id WHERE q.id IN (${placeholders})`,
-    task.question_ids.map(String),
-  );
-  assert.ok(generatedRows.length > 0);
-  for (const row of generatedRows) {
-    assert.equal(String(row.category_id), categoryId);
-    assert.equal(row.difficulty, 'hard');
-    assert.equal(row.status, 'pending');
-    assert.equal(String(row.version_id), versionId);
-    assert.equal(String(row.regulation_version_id), versionId);
-    assert.equal(row.source, 'ai');
-    assert.equal(row.source_page_group, null);
-    assert.equal(row.source_page_start, null);
-    assert.equal(row.source_page_end, null);
-  }
-
-  const regenQuestion = generatedRows.find((row) => row.type === 'single');
-  assert.ok(regenQuestion, 'Mock AI 结果应至少包含一题可重生成的单选题');
-  const regenQuestionId = String(regenQuestion.id);
-  const regenVersionId = String(regenQuestion.current_version_id);
-  const missingExpectedRegen = await ctx.request(admin.actor, 'POST', `/ai/questions/${regenQuestionId}/regenerate`, {});
-  assert.equal(missingExpectedRegen.status, 400);
-  const beforeStaleRegen = await ctx.queryTestDb(
-    'SELECT COUNT(*) AS total FROM question_version WHERE question_id = ?',
-    [regenQuestionId],
-  );
-  const staleRegen = await ctx.request(admin.actor, 'POST', `/ai/questions/${regenQuestionId}/regenerate`, {
-    expected_version_id: String(BigInt(regenVersionId) + 1n),
+  assert.equal(retiredGeneration.status, 404, '旧资料生成入口不得绕过导入预览直接启用');
+  const retiredRegeneration = await ctx.request(admin.actor, 'POST', `/ai/questions/${manualQuestionId}/regenerate`, {
+    expected_version_id: secondVersionId,
   });
-  assert.equal(staleRegen.status, 409);
-  assert.equal(staleRegen.code, 40940);
-  const afterStaleRegen = await ctx.queryTestDb(
-    'SELECT COUNT(*) AS total FROM question_version WHERE question_id = ?',
-    [regenQuestionId],
-  );
-  assert.equal(Number(afterStaleRegen[0].total), Number(beforeStaleRegen[0].total));
-  const regenerated = await ctx.request(admin.actor, 'POST', `/ai/questions/${regenQuestionId}/regenerate`, {
-    expected_version_id: regenVersionId,
-  });
-  assert.equal(regenerated.status, 200, JSON.stringify(regenerated));
-  assert.equal(regenerated.data.revision, 2);
-  assert.equal(regenerated.data.difficulty, 'hard');
+  assert.equal(retiredRegeneration.status, 404, '历史题目直接重生成入口已取消');
+  assert.deepEqual(await ctx.queryTestDb('SELECT COUNT(*) AS total FROM question_version'), beforeRetiredWrites);
 }
 
 export async function run(ctx) {
-  const mockServer = await startMockAi(0);
-  const address = mockServer.address();
-  const mockPort = address && typeof address !== 'string' ? address.port : null;
-  if (!Number.isInteger(mockPort) || mockPort < 1024) {
-    mockServer.close();
-    throw new Error('training-question-bank Mock AI 未返回有效监听端口');
-  }
-  try {
-    await runBody(ctx, mockPort);
-  } finally {
-    await new Promise((resolve) => mockServer.close(resolve));
-  }
+  await runBody(ctx);
 }

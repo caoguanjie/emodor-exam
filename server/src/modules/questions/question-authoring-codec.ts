@@ -9,7 +9,7 @@ import { parseQuestionContent } from './question-content-dispatch';
 import { assertAuthoringDocumentLimits, parseRichDocV3 } from './question-content-v3';
 import { parseDesignerLayout } from '../exams/paper.dto';
 
-export interface AuthoringQuestionWrite extends Pick<CreateQuestionDto, 'category_id' | 'type' | 'difficulty' | 'concept_id'> {
+export interface AuthoringQuestionWrite extends Pick<CreateQuestionDto, 'category_id' | 'type' | 'difficulty'> {
   client_id: string;
   bundle: AuthoringBundle;
   identity?: VersionTokens[string];
@@ -47,7 +47,7 @@ export function canonicalAuthoringHash(value: AuthoringBundle): string {
 }
 export function withoutAuthoringScores(bundle: AuthoringBundle): AuthoringBundle {
   const result = structuredClone(bundle);
-  for (const meta of Object.values(result.document.questions)) delete meta.score_cents;
+  for (const meta of Object.values(result.document.questions)) { delete meta.score_cents; delete meta.concept_id; }
   return result;
 }
 
@@ -149,8 +149,9 @@ function authorRich(raw: unknown, path: string, widgets: boolean): { author: JSO
   catch (error) { if (error instanceof BizError && error.code === 40001) { const detail = object(error.data || {}, path); fail(path + String(detail.path || '$').slice(1), error.message); } throw error; }
 }
 
-function metaOf(raw: unknown, path: string): QuestionMeta {
+function metaOf(raw: unknown, path: string, legacy: boolean): QuestionMeta {
   const meta = object(raw, path, ['type', 'category_id', 'difficulty', 'concept_id', 'regulation_id', 'regulation_version_id', 'analysis', 'score_cents', 'question_id', 'base_revision']);
+  if (!legacy && own(meta, 'concept_id')) fail(`${path}.concept_id`, '考点组已取消，请移除此字段');
   if (meta.type !== 'single' && meta.type !== 'multiple' && meta.type !== 'judgment') return fail(`${path}.type`, '只支持三种客观题');
   if (meta.difficulty !== 'easy' && meta.difficulty !== 'medium' && meta.difficulty !== 'hard') return fail(`${path}.difficulty`, '难度非法');
   if (own(meta, 'score_cents') && (!Number.isInteger(meta.score_cents) || Number(meta.score_cents) < 1 || Number(meta.score_cents) > 10000)) fail(`${path}.score_cents`, '分值须为 1–10000 整数分');
@@ -158,7 +159,7 @@ function metaOf(raw: unknown, path: string): QuestionMeta {
   const regulation_id = nullable('regulation_id'); const regulation_version_id = nullable('regulation_version_id');
   if (regulation_version_id && !regulation_id) fail(path, '资料版本缺少来源');
   const result: QuestionMeta = { type: meta.type, category_id: id(meta.category_id, `${path}.category_id`), difficulty: meta.difficulty,
-    concept_id: nullable('concept_id'), regulation_id, regulation_version_id, ...(own(meta, 'score_cents') ? { score_cents: Number(meta.score_cents) } : {}), analysis: authorRich(meta.analysis, `${path}.analysis`, false).author };
+    ...(legacy && own(meta, 'concept_id') ? { concept_id: nullable('concept_id') } : {}), regulation_id, regulation_version_id, ...(own(meta, 'score_cents') ? { score_cents: Number(meta.score_cents) } : {}), analysis: authorRich(meta.analysis, `${path}.analysis`, false).author };
   if (own(meta, 'question_id') !== own(meta, 'base_revision')) fail(path, 'question_id/base_revision 必须成对出现');
   if (own(meta, 'question_id')) {
     result.question_id = id(meta.question_id, `${path}.question_id`);
@@ -168,7 +169,7 @@ function metaOf(raw: unknown, path: string): QuestionMeta {
   return result;
 }
 
-export function decodeAuthoringBundle(input: unknown): AuthoringQuestionWrite[] {
+export function decodeAuthoringBundle(input: unknown, decodeOptions: { legacy?: boolean } = {}): AuthoringQuestionWrite[] {
   const bundle = object(input, '$.bundle', ['document', 'option_ids', 'identities', 'layouts']);
   const document = object(bundle.document, '$.bundle.document', ['schema_version', 'content', 'questions']);
   if (document.schema_version !== 1) fail('$.bundle.document.schema_version', '只支持作者版本 1');
@@ -186,7 +187,7 @@ export function decodeAuthoringBundle(input: unknown): AuthoringQuestionWrite[] 
     if (block.type !== 'questionBlock') fail(`${path}.type`, '只允许 questionBlock');
     const attrs = object(block.attrs, `${path}.attrs`, ['client_id']); const client = localId(attrs.client_id, `${path}.attrs.client_id`);
     if (used.has(client)) fail(`${path}.attrs.client_id`, '题块 ID 重复'); used.add(client);
-    const meta = metaOf(questions[client], `$.bundle.document.questions.${client}`);
+    const meta = metaOf(questions[client], `$.bundle.document.questions.${client}`, Boolean(decodeOptions.legacy));
     const parts = array(block.content, `${path}.content`);
     const stem = object(parts[0], `${path}.content[0]`, ['type', 'content']);
     if (stem.type !== 'questionStem') fail(`${path}.content[0].type`, '题块首项必须是题干');
@@ -211,8 +212,9 @@ export function decodeAuthoringBundle(input: unknown): AuthoringQuestionWrite[] 
     if (meta.type === 'judgment' && (richCompatibilityHtml(content.options[0].content) !== '<p>正确</p>' || richCompatibilityHtml(content.options[1].content) !== '<p>错误</p>')) fail(`${path}.content`, '判断题必须使用正确/错误固定选项');
     let identity: VersionTokens[string] | undefined;
     if (identities[client] !== undefined) {
-      const token = object(identities[client], `$.bundle.identities.${client}`, ['question_id', 'expected_version_id']);
-      identity = { question_id: id(token.question_id, `$.bundle.identities.${client}.question_id`), expected_version_id: token.expected_version_id === null ? null : id(token.expected_version_id, `$.bundle.identities.${client}.expected_version_id`) };
+      const token = object(identities[client], `$.bundle.identities.${client}`, ['question_id', 'expected_version_id', 'expected_enabled']);
+      if (!decodeOptions.legacy && typeof token.expected_enabled !== 'boolean') fail(`$.bundle.identities.${client}.expected_enabled`, '必须显式提供布尔值');
+      identity = { question_id: id(token.question_id, `$.bundle.identities.${client}.question_id`), expected_version_id: token.expected_version_id === null ? null : id(token.expected_version_id, `$.bundle.identities.${client}.expected_version_id`), expected_enabled: typeof token.expected_enabled === 'boolean' ? token.expected_enabled : true };
       if (usedIdentity.has(identity.question_id)) fail(`$.bundle.identities.${client}`, '同一身份不能在批次内重复修订'); usedIdentity.add(identity.question_id);
       if (meta.question_id !== undefined && meta.question_id !== identity.question_id) fail(`$.bundle.document.questions.${client}.question_id`, '身份与版本令牌不一致');
     } else if (meta.question_id !== undefined) fail(`$.bundle.document.questions.${client}.question_id`, '修订必须携带精确身份');
@@ -220,7 +222,7 @@ export function decodeAuthoringBundle(input: unknown): AuthoringQuestionWrite[] 
       document: { schema_version: 1, content: { type: 'doc', content: [{ type: 'questionBlock', attrs: { client_id: client }, content: [{ type: 'questionStem', content: stemValue.author.content }, ...options.map((option) => option.author)] }] }, questions: { [client]: meta } },
       option_ids: { [client]: optionMap }, identities: identity ? { [client]: identity } : {}, layouts: layouts[client] === undefined ? {} : { [client]: parseDesignerLayout(layouts[client]) },
     };
-    return { client_id: client, bundle: single, ...(identity ? { identity } : {}), content, category_id: meta.category_id, difficulty: meta.difficulty, type: meta.type, ...(meta.concept_id ? { concept_id: meta.concept_id } : {}) };
+    return { client_id: client, bundle: single, ...(identity ? { identity } : {}), content, category_id: meta.category_id, difficulty: meta.difficulty, type: meta.type };
   });
   if (!result.length || result.length > 100) fail('$.bundle.document.content.content', '题目须为 1–100 题');
   for (const [field, values] of [['questions', questions], ['option_ids', mappings], ['identities', identities], ['layouts', layouts]] as const) for (const key of Object.keys(values)) if (!used.has(key)) fail(`$.bundle.${field}.${key}`, '字段不属于当前题块');
@@ -259,7 +261,7 @@ export function synchronizeFormAuthoring(base: AuthoringBundle | null, input: Au
   const client = input.client_id;
   const empty: AuthoringBundle = { document: { schema_version: 1, content: { type: 'doc', content: [] }, questions: {} }, option_ids: {}, identities: {}, layouts: {} };
   const result = structuredClone(base || empty);
-  const previous = base ? decodeAuthoringBundle(base)[0] : null;
+  const previous = base ? decodeAuthoringBundle(base, { legacy: true })[0] : null;
   if (previous && (Object.keys(base!.document.questions).length !== 1 || previous.client_id !== client)) fail('$.bundle', '必须是同一题目的单题原稿');
   const oldBlock = result.document.content.content?.[0];
   const oldOptions = oldBlock?.content?.slice(1) || [];
@@ -329,7 +331,7 @@ export function synchronizeFormAuthoring(base: AuthoringBundle | null, input: Au
   if (!content.analysis && oldMeta && protectedNode(oldMeta.analysis)) fail('$.analysis', '当前表单无法安全删除作者专有节点');
   const incomingMeta = input.bundle.document.questions[client];
   result.document = { schema_version: 1, content: { type: 'doc', content: [{ type: 'questionBlock', attrs: { client_id: client }, content: [{ type: 'questionStem', content: stem.content }, ...options] }] }, questions: {
-    [client]: { type: input.type, category_id: input.category_id, difficulty: input.difficulty, concept_id: input.concept_id || null,
+    [client]: { type: input.type, category_id: input.category_id, difficulty: input.difficulty,
       regulation_id: incomingMeta?.regulation_id ?? oldMeta?.regulation_id ?? null, regulation_version_id: incomingMeta?.regulation_version_id ?? oldMeta?.regulation_version_id ?? null,
       analysis,
       ...(input.identity ? { question_id: input.identity.question_id, base_revision: oldMeta?.base_revision ?? null } : {}) },
@@ -340,7 +342,7 @@ export function synchronizeFormAuthoring(base: AuthoringBundle | null, input: Au
 }
 
 /** Assemble exact question facts without importing a historical suggested score. */
-export function assembleVersionAuthoring(version: QuestionVersion, client: string): AuthoringBundle {
+export function assembleVersionAuthoring(version: QuestionVersion, client: string, expectedEnabled = true): AuthoringBundle {
   let base = version.authoringJson ? structuredClone(version.authoringJson) : null;
   const oldClient = Object.keys(base?.document.questions || {})[0];
   if (base && oldClient !== client) {
@@ -349,14 +351,14 @@ export function assembleVersionAuthoring(version: QuestionVersion, client: strin
       option_ids: { [client]: base.option_ids[oldClient] || {} }, identities: base.identities[oldClient] ? { [client]: base.identities[oldClient] } : {},
       layouts: base.layouts[oldClient] ? { [client]: base.layouts[oldClient] } : {} };
   }
-  const identity = { question_id: String(version.questionId), expected_version_id: String(version.id) };
+  const identity = { question_id: String(version.questionId), expected_version_id: String(version.id), expected_enabled: expectedEnabled };
   const placeholder: AuthoringBundle = { document: { schema_version: 1, content: { type: 'doc', content: [] }, questions: { [client]: {
-    type: version.type as QuestionType, category_id: String(version.categoryId), difficulty: version.difficulty as Difficulty, concept_id: version.conceptId,
+    type: version.type as QuestionType, category_id: String(version.categoryId), difficulty: version.difficulty as Difficulty,
     regulation_id: version.regulationId, regulation_version_id: version.regulationVersionId, analysis: { type: 'doc', content: [] },
   } } }, option_ids: {}, identities: {}, layouts: {} };
   const bundle = withoutAuthoringScores(synchronizeFormAuthoring(base, { client_id: client, bundle: base || placeholder, identity,
     content: parseQuestionContent(version), category_id: String(version.categoryId), type: version.type as QuestionType,
-    difficulty: version.difficulty as Difficulty, concept_id: version.conceptId || undefined }));
+    difficulty: version.difficulty as Difficulty }));
   bundle.document.questions[client].question_id = String(version.questionId);
   bundle.document.questions[client].base_revision = Number(version.revision);
   return bundle;

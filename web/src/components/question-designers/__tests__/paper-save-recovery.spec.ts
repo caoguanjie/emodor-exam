@@ -34,7 +34,7 @@ async function setup(value = paperFixture(), access = { read: true, write: true,
   const host = createPaperDesignerHost({ api, paperId: value.paper.id, access });
   return { host, calls, receipts, api, setFailure(flags: { commit?: boolean; config?: boolean; questions?: boolean; query?: boolean }) { failCommit = flags.commit ?? failCommit; failConfig = flags.config ?? failConfig; failQuestions = flags.questions ?? failQuestions; failQuery = flags.query ?? failQuery; } };
 }
-function newPaper() { const value = paperFixture(); value.bindings.question_one = { kind: 'new' }; value.session = { option_ids: { question_one: { question_one_a: 'A', question_one_b: 'B' } }, identities: { question_one: { question_id: '40', expected_version_id: '50' } }, layouts: {} }; return value; }
+function newPaper() { const value = paperFixture(); value.bindings.question_one = { kind: 'new' }; value.session = { option_ids: { question_one: { question_one_a: 'A', question_one_b: 'B' } }, identities: { question_one: { question_id: '40', expected_version_id: '50', expected_enabled: true } }, layouts: {} }; return value; }
 function sourcedPaper() {
   const value = paperFixture(); value.paper.regulation_ids = ['30'];
   Object.assign(value.document.questions.question_one!, { regulation_id: '30', regulation_version_id: '31' });
@@ -43,6 +43,65 @@ function sourcedPaper() {
 }
 
 describe('fixed paper phased save and recovery', () => {
+  it.each([true, false])('loads source paper questions using enabled=%s without a review status', async (enabled) => {
+    const value = paperFixture();
+    const env = await setup(value);
+    const queries: Array<{ path: string; body?: unknown }> = [];
+    env.api.get = async (path) => {
+      queries.push({ path });
+      return { ...value.paper, id: '200', status: 'draft', rules: [], questions: [{
+        question_id: '40', question_version_id: '50', score_cents: 10000, sort: 0,
+        enabled, type: 'single', difficulty: 'easy', regulation_id: null, stem: '来源题目', options: [],
+      }] } as any;
+    };
+    env.api.post = async (path, body) => {
+      queries.push({ path, body });
+      const document = copy(value.document);
+      Object.assign(document.questions.question_one!, { question_id: '40', base_revision: 1 });
+      return { document, option_ids: { question_one: { question_one_a: 'A', question_one_b: 'B' } },
+        identities: { question_one: { question_id: '40', expected_version_id: '50', expected_enabled: enabled } },
+        layouts: {} } as any;
+    };
+    if (enabled) {
+      const source = await env.host.paperLibrarySource.get('200');
+      expect(source.paper.id).toBe('200');
+      expect(source.bindings.question_one).toMatchObject({ question_id: '40', question_version_id: '50', enabled: true });
+      expect(source.document.questions.question_one!.score_cents).toBe(10000);
+      expect(queries).toEqual([{ path: '/admin/papers/200' }, {
+        path: '/admin/question-documents/assemble', body: { version_ids: ['50'] },
+      }]);
+    } else {
+      await expect(env.host.paperLibrarySource.get('200')).rejects.toThrow(/已停用/);
+      expect(queries).toEqual([{ path: '/admin/papers/200' }]);
+    }
+  });
+  it('requires an explicit paper score instead of falling back to a historical bank score', async () => {
+    const value = paperFixture();
+    const env = await setup(value);
+    const document = copy(value.document);
+    Object.assign(document.questions.question_one!, { question_id: '40', base_revision: 1, score_cents: 7300 });
+    env.api.get = async () => ({ ...value.paper, status: 'draft', rules: [], questions: [{
+      question_id: '40', question_version_id: '50', enabled: true, sort: 0,
+    }] }) as any;
+    env.api.post = async () => ({ document, option_ids: {}, identities: {
+      question_one: { question_id: '40', expected_version_id: '50', expected_enabled: true },
+    }, layouts: {} }) as any;
+    const loaded = await env.host.load();
+    expect(loaded.document.questions.question_one!.score_cents).toBeUndefined();
+    await expect(env.host.saveDraft(loaded, { request_id: 'missing-paper-score', intent: 'save' })).rejects.toThrow();
+    expect(env.calls.some((call) => call.method === 'put' || call.path === '/admin/question-documents/commit')).toBe(false);
+  });
+  it('rejects a candidate disabled after its list request without adding it to the paper', async () => {
+    const value = paperFixture();
+    const env = await setup(value);
+    env.api.get = async () => ({ list: [{ question_id: '40', current_version_id: '50', category_id: '10',
+      enabled: true, difficulty: 'easy', type: 'single', stem: '题干' }], total: 1 }) as any;
+    env.api.post = async () => ({ document: { ...copy(value.document), questions: { question_one: {
+      ...copy(value.document.questions.question_one), question_id: '40', base_revision: 1 } } },
+      option_ids: {}, identities: { question_one: { question_id: '40', expected_version_id: '50', expected_enabled: false } }, layouts: {} }) as any;
+    await env.host.questionLibrarySource.list({ category_id: '10', page: 1, page_size: 20 });
+    await expect(env.host.questionLibrarySource.get('40')).rejects.toThrow(/停用|启用状态/);
+  });
   it('loads a scoreless assembled question using its exact paper association score before save validation', async () => {
     const value = paperFixture(); const env = await setup(value);
     const document = copy(value.document);
@@ -50,7 +109,7 @@ describe('fixed paper phased save and recovery', () => {
     delete (document.questions.question_one as any).score_cents;
     env.api.get = async () => ({ ...value.paper, status: 'draft', rules: [], questions: [{ question_id: '40', question_version_id: '50', score_cents: 10000, sort: 0 }] }) as any;
     env.api.post = async () => ({ document, option_ids: {},
-      identities: { question_one: { question_id: '40', expected_version_id: '50' } }, layouts: {} }) as any;
+      identities: { question_one: { question_id: '40', expected_version_id: '50', expected_enabled: true } }, layouts: {} }) as any;
     const loaded = await env.host.load();
     expect(loaded.document.questions.question_one!.score_cents).toBe(10000);
     expect((await env.host.saveDraft(loaded, { request_id: 'scoreless-load', intent: 'save' })).status).toBe('saved');
@@ -93,12 +152,12 @@ describe('fixed paper phased save and recovery', () => {
   it.each([undefined, 7300])('assigns the initial paper score instead of assembled bank score %s', async (oldScore) => {
     const value = paperFixture(); const env = await setup(value);
     env.api.get = async () => ({ list: [{ question_id: '40', current_version_id: '50', category_id: '10',
-      status: 'approved', difficulty: 'easy', type: 'single', stem: '题干' }], total: 1 }) as any;
+      enabled: true, difficulty: 'easy', type: 'single', stem: '题干' }], total: 1 }) as any;
     const document = copy(value.document);
     Object.assign(document.questions.question_one!, { question_id: '40', base_revision: 1 });
     if (oldScore === undefined) delete (document.questions.question_one as any).score_cents;
     else document.questions.question_one!.score_cents = oldScore;
-    env.api.post = async () => ({ document, option_ids: {}, identities: { question_one: { question_id: '40', expected_version_id: '50' } }, layouts: {} }) as any;
+    env.api.post = async () => ({ document, option_ids: {}, identities: { question_one: { question_id: '40', expected_version_id: '50', expected_enabled: true } }, layouts: {} }) as any;
     await env.host.questionLibrarySource.list({ category_id: '10', page: 1, page_size: 20 });
     const source = await env.host.questionLibrarySource.get('40');
     expect(source.document.questions.question_one!.score_cents).toBe(500);
@@ -138,7 +197,7 @@ describe('fixed paper phased save and recovery', () => {
     expect(source.document.questions.question_one).toMatchObject({ regulation_id: '30', regulation_version_id: '31' }); expect(source.bindings.question_one).toMatchObject({ question_id: '40', question_version_id: '50' });
 
     const receipt = env.receipts.get('manual-copy')!; const assembled = copy(receipt.bundle);
-    assembled.identities.question_one = { question_id: '80', expected_version_id: '90' };
+    assembled.identities.question_one = { question_id: '80', expected_version_id: '90', expected_enabled: true };
     Object.assign(assembled.document.questions.question_one!, { question_id: '80', base_revision: 1 });
     env.api.get = async () => ({ ...saved.value.paper, status: 'draft', rules: [], questions: [{ question_id: '80', question_version_id: '90', score_cents: 10000, sort: 0 }] });
     const post = env.api.post; env.api.post = async (path, body) => path === '/admin/question-documents/assemble' ? copy(assembled) as any : post(path, body);
@@ -281,18 +340,18 @@ describe('fixed paper phased save and recovery', () => {
     const value = paperFixture(); const env = await setup(value);
     const layout = { schema_version: 1, settings: { templateName: '旧卷', pageSize: 'A5', pageOrientation: 2, pageSizeReduce: { top: 0, bottom: 15, left: 15, right: 15 } } };
     env.api.get = async () => ({ ...value.paper, status: 'draft', designer_layout: layout, rules: [], questions: [{ question_id: '40', question_version_id: '50', score_cents: 10000, sort: 0 }] });
-    env.api.post = async () => ({ document: { ...copy(value.document), questions: { question_one: { ...copy(value.document.questions.question_one), difficulty: 'medium', question_id: '40', base_revision: 2 } } }, option_ids: { question_one: { question_one_a: 'A', question_one_b: 'B' } }, identities: { question_one: { question_id: '40', expected_version_id: '50' } }, layouts: { question_one: layout } }) as any;
+    env.api.post = async () => ({ document: { ...copy(value.document), questions: { question_one: { ...copy(value.document.questions.question_one), difficulty: 'medium', question_id: '40', base_revision: 2 } } }, option_ids: { question_one: { question_one_a: 'A', question_one_b: 'B' } }, identities: { question_one: { question_id: '40', expected_version_id: '50', expected_enabled: true } }, layouts: { question_one: layout } }) as any;
     const loaded = await env.host.load(); expect(loaded.document.questions.question_one!.difficulty).toBe('medium'); expect(loaded.bindings.question_one).toMatchObject({ question_id: '40', question_version_id: '50', revision: 2 });
     expect(loaded.session).toEqual({ option_ids: { question_one: { question_one_a: 'A', question_one_b: 'B' } }, identities: {}, layouts: { question_one: layout } }); expect(loaded.paper_layout).toEqual(layout);
     await expect(env.host.saveDraft(loaded, { request_id: 'medium', intent: 'save' })).rejects.toThrow();
   });
-  it('uses main paginated libraries and assembles the selected exact approved version with stable IDs', async () => {
+  it('uses main paginated libraries and assembles the selected exact enabled version with stable IDs', async () => {
     const value = paperFixture(); const env = await setup(value); const queries: any[] = [];
-    env.api.get = (async (path: string, config: any) => { queries.push({ path, ...config }); return path === '/ai/questions' ? { list: [{ question_id: '40', current_version_id: '50', status: 'approved', revision: 1, category_id: '10', difficulty: 'easy', type: 'single', stem: '题干' }], total: 81 }
+    env.api.get = (async (path: string, config: any) => { queries.push({ path, ...config }); return path === '/ai/questions' ? { list: [{ question_id: '40', current_version_id: '50', enabled: true, revision: 1, category_id: '10', difficulty: 'easy', type: 'single', stem: '题干' }], total: 81 }
       : { items: [{ ...value.paper, rules: [{ type: 'single', count: 1, score_cents: 10000 }] }], total: 25, page: 2, page_size: 20 }; }) as any;
-    env.api.post = async (_path: string, body: any) => { expect(body).toEqual({ version_ids: ['50'] }); return { document: { ...copy(value.document), questions: { question_one: { ...value.document.questions.question_one, question_id: '40', base_revision: 1 } } }, option_ids: { question_one: { question_one_a: 'A', question_one_b: 'B' } }, identities: { question_one: { question_id: '40', expected_version_id: '50' } }, layouts: {} } as any; };
+    env.api.post = async (_path: string, body: any) => { expect(body).toEqual({ version_ids: ['50'] }); return { document: { ...copy(value.document), questions: { question_one: { ...value.document.questions.question_one, question_id: '40', base_revision: 1 } } }, option_ids: { question_one: { question_one_a: 'A', question_one_b: 'B' } }, identities: { question_one: { question_id: '40', expected_version_id: '50', expected_enabled: true } }, layouts: {} } as any; };
     const page = await env.host.questionLibrarySource.list({ category_id: '10', keyword: '安全', page: 3, page_size: 20 });
-    expect(page.total).toBe(81); expect(page.page).toBe(3); expect(queries[0]).toEqual({ path: '/ai/questions', params: { category_id: '10', keyword: '安全', page: 3, page_size: 20, status: 'approved' } });
+    expect(page.total).toBe(81); expect(page.page).toBe(3); expect(queries[0]).toEqual({ path: '/ai/questions', params: { category_id: '10', keyword: '安全', page: 3, page_size: 20, enabled: true } });
     const question = await env.host.questionLibrarySource.get('40'); expect(question.session!.option_ids.question_one).toEqual({ question_one_a: 'A', question_one_b: 'B' }); expect(question.binding.question_version_id).toBe('50');
     const papers = await env.host.paperLibrarySource.list({ keyword: '完整', page: 2, page_size: 20 }); expect(papers).toMatchObject({ total: 25, page: 2, items: [{ id: '100', question_count: 1 }] }); expect(queries[1].params).toEqual({ keyword: '完整', page: 2, page_size: 20, mode: 'fixed' });
     env.host.dispose(); await expect(env.host.questionLibrarySource.get('40')).rejects.toThrow(/会话/);

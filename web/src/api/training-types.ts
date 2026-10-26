@@ -224,12 +224,15 @@ export interface ImportPreview {
   valid_rows: number[];
   errors: Array<{ row: number; message: string }>;
   duplicates: number[];
+  warnings?: string[];
+  rows?: AiQuestionImportRow[];
 }
 
 export interface ImportResult {
   batch_id: Id;
   created_ids: Id[];
   committed_rows: number[];
+  enabled?: true;
 }
 
 export interface AiQuestionImportTask {
@@ -249,7 +252,8 @@ export interface AiQuestionImportRow {
   category: Id;
   type: QuestionType;
   difficulty: Difficulty;
-  concept: Id | '';
+  /** Read-only compatibility for old batches. New previews omit this field. */
+  concept?: Id | '';
   stem: string;
   options: QuestionOption[];
   answer: number[];
@@ -303,14 +307,16 @@ export interface QuestionDraftPayload extends QuestionContentFields {
   concept_id?: Id | null;
 }
 
-export interface QuestionView extends Omit<QuestionDraftPayload, 'category_id' | 'difficulty'> {
+export interface QuestionView extends Omit<QuestionDraftPayload, 'category_id' | 'difficulty' | 'concept_id'> {
   id: number;
   question_id: Id;
   category_id: Id | null;
   difficulty: Difficulty | null;
   current_version_id: Id | null;
   revision: number | null;
-  status: 'pending' | 'approved' | 'rejected';
+  enabled: boolean;
+  updated_at?: string;
+  category_name?: string | null;
   source: QuestionSource;
   approved_by: Id | null;
   approved_at: string | null;
@@ -331,7 +337,7 @@ export function questionDraftFromView(row: Pick<QuestionDraftPayload,
     const content = JSON.parse(JSON.stringify(row.content_json)) as QuestionContentV3;
     const fields = toQuestionFormValue({ ...content, schema: 3 });
     return { category_id: row.category_id || '', difficulty: row.difficulty || '', type: row.type,
-      ...fields, concept_id: row.concept_id || undefined,
+      ...fields,
       content_schema_version: 3, content_json: content };
   }
   const content = row.content_schema_version === 2 ? normalizeQuestionContentV2(row.content_json) : null;
@@ -344,8 +350,6 @@ export function questionDraftFromView(row: Pick<QuestionDraftPayload,
     options,
     answer: content ? content.options.flatMap((option, index) => content.answer_option_ids.includes(option.id) ? [index] : []) : [...(row.answer || [])],
     analysis: content ? (content.analysis ? readonlyQuestionDocToHtml(content.analysis) : null) : row.analysis ?? null,
-
-    concept_id: row.concept_id || undefined,
     ...(content ? { content_schema_version: 2 as const, content_json: content } : {}),
   };
 }
@@ -464,7 +468,7 @@ export function questionDraftWithContent(value: QuestionDraftPayload): Omit<Ques
   const fields: QuestionDraftPayload = {
     category_id: value.category_id, difficulty: value.difficulty, type: value.type,
     stem: value.stem, options: value.options.map((option) => ({ key: option.key, text: option.text })),
-    answer: [...value.answer], analysis: value.analysis, concept_id: value.concept_id,
+    answer: [...value.answer], analysis: value.analysis,
   };
   if (value.content_schema_version === 3) {
     const base = { ...value.content_json, schema: 3 as const } as QuestionContentV3 & { schema: 3 };
@@ -665,6 +669,7 @@ export interface TrainingPaperSummary {
 export interface TrainingPaperQuestion extends QuestionContentFields {
   paper_question_id?: Id;
   question_id: Id;
+  enabled?: boolean;
   question_version_id: Id;
   sort: number;
   score_cents: number;

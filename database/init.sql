@@ -300,7 +300,8 @@ CREATE TABLE IF NOT EXISTS `question` (
   `category_id`        BIGINT UNSIGNED NULL COMMENT '培训类别；旧题未知保持 NULL',
   `difficulty`         VARCHAR(16) NULL COMMENT 'easy / medium / hard；旧题未知保持 NULL',
   `concept_id`         BIGINT UNSIGNED NULL COMMENT '可选同考点组',
-  `current_version_id` BIGINT UNSIGNED NULL COMMENT '当前题目版本；旧题首次编辑/审核时捕获',
+  `current_version_id` BIGINT UNSIGNED NULL COMMENT '当前题目版本；旧题首次修订或发布时捕获',
+  `is_enabled`         TINYINT(1) NOT NULL DEFAULT 1,
   `type`               VARCHAR(16)  NOT NULL COMMENT 'single / multiple / judgment',
   `stem`               TEXT         NOT NULL COMMENT '题干',
   `options`            JSON         NOT NULL COMMENT '选项数组 [{key,text}]',
@@ -319,7 +320,8 @@ CREATE TABLE IF NOT EXISTS `question` (
   KEY `idx_version` (`version_id`),
   KEY `idx_question_category_pool` (`category_id`, `status`, `type`, `difficulty`),
   KEY `idx_question_concept` (`concept_id`),
-  KEY `idx_question_current_version` (`current_version_id`)
+  KEY `idx_question_current_version` (`current_version_id`),
+  KEY `idx_question_enabled_pool` (`is_enabled`, `category_id`, `type`, `difficulty`, `current_version_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='试题库';
 
 CREATE TABLE IF NOT EXISTS `question_concept` (

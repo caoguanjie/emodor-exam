@@ -5,6 +5,7 @@ import { randomStrongPassword } from './training-access.mjs';
 import {
   provePaperReleaseSingleConnectionPools,
   proveTrainingCategoryChangeConflicts,
+  proveDisableWinsPublication,
 } from './support/paper-release-concurrency-checks.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
@@ -118,7 +119,6 @@ function questionDraft(categoryId, type, difficulty, stem, extra = {}) {
     options: type === 'judgment' ? [{ text: '正确' }, { text: '错误' }] : objectiveOptions,
     answer: type === 'multiple' ? [0, 1] : type === 'judgment' ? [1] : [0],
     analysis: '<p>发布前解析</p>',
-    score: 25,
     ...extra,
   };
 }
@@ -127,7 +127,7 @@ async function createQuestion(ctx, actor, draft) {
   const { regulation_id: legacyRegulationId, regulation_version_id: legacyVersionId, ...apiDraft } = draft;
   const response = await ctx.request(actor, 'POST', '/ai/questions', apiDraft);
   assert.equal(response.status, 200, `question create: ${JSON.stringify(response)}`);
-  assert.equal(response.data.status, 'approved');
+  assert.equal(response.data.enabled, true);
   if (legacyRegulationId !== undefined) {
     await ctx.queryTestDb(
       'UPDATE question SET regulation_id = ?, version_id = ? WHERE id = ?',
@@ -186,7 +186,6 @@ async function runPublishing(ctx) {
       ],
       answer: [0],
       analysis: `<p>解析图<img data-media-id="${mediaIds.analysis}" alt="解析图"></p>`,
-      score: 50,
     },
   ));
   await createQuestion(ctx, admin.actor, questionDraft(
@@ -232,10 +231,11 @@ async function runPublishing(ctx) {
   assert.equal(releasePromptContent.status, 200, 'published release must retain prompt-image access');
   const revisedMediaQuestion = await ctx.request(admin.actor, 'PUT', `/ai/questions/${promptMediaQuestion.questionId}`, {
     expected_version_id: promptMediaQuestion.versionId,
+    expected_enabled: true,
     stem: `<p>发布后的新题干 ${suffix}</p>`,
   });
   assert.equal(revisedMediaQuestion.status, 200, JSON.stringify(revisedMediaQuestion));
-  assert.equal(revisedMediaQuestion.data.status, 'pending');
+  assert.equal(revisedMediaQuestion.data.enabled, true);
   const historicalPromptContent = await ctx.request(paperReader.actor, 'GET', `/media/${mediaIds.stem}/content`);
   assert.equal(historicalPromptContent.status, 200, 'historical release must authorize its frozen version instead of current_version');
 
@@ -310,10 +310,11 @@ async function runPublishing(ctx) {
   const originalStem = fixedPreview.data.questions.find((item) => item.question_id === fixedQuestions[0].questionId).stem;
   const revised = await ctx.request(admin.actor, 'PUT', `/ai/questions/${fixedQuestions[0].questionId}`, {
     expected_version_id: fixedQuestions[0].versionId,
+    expected_enabled: true,
     stem: `<p>发布后修订 ${suffix}</p>`,
   });
   assert.equal(revised.status, 200, JSON.stringify(revised));
-  assert.equal(revised.data.status, 'pending');
+  assert.equal(revised.data.enabled, true);
   const frozenPreview = await ctx.request(admin.actor, 'GET', `/admin/papers/${fixedId}/preview`);
   assert.equal(frozenPreview.status, 200);
   assert.equal(
@@ -328,14 +329,10 @@ async function runPublishing(ctx) {
   const weightedQuestions = [];
   stage = 'same-type weighted fixed paper';
   for (const label of ['三十分考点', '七十分考点']) {
-    const concept = await ctx.request(admin.actor, 'POST', '/ai/question-concepts', {
-      category_id: categoryId, type: 'single', name: `${label} ${suffix}`,
-    });
-    assert.equal(concept.status, 200, JSON.stringify(concept));
     weightedQuestions.push(await createQuestion(
       ctx,
       admin.actor,
-      questionDraft(categoryId, 'single', 'easy', `${label}题目 ${suffix}`, { concept_id: String(concept.data.id) }),
+      questionDraft(categoryId, 'single', 'easy', `${label}题目 ${suffix}`),
     ));
   }
   const weightedFixed = await ctx.request(admin.actor, 'POST', '/admin/papers', {
@@ -368,18 +365,34 @@ async function runPublishing(ctx) {
     ['single', 3000], ['single', 7000],
   ]);
 
+  stage = 'disable/publication race, visible draft and frozen release';
+  const raceQuestion = await createQuestion(ctx, admin.actor, questionDraft(categoryId, 'single', 'easy', `启停并发 ${suffix}`));
+  const racePaper = await ctx.request(admin.actor, 'POST', '/admin/papers', { title: `启停发布并发 ${suffix}`, mode: 'fixed', category_id: categoryId });
+  assert.equal(racePaper.status, 200, JSON.stringify(racePaper));
+  assert.equal((await ctx.request(admin.actor, 'PUT', `/admin/papers/${racePaper.data.id}/questions`, {
+    items: [{ question_version_id: raceQuestion.versionId, score_cents: 10000 }],
+  })).status, 200);
+  const lifecycleRace = await proveDisableWinsPublication(ctx, String(racePaper.data.id), raceQuestion.questionId, admin.id);
+  assert.equal(lifecycleRace.conflict_code, 40970);
+  const disabledDraft = await ctx.request(admin.actor, 'GET', `/admin/papers/${racePaper.data.id}`);
+  assert.equal(disabledDraft.status, 200);
+  assert.equal(disabledDraft.data.questions[0].enabled, false);
+  assert.equal(disabledDraft.data.questions[0].question_id, raceQuestion.questionId);
+  const frozenBeforeDisable = structuredClone(weightedPreview.data);
+  assert.equal((await ctx.request(admin.actor, 'PUT', `/ai/questions/${weightedQuestions[0].questionId}/enabled`, {
+    enabled: false, expected_version_id: weightedQuestions[0].versionId,
+  })).status, 200);
+  const frozenAfterDisable = await ctx.request(admin.actor, 'GET', `/admin/papers/${weightedFixedId}/preview`);
+  assert.deepEqual(frozenAfterDisable.data, frozenBeforeDisable, 'live disable cannot change a frozen release');
+
   const bandScores = [1000, 1500, 2000, 2500, 3000];
   stage = 'five-band fixed paper';
   const bandQuestions = [];
   for (const [index, score] of bandScores.entries()) {
-    const bandConcept = await ctx.request(admin.actor, 'POST', '/ai/question-concepts', {
-      category_id: categoryId, type: 'single', name: `五档考点 ${index + 1}-${score} ${suffix}`,
-    });
-    assert.equal(bandConcept.status, 200, JSON.stringify(bandConcept));
     bandQuestions.push(await createQuestion(
       ctx,
       admin.actor,
-      questionDraft(categoryId, 'single', 'easy', `五档题目 ${index + 1} ${suffix}`, { concept_id: String(bandConcept.data.id) }),
+      questionDraft(categoryId, 'single', 'easy', `五档题目 ${index + 1} ${suffix}`),
     ));
   }
   const fiveBands = await ctx.request(admin.actor, 'POST', '/admin/papers', {
@@ -464,7 +477,7 @@ async function runPublishing(ctx) {
   stage = 'real category-change stale-read conflicts';
   const categoryRaceQuestion = await ctx.request(admin.actor, 'GET', `/ai/questions/${fixedQuestions[1].questionId}`);
   assert.equal(categoryRaceQuestion.status, 200, JSON.stringify(categoryRaceQuestion));
-  assert.equal(categoryRaceQuestion.data.status, 'approved');
+  assert.equal(categoryRaceQuestion.data.enabled, true);
   assert.equal(String(categoryRaceQuestion.data.current_version_id), fixedQuestions[1].versionId);
   const categoryBId = await createCategory(ctx, admin.actor, `C1 并发类别 B ${suffix}`);
   const categoryRacePapers = {};
@@ -604,11 +617,11 @@ async function runPublishing(ctx) {
   const rejectedRandomQuestion = await ctx.request(
     admin.actor,
     'PUT',
-    `/ai/questions/${randomWrongStatus.questionId}/review`,
-    { expected_version_id: randomWrongStatus.versionId, status: 'rejected', reason: 'C1 random media status boundary' },
+    `/ai/questions/${randomWrongStatus.questionId}/enabled`,
+    { expected_version_id: randomWrongStatus.versionId, enabled: false },
   );
   assert.equal(rejectedRandomQuestion.status, 200, JSON.stringify(rejectedRandomQuestion));
-  assert.equal(rejectedRandomQuestion.data.status, 'rejected');
+  assert.equal(rejectedRandomQuestion.data.enabled, false);
   const randomStaleVersion = await createQuestion(ctx, admin.actor, questionDraft(
     randomMediaCategoryId,
     'single',
@@ -621,17 +634,12 @@ async function runPublishing(ctx) {
   ));
   const randomStaleRevision = await ctx.request(admin.actor, 'PUT', `/ai/questions/${randomStaleVersion.questionId}`, {
     expected_version_id: randomStaleVersion.versionId,
+    expected_enabled: true,
     difficulty: 'hard',
     stem: `<p>随机当前版本 ${suffix}</p>`,
   });
   assert.equal(randomStaleRevision.status, 200, JSON.stringify(randomStaleRevision));
-  assert.equal(randomStaleRevision.data.status, 'pending');
-  const approvedRandomRevision = await ctx.request(admin.actor, 'PUT', `/ai/questions/${randomStaleVersion.questionId}/review`, {
-    expected_version_id: String(randomStaleRevision.data.saved_version_id),
-    status: 'approved',
-  });
-  assert.equal(approvedRandomRevision.status, 200, JSON.stringify(approvedRandomRevision));
-  assert.equal(approvedRandomRevision.data.status, 'approved');
+  assert.equal(randomStaleRevision.data.enabled, true);
 
   const randomMediaPaper = await ctx.request(admin.actor, 'POST', '/admin/papers', {
     title: `C1 随机草稿题图 ${suffix}`,
@@ -772,19 +780,13 @@ async function runPublishing(ctx) {
   assert.equal(staleVersionState.current_difficulty, 'hard');
   await assertRandomMediaHasNoPaperReferences('after preview');
 
-  stage = 'regulation duplicate-concept rollback and no-concept control';
-  const regulationConcept = await ctx.request(admin.actor, 'POST', '/ai/question-concepts', {
-    category_id: categoryId,
-    type: 'single',
-    name: `制度重复考点 ${suffix}`,
-  });
-  assert.equal(regulationConcept.status, 200, JSON.stringify(regulationConcept));
+  stage = 'regulation distinct identities sharing historical concept metadata';
   const duplicateConceptQuestionIds = [];
   for (const label of ['变体一', '变体二']) {
     duplicateConceptQuestionIds.push(await insertLegacyRegulationQuestion(ctx, {
       regulationId,
       categoryId,
-      conceptId: String(regulationConcept.data.id),
+      conceptId: '987654',
       stem: `${label} ${suffix}`,
       createdBy: admin.id,
     }));
@@ -800,9 +802,7 @@ async function runPublishing(ctx) {
   });
   assert.equal(duplicateConceptSet.status, 200, JSON.stringify(duplicateConceptSet));
   const duplicateConceptPublish = await ctx.request(admin.actor, 'POST', `/ai/papers/${duplicateConceptPaperId}/publish`);
-  assert.equal(duplicateConceptPublish.status, 409, JSON.stringify(duplicateConceptPublish));
-  assert.equal(duplicateConceptPublish.code, 40972);
-  assert.match(duplicateConceptPublish.json?.message, /重复考点/);
+  assert.equal(duplicateConceptPublish.status, 200, JSON.stringify(duplicateConceptPublish));
   const [duplicatePaperState] = await ctx.queryTestDb(
     'SELECT status FROM exam_paper WHERE id = ?',
     [duplicateConceptPaperId],
@@ -823,11 +823,11 @@ async function runPublishing(ctx) {
     'SELECT COUNT(*) AS count FROM question_version WHERE question_id IN (?, ?)',
     duplicateConceptQuestionIds,
   );
-  assert.equal(duplicatePaperState.status, 'draft');
-  assert.equal(Number(duplicateReleaseCount.count), 0);
-  assert.equal(duplicateQuestionsAfter.every((row) => row.current_version_id === null), true);
-  assert.equal(duplicateLinksAfter.every((row) => row.question_version_id === null), true);
-  assert.equal(Number(duplicateCapturedCount.count), 0, 'duplicate-concept rollback must remove captured legacy versions');
+  assert.equal(duplicatePaperState.status, 'published');
+  assert.equal(Number(duplicateReleaseCount.count), 1);
+  assert.equal(duplicateQuestionsAfter.every((row) => row.current_version_id !== null), true);
+  assert.equal(duplicateLinksAfter.every((row) => row.question_version_id !== null), true);
+  assert.equal(Number(duplicateCapturedCount.count), 2, 'distinct identities remain selectable despite historical concept metadata');
 
   const noConceptQuestionIds = [];
   for (const label of ['独立旧题一', '独立旧题二']) {
@@ -882,22 +882,20 @@ async function runPublishing(ctx) {
   // Model that historical draft only in the owned fixture database.
   await ctx.queryTestDb('INSERT INTO paper_question(paper_id,question_id,score,sort) VALUES (?,?,100,0)', [legacyPaperId, legacyQuestionId]);
   const unknownNewPublish = await ctx.request(admin.actor, 'POST', `/ai/papers/${legacyPaperId}/publish`);
-  assert.equal(unknownNewPublish.status, 409, `unclassified historical questions cannot enter a new release: ${JSON.stringify(unknownNewPublish)}`);
+  assert.equal(unknownNewPublish.status, 400, `unclassified historical questions cannot enter a new release: ${JSON.stringify(unknownNewPublish)}`);
+  assert.equal(unknownNewPublish.code, 40001);
   const [unclassifiedAfter] = await ctx.queryTestDb('SELECT current_version_id,(SELECT COUNT(*) FROM question_version WHERE question_id=?) AS versions FROM question WHERE id=?', [legacyQuestionId, legacyQuestionId]);
   assert.equal(unclassifiedAfter.current_version_id, null);
   assert.equal(Number(unclassifiedAfter.versions), 0, 'rejected new publication cannot capture a partial legacy version');
   const classifiedLegacy = await ctx.request(admin.actor, 'PUT', `/ai/questions/${legacyQuestionId}`, {
-    expected_version_id: null, category_id: categoryId, difficulty: 'easy',
+    expected_version_id: null, expected_enabled: true, category_id: categoryId, difficulty: 'easy',
   });
   assert.equal(classifiedLegacy.status, 200, JSON.stringify(classifiedLegacy));
   const [capturedUnknown] = await ctx.queryTestDb('SELECT difficulty,approved_by,approved_at FROM question_version WHERE question_id=? AND revision=1', [legacyQuestionId]);
   assert.equal(capturedUnknown.difficulty, null, 'the captured old revision keeps the unknown fact');
   assert.equal(capturedUnknown.approved_by, null);
   assert.equal(capturedUnknown.approved_at, null);
-  const approvedClassified = await ctx.request(admin.actor, 'PUT', `/ai/questions/${legacyQuestionId}/review`, {
-    expected_version_id: String(classifiedLegacy.data.saved_version_id), status: 'approved',
-  });
-  assert.equal(approvedClassified.status, 200, JSON.stringify(approvedClassified));
+  assert.equal(classifiedLegacy.data.enabled, true);
   // The prior legacy selection had no version. Select the now classified exact
   // current version before publishing; historical unknown facts stay immutable.
   assert.equal((await ctx.request(admin.actor, 'PUT', `/ai/papers/${legacyPaperId}/questions`, {
@@ -924,8 +922,8 @@ async function runPublishing(ctx) {
   assert.equal(Number(legacyReleaseRow.score_cents), 10000);
   assert.equal(legacySnapshot.categoryId, categoryId);
   assert.equal(legacySnapshot.difficulty, 'easy');
-  assert.equal(String(legacySnapshot.approvedBy), admin.id);
-  assert.ok(legacySnapshot.approvedAt);
+  assert.equal(legacySnapshot.approvedBy, null, 'direct enable must not fabricate an approval actor');
+  assert.equal(legacySnapshot.approvedAt, null);
   assert.equal(legacySnapshot.stem, `<p>制度发布前题干 ${suffix}</p>`);
 
   const legacyDetail = await ctx.request(admin.actor, 'GET', `/ai/papers/${legacyPaperId}`);
@@ -1030,12 +1028,9 @@ async function runPublishing(ctx) {
   assert.equal(filteredPublish.code, 40971);
 
   const capacityCategory = await createCategory(ctx, admin.actor, `C1 考点容量 ${suffix}`);
-  const concept = await ctx.request(admin.actor, 'POST', '/ai/question-concepts', {
-    category_id: capacityCategory, type: 'single', name: `同一考点 ${suffix}`,
-  });
-  assert.equal(concept.status, 200, JSON.stringify(concept));
-  await createQuestion(ctx, admin.actor, questionDraft(capacityCategory, 'single', 'easy', `变体一 ${suffix}`, { concept_id: String(concept.data.id) }));
-  await createQuestion(ctx, admin.actor, questionDraft(capacityCategory, 'single', 'easy', `变体二 ${suffix}`, { concept_id: String(concept.data.id) }));
+  await createQuestion(ctx, admin.actor, questionDraft(capacityCategory, 'single', 'easy', `独立题一 ${suffix}`));
+  await createQuestion(ctx, admin.actor, questionDraft(capacityCategory, 'single', 'easy', `独立题二 ${suffix}`));
+  await createQuestion(ctx, admin.actor, questionDraft(capacityCategory, 'single', 'hard', `困难题 ${suffix}`));
   const deficit = await ctx.request(admin.actor, 'POST', '/admin/papers', {
     title: `C1 考点不足 ${suffix}`, mode: 'random', category_id: capacityCategory,
     rules: [{ type: 'single', count: 2, score_cents: 5000 }],

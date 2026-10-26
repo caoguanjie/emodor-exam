@@ -22,6 +22,7 @@
       </div>
     </header>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
+    <el-alert v-if="Object.values(value.bindings).some((binding) => binding.kind === 'bound' && binding.enabled === false)" title="题单包含已停用题目，请移除或替换后保存。" type="warning" :closable="false" />
     <el-alert v-if="failedUpload" title="图片上传失败，可在原位置重试。" type="warning" :closable="false">
       <el-button :disabled="locked" @click="uploadFile(failedUpload)">重试上传</el-button><el-button @click="cancelImage">移除占位</el-button>
     </el-alert>
@@ -37,8 +38,8 @@
           </div>
           <div class="designer-sheet__body">
           <QuestionEditor :key="editorKey" ref="editor" class="designer-sheet__content" :model-value="value.document" :disabled="locked" :categories="categories"
-            :default-category-id="value.paper.category_id" :concept-api="conceptApi || noConceptApi" :concept-access="conceptAccess"
-            :concept-options-api="conceptOptionsApi" :media-resolver="mediaResolver" :can-upload-media="!!mediaAdapter"
+            :default-category-id="value.paper.category_id"
+            :media-resolver="mediaResolver" :can-upload-media="!!mediaAdapter"
             :show-toolbar="false" :show-panels="false" compact allow-structure
             @update:model-value="changeDocument" @selection-change="selectQuestion" @structure-change="changeStructure"
             @remove-request="removeQuestion" @move-request="moveQuestion($event.client_id, $event.to_index)" @edit-blocked="error = $event"
@@ -55,7 +56,7 @@
           <el-tab-pane label="模板设置" name="template" />
         </el-tabs>
         <QuestionProperties v-if="selectedMeta" v-show="panel === 'question'" :client-id="selectedId" :meta="selectedMeta" :answer-summary="answerSummary"
-          :categories="categories" :regulations="questionRegulations" :concept-api="conceptAccess.read ? conceptApi : undefined" :concept-options-api="conceptOptionsApi"
+          :categories="categories" :regulations="questionRegulations"
           :readonly="locked" category-readonly :media-resolver="mediaResolver" :can-upload-media="!!mediaAdapter" :media-adapter="mediaAdapter" :difficulty-options="difficultyOptions"
           @change="changeMeta" @type-change="changeType" @upload-state-change="analysisUploading = $event.pending" />
         <PaperProperties v-if="panel === 'paper'" :model-value="value.paper" :categories="categories" :regulations="categoryRegulations" :courses="categoryCourses"
@@ -84,7 +85,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import type { Editor } from '@tiptap/vue-3';
 import type { JSONContent, QuestionAuthoringDocument, QuestionMeta } from '../../api/question-document-types';
-import type { QuestionConceptAccess, QuestionConceptApi, QuestionConceptOptionsApi } from '../../api/question-authoring';
 import type { DesignerMediaAdapter, DesignerMode, DesignerOption, DesignerPaper, PaperCourseOption, PaperDesignerValue, PaperLibrarySource, QuestionLibrarySource, SavePaperDraft } from './contracts';
 import type { QuestionRegulationOption } from '../Tiptap/components/QuestionSetting.vue';
 import { insertPaper, paperLoadAction, validateDesignerLayout } from './paper-designer-state';
@@ -104,11 +104,10 @@ import type { MediaResolver } from '../Tiptap/extensions/MediaImage';
 const props = withDefaults(defineProps<{
   modelValue: PaperDesignerValue; mode?: DesignerMode; saveDraft: SavePaperDraft;
   categories?: Array<{ id: string; name: string }>; regulations?: QuestionRegulationOption[]; courses?: PaperCourseOption[];
-  conceptApi?: QuestionConceptApi; conceptAccess?: QuestionConceptAccess;
-  conceptOptionsApi?: QuestionConceptOptionsApi; mediaResolver?: MediaResolver; mediaAdapter?: DesignerMediaAdapter;
+  mediaResolver?: MediaResolver; mediaAdapter?: DesignerMediaAdapter;
   questionLibrarySource?: QuestionLibrarySource; paperLibrarySource?: PaperLibrarySource;
   difficultyOptions?: DesignerOption[];
-}>(), { mode: 'create', categories: () => [], regulations: () => [], courses: () => [], difficultyOptions: () => [], conceptAccess: () => ({ read: false, create: false, edit: false, delete: false }) });
+}>(), { mode: 'create', categories: () => [], regulations: () => [], courses: () => [], difficultyOptions: () => [] });
 const emit = defineEmits<{
   'update:modelValue': [value: PaperDesignerValue]; close: []; 'dirty-change': [dirty: boolean];
   'selection-change': [selection: { client_id: string | null; option_id: string | null }];
@@ -148,8 +147,7 @@ const answerSummary = computed(() => {
   return (block?.content || []).filter((node) => node.type === 'questionOption').flatMap((node, index) => node.attrs?.checked
     ? [selectedMeta.value?.type === 'judgment' ? ['正确', '错误'][index] : String.fromCharCode(65 + index)] : []).join('、');
 });
-const noConceptApi: QuestionConceptApi = { list: async () => ({ items: [], total: 0, page: 1, page_size: 20 }),
-  create: async () => { throw new Error('无考点写入权限'); }, update: async () => { throw new Error('无考点写入权限'); }, remove: async () => { throw new Error('无考点写入权限'); } };
+
 function selectQuestion(selection: { client_id: string | null; option_id: string | null }) {
   if (selection.client_id && value.value.document.questions[selection.client_id]) { selectedId.value = selection.client_id; panel.value = 'question'; }
   emit('selection-change', selection);
@@ -209,9 +207,8 @@ async function changeType(type: 'single' | 'multiple' | 'judgment') {
       type: 'questionOption', attrs: { option_id: crypto.randomUUID(), checked: false }, content: [{ type: 'paragraph', ...(label ? { content: [{ type: 'text', text: label }] } : {}) }],
     }))];
   }
-  const hadConcept = meta.concept_id !== null;
-  meta.type = type; meta.concept_id = null;
-  if (controller.change(next) && hadConcept) error.value = '题型已改变，请重新选择考点';
+  meta.type = type; delete meta.concept_id;
+  controller.change(next);
 }
 async function focusFirst(id: string) { selectedId.value = id; panel.value = 'question'; await nextTick(); editor.value?.focus(id); }
 function insertQuestion(source: Awaited<ReturnType<QuestionLibrarySource['get']>>) {

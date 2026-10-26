@@ -67,11 +67,12 @@ describe('main complete paper kernel', () => {
     expect(wrapper.text()).not.toContain('可在原位置重试');
   });
 
-  it('requires a new concept choice after switching question type', async () => {
+  it('switches question type without retaining legacy concept metadata', async () => {
     const wrapper = await show();
     wrapper.findComponent({ name: 'QuestionProperties' }).vm.$emit('type-change', 'multiple'); await flushPromises();
-    expect(latest(wrapper).document.questions.question_one).toMatchObject({ type: 'multiple', concept_id: null });
-    expect(wrapper.text()).toContain('重新选择考点');
+    expect(latest(wrapper).document.questions.question_one).toMatchObject({ type: 'multiple' });
+    expect(latest(wrapper).document.questions.question_one).not.toHaveProperty('concept_id');
+    expect(wrapper.text()).not.toContain('重新选择考点');
   });
 
   it('offers an analysis image action and keeps a failed image retryable', async () => {
@@ -106,7 +107,7 @@ describe('main complete paper kernel', () => {
   it('retains stable A/B mappings when library insertion generates new local option IDs', async () => {
     const source = paperFixture();
     const session = { option_ids: { question_one: { question_one_a: 'A', question_one_b: 'B' } },
-      identities: { question_one: { question_id: '40', expected_version_id: '50' } }, layouts: {} };
+      identities: { question_one: { question_id: '40', expected_version_id: '50', expected_enabled: true } }, layouts: {} };
     const wrapper = await show(blankPaper(), { questionLibrarySource: {
       list: async () => ({ items: [{ id: '40', stem: '库中短ID题目', type: 'single', difficulty: 'easy', category_id: '10' }], total: 1, page: 1, page_size: 20 }),
       get: async () => ({ document: source.document, binding: source.bindings.question_one, session }),

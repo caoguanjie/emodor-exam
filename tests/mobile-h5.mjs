@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createServer, request as httpRequest } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, normalize, extname } from 'node:path';
@@ -89,7 +89,12 @@ async function createDebugLearner(ctx, categoryId) {
 }
 
 async function createDeadlineAttempt(ctx, actor, paperId) {
-  const started = await ctx.request(actor, 'POST', `/me/exams/${paperId}/start`);
+  let started;
+  try { started = await ctx.request(actor, 'POST', `/me/exams/${paperId}/start`); }
+  catch (error) {
+    error.message = `[mobile-h5 stage=createDeadlineAttempt cause=${error.cause?.code || 'none'}:${error.cause?.message || 'none'}] ${error.message}`;
+    throw error;
+  }
   assert.equal(started.status, 200, JSON.stringify(started)); assertAttemptView(started.data);
   // Leave a real in-progress window for the browser. The Playwright case first
   // proves the questions are editable, then waits for the server deadline to
@@ -126,7 +131,11 @@ export async function run(ctx) {
   };
   const courseDetail = await ctx.request(learner.actor, 'GET', `/me/courses/${flow.courseId}`);
   assert.equal(courseDetail.status, 200, JSON.stringify(courseDetail));
-  execFileSync(process.execPath, ['scripts/build.mjs', 'h5'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env } });
+  // Keep processing API keep-alive closures while the separate H5 build runs.
+  // A synchronous build leaves a stale pooled socket for the next exam request.
+  const build = spawn(process.execPath, ['scripts/build.mjs', 'h5'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env } });
+  ctx.trackChild(build);
+  await waitForChild(build, 'mobile H5 build');
   // Create the short-lived attempt immediately before Playwright so the two
   // ordered tests observe a fresh in-progress state before crossing deadline.
   const timeout = await createDeadlineAttempt(ctx, flow.learners[0].actor, flow.paperId);
