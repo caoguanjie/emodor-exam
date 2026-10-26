@@ -48,6 +48,7 @@ async function createChecks(mysqlConfig,redisConfig) {
   const {RedisService}=load('common/redis.service');const {AccessService}=load('modules/access/access.service');const {SessionService}=load('modules/auth/session.service');
   const {MediaService}=load('modules/media/media.service');const {MediaPublisher}=load('modules/media/media-publisher.service');
   const {LocalMediaStorage}=load('modules/media/storage/local-media-storage');const {MediaStorageRouter}=load('modules/media/storage/media-storage.router');
+  const {CosUploadGrantAdapter}=load('modules/media/storage/cos-upload-grant.adapter');
   const {MediaUploadSessionService}=load('modules/media/uploads/media-upload-session.service');const {MediaUploadGrantService}=load('modules/media/uploads/media-upload-grant.service');
   const {MediaUploadFinalizerService}=load('modules/media/uploads/media-upload-finalizer.service');const {MediaUploadCleanupService}=load('modules/media/uploads/media-upload-cleanup.service');
   const {DEFAULT_MEDIA_LIMITS}=load('modules/media/media-policy');
@@ -80,6 +81,7 @@ async function createChecks(mysqlConfig,redisConfig) {
   async function uploaded(body=Buffer.from('image fixture')){const request=input(body);const session=await one.sessions.begin(actor,request);const row=await repo.findOneByOrFail({id:session.session_id});cos.place(row.stagingLocator,body);return{request,session,row,body};}
   const assetCount=()=>source.getRepository(MediaAsset).count({where:{uploadedBy:'9001'}});
   return{one,two,source,second,cos,probe,repo,users,actor,other,input,uploaded,observedGrants,grantAdapter,assetCount,MediaAsset,MediaReference,config,
+    grantsWithProvider(provider){return new MediaUploadGrantService(source,one.media,one.sessions,config,new CosUploadGrantAdapter(config.cosMedia,provider));},
     async close(){await Promise.all([source.destroy(),second.destroy()]);await redis.onModuleDestroy();await rm(root,{recursive:true,force:true});}};
 }
 
@@ -188,6 +190,35 @@ export async function verifyMediaUploadRaces({mysqlConfig,redisConfig}) {
     await h.one.cleanup.runOnce(new Date(last.getTime()+1));assert.equal(h.cos.objects.has(late.row.stagingLocator.key),false);
     h.cos.place(late.row.stagingLocator,late.body);await h.two.cleanup.runOnce(new Date(last.getTime()+86400_000+1));
     assert.equal(h.cos.objects.has(late.row.stagingLocator.key),false);assert.ok((await h.repo.findOneByOrFail({id:late.row.id})).cleanedAt);
+    scenarios++;
+
+    // Cancellation during a real adapter's vendor wait cannot let cleanup race
+    // a credential already being issued. Its reserved deadline owns both paths.
+    const duringGrant=await h.uploaded(Buffer.from('cancel during STS fixture'));
+    const sessionDeadline=new Date(Date.now()+12_000);await h.repo.update(duringGrant.row.id,{expiresAt:sessionDeadline});
+    let releaseCredential;let actualExpiry;
+    const realGrants=h.grantsWithProvider(options=>new Promise(resolve=>{
+      releaseCredential=()=>{
+        const startTime=Math.floor(Date.now()/1000);actualExpiry=new Date((startTime+options.durationSeconds)*1000);
+        resolve({startTime,expiredTime:actualExpiry.getTime()/1000,requestId:'fixture',credentials:{tmpSecretId:'unusable-temporary-id',tmpSecretKey:'unusable-temporary-key',sessionToken:'unusable-temporary-token'}});
+      };
+    }));
+    const inFlight=realGrants.issue(h.actor,duringGrant.row.id).then(grant=>({grant}),error=>({error}));
+    await until(()=>releaseCredential);
+    const reserved=await h.repo.findOneByOrFail({id:duringGrant.row.id});
+    try {
+      assert.equal(reserved.lastCredentialExpiresAt.getTime(),sessionDeadline.getTime());
+      await h.two.sessions.cancel(h.actor,duringGrant.row.id);
+      await h.two.cleanup.runOnce(new Date(reserved.lastCredentialExpiresAt.getTime()-1));
+      assert.ok(h.cos.objects.has(duringGrant.row.stagingLocator.key),'reserved credential deadline must defer cleanup during STS');
+    } finally {releaseCredential();}
+    const withheld=await inFlight;
+    assert.equal(withheld.error?.httpStatus,409);assert.equal(withheld.error?.data?.reason_code,'UPLOAD_ABORTED');
+    assert.equal(withheld.grant,undefined);
+    assert.ok(actualExpiry.getTime()<=reserved.lastCredentialExpiresAt.getTime());
+    assert.ok(reserved.lastCredentialExpiresAt.getTime()<=reserved.expiresAt.getTime());
+    await h.one.cleanup.runOnce(new Date(reserved.lastCredentialExpiresAt.getTime()+1));
+    assert.equal(h.cos.objects.has(duringGrant.row.stagingLocator.key),false);
     scenarios++;
 
     // Revocation is rechecked even after the provider has generated a grant; the result is withheld.

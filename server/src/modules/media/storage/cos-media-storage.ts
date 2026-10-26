@@ -175,14 +175,17 @@ export class CosMediaStorage implements MediaStoragePort, CosUploadPort {
     let marker = ''; let versionMarker = '';
     const seen = new Set<string>();
     do {
-      let page: COS.ListObjectVersionsResult;
-      try { page = await this.sdk.listObjectVersions({ Bucket: target.Bucket, Region: target.Region, Prefix: target.Key, MaxKeys: '1000', Marker: marker, VersionIdMarker: versionMarker }); }
+      // SDK 3.0.0's declaration says Marker/NextMarker, but its runtime and
+      // COS XML protocol use KeyMarker/NextKeyMarker. Keep the wire contract.
+      let page: COS.ListObjectVersionsResult & { NextKeyMarker?: string };
+      const params = { Bucket: target.Bucket, Region: target.Region, Prefix: target.Key, MaxKeys: '1000', KeyMarker: marker, VersionIdMarker: versionMarker };
+      try { page = await this.sdk.listObjectVersions(params); }
       catch (error) { throw failure('版本列表', error); }
       for (const item of [...(page.Versions || []), ...(page.DeleteMarkers || [])]) {
         if (item.Key === target.Key) versions.push({ ...locator, versionId: item.VersionId || null });
       }
       if (!truncated(page.IsTruncated)) break;
-      const nextMarker = page.NextMarker || ''; const nextVersion = page.NextVersionIdMarker || '';
+      const nextMarker = page.NextKeyMarker || ''; const nextVersion = page.NextVersionIdMarker || '';
       const pair = JSON.stringify([nextMarker, nextVersion]);
       if (!nextMarker || seen.has(pair) || (nextMarker === marker && nextVersion === versionMarker)) throw new Error('COS 版本分页标记无效');
       seen.add(pair); marker = nextMarker; versionMarker = nextVersion;

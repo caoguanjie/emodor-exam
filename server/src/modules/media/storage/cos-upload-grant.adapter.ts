@@ -20,35 +20,65 @@ export function multipartUploadPolicy(locator: StorageLocator) {
 }
 export type UploadGrantInput={mode:'simple'|'multipart';locator:StorageLocator;uploadId:string|null;mimeType:string;expiresAt:Date};
 
+const STS_WAIT_MS=10_000;
+const STS_SAFETY_SECONDS=30;
+const STS_PENDING_LIMIT=8;
+
 /** Vendor calls live here; application services only receive the constrained grant. */
 export class CosUploadGrantAdapter {
+  private pendingCredentials=0;
   constructor(private readonly config:CosMediaConfig,private readonly credentials:(options:GetCredentialOptions)=>Promise<CredentialData>=getCredential) {}
+
+  private async requestCredentials(options:GetCredentialOptions,waitMs:number):Promise<CredentialData> {
+    if(this.pendingCredentials>=STS_PENDING_LIMIT) throw new Error('上传临时授权供应商繁忙');
+    this.pendingCredentials++;
+    const pending=Promise.resolve().then(()=>this.credentials(options));
+    // SDK 3.1.3 exposes no abort hook. A logical timeout cannot release the
+    // resource slot: keep it until the real request settles, with no wait queue.
+    void pending.then(()=>{this.pendingCredentials--;},()=>{this.pendingCredentials--;});
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    const timeout=new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('上传临时授权供应商响应超时')),waitMs);});
+    try {return await Promise.race([pending,timeout]);}
+    finally {if(timer) clearTimeout(timer);}
+  }
 
   async issue(input:UploadGrantInput):Promise<UploadGrant> {
     const {locator}=input;
     assertExactStaging(locator);
     if (locator.bucket!==this.config.bucket || locator.region!==this.config.region || !locator.key.startsWith(`${this.config.keyPrefix}staging/`)) throw new Error('上传授权超出当前项目范围');
-    // Tencent documents a default/max duration; do not import another cloud's
-    // minimum. Actual provider acceptance of short durations remains a cloud gate.
-    const durationSeconds=Math.floor(input.expiresAt.getTime()/1000)-Math.floor(Date.now()/1000);
-    if (!Number.isSafeInteger(durationSeconds) || durationSeconds<=0 || durationSeconds>7200 || input.expiresAt.getTime()<=Date.now()) throw new Error('上传授权剩余有效期无效');
+    const now=Date.now();const remainingMs=input.expiresAt.getTime()-now;
+    const remainingSeconds=Math.floor(remainingMs/1000);
+    if (!Number.isSafeInteger(remainingSeconds) || remainingMs<=1000 || remainingSeconds>7200) throw new Error('上传授权剩余有效期无效');
+    // STS starts DurationSeconds when it issues the credential, after our durable
+    // reservation. Leave room for the round trip, second rounding and clock skew;
+    // near expiry shrink the margin, while preserving the original hard deadline.
+    // Tencent documents no 900-second minimum; short-duration acceptance is a cloud gate.
+    const durationSeconds=Math.max(1,remainingSeconds-Math.min(STS_SAFETY_SECONDS,Math.floor(remainingSeconds/2)));
+    const waitMs=Math.min(STS_WAIT_MS,remainingMs);
+    const requestStarted=performance.now();
     let data:CredentialData;
-    try { data=await this.credentials({secretId:this.config.secretId!,secretKey:this.config.secretKey!,region:this.config.region!,durationSeconds,
-      policy:input.mode==='multipart'?multipartUploadPolicy(locator):policy(locator,['name/cos:PutObject'])}); }
+    try { data=await this.requestCredentials({secretId:this.config.secretId!,secretKey:this.config.secretKey!,region:this.config.region!,durationSeconds,
+      policy:input.mode==='multipart'?multipartUploadPolicy(locator):policy(locator,['name/cos:PutObject'])},waitMs); }
     catch { throw new Error('上传临时授权供应商调用失败'); }
-    if (!data?.credentials?.tmpSecretId || !data.credentials.tmpSecretKey || !data.credentials.sessionToken
+    if (performance.now()-requestStarted>=waitMs || Date.now()>=input.expiresAt.getTime()
+      || !data?.credentials?.tmpSecretId || !data.credentials.tmpSecretKey || !data.credentials.sessionToken
       || !Number.isSafeInteger(data.startTime) || !Number.isSafeInteger(data.expiredTime) || data.expiredTime<=Math.floor(Date.now()/1000)
+      || data.startTime>=data.expiredTime
       || data.expiredTime*1000>input.expiresAt.getTime()) throw new Error('上传临时授权有效期无效');
     const credentials={tmp_secret_id:data.credentials.tmpSecretId,tmp_secret_key:data.credentials.tmpSecretKey,token:data.credentials.sessionToken};
     if(input.mode==='multipart') {
       if(!input.uploadId) throw new Error('分块上传尚未初始化');
       return {mode:'multipart',bucket:locator.bucket!,region:locator.region!,key:locator.key,upload_id:input.uploadId,credentials,start_time:data.startTime,expired_time:data.expiredTime};
     }
-    const remaining=data.expiredTime-Math.floor(Date.now()/1000);
-    if(remaining<=0) throw new Error('上传临时授权已到期');
-    const signer=new COS({SecretId:credentials.tmp_secret_id,SecretKey:credentials.tmp_secret_key,SecurityToken:credentials.token,Protocol:'https:'});
+    // Explicit STS start/end avoids SDK's local one-second signing offset, which
+    // can otherwise produce an already-expired URL for a very short credential.
+    const signer=new COS({Protocol:'https:',getAuthorization:(_options,callback)=>callback({
+      TmpSecretId:credentials.tmp_secret_id,TmpSecretKey:credentials.tmp_secret_key,SecurityToken:credentials.token,
+      StartTime:data.startTime,ExpiredTime:data.expiredTime,
+    })});
     const url=await new Promise<string>((resolve,reject)=>signer.getObjectUrl({Bucket:locator.bucket!,Region:locator.region!,Key:locator.key,Method:'PUT',Sign:true,
-      Headers:{'Content-Type':input.mimeType},Expires:remaining,Protocol:'https:'},(error,result)=>error?reject(new Error('上传指令签名失败')):resolve(result.Url)));
+      Headers:{'Content-Type':input.mimeType},Protocol:'https:'},(error,result)=>error?reject(new Error('上传指令签名失败')):resolve(result.Url)));
+    if(Date.now()>=data.expiredTime*1000 || Date.now()>=input.expiresAt.getTime()) throw new Error('上传临时授权已到期');
     return {mode:'simple',method:'PUT',url,headers:{'Content-Type':input.mimeType},expires_at:new Date(data.expiredTime*1000).toISOString()};
   }
 }

@@ -97,12 +97,12 @@ describe('COS media storage', () => {
   });
   it('removes only exact staging-key versions including delete markers across pages', async () => {
     const key='ruleexam/test/staging/session.upload';
-    const list=vi.fn().mockResolvedValueOnce({Versions:[{Key:key,VersionId:'v1'},{Key:key+'-other',VersionId:'foreign'}],DeleteMarkers:[],IsTruncated:'true',NextMarker:key,NextVersionIdMarker:'v1'}).mockResolvedValueOnce({Versions:[{Key:key,VersionId:'v2'}],DeleteMarkers:[{Key:key,VersionId:'deleted'}],IsTruncated:'false'});
+    const list=vi.fn().mockResolvedValueOnce({Versions:[{Key:key,VersionId:'v1'},{Key:key+'-other',VersionId:'foreign'}],DeleteMarkers:[],IsTruncated:'true',NextKeyMarker:key,NextVersionIdMarker:'v1'}).mockResolvedValueOnce({Versions:[{Key:key,VersionId:'v2'}],DeleteMarkers:[{Key:key,VersionId:'deleted'}],IsTruncated:'false'});
     const del=vi.fn(async () => ({}));
     const storage=new CosMediaStorage(config(),{listObjectVersions:list,deleteObject:del} as any);
     await storage.removeStagingVersions(cosLocator(key,null));
     expect(del.mock.calls.map(call => [call[0].Key,call[0].VersionId])).toEqual([[key,'v1'],[key,'v2'],[key,'deleted']]);
-    expect(list.mock.calls[1][0]).toMatchObject({Prefix:key,Marker:key,VersionIdMarker:'v1'});
+    expect(list.mock.calls[1][0]).toMatchObject({Prefix:key,KeyMarker:key,VersionIdMarker:'v1'});
     await expect(storage.removeStagingVersions(cosLocator())).rejects.toThrow(/staging/);
   });
   it('reconciles only multipart tasks for the exact session key across pages', async () => {
