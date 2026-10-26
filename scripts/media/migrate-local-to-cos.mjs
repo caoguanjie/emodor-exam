@@ -34,6 +34,12 @@ function config(env, name) {
   if (!env[name]?.trim()) throw new Error(`CONFIG_REQUIRED_${name}`);
   return env[name];
 }
+export function readMigrationDatabasePassword(env) {
+  const localDevelopment = ['localhost', '127.0.0.1', '::1'].includes(env.DB_HOST)
+    && (env.NODE_ENV === undefined || env.NODE_ENV === 'development');
+  if (localDevelopment && Object.hasOwn(env, 'DB_PASSWORD') && env.DB_PASSWORD === '') return '';
+  return config(env, 'DB_PASSWORD');
+}
 function repositoryRoots() {
   try {
     const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -66,7 +72,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error('CONFIG_INVALID_DB_PORT');
   const sourceRoot = resolve(ROOT, config(env, 'UPLOAD_DIR'));
   const source = new DataSource({ type: 'mysql', host: config(env, 'DB_HOST'), port,
-    username: config(env, 'DB_USERNAME'), password: config(env, 'DB_PASSWORD'), database,
+    username: config(env, 'DB_USERNAME'), password: readMigrationDatabasePassword(env), database,
     entities: [MediaAsset, MediaReference], synchronize: false, logging: false,
     charset: 'utf8mb4_0900_ai_ci', timezone: 'Z', supportBigNumbers: true, bigNumberStrings: true,
     extra: { connectionLimit: 2 } });
