@@ -2,7 +2,7 @@
 
 执行方式：用户指定 Astra 并行编排，不经过 SDD。
 
-工作副本：`/Users/caogj/Documents/emodor/RuleExam/.worktrees/cos-media-integration`，分支 `cos-media-integration`，基线 `44b9d7f`。主工作区未提交的题库/UI 改动未复制；其中迁移 029 保留，本分支新增媒体迁移使用 030。图谱项目 `RuleExam_cos` 仅用于定位，未覆盖的媒体实现按路径读取。
+工作副本：`/Users/caogj/Documents/emodor/RuleExam/.worktrees/cos-media-integration`，分支 `cos-media-integration`，基线 `44b9d7f`。初次实施时主工作区未提交的题库/UI 改动未复制，COS候选迁移使用030；该编号从未部署。本次整合主线已应用的029—032后改为 `033_cos_media_storage.sql`，不改写主线迁移内容或checksum。下列原候选commit与测试结果保留为历史证据，不能代替重编号后的复验。图谱项目 `RuleExam_cos` 仅用于定位，未覆盖的媒体实现按路径读取。
 
 ## 基线
 
@@ -47,17 +47,24 @@
 
 最终代码候选为 `92c945b`。后端/预检/容量与前端均经过独立只读审查，实质发现已修复并分别复审闭环，见后端及前端 review 记录。根在最终候选重跑 `cos-media-flow`、`node scripts/build.mjs web h5`、`node scripts/build.mjs mp-weixin`，均退出 0；对应日志为 `/tmp/ruleexam-cos-flow-final2-reviewed.log`、`/tmp/ruleexam-cos-final2-web-h5-build.log`、`/tmp/ruleexam-cos-final2-mp-build.log`。没有 push 或合并主工作区。
 
+## 主线整合与迁移重编号复验
+
+整合主线 `1725b80` 的029—032后，未部署的COS候选030顺延为033；这里只修改文件名、首行编号及引用，DDL与完成探针不变。逐字节对比确认029—032与主线原文件一致；`init.sql`仍为40张业务表加1张迁移元数据表，共41张物理表。
+
+- `node --test tests/migration-catalog.test.mjs tests/cos-media-migration.test.mjs tests/migration-contract.test.mjs`：42/42通过；包含000—033完整升级、重复应用、COS两处DDL崩溃恢复、旧资产/引用不变及结构漂移拒绝。
+- `node tests/run-e2e.mjs --ephemeral --suite cos-media-schema`：退出0，5类schema场景通过；自有MySQL/Redis/API进程和临时目录清理成功。以上未读取真实环境文件，未对开发库或云执行变更。
+
 ## 本地存量与切换准备
 
-只读查询现有开发库及本地文件：共有 7 个 ready 资源，4 张品牌图、1 张课程封面和 2 个视频，7 个实际文件均存在、大小与 SHA 匹配。该库已到 `029_question_soft_delete`，尚无 COS 定位列和上传会话表。未执行 030、未切换任何现有媒体行、未删除任何原文件。worktree `.env` 的 `UPLOAD_DIR` 已指向这些现存本地文件，避免相对目录误指空的 worktree/uploads。
+初次只读查询现有开发库及本地文件：共有 7 个 ready 资源，4 张品牌图、1 张课程封面和 2 个视频，7 个实际文件均存在、大小与 SHA 匹配。该库已到 `029_question_soft_delete`，尚无 COS 定位列和上传会话表。当时未执行COS候选030、未切换任何现有媒体行、未删除任何原文件。本次整合前，根智能体已只读确认主线029—032已应用、COS候选030从未应用，仍有7个ready资源；当前待应用的COS迁移为033。worktree `.env` 的 `UPLOAD_DIR` 已指向这些现存本地文件，避免相对目录误指空的 worktree/uploads。
 
-配置保持 `MEDIA_STORAGE_PROVIDER=local`、`MEDIA_DELIVERY_MODE=proxy`。同一套共享 COS 密钥已在忽略的 0600 根 `.env` 中配置，前端仅注入公开 origin/prefix。切换前须部署本分支后端、应用迁移 030，再通过浏览器配置/正式媒体 G0，审阅实际批次后执行迁移；不能把尚在旧主分支运行的服务直接指向 COS 行。
+配置保持 `MEDIA_STORAGE_PROVIDER=local`、`MEDIA_DELIVERY_MODE=proxy`。同一套共享 COS 密钥已在忽略的 0600 根 `.env` 中配置，前端仅注入公开 origin/prefix。切换前须部署本分支后端、应用迁移 033，再通过浏览器配置/正式媒体 G0，审阅实际批次后执行迁移；不能把尚在旧主分支运行的服务直接指向 COS 行。
 
 只读盘点和具体本地 CORS 提案存于仓库外私有运维目录：`/Users/caogj/Documents/emodor/RuleExam-cos-operations/2026-10-26/`。当前供审阅的提案文件为 `cos-local-cors-proposal-v2.json`（包含 `x-cos-acl`），旧版保留仅作历史，不应应用。提案尚未应用；未修改共桶 ACL/Policy/CORS/版本和 gooodwork 身份权限。
 
 ## 可执行的人工验收路径（待真实环境切换）
 
-先按上节准备新版服务、迁移 030、精确 CORS/CSP 配置及 `cos/cos-signed` 环境；不能在仍运行旧主分支服务时只切数据库或存储参数。随后在 worktree 分别运行 `npm --prefix web run dev`、`npm --prefix mobile run dev:h5`，页面来源使用提案中的 localhost 或 127.0.0.1。
+先按上节准备新版服务、迁移 033、精确 CORS/CSP 配置及 `cos/cos-signed` 环境；不能在仍运行旧主分支服务时只切数据库或存储参数。随后在 worktree 分别运行 `npm --prefix web run dev`、`npm --prefix mobile run dev:h5`，页面来源使用提案中的 localhost 或 127.0.0.1。
 
 1. PC 打开 `http://localhost:5173/admin/courses`，进入草稿课程，上传一段大于 16 MiB 的合法 MP4；检查分块直达 COS、暂停后恢复、刷新后重选原文件续传，且等待服务端 ready 后才能保存。换成同名不同内容必须新建任务；确认终态失败后重新选原文件可发起新任务。
 2. PC 打开 `http://localhost:5173/admin/questions`，在 Tiptap 插入图片并保存，重开题目、预览和出卷后仍能显示。业务 JSON 只保存 asset ID；已签名 URL 不进入题干或冻结快照。打开 `/admin/system/site-settings` 检查 Logo/轮播沿当前白名单展示。

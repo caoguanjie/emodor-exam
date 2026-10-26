@@ -43,6 +43,26 @@ function sourcedPaper() {
 }
 
 describe('fixed paper phased save and recovery', () => {
+  it('strips a 120 point paper score from a new question commit and restores it to the association', async () => {
+    const value = newPaper(); value.paper.total_score = 120; value.document.questions.question_one!.score_cents = 12000;
+    const env = await setup(value);
+    const result = await env.host.saveDraft(value, { request_id: 'new-120' });
+    const commit = env.calls.find(call => call.method === 'post' && call.path === '/admin/question-documents/commit')!;
+    expect(commit.body.bundle.document.questions.question_one).not.toHaveProperty('score_cents');
+    expect(env.calls.at(-1)!.body.items).toEqual([{ question_version_id: '90', score_cents: 12000 }]);
+    expect(result.value.document.questions.question_one!.score_cents).toBe(12000);
+  });
+  it('sends the configured target and zero score on draft save without committing unchanged questions', async () => {
+    const value = paperFixture(); value.paper.total_score = 120; value.paper.pass_score = 72;
+    value.document.questions.question_one!.score_cents = 0;
+    const env = await setup(value);
+    await env.host.saveDraft(value, { request_id: 'draft-120' });
+    const config = env.calls.find(call => call.method === 'put' && call.path === '/admin/papers/100')!;
+    expect(config.body).toMatchObject({ total_score: 120, pass_score: 72 });
+    expect(env.calls.some(call => call.method === 'post')).toBe(false);
+    expect(env.calls.at(-1)!.body.items).toEqual([{ question_version_id: '50', score_cents: 0 }]);
+  });
+
   it.each([true, false])('loads source paper questions using enabled=%s without a review status', async (enabled) => {
     const value = paperFixture();
     const env = await setup(value);
@@ -75,6 +95,35 @@ describe('fixed paper phased save and recovery', () => {
       expect(queries).toEqual([{ path: '/admin/papers/200' }]);
     }
   });
+  it('refreshes readonly operation information from the final save receipt without writing client metadata', async () => {
+    const value = paperFixture();
+    Object.assign(value.paper, { created_by_name:'张三', updated_by_name:'旧更新人', created_at:'2025-07-21T08:45:00Z', updated_at:'2025-07-21T08:45:00Z' });
+    const env = await setup(value);
+    const put = env.api.put;
+    env.api.put = async (path, body) => {
+      await put(path, body);
+      return path.endsWith('/questions') ? { created_by_name:'张三', updated_by_name:'李四', created_at:'2025-07-21T08:45:00Z', updated_at:'2025-07-22T09:30:00Z' } : {};
+    };
+    const result = await env.host.saveDraft(value, {request_id:'operation-info',intent:'save'});
+    expect(result.status).toBe('saved');
+    expect(result.value?.paper).toMatchObject({created_by_name:'张三',updated_by_name:'李四',updated_at:'2025-07-22T09:30:00Z'});
+    const body = env.calls.find(call=>call.path==='/admin/papers/100' && call.method==='put')!.body;
+    expect(body).not.toHaveProperty('created_by_name');
+    expect(body).not.toHaveProperty('updated_at');
+  });
+
+  it('round-trips sidebar order while preserving hidden exam settings', async () => {
+    const value = paperFixture();
+    Object.assign(value.paper, { sort_order: 7, max_attempts: 5, partial_credit_ratio: 0.25 });
+    const env = await setup(value);
+    const outcome = await env.host.saveDraft(value, { request_id: 'sidebar-settings', intent: 'save' });
+    expect(outcome.status).toBe('saved');
+    expect(env.calls.find(call => call.method === 'put' && call.path === '/admin/papers/100')?.body)
+      .toMatchObject({ sort_order: 7, max_attempts: 5, partial_credit_ratio: 0.25 });
+    env.api.get = async () => ({ ...value.paper, questions: [], regulation_ids: [], course_ids: [], rules: [] }) as any;
+    expect((await env.host.load()).paper.sort_order).toBe(7);
+  });
+
   it('requires an explicit paper score instead of falling back to a historical bank score', async () => {
     const value = paperFixture();
     const env = await setup(value);
@@ -160,7 +209,7 @@ describe('fixed paper phased save and recovery', () => {
     env.api.post = async () => ({ document, option_ids: {}, identities: { question_one: { question_id: '40', expected_version_id: '50', expected_enabled: true } }, layouts: {} }) as any;
     await env.host.questionLibrarySource.list({ category_id: '10', page: 1, page_size: 20 });
     const source = await env.host.questionLibrarySource.get('40');
-    expect(source.document.questions.question_one!.score_cents).toBe(500);
+    expect(source.document.questions.question_one!.score_cents).toBe(0);
     expect(source.binding.baseline_fingerprint).toBe(questionFingerprint(source.document, 'question_one'));
     expect(document.questions.question_one!.score_cents).toBe(oldScore);
   });
@@ -286,10 +335,10 @@ describe('fixed paper phased save and recovery', () => {
     const changed = newPaper(); const denied = await setup(changed, access); await expect(denied.host.saveDraft(changed, { request_id: 'denied', intent: 'save' })).rejects.toThrow(/权限/); expect(denied.calls).toEqual([]);
     const readDenied = await setup(paperFixture(), { ...access, read: false }); await expect(readDenied.host.load()).rejects.toThrow(/权限/); expect(readDenied.calls).toEqual([]);
   });
-  it('persists layout and rejects medium, invalid totals, category mismatches and missing permissions before writes', async () => {
+  it('persists layout and rejects medium, invalid scores, category mismatches and missing permissions before writes', async () => {
     const value = paperFixture(); value.paper_layout = { schema_version: 1, settings: { templateName: value.paper.title, pageSize: 'A5', pageOrientation: 2, pageSizeReduce: { top: 10, bottom: 20, left: 12, right: 13 } } };
     const env = await setup(value); await env.host.saveDraft(value, { request_id: 'layout', intent: 'save' }); expect(env.calls[0]!.body.designer_layout).toEqual(value.paper_layout);
-    for (const mutation of [(v: PaperDesignerValue) => { v.document.questions.question_one!.difficulty = 'medium'; }, (v: PaperDesignerValue) => { v.document.questions.question_one!.score_cents = 5; }, (v: PaperDesignerValue) => { v.document.questions.question_one!.category_id = '11'; }]) {
+    for (const mutation of [(v: PaperDesignerValue) => { v.document.questions.question_one!.difficulty = 'medium'; }, (v: PaperDesignerValue) => { v.document.questions.question_one!.score_cents = -1; }, (v: PaperDesignerValue) => { v.document.questions.question_one!.category_id = '11'; }]) {
       const invalid = paperFixture(); mutation(invalid); const isolated = await setup(invalid); await expect(isolated.host.saveDraft(invalid, { request_id: 'invalid', intent: 'save' })).rejects.toThrow(); expect(isolated.calls).toEqual([]);
     }
   });
@@ -314,11 +363,13 @@ describe('fixed paper phased save and recovery', () => {
     ['requires_learning', 1], ['requires_learning', 'false'],
     ['course_ids', ['41', '41']], ['course_ids', ['wrong-id']], ['course_ids', Array.from({ length: 101 }, (_, i) => String(i + 1))],
   ])('rejects invalid %s=%j before creating any new question', async (field, invalid) => {
-    const value = newPaper(); Object.assign(value.paper, { [field as string]: invalid }); const snapshot = copy(value);
+    const value = newPaper();
+    if (field === 'course_ids') Object.assign(value.paper, { requires_learning: true, required_learning_minutes: 15 });
+    Object.assign(value.paper, { [field as string]: invalid }); const snapshot = copy(value);
     const env = await setup(value); await expect(env.host.saveDraft(value, { request_id: 'invalid-strategy', intent: 'save' })).rejects.toThrow(); expect(env.calls).toEqual([]); expect(value).toEqual(snapshot);
   });
   it('accepts server strategy and layout boundary values without narrowing pass score or partial credit to integers', async () => {
-    for (const paper of [{ duration_minutes: 1, max_attempts: 1, pass_score: 0.01, partial_credit_ratio: 0, requires_learning: false }, { duration_minutes: 1440, max_attempts: 100, pass_score: 99.5, partial_credit_ratio: 0.375, requires_learning: true }]) {
+    for (const paper of [{ duration_minutes: 1, max_attempts: 1, pass_score: 0.01, partial_credit_ratio: 0, requires_learning: false, course_ids: [], required_learning_minutes: null }, { duration_minutes: 1440, max_attempts: 100, pass_score: 99.5, partial_credit_ratio: 0.375, requires_learning: true, course_ids: ['41'], required_learning_minutes: 2147483647 }]) {
       const value = newPaper(); Object.assign(value.paper, paper); value.paper_layout = { schema_version: 1, settings: { templateName: '😀'.repeat(128), pageSize: 'A5', pageOrientation: 2, pageSizeReduce: { top: 0, bottom: 99, left: 0, right: 99 } } };
       const env = await setup(value); expect((await env.host.saveDraft(value, { request_id: 'valid-strategy', intent: 'save' })).status).toBe('saved'); expect(env.calls[1]!.body).toMatchObject(paper);
     }

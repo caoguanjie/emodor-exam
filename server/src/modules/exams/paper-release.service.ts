@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { AuditService } from '../../common/audit.service';
 import { BizError, Errors } from '../../common/errors';
+import { assertPaperLearningCourses, normalizePaperLearning } from './paper-learning';
+import { MAX_PAPER_SCORE_CENTS, paperScoreRule } from './paper-score';
 import type { Difficulty, PoolRule, QuestionContentV2, QuestionOption, QuestionType, RuleSnapshot } from '../../common/training-contracts';
 import { ExamPaper } from '../../entities/exam-paper.entity';
 import { PaperQuestion } from '../../entities/paper-question.entity';
@@ -50,6 +52,8 @@ interface PublishedPaperBase {
   paperId: string;
   rule: RuleSnapshot;
   requiresLearning: boolean;
+  requiredLearningMinutes: number | null;
+  courseIds: string[];
 }
 
 export interface TrainingPublishedPaper extends PublishedPaperBase {
@@ -77,11 +81,11 @@ function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function decimalToCents(value: string | number): number {
+function decimalToCents(value: string | number, allowZero = false): number {
   const numeric = Number(value);
   const cents = Math.round(numeric * 100);
-  if (!Number.isFinite(numeric) || cents <= 0 || Math.abs(numeric * 100 - cents) > 0.000001) {
-    throw Errors.paperRuleInvalid('固定题目分值必须是大于 0 的整数分');
+  if (!Number.isFinite(numeric) || cents < (allowZero ? 0 : 1) || cents > MAX_PAPER_SCORE_CENTS || Math.abs(numeric * 100 - cents) > 0.000001) {
+    throw Errors.paperRuleInvalid(allowZero ? '草稿题目分值须为 0～999.99 分，最多两位小数' : '固定题目分值必须是大于 0 的整数分');
   }
   return cents;
 }
@@ -212,23 +216,22 @@ export class PaperReleaseService implements OnModuleInit {
     return null;
   }
 
-  private ruleForPaper(paper: ExamPaper, rules: PoolRule[]): RuleSnapshot {
+  private ruleForPaper(paper: ExamPaper, rules: PoolRule[], requireComplete = true): RuleSnapshot {
     const rule: RuleSnapshot = {
-      totalCents: 10000,
-      passCents: Math.round(Number(paper.passScore) * 100),
+      ...paperScoreRule(paper.businessScope === 'regulation' ? 100 : paper.totalScore, paper.passScore),
       durationMinutes: Number(paper.durationMinutes),
       maxAttempts: Number(paper.maxAttempts),
       partialCreditRatio: Number(paper.partialCreditRatio),
       rules: rules.map((item) => ({ ...item })),
     };
-    this.assertRule(rule);
+    this.assertRule(rule, requireComplete);
     return rule;
   }
 
-  private assertRule(rule: RuleSnapshot): void {
-    if (rule.totalCents !== 10000) throw Errors.paperRuleInvalid('试卷总分必须为 10000 分');
-    if (!Number.isInteger(rule.passCents) || rule.passCents <= 0 || rule.passCents > 10000) {
-      throw Errors.paperRuleInvalid('及格线必须在 1—10000 分之间');
+  private assertRule(rule: RuleSnapshot, requireComplete = true): void {
+    if (!Number.isInteger(rule.totalCents) || rule.totalCents < 1 || rule.totalCents > MAX_PAPER_SCORE_CENTS) throw Errors.paperRuleInvalid('试卷总分必须为 0.01～999.99 分');
+    if (!Number.isInteger(rule.passCents) || rule.passCents <= 0 || rule.passCents > rule.totalCents) {
+      throw Errors.paperRuleInvalid('及格分数必须大于 0 且不超过试卷总分');
     }
     if (!Number.isInteger(rule.durationMinutes) || rule.durationMinutes < 1) throw Errors.paperRuleInvalid('考试时长必须是正整数');
     if (!Number.isInteger(rule.maxAttempts) || rule.maxAttempts < 1) throw Errors.paperRuleInvalid('作答次数必须是正整数');
@@ -238,12 +241,12 @@ export class PaperReleaseService implements OnModuleInit {
     if (!rule.rules.length) throw Errors.paperRuleInvalid('试卷至少需要一项题型规则');
     for (const item of rule.rules) {
       if (!QUESTION_TYPES.has(item.type) || !Number.isInteger(item.count) || item.count < 1
-        || !Number.isInteger(item.scoreCents) || item.scoreCents < 1) {
+        || !Number.isInteger(item.scoreCents) || item.scoreCents < (requireComplete ? 1 : 0) || item.scoreCents > MAX_PAPER_SCORE_CENTS) {
         throw Errors.paperRuleInvalid('题型、题量或分值规则不合法');
       }
     }
     const total = rule.rules.reduce((sum, item) => sum + item.count * item.scoreCents, 0);
-    if (total !== 10000) throw Errors.paperRuleInvalid(`题型规则总分必须为 10000 分，当前为 ${total}`);
+    if (requireComplete && total !== rule.totalCents) throw Errors.paperRuleInvalid(`题目分值合计须为 ${rule.totalCents / 100} 分，当前为 ${total / 100} 分`);
   }
 
   private async randomPool(
@@ -290,6 +293,7 @@ export class PaperReleaseService implements OnModuleInit {
     paper: ExamPaper,
     forPublication = true,
   ): Promise<{ rule: RuleSnapshot; pool: ScoredQuestionVersionSnapshot[] }> {
+    const draftPreview = !forPublication && paper.businessScope === 'training' && paper.status === 'draft';
     const items = await manager.getRepository(PaperQuestion).find({
       where: { paperId: String(paper.id) },
       order: { sort: 'ASC', id: 'ASC' },
@@ -316,7 +320,7 @@ export class PaperReleaseService implements OnModuleInit {
     for (const item of items) {
       const version = versionMap.get(String(item.questionVersionId));
       const question = version && questionMap.get(String(version.questionId));
-      if (!version || !question || (forPublication && !question.isEnabled) || String(question.currentVersionId) !== String(version.id)) {
+      if (!version || !question || (forPublication && (!question.isEnabled || question.deletedAt)) || String(question.currentVersionId) !== String(version.id)) {
         throw Errors.paperReleaseConflict(`题目 ${item.questionId} 已停用或不是当前版本，请重新选题`);
       }
       if (String(version.categoryId) !== String(paper.categoryId)) throw Errors.paperRuleInvalid('固定题目与试卷培训类别不一致');
@@ -327,7 +331,7 @@ export class PaperReleaseService implements OnModuleInit {
       const key = questionGroupKey(version);
       if (seen.has(key)) throw Errors.paperRuleInvalid('固定题单不能重复选择同一题目');
       seen.add(key);
-      const scoreCents = decimalToCents(item.score);
+      const scoreCents = decimalToCents(item.score, draftPreview);
       const snapshot = snapshotFromEntity(version);
       pool.push({ ...snapshot, scoreCents });
       const ruleKey = `${snapshot.type}:${scoreCents}`;
@@ -335,7 +339,7 @@ export class PaperReleaseService implements OnModuleInit {
       if (existing) existing.count += 1;
       else rules.set(ruleKey, { type: snapshot.type, count: 1, scoreCents });
     }
-    return { rule: this.ruleForPaper(paper, [...rules.values()]), pool };
+    return { rule: this.ruleForPaper(paper, [...rules.values()], !draftPreview), pool };
   }
 
   private async regulationFixedPool(
@@ -435,6 +439,9 @@ export class PaperReleaseService implements OnModuleInit {
         throw Errors.paperReleaseConflict('试卷培训类别已变化，请刷新后重试');
       }
 
+        const learning = paper.businessScope === 'training' ? normalizePaperLearning(paper) : null;
+        if (learning) await assertPaperLearningCourses(manager, String(paper.categoryId), learning.courseIds);
+
       const frozen = paper.businessScope === 'regulation'
         ? await this.regulationFixedPool(manager, paper)
         : paper.mode === 'random'
@@ -450,10 +457,11 @@ export class PaperReleaseService implements OnModuleInit {
         businessScope: paper.businessScope,
         mode: paper.mode,
         categoryId: paper.categoryId ? String(paper.categoryId) : null,
-        requiresLearning: Number(paper.requiresLearning || 0),
+        requiresLearning: learning ? learning.requiresLearning : Number(paper.requiresLearning || 0),
+        requiredLearningMinutes: learning?.requiredLearningMinutes ?? null,
         ruleSnapshot: deepClone(frozen.rule),
         regulationIds: deepClone(paper.regulationIds || []),
-        courseIds: deepClone(paper.courseIds || []),
+        courseIds: deepClone(learning ? learning.courseIds : paper.courseIds || []),
         createdBy: String(actorId),
       }));
       const rows = snapshots.map((snapshot, position) => releaseQuestionRepo.create({
@@ -469,6 +477,10 @@ export class PaperReleaseService implements OnModuleInit {
       }));
       await releaseQuestionRepo.save(rows);
       paper.status = 'published';
+      if (paper.businessScope === 'training') {
+        paper.updatedBy = String(actorId);
+        paper.updatedAt = new Date();
+      }
       await paperRepo.save(paper);
       return { releaseId: String(release.id) };
     });
@@ -493,6 +505,8 @@ export class PaperReleaseService implements OnModuleInit {
       paperId: String(release.paperId),
       rule: deepClone(release.ruleSnapshot),
       requiresLearning: Boolean(release.requiresLearning),
+      requiredLearningMinutes: release.requiredLearningMinutes ?? null,
+      courseIds: (release.courseIds || []).map(String),
     };
     if (release.businessScope === 'regulation') {
       return {
@@ -553,7 +567,7 @@ export class PaperReleaseService implements OnModuleInit {
       : [];
     if (paper.mode === 'random' && !published) assertActiveDifficulty(difficulty);
     const questions = paper.mode === 'random'
-      ? this.sampling.draw(pool, rule.rules, difficulty, undefined, grouping)
+      ? this.sampling.draw(pool, rule.rules, difficulty, undefined, grouping, rule.totalCents)
       : pool;
     return {
       paper_id: String(paper.id),
@@ -562,7 +576,7 @@ export class PaperReleaseService implements OnModuleInit {
       sample_kind: paper.mode === 'random' ? 'random_example' as const : 'fixed_paper' as const,
       note: paper.mode === 'random'
         ? '随机预览仅为规则与样例，不代表所有考生取得同一张试卷。'
-        : '固定卷预览使用发布题单。',
+        : published ? '固定卷预览使用发布题单。' : '固定草稿预览；发布前仍须完成分值配置。',
       difficulty: paper.mode === 'random' ? difficulty : null,
       rule: deepClone(rule),
       capacities,

@@ -6,7 +6,7 @@
 
 ## 准备
 
-1. 已执行 `030_cos_media_storage.sql`，后端与迁移工具使用同一版本实体；本工具不自动改表。
+1. 已执行 `033_cos_media_storage.sql`，后端与迁移工具使用同一版本实体；本工具不自动改表。原未部署的 COS 030 在合入主线 029—032 后顺延为 033，既有主线迁移内容不变。
 2. 从仓库根运行 `npm --prefix server run build`，工具加载本次 `server/dist/`。
 3. 根 `.env` 由使用方维护为 0600 并被 Git 忽略。`DB_HOST/PORT/USERNAME/PASSWORD/DATABASE` 指向经批准的目标，`UPLOAD_DIR` 指向实际本地文件根目录。COS 桶、地域、应用前缀及 `COS_SECRET_ID/COS_SECRET_KEY` 沿用已确认配置，两边使用同一套长期凭据。
 4. 清单放在**主仓库和 worktree 之外**的受控目录，例如 `<私有运维目录>/cos-batch.json`。新目录由工具创建为 0700，清单及锁为 0600。不要把清单复制进仓库或公开工单，清单虽不包含姓名、原件正文、签名 URL、凭据，仍包含私有存储定位。

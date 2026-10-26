@@ -65,9 +65,10 @@ export class SamplingService {
     difficulty: Difficulty,
     rng: RandomSource = new CryptoRandomSource(),
     grouping: SamplingGrouping = 'question',
+    expectedTotalCents = 10000,
   ): SelectedQuestion[] {
     const totalCents = rules.reduce((total, rule) => total + rule.count * rule.scoreCents, 0);
-    if (totalCents !== 10000) throw Errors.paperRuleInvalid(`题型规则总分必须为 10000 分，当前为 ${totalCents}`);
+    if (!Number.isInteger(expectedTotalCents) || expectedTotalCents < 1 || totalCents !== expectedTotalCents) throw Errors.paperRuleInvalid(`题型规则分值合计须为 ${expectedTotalCents / 100} 分，当前为 ${totalCents / 100} 分`);
     const validation = this.validatePool(pool, rules, difficulty, grouping);
     if (!validation.ok) throw Errors.paperPoolInsufficient(validation.deficits);
 

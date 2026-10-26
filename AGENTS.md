@@ -1,12 +1,12 @@
 # AGENTS.md — EmodorRuleExam 工作区指引
 
-培训机构管理与考试系统：资料上传解析 → AI 出题/人工导题 → 预览确认并启用 → 组卷发布 → 自动评分 → 记录与统计；课程视频学习独立保留。题库不配置分值，分值归属试卷；停用不影响历史冻结卷和考试。
+培训机构管理与考试系统：资料上传解析 → AI 出题/人工导题 → 预览确认并启用 → 组卷发布 → 自动评分 → 记录与统计；课程视频学习独立保留。题库不配置分值，分值归属试卷；停用与逻辑删除不影响历史冻结卷和考试。
 **`docs/design/`（8 册）是实现基准**：改数据库/API/流程前先读对应分册，改动后保持文档、`database/init.sql`、`server/src/entities/` 三方一致。
 
 ## 目录
 
 - `docs/design/` 设计方案 8 册（01 需求 … 07 安全与非功能、README 对照表）
-- `database/` `init.sql`（40 张业务表 + 1 张迁移元数据表，共 41 张物理表，与 03 册一致）+ `seed.mjs`（口令经环境变量注入）；当前迁移 000—028，021 考试稳定选项 ID、022 设计器存储、023 课时软删除、024 学员年龄、025 题库分值历史兼容可空、026 题目启停、027 清理题目审核权限、028 续接一次性密码回填完成探针（不改账号数据）；表变更必须同步迁移、`init.sql`、entities 与设计分册
+- `database/` `init.sql`（40 张业务表 + 1 张迁移元数据表，共 41 张物理表，与 03 册一致）+ `seed.mjs`（口令经环境变量注入）；当前迁移 000—033，021 考试稳定选项 ID、022 设计器存储、023 课时软删除、024 学员年龄、025 题库分值历史兼容可空、026 题目启停、027 清理题目审核权限、028 续接一次性密码回填完成探针（不改账号数据）、029 题目逻辑删除、030 试卷考前学习要求、031 试卷排序、032 试卷操作信息、033 COS 媒体定位与上传会话；表变更必须同步迁移、`init.sql`、entities 与设计分册
 - `server/` NestJS API：`src/common/`（信封/错误码/守卫链/Redis/审计）、`src/entities/`、`src/modules/`（auth/access/users/training/courses/question-materials/ai/questions/exams/statistics 等）；departments/regulations 只保留共享存储与历史只读依赖，不恢复旧管理 CRUD
 - `web/` Vue 3 + TS + Vite + Element Plus；`src/views/employee/` 学习端、`src/views/admin/` 管理端
 - `mobile/` uni-app + Vue 3 + TypeScript + Pinia + Wot UI 2.3.2；独立学员 H5 / MP-WEIXIN 入口，PC 管理端不复用其登录状态或答题入口
@@ -67,7 +67,7 @@ API 启动后监听 :3000，全局前缀 `api/v1`。本机开发用宿主 MySQL 
 ## COS 媒体增量
 
 - 采用[批准设计](docs/superpowers/specs/2026-10-26-cos-media-integration-design.md)与[Astra计划](docs/superpowers/plans/2026-10-26-cos-media-integration.md)，不经过SDD。local/COS按媒体行读取；PDF/DOCX原件仍本地。两边后端共用原COS密钥，浏览器只获精确临时授权。
-- 本分支新增 `030_cos_media_storage.sql`；029保留给主工作区并行题库候选，未复制。根 `.env` 由已有工具加载，`import-cos --from-env <明确源路径>` 只导入4项白名单；不得提交或打印真实值。
+- 本分支新增 `033_cos_media_storage.sql`。原 COS 候选 030 从未部署；整合主线已应用的 029—032 后顺延为 033，不改写已应用迁移或其 checksum。根 `.env` 由已有工具加载，`import-cos --from-env <明确源路径>` 只导入4项白名单；不得提交或打印真实值。
 - 实际实施/云/容量边界见[验收记录](review/2026-10-26-cos-media-acceptance.md)和[G0记录](review/2026-10-26-cos-cloud-gates.md)。不把源码、自动化或同桶配置当成真实分发/迁移完成。
 
 ## 已知坑

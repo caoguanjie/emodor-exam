@@ -36,7 +36,7 @@ export interface PoolRule {
 }
 
 export interface RuleSnapshot {
-  totalCents: 10000;
+  totalCents: number;
   passCents: number;
   durationMinutes: number;
   maxAttempts: number;

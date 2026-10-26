@@ -7,7 +7,7 @@ import { applyMigrations, listMigrations } from '../database/migrate.mjs';
 import { renderSchemaForDatabase } from './support/test-target.mjs';
 
 const BASE = '44b9d7f';
-const TARGET = '030_cos_media_storage';
+const TARGET = '033_cos_media_storage';
 const ROOT = new URL('../', import.meta.url);
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 

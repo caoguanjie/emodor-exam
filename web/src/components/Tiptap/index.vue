@@ -159,6 +159,7 @@ const emit = defineEmits<{
     'media-ready': [result: { pending: boolean; ok: boolean }];
     'edit-blocked': [message: string];
     'upload-state-change': [state: { pending: boolean; count: number }];
+    'copy-request': [clientId: string];
     'remove-request': [clientId: string];
     'move-request': [change: { client_id: string; to_index: number }];
 }>();
@@ -281,6 +282,7 @@ const editor = useEditor({
         allowStructure: () => props.allowStructure,
         onEditBlocked: (message) => emit('edit-blocked', message),
         onUploadsChange: (state) => emit('upload-state-change', state),
+        onQuestionCopyRequest: (clientId) => emit('copy-request', clientId),
         onQuestionRemoveRequest: (clientId) => emit('remove-request', clientId),
         onQuestionMoveRequest: (change) => emit('move-request', change),
         getQuestionMeta: (clientId) => props.runtimeQuestions?.[clientId] ?? props.questions[clientId],

@@ -37,6 +37,20 @@ function record(overrides: Partial<StatisticsRecord> & Pick<StatisticsRecord, 'i
 }
 
 describe('training statistics aggregation', () => {
+  it('uses the frozen 120-point target for score distribution boundaries including full marks', () => {
+    const rule = { ...RULE, totalCents: 12000, passCents: 7200, rules: [{ type: 'single' as const, count: 1, scoreCents: 12000 }] };
+    const summary = buildExamSummary({
+      records: [71, 72, 84, 96, 108, 120].map((score, index) => record({ id: String(index + 1), userId: String(index + 1), difficulty: 'easy', score, ruleSnapshot: rule })),
+      eligibleUserIds: new Set(), scoringReleaseId: '20', scoringRule: rule,
+      course: { eligible_users: 0, required_lessons: 0, completed_users: 0, completion_rate: null },
+    });
+    expect(summary.score_groups[0].distribution).toEqual([
+      { lower: 0, upper: 72, count: 1 }, { lower: 72, upper: 84, count: 1 },
+      { lower: 84, upper: 96, count: 1 }, { lower: 96, upper: 108, count: 1 },
+      { lower: 108, upper: 120, count: 2 },
+    ]);
+  });
+
   const rows: StatisticsRecord[] = [
     record({ id: '101', userId: '1', difficulty: 'easy', score: 50, status: 'failed', gradedAt: new Date('2026-10-20T01:00:00.000Z') }),
     record({ id: '102', userId: '1', difficulty: 'easy', score: 80, gradedAt: new Date('2026-10-20T05:00:00.000Z') }),

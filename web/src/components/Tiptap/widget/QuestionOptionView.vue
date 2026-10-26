@@ -23,6 +23,23 @@
     <button v-if="canReorder && !manualActions" type="button" data-option-drag-handle draggable="true" contenteditable="false"
       class="question-option__drag" :aria-label="`拖拽选项 ${label} 排序`" @dragstart.stop="dragOption">⠿</button>
     <button
+      v-if="manualActions"
+      class="question-option__toggle"
+      type="button"
+      contenteditable="false"
+      data-option-letter
+      style="display: inline-flex; align-items: center; justify-content: center"
+      :disabled="interactionDisabled"
+      :role="meta?.type === 'multiple' ? 'checkbox' : 'radio'"
+      :aria-checked="checked"
+      :class="{ 'question-option__toggle--multiple': meta?.type === 'multiple' }"
+      @mousedown.prevent
+      @click="toggleChecked"
+    >
+      {{ label }}
+    </button>
+    <button
+      v-else
       class="question-option__toggle"
       type="button"
       contenteditable="false"
@@ -41,7 +58,9 @@
     />
     <span v-if="manualActions" class="question-option__actions" contenteditable="false">
       <span v-if="checked" class="question-option__answer-label" data-answer-label>✓ 正确答案</span>
-      <button v-else-if="!interactionDisabled" type="button" class="question-option__set-answer" data-set-answer
+      <button v-if="checked && meta?.type === 'multiple' && !interactionDisabled" type="button" class="question-option__unset-answer" data-unset-answer
+        :aria-label="`取消选项 ${label} 的正确答案`" @mousedown.prevent @click.stop="toggleChecked">取消答案</button>
+      <button v-else-if="!checked && !interactionDisabled" type="button" class="question-option__set-answer" data-set-answer
         :aria-label="`设选项 ${label} 为正确答案`" @mousedown.prevent @click.stop="toggleChecked">设为答案</button>
       <button v-if="canRemove" class="question-option__remove" type="button" :aria-label="`删除选项 ${label}`"
         @mousedown.prevent @click.stop="props.editor.commands.removeQuestionOption(optionId)">×</button>
@@ -168,7 +187,11 @@ function toggleChecked() {
 }
 
 .question-option__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
+  box-sizing: border-box;
   width: 26px;
   height: 26px;
   padding: 0;
@@ -177,9 +200,11 @@ function toggleChecked() {
   background: #fff;
   color: var(--el-text-color-regular, #606266);
   cursor: pointer;
+  line-height: 1;
 }
 
-.question-option__toggle[role='checkbox'] {
+.question-option__toggle[role='checkbox'],
+.question-option__toggle--multiple {
   border-radius: 4px;
 }
 
@@ -192,6 +217,7 @@ function toggleChecked() {
 .question-option__toggle:disabled {
   cursor: default;
 }
+.question-option--manual .question-option__toggle { user-select: none; }
 
 .question-option__content {
   display: block;
@@ -206,11 +232,13 @@ function toggleChecked() {
 .question-option__order button:disabled { opacity: .35; cursor: default; }
 .question-option__answer-label { flex: none; padding: 3px 7px; border-radius: 4px; background: var(--el-color-primary-light-9, #ecf5ff); color: var(--el-color-primary, #409eff); font-size: 12px; line-height: 20px; white-space: nowrap; }
 .question-option__actions { display: flex; flex: none; align-items: center; gap: 8px; min-height: 26px; }
-.question-option__set-answer { padding: 3px 0; border: 0; background: transparent; color: var(--el-color-primary, #409eff); font-size: 12px; line-height: 20px; white-space: nowrap; cursor: pointer; opacity: 0; pointer-events: none; }
-.question-option--manual:hover .question-option__set-answer,.question-option--manual:focus-within .question-option__set-answer { opacity: 1; pointer-events: auto; }
+.question-option__set-answer,.question-option__unset-answer { padding: 3px 0; border: 0; background: transparent; color: var(--el-color-primary, #409eff); font-size: 12px; line-height: 20px; white-space: nowrap; cursor: pointer; opacity: 0; pointer-events: none; }
+.question-option__unset-answer { color: var(--el-text-color-secondary, #909399); }
+.question-option--manual:hover .question-option__set-answer,.question-option--manual:focus-within .question-option__set-answer,
+.question-option--manual:hover .question-option__unset-answer,.question-option--manual:focus-within .question-option__unset-answer { opacity: 1; pointer-events: auto; }
 .question-option--manual .question-option__remove { width: 24px; height: 24px; padding: 0; border-radius: 4px; color: var(--el-text-color-placeholder, #a8abb2); font-size: 19px; line-height: 24px; }
 .question-option--manual .question-option__remove:hover,.question-option--manual .question-option__remove:focus-visible { background: var(--el-color-danger-light-9, #fef0f0); color: var(--el-color-danger, #f56c6c); }
-.question-option__sort { display: flex; flex: none; align-items: center; gap: 0; }
+.question-option__sort { display: flex; flex-direction: row-reverse; flex: none; align-items: center; gap: 0; }
 .question-option__sort .question-option__drag { padding: 0; width: 14px; }
 .question-option__sort .question-option__order { flex-direction: column; gap: 0; opacity: 0; pointer-events: none; }
 .question-option__sort .question-option__order button { width: 18px; height: 13px; padding: 0; font-size: 12px; line-height: 13px; }

@@ -1,6 +1,5 @@
 # 无分值题库与人工录题调整验收
 
-> 提交范围说明：下文自动化与浏览器结果保留为原执行阶段的历史证据。本次严格分离提交从 HEAD 审核契约恢复本会话改动，不含另一会话的启停、考点退场、026/027 或 QuestionBankService；用户要求立即提交，未对分离候选重新运行构建、测试或浏览器验收。
 > 后续范围纠正：本文记录无分值阶段。用户随后明确要求现有录题弹窗集成真正的 Tiptap，原“未集成富文本工具栏”边界已由[融合设计](../docs/superpowers/specs/2026-10-26-manual-question-tiptap-design.md)覆盖；最新实现与验证另见 [Tiptap 集成验收](2026-10-26-manual-question-tiptap.md)。
 
 日期：2026-10-26。范围对应 `docs/superpowers/plans/2026-10-26-question-bank-without-scores.md`。

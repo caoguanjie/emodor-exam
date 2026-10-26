@@ -28,7 +28,7 @@ async function show(value = paperFixture(), extra: { mediaAdapter?: DesignerMedi
   global: { plugins: [ElementPlus] } });
   wrappers.push(wrapper); await flushPromises(); return wrapper;
 }
-function button(text: string) { return new DOMWrapper(document.body).findAll('button,[role="tab"]').find((entry) => entry.text() === text && entry.isVisible())!; }
+function button(text: string) { return new DOMWrapper(document.body).findAll('button,[role="tab"]').find((entry) => (entry.text() === text || entry.attributes('aria-label') === text) && entry.isVisible())!; }
 function latest(wrapper: VueWrapper) { return wrapper.emitted('update:modelValue')!.at(-1)![0] as PaperDesignerValue; }
 function analysisEditor(wrapper: VueWrapper) { return wrapper.findComponent(QuestionProperties).findComponent(EditorContent).props('editor') as Editor; }
 async function chooseAnalysis(wrapper: VueWrapper) {
@@ -51,23 +51,19 @@ function expectDefaultSheet(wrapper: VueWrapper, title: string) {
 }
 
 describe('reviewed paper designer regressions', () => {
-  it('opens the real 宋体 toolbar without submitting the properties form', async () => {
+  it('uses the compact analysis toolbar without submitting the properties form', async () => {
     const wrapper = await show();
     const form = wrapper.get('form.question-properties').element;
-    // Native field validation must not mask an accidental toolbar submit.
     (form as HTMLFormElement).noValidate = true;
     let submissions = 0;
     form.addEventListener('submit', (event) => { submissions += 1; event.preventDefault(); });
-    const font = wrapper.findComponent(QuestionProperties).findAll('button').find((entry) => entry.text() === '宋体')!;
-    (font.element as HTMLButtonElement).click(); await flushPromises();
-    const bold = wrapper.findComponent(QuestionProperties).findAll('button').find((entry) => entry.find('use').exists()
-      && Object.values(entry.find('use').attributes()).includes('#icon-bold'))!;
+    const toolbar = wrapper.get('[aria-label="解析格式"]');
+    const bold = toolbar.get('[aria-label="解析加粗"]');
     expect((bold.element as HTMLButtonElement).form).toBe(form);
     (bold.element as HTMLButtonElement).click(); await flushPromises();
     expect(submissions).toBe(0);
-    expect(new DOMWrapper(document.body).findAll('.fits-dropdown-item').some((entry) => entry.isVisible() && entry.text() === '黑体')).toBe(true);
-    expect(wrapper.findComponent(QuestionProperties).findAll('.menu-btn-item').filter((entry) => entry.element.tagName === 'BUTTON')
-      .every((entry) => (entry.element as HTMLButtonElement).type === 'button')).toBe(true);
+    expect(toolbar.findAll('button').every((entry) => (entry.element as HTMLButtonElement).type === 'button')).toBe(true);
+    expect(wrapper.find('.question-properties__rich .menu-btn-groups').exists()).toBe(false);
   });
 
   it('prevents an implicit native submit from navigating away from question properties', async () => {

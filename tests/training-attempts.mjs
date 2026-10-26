@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { assertTimeoutStartRace } from './training-attempts-race.mjs';
 import { assertAttemptView, assertPureTimeout, assertTimeoutFacts, examLearner, verifyExamLearner, wholeAnswers } from './support/exam-mobile-fixtures.mjs';
+import { assertDeleteReceipt } from './support/question-soft-delete-checks.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const bcrypt = require('bcryptjs');
@@ -276,6 +277,25 @@ async function runAttempts(ctx) {
     const firstSubmitted = await ctx.request(learner, 'POST', `/me/exam-records/${first.data.record_id}/submit`, wholeAnswers(first.data));
     assert.equal(firstSubmitted.status, 200, JSON.stringify(firstSubmitted));
     assert.equal(firstSubmitted.data.status, 'failed');
+    stage = 'logical deletion preserves finalized results and personal snapshots';
+    const resultBeforeDelete = await ctx.request(learner, 'GET', `/me/exam-records/${first.data.record_id}/result`);
+    assert.equal(resultBeforeDelete.status, 200);
+    const recordFactsBeforeDelete = await ctx.queryTestDb('SELECT * FROM exam_record WHERE id=?', [first.data.record_id]);
+    const itemFactsBeforeDelete = await ctx.queryTestDb('SELECT * FROM exam_record_question WHERE record_id=? ORDER BY id', [first.data.record_id]);
+    const answerFactsBeforeDelete = await ctx.queryTestDb('SELECT * FROM exam_answer WHERE exam_record_id=? ORDER BY id', [first.data.record_id]);
+    const sourceVersionBeforeDelete = await ctx.queryTestDb('SELECT * FROM question_version WHERE question_id=? ORDER BY revision', [easy.questionId]);
+    const mediaOwnersBeforeDelete = await ctx.queryTestDb('SELECT * FROM media_reference WHERE asset_id IN (?,?) ORDER BY id', [promptAssetId, answerAssetId]);
+    assertDeleteReceipt(await ctx.request(admin, 'DELETE', `/ai/questions/${easy.questionId}`, {
+      expected_version_id: easy.versionId, expected_enabled: true,
+    }), easy.questionId);
+    const resultAfterDelete = await ctx.request(learner, 'GET', `/me/exam-records/${first.data.record_id}/result`);
+    assert.equal(resultAfterDelete.status, 200);
+    assert.deepEqual(resultAfterDelete.data, resultBeforeDelete.data, 'deleting a source question cannot change an already finalized result');
+    assert.deepEqual(await ctx.queryTestDb('SELECT * FROM exam_record WHERE id=?', [first.data.record_id]), recordFactsBeforeDelete);
+    assert.deepEqual(await ctx.queryTestDb('SELECT * FROM exam_record_question WHERE record_id=? ORDER BY id', [first.data.record_id]), itemFactsBeforeDelete);
+    assert.deepEqual(await ctx.queryTestDb('SELECT * FROM exam_answer WHERE exam_record_id=? ORDER BY id', [first.data.record_id]), answerFactsBeforeDelete);
+    assert.deepEqual(await ctx.queryTestDb('SELECT * FROM question_version WHERE question_id=? ORDER BY revision', [easy.questionId]), sourceVersionBeforeDelete);
+    assert.deepEqual(await ctx.queryTestDb('SELECT * FROM media_reference WHERE asset_id IN (?,?) ORDER BY id', [promptAssetId, answerAssetId]), mediaOwnersBeforeDelete);
     const analysisTicket = await ctx.request(learner, 'POST', `/media/${answerAssetId}/tickets`, { owner_type: 'exam_record_question', owner_id: first.data.questions[0].item_id });
     assert.equal(analysisTicket.status, 200, JSON.stringify(analysisTicket));
     assert.equal((await ctx.request(null, 'GET', analysisTicket.data.content_url.replace(/^\/api\/v1/, ''))).status, 200);
@@ -434,6 +454,16 @@ async function runAttempts(ctx) {
       'INSERT INTO learning_record (user_id, regulation_id, version_id, total_seconds, max_scroll_percent, scroll_coverage, is_valid, valid_at, last_learn_at) VALUES (?, ?, 1, 60, 100, ?, 1, NOW(3), NOW(3))',
       [noLearningId, regulationId, JSON.stringify([1, 1, 1, 1, 1, 1, 1, 1, 1, 1])],
     );
+    stage = 'deleted legacy question remains available to a genuinely first start without release';
+    const [legacyReleaseCount] = await ctx.queryTestDb('SELECT COUNT(*) AS total FROM paper_release WHERE paper_id=?', [legacyPaperId]);
+    assert.equal(Number(legacyReleaseCount.total), 0, 'legacy compatibility fixture must not have a release');
+    const [legacyStartCount] = await ctx.queryTestDb('SELECT COUNT(*) AS total FROM exam_record WHERE paper_id=?', [legacyPaperId]);
+    assert.equal(Number(legacyStartCount.total), 0, 'legacy compatibility must exercise first start, not recovery');
+    assertDeleteReceipt(await ctx.request(admin, 'DELETE', `/ai/questions/${legacyQuestionId}`, {
+      expected_version_id: null, expected_enabled: true,
+    }), legacyQuestionId);
+    const legacyCurrentDetail = await ctx.request(admin, 'GET', `/ai/questions/${legacyQuestionId}`);
+    assert.equal(legacyCurrentDetail.status, 404); assert.equal(legacyCurrentDetail.code, 40401);
     const oldStart = await ctx.request(legacyActor, 'POST', `/exams/papers/${legacyPaperId}/start`);
     assert.equal(oldStart.status, 200, JSON.stringify(oldStart));
     assert.equal(typeof oldStart.data.exam_record_id, 'number');
@@ -597,7 +627,7 @@ async function runAttempts(ctx) {
       assignment_id: String(assignments[0].id),
       timeout_record_id: third.data.record_id,
       legacy_record_id: String(oldStart.data.exam_record_id),
-      assertions: 'atomic-start,snapshot,retake,rollback,media,timeout-sweeper,legacy-flow,frozen-legacy-source,terminal-recover',
+      assertions: 'atomic-start,snapshot,retake,rollback,media,timeout-sweeper,legacy-flow,frozen-legacy-source,terminal-recover,deleted-finalized-result,deleted-legacy-first-start',
     }));
   } catch (error) {
     error.message = `[training-attempts stage=${stage}] ${error.message}`;

@@ -31,6 +31,7 @@ export interface QuestionNodeRuntime {
   allowStructure?: () => boolean;
   onEditBlocked?: (message: string) => void;
   onUploadsChange?: (state: { pending: boolean; count: number }) => void;
+  onQuestionCopyRequest?: (clientId: string) => void;
   onQuestionRemoveRequest?: (clientId: string) => void;
   onQuestionMoveRequest?: (change: { client_id: string; to_index: number }) => void;
   getQuestionMeta?: (clientId: string) => QuestionRuntimeMeta | undefined;
@@ -182,13 +183,13 @@ export function getAuthoringControlDecision(
   return decideControl(editor.state.doc, position, attrs, runtimeFromEditor(editor));
 }
 
-function optionJSON(index: number): JSONContent {
+function optionJSON(text = ''): JSONContent {
   return {
     type: 'questionOption',
     attrs: { option_id: nanoid(), checked: false },
     content: [{
       type: 'paragraph',
-      content: [{ type: 'text', text: `选项${index}` }],
+      ...(text ? { content: [{ type: 'text', text }] } : {}),
     }],
   };
 }
@@ -199,7 +200,7 @@ function questionJSON(): JSONContent {
     attrs: { client_id: nanoid() },
     content: [
       { type: 'questionStem', content: [{ type: 'paragraph' }] },
-      optionJSON(1),
+      optionJSON('选项1'),
     ],
   };
 }
@@ -437,7 +438,7 @@ const QuestionCommands = Extension.create<QuestionExtensionOptions>({
         if (!context || !canEditQuestionOptions(editor, this.options.runtime, context)
           || context.node.childCount - 1 >= 26) return false;
         if (!dispatch) return true;
-        const raw = optionJSON(context.node.childCount);
+        const raw = optionJSON();
         while (findQuestionOption(state.doc, String(raw.attrs?.option_id))) raw.attrs!.option_id = nanoid();
         const position = context.pos + context.node.nodeSize - 1;
         const transaction = state.tr.insert(position, state.schema.nodeFromJSON(raw));

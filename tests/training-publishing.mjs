@@ -1041,7 +1041,7 @@ async function runPublishing(ctx) {
   assert.equal(deficitPublish.code, 40971);
   assert.match(JSON.stringify(deficitPublish.data), /"available":1/);
 
-  stage = 'training copy transitions and lists';
+  stage = 'training copy, retired transitions and historical lists';
   const maxTrainingCopyTitle = '培'.repeat(128);
   await ctx.queryTestDb('UPDATE exam_paper SET title = ? WHERE id = ?', [maxTrainingCopyTitle, fixedId]);
   const copied = await ctx.request(admin.actor, 'POST', `/admin/papers/${fixedId}/copy`);
@@ -1052,14 +1052,29 @@ async function runPublishing(ctx) {
   assert.equal(Array.from(copied.data.title).length, 128);
   const [trainingCopySource] = await ctx.queryTestDb('SELECT title FROM exam_paper WHERE id = ?', [fixedId]);
   assert.equal(trainingCopySource.title, maxTrainingCopyTitle, 'training copy must not mutate the source title');
-  const withdrawn = await ctx.request(admin.actor, 'POST', `/admin/papers/${randomId}/withdraw`);
-  assert.equal(withdrawn.status, 200, JSON.stringify(withdrawn));
-  assert.equal(withdrawn.data.status, 'withdrawn');
+  const retiredWithdraw = await ctx.request(admin.actor, 'POST', `/admin/papers/${randomId}/withdraw`);
+  assert.equal(retiredWithdraw.status, 404, 'retired withdraw URL must be unreachable');
+  const [stillPublishedAfterWithdraw] = await ctx.queryTestDb('SELECT status FROM exam_paper WHERE id = ?', [randomId]);
+  assert.equal(stillPublishedAfterWithdraw.status, 'published', 'retired withdraw URL must not change paper state');
+
+  await ctx.queryTestDb('UPDATE exam_paper SET status = ? WHERE id = ?', ['withdrawn', randomId]);
+  const withdrawnList = await ctx.request(admin.actor, 'GET', `/admin/papers?page=1&page_size=100&status=withdrawn`);
+  assert.equal(withdrawnList.status, 200, JSON.stringify(withdrawnList));
+  assert.ok(withdrawnList.data.items.some((item) => item.id === randomId && item.status === 'withdrawn'));
   const previewAfterWithdraw = await ctx.request(admin.actor, 'GET', `/admin/papers/${randomId}/preview?difficulty=hard`);
-  assert.equal(previewAfterWithdraw.status, 200, 'withdrawal must preserve the immutable release for history/active attempts');
-  const archived = await ctx.request(admin.actor, 'POST', `/admin/papers/${randomId}/archive`);
-  assert.equal(archived.status, 200);
-  assert.equal(archived.data.status, 'archived');
+  assert.equal(previewAfterWithdraw.status, 200, 'historical withdrawn state must preserve the immutable release for history/active attempts');
+
+  const retiredArchive = await ctx.request(admin.actor, 'POST', `/admin/papers/${randomId}/archive`);
+  assert.equal(retiredArchive.status, 404, 'retired archive URL must be unreachable');
+  const [stillWithdrawnAfterArchive] = await ctx.queryTestDb('SELECT status FROM exam_paper WHERE id = ?', [randomId]);
+  assert.equal(stillWithdrawnAfterArchive.status, 'withdrawn', 'retired archive URL must not change paper state');
+
+  await ctx.queryTestDb('UPDATE exam_paper SET status = ? WHERE id = ?', ['archived', randomId]);
+  const archivedList = await ctx.request(admin.actor, 'GET', `/admin/papers?page=1&page_size=100&status=archived`);
+  assert.equal(archivedList.status, 200, JSON.stringify(archivedList));
+  assert.ok(archivedList.data.items.some((item) => item.id === randomId && item.status === 'archived'));
+  const previewAfterArchive = await ctx.request(admin.actor, 'GET', `/admin/papers/${randomId}/preview?difficulty=hard`);
+  assert.equal(previewAfterArchive.status, 200, 'historical archived state must preserve the immutable release');
 
   const trainingList = await ctx.request(admin.actor, 'GET', `/admin/papers?page=1&page_size=100&category_id=${categoryId}`);
   assert.equal(trainingList.status, 200, JSON.stringify(trainingList));
@@ -1069,6 +1084,22 @@ async function runPublishing(ctx) {
   const categoryDelete = await ctx.request(admin.actor, 'DELETE', `/admin/training-categories/${categoryId}`);
   assert.equal(categoryDelete.status, 409);
   assert.equal(categoryDelete.code, 40910);
+
+  const retiredLegacyArchive = await ctx.request(admin.actor, 'POST', `/ai/papers/${legacyPaperId}/archive`);
+  assert.equal(retiredLegacyArchive.status, 404, 'retired legacy archive URL must be unreachable');
+  const [legacyStillPublished] = await ctx.queryTestDb('SELECT status FROM exam_paper WHERE id = ?', [legacyPaperId]);
+  assert.equal(legacyStillPublished.status, 'published', 'retired legacy archive URL must not change paper state');
+
+  await ctx.queryTestDb('UPDATE exam_paper SET status = ? WHERE id = ?', ['archived', legacyPaperId]);
+  const historicalLegacyDetail = await ctx.request(admin.actor, 'GET', `/ai/papers/${legacyPaperId}`);
+  assert.equal(historicalLegacyDetail.status, 200, JSON.stringify(historicalLegacyDetail));
+  assert.equal(historicalLegacyDetail.data.status, 'archived');
+  assert.equal(historicalLegacyDetail.data.release_id, legacyReleaseId);
+  assert.equal(historicalLegacyDetail.data.rules_locked, true);
+  const historicalLegacyList = await ctx.request(admin.actor, 'GET', '/ai/papers?page=1&page_size=100&status=archived');
+  assert.equal(historicalLegacyList.status, 200, JSON.stringify(historicalLegacyList));
+  assert.ok(historicalLegacyList.data.list.some((item) => String(item.id) === legacyPaperId
+    && item.status === 'archived' && item.release_id === legacyReleaseId && item.rules_locked === true));
 
   const legacyList = await ctx.request(admin.actor, 'GET', '/ai/papers?page=1&page_size=100');
   assert.equal(legacyList.status, 200);

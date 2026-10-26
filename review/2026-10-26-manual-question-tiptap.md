@@ -1,6 +1,5 @@
 # 现有新增/修订试题弹窗 Tiptap 集成验收
 
-> 提交范围说明：下文自动化与浏览器结果保留为原执行阶段的历史证据。本次严格分离提交从 HEAD 审核契约恢复本会话改动，不含另一会话的启停、考点退场、026/027 或 QuestionBankService；用户要求立即提交，未对分离候选重新运行构建、测试或浏览器验收。
 范围：[融合设计](../docs/superpowers/specs/2026-10-26-manual-question-tiptap-design.md)、[实施计划](../docs/superpowers/plans/2026-10-26-manual-question-tiptap.md)。本记录覆盖此前仅精简原表单的不足；独立于另一会话的题库启停/审核瘦身整体交付。
 
 ## 已接入的实现

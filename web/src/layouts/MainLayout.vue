@@ -61,14 +61,17 @@
         @close="closeTab"
         @action="onTabCommand"
       />
-      <el-main class="main">
-        <router-view v-slot="{ Component, route: viewRoute }">
-          <KeepAlive :max="20">
-            <component v-if="viewRoute.meta.cache" :is="Component" :key="tabCacheKey(viewRoute.fullPath, cacheVersions)" class="page-enter" />
-          </KeepAlive>
-          <component v-if="!viewRoute.meta.cache" :is="Component" :key="tabCacheKey(viewRoute.fullPath, cacheVersions)" class="page-enter" />
-        </router-view>
-      </el-main>
+      <div class="content-region">
+        <div ref="contentDialogTarget" class="content-dialog-host" />
+        <el-main class="main">
+          <router-view v-slot="{ Component, route: viewRoute }">
+            <KeepAlive :max="20">
+              <component v-if="viewRoute.meta.cache" :is="Component" :key="tabCacheKey(viewRoute.fullPath, cacheVersions)" class="page-enter" />
+            </KeepAlive>
+            <component v-if="!viewRoute.meta.cache" :is="Component" :key="tabCacheKey(viewRoute.fullPath, cacheVersions)" class="page-enter" />
+          </router-view>
+        </el-main>
+      </div>
     </el-container>
 
     <el-dialog v-model="profileVisible" title="本人资料" width="560px" class="re-form-dialog" :before-close="beforeProfileClose">
@@ -85,7 +88,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch, type Component } from 'vue';
+import { computed, onMounted, provide, reactive, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
@@ -110,6 +113,8 @@ interface NavigationGroup { id:string; name:string; path:string|null; icon:strin
 interface SiteConfig { logo_asset_id:string|null }
 interface ProfileData { real_name:string; phone:string; email:string; avatar_id:string|null; source:string|null; category_id:string|null }
 const route=useRoute(); const router=useRouter(); const auth=useAuthStore(); const tabs=useTabsStore(); const cacheVersions=reactive<TabCacheVersions>({}); const adminGroups=ref<NavigationGroup[]>([]); const siteConfig=reactive<SiteConfig>({logo_asset_id:null});
+const contentDialogTarget = ref<HTMLElement>();
+provide('contentDialogTarget', contentDialogTarget);
 const SIDEBAR_STORAGE_KEY='re_sidebar_collapsed';
 function restoreSidebarCollapsed(){try{return window.localStorage?.getItem(SIDEBAR_STORAGE_KEY)==='1'}catch{return false}}
 const sidebarCollapsed=ref(restoreSidebarCollapsed());

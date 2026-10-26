@@ -59,6 +59,7 @@ export class QuestionBankService {
     const page = Math.max(1, Number(query.page || 1));
     const pageSize = Math.min(100, Math.max(1, Number(query.page_size || 20)));
     const qb = this.questionRepo.createQueryBuilder('q');
+    qb.andWhere('q.deleted_at IS NULL');
     if (query.material_id) qb.andWhere('q.regulation_id = :materialId', { materialId: String(query.material_id) });
     if (query.category_id) qb.andWhere('q.category_id = :categoryId', { categoryId: String(query.category_id) });
     if (query.enabled !== undefined) qb.andWhere('q.is_enabled = :enabled', { enabled: query.enabled });
@@ -73,7 +74,7 @@ export class QuestionBankService {
 
   async getOne(id: string) {
     const q = await this.questionRepo.findOne({ where: { id: String(id) } });
-    if (!q) throw Errors.notFound('题目不存在');
+    if (!q || q.deletedAt) throw Errors.notFound('题目不存在');
     return this.questionView(q);
   }
 
@@ -139,7 +140,7 @@ export class QuestionBankService {
     expectedEnabled: boolean,
   ) {
     const q = await this.questionRepo.findOne({ where: { id: String(id) } });
-    if (!q) throw Errors.notFound('题目不存在');
+    if (!q || q.deletedAt) throw Errors.notFound('题目不存在');
     await this.assertTypeChangeAllowed(String(q.id), q.type, patch.type);
     const touchingCore = ['category_id', 'difficulty', 'type', 'stem', 'options', 'answer', 'content_json']
       .some((field) => (patch as Record<string, unknown>)[field] !== undefined);
@@ -180,7 +181,7 @@ export class QuestionBankService {
       const repo = manager.getRepository(Question);
       const q = enabled ? await this.versions.lockIdentityForLifecycle(String(id), manager)
         : await repo.findOne({ where: { id: String(id) }, lock: { mode: 'pessimistic_write' } });
-      if (!q) throw Errors.notFound('题目不存在');
+      if (!q || q.deletedAt) throw Errors.notFound('题目不存在');
       if ((q.currentVersionId ? String(q.currentVersionId) : null) !== expectedVersionId) throw Errors.questionVersionConflict();
       const previous = Boolean(q.isEnabled);
       if (previous === enabled) return null;
@@ -194,5 +195,30 @@ export class QuestionBankService {
       detail: change, result: 'success', source_ip: ip,
     });
     return this.getOne(id);
+  }
+
+  async softDelete(id: string, expectedVersionId: string | null, expectedEnabled: boolean, actor: { id: number; name: string }, ip: string | null) {
+    if (expectedVersionId !== null && (typeof expectedVersionId !== 'string' || !/^[1-9]\d*$/.test(expectedVersionId))) throw Errors.param('expected_version_id 必须显式提供 ID 或 null');
+    if (typeof expectedEnabled !== 'boolean') throw Errors.param('expected_enabled 必须显式提供布尔值');
+    const result = await this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(Question);
+      // The same identity row lock serializes deletion with revision and publication.
+      // No category fact is changed or acquired after this lock.
+      const q = await repo.findOne({ where: { id: String(id) }, lock: { mode: 'pessimistic_write' } });
+      if (!q) throw Errors.notFound('题目不存在');
+      if (q.deletedAt) return { deletedAt: q.deletedAt, change: null };
+      const versionId = q.currentVersionId ? String(q.currentVersionId) : null;
+      if (versionId !== expectedVersionId || Boolean(q.isEnabled) !== expectedEnabled) throw Errors.questionVersionConflict();
+      const deletedAt = new Date();
+      const previousEnabled = Boolean(q.isEnabled);
+      // Preserve every other stored fact, including the historical compatibility timestamp.
+      await repo.update(String(q.id), { deletedAt, isEnabled: false, updatedAt: q.updatedAt });
+      return { deletedAt, change: { version_id: versionId, from_enabled: previousEnabled, to_enabled: false } };
+    });
+    if (result.change) this.audit.log({
+      actor_id: actor.id, actor_name: actor.name, action: 'question.delete', object_type: 'question', object_id: id,
+      detail: { ...result.change, deleted_at: result.deletedAt.toISOString() }, result: 'success', source_ip: ip,
+    });
+    return { question_id: String(id), deleted: true as const, deleted_at: result.deletedAt.toISOString() };
   }
 }

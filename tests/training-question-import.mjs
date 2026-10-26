@@ -15,6 +15,7 @@ const { QuestionVersionService } = require('./dist/modules/questions/question-ve
 
 const HEADERS = ['category', 'type', 'difficulty', 'stem', 'options', 'answer', 'analysis'];
 const LEGACY_HEADERS = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'score'];
+const HUMAN_HEADERS = ['试题内容', '试题类型', '选项内容', '答案', '难度'];
 
 async function captchaAnswer(ctx, captchaId) {
   const redis = new Redis({
@@ -95,14 +96,34 @@ async function xlsxBytes(rows, headers = HEADERS) {
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
-async function previewFile(ctx, actor, format, bytes, categoryId, difficulty = '') {
+async function previewFile(ctx, actor, format, bytes, categoryId) {
   const request = multipart(
-    { format, category_id: categoryId, ...(difficulty ? { difficulty } : {}) },
+    { format, category_id: categoryId },
     bytes,
     `questions.${format}`,
     format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/plain; charset=utf-8',
   );
   return ctx.request(actor, 'POST', '/admin/questions/import-preview', request.body, request.headers);
+}
+
+function humanTxtBytes(rows) {
+  const blocks = rows.map((row) => [
+    `[题干]${row.stem}`,
+    `[类型]${row.type}`,
+    `[选项]${row.options || ''}`,
+    `[答案]${row.answer}`,
+    ...(Object.hasOwn(row, 'difficulty') ? [`[难度]${row.difficulty || ''}`] : []),
+  ].join('\r\n'));
+  return Buffer.from(`\uFEFF# 合成集成测试文件\r\n${blocks.join('\r\n\r\n')}\r\n`, 'utf8');
+}
+
+async function humanXlsxBytes(rows, includeDifficulty = true) {
+  const headers = includeDifficulty ? HUMAN_HEADERS : HUMAN_HEADERS.slice(0, 4);
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('试题导入');
+  sheet.addRow(headers);
+  for (const row of rows) sheet.addRow(headers.map((header) => row[header] ?? ''));
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
 async function templateRows(buffer, format) {
@@ -219,14 +240,56 @@ async function runBody(ctx) {
   const xlsxTemplate = await ctx.request(admin.actor, 'GET', '/admin/questions/import-template?format=xlsx');
   assert.equal(txtTemplate.status, 200);
   assert.equal(xlsxTemplate.status, 200);
-  assert.match(txtTemplate.headers['content-type'], /text\/tab-separated-values/);
+  assert.match(txtTemplate.headers['content-type'], /text\/plain/);
   assert.match(xlsxTemplate.headers['content-type'], /spreadsheetml\.sheet/);
-  assert.equal(txtTemplate.data.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/)[0], HEADERS.join('\t'));
-  assert.deepEqual(await templateRows(xlsxTemplate.data, 'xlsx'), await templateRows(txtTemplate.data, 'txt'));
+  assert.match(txtTemplate.data.toString('utf8'), /\[题干\]/);
+  const humanBook = new ExcelJS.Workbook();
+  await humanBook.xlsx.load(xlsxTemplate.data);
+  assert.deepEqual(humanBook.worksheets.map((sheet) => sheet.name), ['试题导入模板', '填写示例', '填写说明']);
+  assert.deepEqual(humanBook.worksheets[0].getRow(1).values.slice(1), HUMAN_HEADERS);
+  assert.equal(humanBook.worksheets[0].actualRowCount, 1, 'ordinary template first sheet must not contain examples');
+  assert.equal(humanBook.worksheets[0].getCell('B2').dataValidation.type, 'list');
+  assert.equal(humanBook.worksheets[0].getCell('E2').dataValidation.type, 'list');
+
+  const aiTxtTemplate = await ctx.request(admin.actor, 'GET', '/admin/questions/import-template?format=txt&purpose=ai');
+  const aiXlsxTemplate = await ctx.request(admin.actor, 'GET', '/admin/questions/import-template?format=xlsx&purpose=ai');
+  assert.equal(aiTxtTemplate.status, 200);
+  assert.equal(aiXlsxTemplate.status, 200);
+  assert.match(aiTxtTemplate.headers['content-type'], /text\/tab-separated-values/);
+  assert.equal(aiTxtTemplate.data.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/)[0], HEADERS.join('\t'));
+  assert.deepEqual(await templateRows(aiXlsxTemplate.data, 'xlsx'), await templateRows(aiTxtTemplate.data, 'txt'));
+
+  const missingCategoryUpload = multipart(
+    { format: 'txt' }, txtBytes(baseRows()), 'questions.txt', 'text/plain; charset=utf-8',
+  );
+  const missingCategory = await ctx.request(admin.actor, 'POST', '/admin/questions/import-preview', missingCategoryUpload.body, missingCategoryUpload.headers);
+  assert.equal(missingCategory.status, 400);
+  assert.equal(missingCategory.code, 40001);
+  assert.match(missingCategory.json?.message, /category_id/);
+
+  const humanRows = [
+    { stem: `B4 中文 TXT ${suffix}：1 < 2`, type: '单选题', options: '${正确 < 符号},${错误 > 符号}', answer: 'A', difficulty: '' },
+    { stem: `B4 中文 TXT ${suffix}：判断`, type: '判断题', options: '', answer: '错', difficulty: '困难' },
+  ];
+  const humanTxtPreview = await previewFile(ctx, admin.actor, 'txt', humanTxtBytes(humanRows), categoryId);
+  assert.equal(humanTxtPreview.status, 200, JSON.stringify(humanTxtPreview));
+  assert.deepEqual(humanTxtPreview.data.valid_rows, [2, 8]);
+  assert.deepEqual(humanTxtPreview.data.rows.map((row) => row.difficulty), ['easy', 'hard']);
+  assert.match(humanTxtPreview.data.rows[0].stem, /&lt;/);
+
+  const oldChineseRows = [{
+    试题内容: `B4 中文四列 ${suffix}`, 试题类型: '多选题',
+    选项内容: '${甲},${乙},${丙}', 答案: 'A,C',
+  }];
+  const oldChinesePreview = await previewFile(ctx, admin.actor, 'xlsx', await humanXlsxBytes(oldChineseRows, false), categoryId);
+  assert.equal(oldChinesePreview.status, 200, JSON.stringify(oldChinesePreview));
+  assert.deepEqual(oldChinesePreview.data.valid_rows, [2]);
+  assert.equal(oldChinesePreview.data.rows[0].difficulty, 'easy');
+  assert.equal(oldChinesePreview.data.rows[0].category, categoryId);
 
   const rows = baseRows();
-  const txtPreview = await previewFile(ctx, admin.actor, 'txt', txtBytes(rows), categoryId, 'hard');
-  const xlsxPreview = await previewFile(ctx, admin.actor, 'xlsx', await xlsxBytes(rows), categoryId, 'hard');
+  const txtPreview = await previewFile(ctx, admin.actor, 'txt', txtBytes(rows), categoryId);
+  const xlsxPreview = await previewFile(ctx, admin.actor, 'xlsx', await xlsxBytes(rows), categoryId);
   for (const preview of [txtPreview, xlsxPreview]) {
     assert.equal(preview.status, 200, JSON.stringify(preview));
     assert.deepEqual(preview.data.valid_rows, [2, 5]);
@@ -544,7 +607,7 @@ async function runBody(ctx) {
     for (const key of ['concept_id', 'version_concept_id', 'score', 'score_cents', 'approved_by', 'reviewed_by', 'approved_at', 'reviewed_at']) assert.equal(row[key], null, `${key} must not be written by current imports`);
   }
 
-  const duplicatePreview = await previewFile(ctx, admin.actor, 'txt', txtBytes(rows), categoryId, 'hard');
+  const duplicatePreview = await previewFile(ctx, admin.actor, 'txt', txtBytes(rows), categoryId);
   assert.equal(duplicatePreview.status, 200, JSON.stringify(duplicatePreview));
   assert.deepEqual(duplicatePreview.data.valid_rows, [], 'committed imports must remain duplicates after v2 HTML rendering');
   assert.equal(duplicatePreview.data.errors.some((item) => item.row === 3), true);

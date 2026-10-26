@@ -156,16 +156,16 @@ describe('enabled difficulty at question write boundaries', () => {
     expect(JSON.parse(state.get('ai:task:test-task')!)).toMatchObject({ status: 'completed', question_ids: [101] });
   });
 
-  it('rejects a disabled default even when every file row has its own enabled difficulty', async () => {
+  it('requires the authoritative category instead of accepting a page difficulty default', async () => {
     const service = Object.create(QuestionImportService.prototype);
     service.config = { upload: { maxImportSizeMb: 5, maxImportRows: 100 } };
     service.importBatches = { preview: async () => ({ valid_rows: [2] }) };
-    await expect(service.preview('1', await buildQuestionImportTemplate('txt'), 'txt', { difficulty: 'medium' }))
-      .rejects.toMatchObject({ code: 40001 });
+    await expect(service.preview('1', await buildQuestionImportTemplate('txt'), 'txt', {}))
+      .rejects.toMatchObject({ code: 40001, message: 'category_id 必填' });
   });
 
-  it.each(['txt', 'xlsx'] as const)('provides only importable enabled difficulties in the %s template', async (format) => {
-    const rows = await parseQuestionImportFile(await buildQuestionImportTemplate(format), format);
+  it.each(['txt', 'xlsx'] as const)('keeps AI reference templates on importable enabled difficulties in %s', async (format) => {
+    const rows = await parseQuestionImportFile(await buildQuestionImportTemplate(format, 'ai'), format);
     expect(rows.map((row) => row.difficulty)).toEqual(['easy', 'hard', 'hard']);
   });
 

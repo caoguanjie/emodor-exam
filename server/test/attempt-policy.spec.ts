@@ -232,9 +232,9 @@ function frozenRecord(id: string, status: string, attemptNo: number, overrides: 
 }
 
 describe('atomic attempt policy', () => {
-  it('preserves historical concept grouping when creating a first attempt from an existing random release', async () => {
+  it.each([10000, 12000])('preserves historical grouping and frozen total %i when starting a random release', async (totalCents) => {
     const release = published({
-      rule: { ...structuredClone(RULE), rules: [{ type: 'single', count: 2, scoreCents: 5000 }] },
+      rule: { ...structuredClone(RULE), totalCents, rules: [{ type: 'single', count: 2, scoreCents: totalCents / 2 }] },
       pool: [
         question('101', 'easy', { conceptId: 'old-group' }),
         question('102', 'easy', { conceptId: 'old-group' }),
@@ -249,8 +249,11 @@ describe('atomic attempt policy', () => {
     fixture.service.sampling = new SamplingService();
     const draw = vi.spyOn(fixture.service.sampling, 'draw');
     await fixture.service.start('9', '11');
-    expect(draw).toHaveBeenCalledWith(release.pool, release.rule.rules, 'easy', undefined, 'historical-concept');
+    expect(draw).toHaveBeenCalledWith(release.pool, release.rule.rules, 'easy', undefined, 'historical-concept', release.rule.totalCents);
     expect(fixture.savedItems).toHaveLength(2);
+    expect(fixture.savedAssignments[0].ruleSnapshot.totalCents).toBe(totalCents);
+    expect(fixture.savedRecords[0].ruleSnapshot.totalCents).toBe(totalCents);
+    expect(fixture.savedItems.reduce((sum, item) => sum + item.scoreCents, 0)).toBe(totalCents);
     expect(new Set(fixture.savedItems.map((item) => item.snapshotJson.conceptId)).size).toBe(2);
   });
   it('recovers a still-active third attempt before applying the attempt limit', () => {
@@ -452,6 +455,14 @@ describe('frozen assignment facts', () => {
 });
 
 describe('immutable question presentation', () => {
+  it('grades a 120-point snapshot without capping its full score at 100', () => {
+    const snapshot: GradingSnapshot = {
+      recordId: '71', rule: { ...structuredClone(RULE), totalCents: 12000, passCents: 7200 },
+      items: [{ ...question('103', 'easy', { scoreCents: 12000 }), itemId: '903', displayToOriginal: [0, 1], position: 0 }],
+    };
+    expect(gradeFrozenSnapshot(snapshot, new Map([['903', [1]]]))).toMatchObject({ totalCents: 12000 });
+  });
+
   it('renders from the stored display mapping without exposing grading fields', () => {
     const view = attemptQuestionView({
       id: '901',

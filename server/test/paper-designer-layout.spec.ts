@@ -56,6 +56,7 @@ function fixture(existing?: Record<string, unknown>) {
   Object.assign(service, {
     paperRepo, pqRepo,
     releaseRepo: { findOne: async () => null },
+    userRepo: { findBy: async ({ id }: any) => id.value.map((value: string) => ({ id: value, realName: null, username: 'admin' })) },
     categories: { lockActive: async (_manager: unknown, id: string) => {
       if (id !== '7') throw new Error('Unexpected category');
       return { id: '7', status: 1 };

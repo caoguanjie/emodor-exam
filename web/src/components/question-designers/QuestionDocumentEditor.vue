@@ -4,13 +4,13 @@
       <el-button v-for="item in types" :key="item.type" size="small" @click="addQuestion(item.type)">添加{{ item.label }}</el-button>
       <span>每份最多 100 题；图片选项仍使用单选或多选题。</span>
     </div>
-    <TiptapEditor ref="editor" :model-value="local.content" :questions="local.questions" profile="question"
+    <TiptapEditor ref="editor" class="question-authoring-surface" :model-value="local.content" :questions="local.questions" profile="question"
       :mode="disabled ? 'preview' : 'edit'" presentation="inline" :media-resolver="mediaResolver"
       :show-toolbar="showToolbar" :show-panels="showPanels" :compact="compact" protect-question-structure
-      :allow-structure="allowStructure"
+      :allow-structure="allowStructure" reorder-options show-answer-labels
       @update:model-value="changeContent" @question-meta-change="changeMeta" @selection-change="changeSelection"
       @edit-blocked="emit('edit-blocked', $event)" @upload-state-change="emit('upload-state-change', $event)"
-      @remove-request="emit('remove-request', $event)" @move-request="emit('move-request', $event)"
+      @copy-request="copyQuestion" @remove-request="emit('remove-request', $event)" @move-request="emit('move-request', $event)"
       @save="emit('save', clone(local))">
       <template #left-sidebar><slot name="libraries" /></template>
       <template #question-settings="{ client_id, meta, answer_summary, readonly, change }">
@@ -98,7 +98,7 @@ function publish(value: QuestionAuthoringDocument) {
 }
 function metadata(type: QuestionType): QuestionMeta {
   return { type, category_id: props.defaultCategoryId, difficulty: 'easy',
-    regulation_id: null, regulation_version_id: null, score_cents: 500, analysis: rich() };
+    regulation_id: null, regulation_version_id: null, score_cents: 0, analysis: rich() };
 }
 function changeContent(content: JSONContent) {
   const blocks = content.content || [];
@@ -164,6 +164,34 @@ function addQuestion(type: QuestionType): string | null {
   const transaction = instance.state.tr.insert(position, block);
   transaction.setSelection(TextSelection.near(transaction.doc.resolve(position + 3)));
   if (!applyStructure(transaction, { kind: 'add', client_id: clientId, to_index: instance.state.doc.childCount })) {
+    pendingCreations.delete(clientId); return null;
+  }
+  editor.value?.focus(clientId);
+  return clientId;
+}
+function copyQuestion(sourceId: string): string | null {
+  const instance = getEditor();
+  const blocks = blocksWithPositions();
+  const index = blocks.findIndex((block) => block.clientId === sourceId);
+  if (!instance || props.disabled || !props.allowStructure || index < 0 || blocks.length >= 100
+    || !isEditorMutationAllowed(instance)) return null;
+  const sourceMeta = local.value.questions[sourceId];
+  if (!sourceMeta) return null;
+  const clientId = nanoid();
+  const json = instance.state.doc.child(index).toJSON();
+  json.attrs = { ...json.attrs, client_id: clientId };
+  const renewOptions = (node: JSONContent) => {
+    if (node.type === 'questionOption') node.attrs = { ...node.attrs, option_id: nanoid() };
+    node.content?.forEach(renewOptions);
+  };
+  renewOptions(json);
+  const meta = clone(sourceMeta) as QuestionMeta & Record<string, unknown>;
+  delete meta.question_id; delete meta.base_revision; delete meta.generation_ref; delete meta.concept_id;
+  pendingCreations.set(clientId, meta);
+  const position = blocks[index]!.position + blocks[index]!.size;
+  const transaction = instance.state.tr.insert(position, instance.schema.nodeFromJSON(json));
+  transaction.setSelection(TextSelection.near(transaction.doc.resolve(position + 3)));
+  if (!applyStructure(transaction, { kind: 'add', client_id: clientId, to_index: index + 1 })) {
     pendingCreations.delete(clientId); return null;
   }
   editor.value?.focus(clientId);

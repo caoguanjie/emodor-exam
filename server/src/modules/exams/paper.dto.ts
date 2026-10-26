@@ -84,7 +84,7 @@ class DesignerLayoutValidator implements ValidatorConstraintInterface {
 export class PaperRuleDto {
   @IsIn(['single', 'multiple', 'judgment']) type!: QuestionType;
   @IsInt() @Min(1) @Max(500) count!: number;
-  @IsInt() @Min(1) @Max(10000) score_cents!: number;
+  @IsInt() @Min(1) @Max(99999) score_cents!: number;
 }
 
 export class CreateTrainingPaperDto {
@@ -94,7 +94,11 @@ export class CreateTrainingPaperDto {
   @IsOptional() @IsArray() @ArrayMaxSize(100) @ArrayUnique() @IsString({ each: true }) @Matches(ID_PATTERN, { each: true }) regulation_ids?: string[];
   @IsOptional() @IsArray() @ArrayMaxSize(100) @ArrayUnique() @IsString({ each: true }) @Matches(ID_PATTERN, { each: true }) course_ids?: string[];
   @IsOptional() @IsBoolean() requires_learning?: boolean;
-  @IsOptional() @IsNumber() @Min(0.01) @Max(100) pass_score?: number;
+  @IsOptional() @IsInt() @Min(1) @Max(2147483647) required_learning_minutes?: number | null;
+  @IsOptional() @IsString() @MaxLength(1000) remark?: string | null;
+  @ValidateIf((_object, value) => value !== undefined) @IsInt() @Min(0) @Max(2147483647) sort_order?: number;
+  @ValidateIf((_object, value) => value !== undefined) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(999.99) total_score?: number;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(999.99) pass_score?: number;
   @IsOptional() @IsInt() @Min(1) @Max(1440) duration_minutes?: number;
   @IsOptional() @IsInt() @Min(1) @Max(100) max_attempts?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(1) partial_credit_ratio?: number;
@@ -109,7 +113,11 @@ export class UpdateTrainingPaperDto {
   @IsOptional() @IsArray() @ArrayMaxSize(100) @ArrayUnique() @IsString({ each: true }) @Matches(ID_PATTERN, { each: true }) regulation_ids?: string[];
   @IsOptional() @IsArray() @ArrayMaxSize(100) @ArrayUnique() @IsString({ each: true }) @Matches(ID_PATTERN, { each: true }) course_ids?: string[];
   @IsOptional() @IsBoolean() requires_learning?: boolean;
-  @IsOptional() @IsNumber() @Min(0.01) @Max(100) pass_score?: number;
+  @IsOptional() @IsInt() @Min(1) @Max(2147483647) required_learning_minutes?: number | null;
+  @IsOptional() @IsString() @MaxLength(1000) remark?: string | null;
+  @ValidateIf((_object, value) => value !== undefined) @IsInt() @Min(0) @Max(2147483647) sort_order?: number;
+  @ValidateIf((_object, value) => value !== undefined) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(999.99) total_score?: number;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(999.99) pass_score?: number;
   @IsOptional() @IsInt() @Min(1) @Max(1440) duration_minutes?: number;
   @IsOptional() @IsInt() @Min(1) @Max(100) max_attempts?: number;
   @IsOptional() @IsNumber() @Min(0) @Max(1) partial_credit_ratio?: number;
@@ -119,7 +127,7 @@ export class UpdateTrainingPaperDto {
 
 export class FixedQuestionDto {
   @IsString() @Matches(ID_PATTERN) question_version_id!: string;
-  @IsInt() @Min(1) @Max(10000) score_cents!: number;
+  @IsInt() @Min(0) @Max(99999) score_cents!: number;
 }
 
 export class SetTrainingQuestionsDto {
@@ -155,7 +163,8 @@ export class PaperPreviewQueryDto {
 
 export const PAPER_CREATE_KEYS = [
   'title', 'mode', 'category_id', 'regulation_ids', 'course_ids', 'requires_learning',
-  'pass_score', 'duration_minutes', 'max_attempts', 'partial_credit_ratio', 'rules', 'designer_layout',
+  'required_learning_minutes', 'remark', 'sort_order',
+  'total_score', 'pass_score', 'duration_minutes', 'max_attempts', 'partial_credit_ratio', 'rules', 'designer_layout',
 ] as const;
 export const PAPER_UPDATE_KEYS = PAPER_CREATE_KEYS;
 export const PAPER_LIST_KEYS = ['page', 'page_size', 'keyword', 'category_id', 'mode', 'status'] as const;

@@ -65,7 +65,7 @@ export interface PoolRule {
 }
 
 export interface RuleSnapshot {
-  totalCents: 10000;
+  totalCents: number;
   passCents: number;
   durationMinutes: number;
   maxAttempts: number;
@@ -647,12 +647,17 @@ export interface PaperRuleInput {
 }
 
 export interface TrainingPaperSummary {
+  created_by_name?: string | null;
+  updated_by_name?: string | null;
   id: Id;
+  sort_order?: number;
   title: string;
   business_scope: 'training';
   mode: PaperMode;
   category_id: Id;
   requires_learning: boolean;
+  required_learning_minutes: number | null;
+  remark: string | null;
   regulation_ids: Id[];
   course_ids: Id[];
   rules: PaperRuleInput[];
@@ -714,7 +719,7 @@ export interface PaperPreview {
   note: string;
   difficulty: Difficulty | null;
   rule: {
-    total_cents: 10000;
+    total_cents: number;
     pass_cents: number;
     duration_minutes: number;
     max_attempts: number;

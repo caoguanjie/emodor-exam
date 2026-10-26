@@ -26,6 +26,10 @@ export class PaperRelease {
   @Column({ name: 'requires_learning', type: 'tinyint', unsigned: true, default: 0 })
   requiresLearning: number;
 
+  /** 随发布冻结；NULL 的历史版本保留原开考语义。 */
+  @Column({ name: 'required_learning_minutes', type: 'int', unsigned: true, nullable: true })
+  requiredLearningMinutes: number | null;
+
   @Column({ name: 'rule_snapshot', type: 'json' })
   ruleSnapshot: RuleSnapshot;
 

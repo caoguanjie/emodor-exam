@@ -14,6 +14,7 @@ web/.env
 
 # 依赖与构建产物
 node_modules/
+.vite/
 /dist/
 server/dist/
 web/dist/
@@ -32,6 +33,9 @@ server/data/
 
 # GUI 测试截图（一次性本地证据，报告在 review/；不进仓库）
 gui-test-screenshots/
+
+# 管理日报（本地归档，不进仓库）
+docs/_reference/claude-workflows/日报/
 
 # 本地存储分析产物（不属于项目源码）
 storage-analysis-report.html

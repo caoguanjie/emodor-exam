@@ -201,16 +201,4 @@ export class PaperAdminController {
   copy(@Param('id') paperId: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.papers.copyTraining(id(paperId, 'paper_id'), this.actor(user), req.ip || null);
   }
-
-  @Post(':id/withdraw')
-  @Permissions('papers:publish')
-  withdraw(@Param('id') paperId: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    return this.papers.withdrawTraining(id(paperId, 'paper_id'), this.actor(user), req.ip || null);
-  }
-
-  @Post(':id/archive')
-  @Permissions('papers:publish')
-  archive(@Param('id') paperId: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
-    return this.papers.archiveTraining(id(paperId, 'paper_id'), this.actor(user), req.ip || null);
-  }
 }

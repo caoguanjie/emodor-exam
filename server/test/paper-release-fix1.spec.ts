@@ -377,6 +377,7 @@ describe('paper copy title boundary', () => {
     Object.assign(service, {
       paperRepo,
       releaseService: { latestForPaper: vi.fn(async () => null) },
+      userRepo: { findBy: vi.fn(async ({ id }: any) => id.value.map((value: string) => ({ id: value, realName: null, username: 'admin' }))) },
       categories: { lockActive: vi.fn(async () => ({ id: '7', status: 1 })) },
       dataSource: { transaction: (work: (value: any) => Promise<unknown>) => work(manager) },
       audit: { log: vi.fn() },

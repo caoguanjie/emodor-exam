@@ -24,53 +24,8 @@
                 </button>
             </el-tooltip>
         </div>
-        <div class="menu-btn-group">
-            <el-popover placement="bottom" width="100" :visible="state.showInsertPopover" :offset="5" :hide-after="0"
-                :show-arrow="false" popper-class="ruleexam-tiptap-popover-menu">
-                <ul class="fits-dropdown-menu">
-                    <!-- 表格选择 -->
-                    <el-popover class="box-item" :offset="0" trigger="hover" v-model:visible="state.showTablePopover"
-                        width="185" :show-arrow="false" :hide-after="0" placement="right-start">
-                        <div ref="ignoreTablePopverElement">
-                            <!-- 行列提示 -->
-                            <div class="grid-header">
-                                {{ selectedCols }} × {{ selectedRows }} 表格
-                            </div>
-                            <!-- 表格选择网格 -->
-                            <div class="table-grid" @mousemove="handleMouseMove" @click.stop="insertTable">
-                                <div v-for="row in maxRows" :key="row" class="table-grid-row">
-                                    <div v-for="col in maxCols" :key="col" class="table-grid-cell" :class="{
-                                        'active': row <= selectedRows && col <= selectedCols
-                                    }"></div>
-                                </div>
-                            </div>
-                        </div>
-                        <template #reference>
-                            <li class="fits-dropdown-item" v-click-outside="closeInsertPopover" @click="insertTable">
-                                <SvgIcon icon-class="table-view"></SvgIcon>
-                                <span>表格</span>
-                            </li>
-                        </template>
-                    </el-popover>
-
-                    <li class="fits-dropdown-item" @click="editor.chain().focus().setHorizontalRule().run()">
-                        <SvgIcon icon-class="page-separator"></SvgIcon>
-                        <span>分割线</span>
-                    </li>
-                    <li class="fits-dropdown-item">
-                        <SvgIcon icon-class="image-line"></SvgIcon>
-                        <span>图片</span>
-                    </li>
-                </ul>
-                <template #reference>
-                    <div class="menu-btn-item" @click="state.showInsertPopover = !state.showInsertPopover"
-                        ref="ignoreMenuBtnElement">
-                        <SvgIcon icon-class="add-circle-line" style="margin-right: 4px;"></SvgIcon>
-                        <span class="menu-btn-item_name">插入</span>
-                        <SvgIcon icon-class="arrow-down-s-line" style="color: #aab4bf"></SvgIcon>
-                    </div>
-                </template>
-            </el-popover>
+        <div v-if="$slots['insert-action']" class="menu-btn-group">
+            <slot name="insert-action" />
         </div>
         <div class="menu-btn-group">
             <el-popover placement="bottom" width="95" :visible="state.showFontPopover" :offset="5" :hide-after="0"
@@ -113,29 +68,14 @@
 
                 </ul>
                 <template #reference>
-                    <button type="button" class="menu-btn-item" @click="state.showFontSizePopover = !state.showFontSizePopover"
-                        ref="ignoreFontSizePopverElement">
-                        <span class="menu-btn-item_name">{{ fontSize }}</span>
-                        <SvgIcon icon-class="arrow-down-s-line" style="color: #aab4bf"></SvgIcon>
-                    </button>
-                </template>
-            </el-popover>
-            <el-popover placement="bottom" width="65" :visible="state.showLineHeightPopover" :offset="5" :hide-after="0"
-                :show-arrow="false" popper-class="ruleexam-tiptap-popover-menu">
-                <ul class="fits-dropdown-menu" @click="state.showLineHeightPopover = false"
-                    v-click-outside="($event: any) => closeAllPopover($event, ignoreLineHeightPopverElement, 'showLineHeightPopover')">
-                    <li class="fits-dropdown-item" v-for="(item, index) in lineHeightArray" :key="index"
-                        @click="editor.chain().focus().setLineHeight(item.toString()).run()">
-                        <span>{{ item }}</span>
-                    </li>
-
-                </ul>
-                <template #reference>
-                    <button type="button" class="menu-btn-item" @click="state.showLineHeightPopover = !state.showLineHeightPopover"
-                        ref="ignoreLineHeightPopverElement">
-                        <SvgIcon icon-class="line-height"></SvgIcon>
-                        <SvgIcon icon-class="arrow-down-s-line" style="color: #aab4bf"></SvgIcon>
-                    </button>
+                    <el-tooltip effect="dark" content="字号，单位：磅（pt）" placement="top" :offset="5"
+                        :show-after="0" :hide-after="0" :show-arrow="false" popper-class="ruleexam-tiptap-tooltip-btn">
+                        <button type="button" class="menu-btn-item" @click="state.showFontSizePopover = !state.showFontSizePopover"
+                            ref="ignoreFontSizePopverElement" :aria-label="`字号：${fontSize} 磅（pt）`">
+                            <span class="menu-btn-item_name">{{ fontSize }} pt</span>
+                            <SvgIcon icon-class="arrow-down-s-line" style="color: #aab4bf"></SvgIcon>
+                        </button>
+                    </el-tooltip>
                 </template>
             </el-popover>
             <el-tooltip class="box-item" effect="dark" content="加粗" placement="bottom" :offset="5" :hide-after="0"
@@ -160,30 +100,6 @@
                     :disabled="!editor?.can().chain().focus().toggleUnderline().run()"
                     :class="{ 'is-active': editor?.isActive('underline') }">
                     <SvgIcon icon-class="underline"></SvgIcon>
-                </button>
-            </el-tooltip>
-            <el-tooltip class="box-item" effect="dark" content="删除线" placement="bottom" :offset="5" :hide-after="0"
-                :show-arrow="false" popper-class="ruleexam-tiptap-tooltip-btn">
-                <button type="button" class="menu-btn-item" @click="editor?.chain().focus().toggleStrike().run()"
-                    :disabled="!editor?.can().chain().focus().toggleStrike().run()"
-                    :class="{ 'is-active': editor?.isActive('strike') }">
-                    <SvgIcon icon-class="strikethrough"></SvgIcon>
-                </button>
-            </el-tooltip>
-            <el-tooltip class="box-item" effect="dark" content="上标" placement="bottom" :offset="5" :hide-after="0"
-                :show-arrow="false" popper-class="ruleexam-tiptap-tooltip-btn">
-                <button type="button" class="menu-btn-item" @click="editor?.chain().focus().toggleSuperscript().run()"
-                    :disabled="!editor?.can().chain().focus().toggleSuperscript().run()"
-                    :class="{ 'is-active': editor?.isActive('superscript') }">
-                    <SvgIcon icon-class="superscript"></SvgIcon>
-                </button>
-            </el-tooltip>
-            <el-tooltip class="box-item" effect="dark" content="下标" placement="bottom" :offset="5" :hide-after="0"
-                :show-arrow="false" popper-class="ruleexam-tiptap-tooltip-btn">
-                <button type="button" class="menu-btn-item" @click="editor?.chain().focus().toggleSubscript().run()"
-                    :disabled="!editor?.can().chain().focus().toggleSubscript().run()"
-                    :class="{ 'is-active': editor?.isActive('subscript') }">
-                    <SvgIcon icon-class="subscript"></SvgIcon>
                 </button>
             </el-tooltip>
             <el-popover placement="bottom" width="216" :visible="state.showFontColorPopover" :offset="5" :hide-after="0"
@@ -410,47 +326,140 @@
 
         </div>
         <div class="menu-btn-group">
-            <el-tooltip class="box-item" effect="dark" content="增加缩进" placement="bottom" :offset="5" :hide-after="0"
-                :show-arrow="false" popper-class="ruleexam-tiptap-tooltip-btn">
-                <button type="button" class="menu-btn-item" @click="editor?.chain().focus().increaseIndent().run()">
-                    <SvgIcon icon-class="indent-increase"></SvgIcon>
-                </button>
-            </el-tooltip>
-            <el-tooltip class="box-item" effect="dark" content="减少缩进" placement="bottom" :offset="5" :hide-after="0"
-                :show-arrow="false" popper-class="ruleexam-tiptap-tooltip-btn">
-                <button type="button" class="menu-btn-item" @click="editor?.chain().focus().decreaseIndent().run()">
-                    <SvgIcon icon-class="indent-decrease"></SvgIcon>
-                </button>
-            </el-tooltip>
-            <el-popover placement="bottom" width="110" :visible="state.showTextAlign" :offset="5" :hide-after="0"
-                :show-arrow="false" popper-class="ruleexam-tiptap-popover-menu">
-                <ul class="fits-dropdown-menu" @click="state.showTextAlign = false"
-                    v-click-outside="($event: any) => closeAllPopover($event, ignoreTextAlignElement, 'showTextAlign')">
-                    <li class="fits-dropdown-item" @click="editor?.chain().focus().setTextAlign('center').run()"
-                        :class="{ 'is-active': editor?.isActive({ textAlign: 'center' }) }">
-                        <SvgIcon icon-class="align-center"></SvgIcon>
-                        <span style="font-size: 12px">居中对齐</span>
-                    </li>
-                    <li class="fits-dropdown-item" @click="editor?.chain().focus().setTextAlign('justify').run()"
-                        :class="{ 'is-active': editor?.isActive({ textAlign: 'justify' }) }">
-                        <SvgIcon icon-class="align-justify"></SvgIcon>
-                        <span style="font-size: 12px">两端对齐</span>
-                    </li>
-                    <li class="fits-dropdown-item" :class="{ 'is-active': editor?.isActive({ textAlign: 'left' }) }"
-                        @click="editor?.chain().focus().setTextAlign('left').run()">
-                        <SvgIcon icon-class="align-left"></SvgIcon>
-                        <span style="font-size: 12px">左对齐</span>
-                    </li>
-                    <li class="fits-dropdown-item" @click="editor.chain().focus().setTextAlign('right').run()"
-                        :class="{ 'is-active': editor?.isActive({ textAlign: 'right' }) }">
-                        <SvgIcon icon-class="align-right"></SvgIcon>
-                        <span style="font-size: 12px">右对齐</span>
-                    </li>
+            <el-popover placement="bottom" width="150" trigger="click" v-model:visible="state.showParagraphPopover"
+                :offset="5" :show-arrow="false" popper-class="ruleexam-tiptap-popover-menu"
+                @hide="state.showTextAlign = false; state.showLineHeightPopover = false">
+                <div class="fits-dropdown-menu" style="overflow: visible" @mousedown.prevent>
+                    <el-popover placement="right-start" width="90" trigger="click" :teleported="false" v-model:visible="state.showLineHeightPopover" :offset="5" :hide-after="0"
+                        :show-arrow="false" popper-class="ruleexam-tiptap-popover-menu">
+                        <ul class="fits-dropdown-menu" @click="state.showLineHeightPopover = false; state.showParagraphPopover = false">
+                            <li class="fits-dropdown-item" v-for="(item, index) in lineHeightArray" :key="index"
+                                @click="editor.chain().focus().setLineHeight(item.toString()).run()">
+                                <span>{{ item }}</span>
+                            </li>
 
+                        </ul>
+                        <template #reference>
+                            <button type="button" class="fits-dropdown-item paragraph-menu-action" :aria-expanded="state.showLineHeightPopover">
+                                <SvgIcon icon-class="line-height" /><span>行距</span>
+                                <SvgIcon icon-class="arrow-down-s-line" style="margin-left: auto; transform: rotate(-90deg)"></SvgIcon>
+                            </button>
+                        </template>
+                    </el-popover>
+                    <el-popover placement="right-start" width="130" trigger="click" v-model:visible="state.showTextAlign"
+                        :teleported="false" :offset="5" :show-arrow="false" popper-class="ruleexam-tiptap-popover-menu">
+                        <ul class="fits-dropdown-menu" @click="state.showTextAlign = false; state.showParagraphPopover = false"
+                            @mousedown.prevent>
+                            <li class="fits-dropdown-item" @click="editor?.chain().focus().setTextAlign('center').run()"
+                                :class="{ 'is-active': editor?.isActive({ textAlign: 'center' }) }">
+                                <SvgIcon icon-class="align-center"></SvgIcon>
+                                <span style="font-size: 12px">居中对齐</span>
+                            </li>
+                            <li class="fits-dropdown-item" @click="editor?.chain().focus().setTextAlign('justify').run()"
+                                :class="{ 'is-active': editor?.isActive({ textAlign: 'justify' }) }">
+                                <SvgIcon icon-class="align-justify"></SvgIcon>
+                                <span style="font-size: 12px">两端对齐</span>
+                            </li>
+                            <li class="fits-dropdown-item" :class="{ 'is-active': editor?.isActive({ textAlign: 'left' }) }"
+                                @click="editor?.chain().focus().setTextAlign('left').run()">
+                                <SvgIcon icon-class="align-left"></SvgIcon>
+                                <span style="font-size: 12px">左对齐</span>
+                            </li>
+                            <li class="fits-dropdown-item" @click="editor.chain().focus().setTextAlign('right').run()"
+                                :class="{ 'is-active': editor?.isActive({ textAlign: 'right' }) }">
+                                <SvgIcon icon-class="align-right"></SvgIcon>
+                                <span style="font-size: 12px">右对齐</span>
+                            </li>
+
+                        </ul>
+                        <template #reference>
+                            <button type="button" class="fits-dropdown-item paragraph-menu-action" :aria-expanded="state.showTextAlign">
+                                <SvgIcon :icon-class="textAlign" /><span>对齐方式</span>
+                                <SvgIcon icon-class="arrow-down-s-line" style="margin-left: auto; transform: rotate(-90deg)" />
+                            </button>
+                        </template>
+                    </el-popover>
+                    <button type="button" class="fits-dropdown-item paragraph-menu-action"
+                        @click="editor?.chain().focus().increaseIndent().run(); state.showParagraphPopover = false">
+                        <SvgIcon icon-class="indent-increase" /><span>增加缩进</span>
+                    </button>
+                    <button type="button" class="fits-dropdown-item paragraph-menu-action"
+                        @click="editor?.chain().focus().decreaseIndent().run(); state.showParagraphPopover = false">
+                        <SvgIcon icon-class="indent-decrease" /><span>减少缩进</span>
+                    </button>
+                </div>
+                <template #reference>
+                    <button type="button" class="menu-btn-item" @mousedown.prevent :aria-expanded="state.showParagraphPopover" aria-label="段落">
+                        <SvgIcon :icon-class="textAlign" />
+                        <span class="menu-btn-item_name" style="margin-left: 4px">段落</span>
+                        <SvgIcon icon-class="arrow-down-s-line" style="color: #aab4bf" />
+                    </button>
+                </template>
+            </el-popover>
+        </div>
+        <div class="menu-btn-group">
+            <el-popover placement="bottom" width="150" trigger="click" v-model:visible="state.showInsertPopover" :offset="5" :hide-after="0"
+                @hide="state.showTablePopover = false"
+                :show-arrow="false" popper-class="ruleexam-tiptap-popover-menu">
+                <ul class="fits-dropdown-menu" style="overflow: visible" @mousedown.prevent>
+                    <!-- 表格选择 -->
+                    <el-popover class="box-item" :offset="0" trigger="hover" v-model:visible="state.showTablePopover"
+                        :teleported="false" width="185" :show-arrow="false" :hide-after="0" placement="right-start">
+                        <div ref="ignoreTablePopverElement">
+                            <!-- 行列提示 -->
+                            <div class="grid-header">
+                                {{ selectedCols }} × {{ selectedRows }} 表格
+                            </div>
+                            <!-- 表格选择网格 -->
+                            <div class="table-grid" @mousemove="handleMouseMove" @click.stop="insertTable">
+                                <div v-for="row in maxRows" :key="row" class="table-grid-row">
+                                    <div v-for="col in maxCols" :key="col" class="table-grid-cell" :class="{
+                                        'active': row <= selectedRows && col <= selectedCols
+                                    }"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <template #reference>
+                            <li class="fits-dropdown-item">
+                                <SvgIcon icon-class="table-view"></SvgIcon>
+                                <span>表格</span>
+                            </li>
+                        </template>
+                    </el-popover>
+
+                    <li class="fits-dropdown-item" @click="editor.chain().focus().setHorizontalRule().run(); state.showInsertPopover = false">
+                        <SvgIcon icon-class="page-separator"></SvgIcon>
+                        <span>分隔线</span>
+                    </li>
+                    <li>
+                        <button type="button" class="fits-dropdown-item paragraph-menu-action"
+                            @click="editor?.chain().focus().toggleSuperscript().run(); state.showInsertPopover = false"
+                            :disabled="!editor?.can().chain().focus().toggleSuperscript().run()"
+                            :class="{ 'is-active': editor?.isActive('superscript') }">
+                            <SvgIcon icon-class="superscript" /><span>上标</span>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="fits-dropdown-item paragraph-menu-action"
+                            @click="editor?.chain().focus().toggleSubscript().run(); state.showInsertPopover = false"
+                            :disabled="!editor?.can().chain().focus().toggleSubscript().run()"
+                            :class="{ 'is-active': editor?.isActive('subscript') }">
+                            <SvgIcon icon-class="subscript" /><span>下标</span>
+                        </button>
+                    </li>
+                    <li>
+                        <button type="button" class="fits-dropdown-item paragraph-menu-action"
+                            @click="editor?.chain().focus().toggleStrike().run(); state.showInsertPopover = false"
+                            :disabled="!editor?.can().chain().focus().toggleStrike().run()"
+                            :class="{ 'is-active': editor?.isActive('strike') }">
+                            <SvgIcon icon-class="strikethrough" /><span>删除线</span>
+                        </button>
+                    </li>
                 </ul>
                 <template #reference>
-                    <button type="button" class="menu-btn-item" @click="state.showTextAlign = true" ref="ignoreTextAlignElement">
-                        <SvgIcon :icon-class="textAlign"></SvgIcon>
+                    <button type="button" class="menu-btn-item" @mousedown.prevent :aria-expanded="state.showInsertPopover" aria-label="插入">
+                        <SvgIcon icon-class="add-circle-line" style="margin-right: 4px;"></SvgIcon>
+                        <span class="menu-btn-item_name">插入</span>
                         <SvgIcon icon-class="arrow-down-s-line" style="color: #aab4bf"></SvgIcon>
                     </button>
                 </template>
@@ -480,6 +489,7 @@ const state = reactive({
     showLineHeightPopover: false,
     // 显示行高的popover
     showInsertPopover: false,
+    showParagraphPopover: false,
     // 对齐方式
     showTextAlign: false,
     // 设置颜色
@@ -492,11 +502,8 @@ const state = reactive({
 })
 
 const lineHeightArray = ref([1, 1.2, 1.5, 1.75, 2, 2.5, 3])
-const ignoreMenuBtnElement = ref(); // 忽略点击的元素
 const ignoreFontPopverElement = ref();
 const ignoreFontSizePopverElement = ref();
-const ignoreLineHeightPopverElement = ref();
-const ignoreTextAlignElement = ref();
 const ignoreBackgroundColorPopverElement = ref();
 const ignoreFontColorPopverElement = ref();
 const ignoreTablePopverElement = ref(); // 忽略点击的元素
@@ -583,15 +590,6 @@ function insertTable() {
         state.showInsertPopover = false;
     })
 }
-function closeInsertPopover(event: any) {
-    // 关闭插入弹框
-    if (ignoreMenuBtnElement.value?.contains(event.target) || ignoreTablePopverElement?.value?.contains(event.target)) {
-        // console.log('点击的是忽略的元素');
-        return;
-    }
-    // console.log('点击了外部区域', event);
-    state.showInsertPopover = false;
-}
 function closeAllPopover(event: any, ignoreElement: any, varName: string) {
     if (ignoreElement?.contains(event.target)) {
         return;
@@ -610,6 +608,7 @@ function handleMouseLeaveTable(event: MouseEvent) {
 }
 </script>
 <style lang='scss' scoped>
+.paragraph-menu-action { width: 100%; border: 0; font: inherit; color: inherit; text-align: left; }
 .menu-btn-groups {
     display: flex;
     align-items: center;

@@ -34,7 +34,7 @@
 - 视频默认上限 512 MiB、图片默认上限 10 MiB；MP4/H.264、音轨 AAC；现有图片类型/像素和真实解码约束保留。
 - 视频学习仍为 30 秒心跳、45 秒封顶、2 秒容差和 95% 去重覆盖；续票不能重建学习会话或补时。
 - 本地 COS/媒体后端配置保存在根目录 `.env`（0600、Git 忽略），沿用 `env:init/env:check/start:local` 及 Node `--env-file=.env`；本地迁移/检查工具共用该文件。只按白名单从明确指定的 gooodwork 环境文件导入共享 COS 凭据，不复制其他系统密钥或项目配置；不把真实值、签名 URL 或实名材料放入示例、日志、前端包或仓库。
-- 数据库无外键；新迁移带可续跑探针，同步 init/entities/设计；不改既有 checksum。初稿基线到 028，当前并行工作区已出现 `029_question_soft_delete.sql`，执行时重新选定下一可用号。
+- 数据库无外键；新迁移带可续跑探针，同步 init/entities/设计；不改既有 checksum。初稿基线到 028，原 COS 候选使用030但从未部署；整合主线已应用的029—032后改为下一可用号033，主线既有迁移内容与checksum不变。
 - 生产 COS 配置缺失即失败，不静默回落本地；混合数据按每条资源的驱动读取。
 - PC 视频续传为本期验收端；H5 图片简单直传；小程序保留受控代理上传；实名沿用专用处理入口。
 - 本地源文件保留回退副本；删除须另行批准。云端变更先形成具体 diff，再授权最后一步；本计划不代签授权。
@@ -215,9 +215,9 @@ type UploadGrant =
 
 ## Task 2: 媒体定位字段、上传会话与可续跑迁移
 
-**Files:** Modify `server/src/entities/media-asset.entity.ts`、`database/init.sql`、`server/src/app.module.ts`、`docs/design/03-数据库设计.md`、`docs/design/README.md`、`AGENTS.md`、`tests/run-e2e.mjs`；Create `server/src/entities/media-upload-session.entity.ts`、`server/src/modules/media/uploads/media-upload.contract.ts`、`database/migrations/030_cos_media_storage.sql`、`tests/cos-media-migration.test.mjs`、`tests/cos-media-schema.mjs`；extend `tests/migration-catalog.test.mjs`。
+**Files:** Modify `server/src/entities/media-asset.entity.ts`、`database/init.sql`、`server/src/app.module.ts`、`docs/design/03-数据库设计.md`、`docs/design/README.md`、`AGENTS.md`、`tests/run-e2e.mjs`；Create `server/src/entities/media-upload-session.entity.ts`、`server/src/modules/media/uploads/media-upload.contract.ts`、`database/migrations/033_cos_media_storage.sql`、`tests/cos-media-migration.test.mjs`、`tests/cos-media-schema.mjs`；extend `tests/migration-catalog.test.mjs`。
 
-**Interfaces:** Produces `MediaUploadSession` entity；原 `MediaAsset` 增量字段 `storageProvider`、`cosBucket`、`cosRegion`、`cosVersionId`、`etag`、`crc64`。执行时已核验并选定 030；主工作区并行 029 保留，不复制到本分支。迁移运行器允许编号空缺。
+**Interfaces:** Produces `MediaUploadSession` entity；原 `MediaAsset` 增量字段 `storageProvider`、`cosBucket`、`cosRegion`、`cosVersionId`、`etag`、`crc64`。初次实施选定的COS迁移030从未部署；本次整合主线029—032后改为033。当前序列000—033，主线已应用迁移保持原内容与checksum。
 
 - [x] **Step 1 — 写 schema 失败用例并绑定编号。** 新字段使用 provider VARCHAR(16) NOT NULL DEFAULT 'local'，bucket VARCHAR(255)、region VARCHAR(64)、version VARCHAR(255)、etag VARCHAR(255)、crc64 VARCHAR(64) 均 nullable。会话含 UUID PK、owner/uploaded_by BIGINT、request UUID、request_digest CHAR(64)、用途/原名/声明类型/大小/指纹、staging locator、uploadId、state、expiresAt、lastCredentialExpiresAt、claimId/leaseUntil、候选对象 JSON、assetId/receipt JSON、错误和时间戳。唯一键 `(uploaded_by, client_request_id)`；队列/清理索引覆盖 state+lease/expiry。断言旧行仍为 local、原 ID/引用不变、重复 request 冲突、无外键、漂移探针拒绝缺列或错误索引。
 - [x] **Step 2 — 验证失败。** `node --test tests/cos-media-migration.test.mjs tests/migration-catalog.test.mjs`；新 DDL/探针断言失败。

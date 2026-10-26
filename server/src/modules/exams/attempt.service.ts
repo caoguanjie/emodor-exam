@@ -33,6 +33,7 @@ import { ShuffleService } from './shuffle.service';
 import { assertExamIdentity, expireExamRecord } from './exam-state';
 import { parseQuestionContent } from '../questions/question-content-dispatch';
 import { assertContentCapability, requiredContentCapability } from './question-content-capability';
+import { assertPaperLearningEligible } from './paper-learning';
 
 type AttemptRecordFact = { attemptNo: number; status: string };
 
@@ -375,13 +376,15 @@ export class AttemptService {
       });
       if (transition.kind !== 'create') throw Errors.examInProgress();
 
+      if (release) await assertPaperLearningEligible(manager, String(user.id), release);
+
       if (!pool) {
         if (!release) throw Errors.paperReleaseConflict('个人考试缺少冻结题池');
         if (release.businessScope === 'training' && release.mode === 'random') {
           if (difficulty !== 'easy' && difficulty !== 'hard') throw Errors.paperRuleInvalid('随机组卷难度必须是初级或高级');
           // Old releases retain their frozen concept grouping. New releases
           // have no concepts, so this falls back to stable question identity.
-          pool = this.sampling.draw(release.pool, rule.rules, difficulty, undefined, 'historical-concept');
+          pool = this.sampling.draw(release.pool, rule.rules, difficulty, undefined, 'historical-concept', rule.totalCents);
         } else {
           pool = release.pool.map((item) => deepClone(item));
         }

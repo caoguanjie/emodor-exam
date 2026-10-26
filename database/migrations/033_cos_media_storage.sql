@@ -1,4 +1,4 @@
--- 030_cos_media_storage: add per-asset storage location and durable upload sessions.
+-- 033_cos_media_storage: add per-asset storage location and durable upload sessions.
 -- Existing IDs, hashes and business references are preserved; no file movement.
 
 -- @step media_storage

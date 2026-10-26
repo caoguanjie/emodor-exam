@@ -6,6 +6,7 @@ import { QuestionGenerationService } from '../src/modules/ai/question-generation
 import { AiController } from '../src/modules/ai/ai.controller';
 import { QuestionBankService } from '../src/modules/questions/question-bank.service';
 import { PaperService } from '../src/modules/ai/paper.service';
+import { PaperAdminController } from '../src/modules/exams/paper-admin.controller';
 
 const MATERIAL_SERVICE_MODULE = '../src/modules/question-materials/question-materials.service';
 const MATERIAL_CONTROLLER_MODULE = '../src/modules/question-materials/question-materials.controller';
@@ -272,6 +273,22 @@ describe('training demo admin slimming', () => {
     expect(routes).toContain('generate-status/:taskId');
     expect(routes).toContain('questions/:id/enabled');
     expect(routes).not.toEqual(expect.arrayContaining(['generate-questions', 'questions/:id/regenerate', 'questions/:id/review', 'question-concepts', 'question-concept-options']));
+  });
+
+  it('retires paper withdrawal and archive routes while retaining publish and copy', () => {
+    const paths = (controller: { prototype: object }) => Object.getOwnPropertyNames(controller.prototype).flatMap((name) => {
+      const handler = (controller.prototype as Record<string, unknown>)[name];
+      const path = Reflect.getMetadata('path', handler as object);
+      return typeof path === 'string' ? [path] : [];
+    });
+
+    const trainingRoutes = paths(PaperAdminController);
+    expect(trainingRoutes).toEqual(expect.arrayContaining([':id/publish', ':id/copy']));
+    expect(trainingRoutes).not.toEqual(expect.arrayContaining([':id/withdraw', ':id/archive']));
+
+    const legacyRoutes = paths(AiController);
+    expect(legacyRoutes).toEqual(expect.arrayContaining(['papers/:id/publish', 'papers/:id/copy']));
+    expect(legacyRoutes).not.toContain('papers/:id/archive');
   });
 
   it('exposes material source names and no removed rubric in reviewed question views', async () => {

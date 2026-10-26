@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import ElementPlus from 'element-plus';
 import PaperDesigner from '../PaperDesigner.vue';
@@ -10,16 +10,120 @@ import { toAuthoringBundle } from '../paper-designer-state';
 import type { PaperDesignerValue } from '../contracts';
 
 const wrappers: VueWrapper[] = [];
-afterEach(() => wrappers.splice(0).forEach((wrapper) => wrapper.unmount()));
+afterEach(() => { wrappers.splice(0).forEach((wrapper) => wrapper.unmount()); vi.useRealTimers(); });
 async function show(value = paperFixture(), extra: Record<string, unknown> = {}) {
   const wrapper = mount(PaperDesigner, { props: { modelValue: value, categories: [{ id: '10', name: '安全培训' }],
     saveDraft: async (next) => ({ status: 'saved', value: next }), ...extra }, global: { plugins: [ElementPlus] } });
   wrappers.push(wrapper); await flushPromises(); return wrapper;
 }
 function latest(wrapper: VueWrapper) { return wrapper.emitted('update:modelValue')!.at(-1)![0] as PaperDesignerValue; }
-function button(wrapper: VueWrapper, text: string) { return wrapper.findAll('button').find((entry) => entry.text() === text)!; }
+function button(wrapper: VueWrapper, text: string) { return wrapper.findAll('button').find((entry) => entry.text() === text || entry.attributes('aria-label') === text)!; }
 
 describe('main complete paper kernel', () => {
+  it('saves an unfinished allocation using the current target without losing question data', async () => {
+    const value = paperFixture(); value.paper.total_score = 120; value.document.questions.question_one!.score_cents = 0;
+    const saveDraft = vi.fn(async (next: PaperDesignerValue) => ({ status: 'saved', value: next }));
+    const wrapper = await show(value, { saveDraft });
+    await button(wrapper, '保存').trigger('click'); await flushPromises();
+    expect(saveDraft).toHaveBeenCalledTimes(1);
+    expect(saveDraft.mock.calls[0]![0].document.content).toEqual(value.document.content);
+    expect(saveDraft.mock.calls[0]![0].paper.total_score).toBe(120);
+    expect(saveDraft.mock.calls[0]![0].document.questions.question_one!.score_cents).toBe(0);
+    await wrapper.get('input[aria-label="分值"]').setValue('120'); await flushPromises();
+    await button(wrapper, '保存').trigger('click'); await flushPromises();
+    expect(saveDraft.mock.calls.at(-1)![0].document.questions.question_one!.score_cents).toBe(12000);
+  });
+
+  it('dismisses floating errors manually or after fifteen seconds, pausing on hover', async () => {
+    const wrapper = await show();
+    vi.useFakeTimers();
+    const editor = wrapper.findComponent(QuestionDocumentEditor);
+    editor.vm.$emit('edit-blocked', '同一道题不能重复加入试卷'); await wrapper.vm.$nextTick();
+    const notice = wrapper.get('.paper-designer__error-notice');
+    await vi.advanceTimersByTimeAsync(14000);
+    expect(wrapper.find('.paper-designer__error-notice').exists()).toBe(true);
+    await notice.trigger('mouseenter');
+    await vi.advanceTimersByTimeAsync(16000);
+    expect(wrapper.find('.paper-designer__error-notice').exists()).toBe(true);
+    await notice.trigger('mouseleave');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(wrapper.find('.paper-designer__error-notice').exists()).toBe(false);
+    editor.vm.$emit('edit-blocked', '同一道题不能重复加入试卷'); await wrapper.vm.$nextTick();
+    await wrapper.get('.paper-designer__error-notice .el-alert__close-btn').trigger('click');
+    expect(wrapper.find('.paper-designer__error-notice').exists()).toBe(false);
+  });
+
+  it('starts new paper questions at zero points', async () => {
+    const wrapper = await show(blankPaper());
+    wrapper.vm.addQuestion('single'); await flushPromises();
+    const scores = Object.values(latest(wrapper).document.questions).map((meta) => meta.score_cents);
+    expect(scores).toEqual([0]);
+    expect((wrapper.get('input[aria-label="分值"]').element as HTMLInputElement).value).toBe('0');
+  });
+
+  it('edits paper question scores as points with a unit and preserves cent precision and limits', async () => {
+    const wrapper = await show();
+    const input = wrapper.get('input[aria-label="分值"]');
+    expect(wrapper.find('.question-properties .el-input-number').exists()).toBe(false);
+    expect(wrapper.get('.question-properties .el-input-group__append').text()).toBe('分');
+    await input.setValue('5.25'); await flushPromises();
+    expect(latest(wrapper).document.questions.question_one!.score_cents).toBe(525);
+    await input.setValue('101'); await input.trigger('blur'); await flushPromises();
+    expect(latest(wrapper).document.questions.question_one!.score_cents).toBe(10000);
+    await input.setValue('0'); await input.trigger('blur'); await flushPromises();
+    expect(latest(wrapper).document.questions.question_one!.score_cents).toBe(0);
+  });
+
+  it('formats analysis with the compact toolbar without the full scrolling menu', async () => {
+    const wrapper = await show();
+    const toolbar = wrapper.get('[aria-label="解析格式"]');
+    expect(toolbar.findAll('button')).toHaveLength(4);
+    expect(wrapper.find('.question-properties__rich .menu-btn-groups').exists()).toBe(false);
+    await toolbar.get('[aria-label="解析加粗"]').trigger('click'); await flushPromises();
+    expect(toolbar.get('[aria-label="解析加粗"]').attributes('aria-pressed')).toBe('true');
+    await toolbar.get('[aria-label="解析加粗"]').trigger('click'); await flushPromises();
+    expect(toolbar.get('[aria-label="解析加粗"]').attributes('aria-pressed')).toBe('false');
+  });
+
+  it('copies a question with fresh identities and selects the whole clicked card', async () => {
+    const wrapper = await show();
+    await wrapper.get('[aria-label="复制题目"]').trigger('click'); await flushPromises();
+    const value = latest(wrapper);
+    const blocks = value.document.content.content!;
+    expect(blocks).toHaveLength(2);
+    const copiedId = String(blocks[1]!.attrs!.client_id);
+    expect(copiedId).not.toBe('question_one');
+    expect(value.bindings[copiedId]).toEqual({ kind: 'new' });
+    expect(blocks[1]!.content![1]!.attrs!.option_id).not.toBe('question_one_a');
+    expect(blocks[1]!.content![1]!.attrs!.checked).toBe(true);
+    const cards = wrapper.findAll('[data-question-block]');
+    await cards[0]!.get('.question-block__header').trigger('click'); await flushPromises();
+    expect(cards[0]!.classes()).toContain('is-active');
+    expect(cards[1]!.classes()).not.toContain('is-active');
+    await cards[1]!.get('.question-block__header').trigger('click'); await flushPromises();
+    expect(cards[1]!.classes()).toContain('is-active');
+    expect(cards[0]!.classes()).not.toContain('is-active');
+    expect(wrapper.get('[role="status"]').text()).toBe('未保存');
+  });
+
+  it('uses the manual question option actions and preserves answers while moving and deleting options', async () => {
+    const wrapper = await show();
+    const canvas = wrapper.get('.paper-designer__canvas');
+    expect(canvas.findAll('[data-option-drag-handle]')).toHaveLength(2);
+    expect(canvas.get('[aria-label="上移选项 A"]').attributes('disabled')).toBeDefined();
+    await canvas.get('[aria-label="下移选项 A"]').trigger('click'); await flushPromises();
+    let options = canvas.findAll('[data-question-option]');
+    expect(options[1]!.attributes('data-option-id')).toBe('question_one_a');
+    expect(options[1]!.attributes('data-checked')).toBe('true');
+    expect(options[1]!.get('[data-answer-label]').text()).toContain('正确答案');
+    await options[0]!.get('[data-set-answer]').trigger('click'); await flushPromises();
+    expect(canvas.findAll('[data-question-option]')[0]!.attributes('data-checked')).toBe('true');
+    await canvas.get('[aria-label="添加选项"]').trigger('click'); await flushPromises();
+    await canvas.get('[aria-label="删除选项 C"]').trigger('click'); await flushPromises();
+    expect(canvas.findAll('[data-question-option]')).toHaveLength(2);
+    expect(canvas.find('[aria-label="删除选项 A"]').exists()).toBe(false);
+  });
+
   it('makes paper margins dirty and restores them after save and reopening', async () => {
     const wrapper = await show();
     await wrapper.get('[role="tab"][id$="-template"]').trigger('click');

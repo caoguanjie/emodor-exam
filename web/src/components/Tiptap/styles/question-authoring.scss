@@ -1,0 +1,14 @@
+/* Shared question content and option interactions for manual and paper authoring. */
+.ruleexam-tiptap.question-authoring-surface .question-block__content { padding: 14px 16px; }
+.ruleexam-tiptap.question-authoring-surface [data-question-stem] { position: relative; box-sizing: border-box; min-height: 58px; padding: 4px 8px 14px; margin-bottom: 12px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); color: var(--el-text-color-primary, #303133); font-size: 15px; line-height: 1.6; }
+.ruleexam-tiptap.question-authoring-surface [data-question-stem]:has(> p:only-child:empty)::before,
+.ruleexam-tiptap.question-authoring-surface [data-question-stem]:has(> p:only-child > br.ProseMirror-trailingBreak:only-child)::before { content: '请输入题干'; position: absolute; top: 4px; left: 8px; color: var(--el-text-color-placeholder, #a8abb2); pointer-events: none; }
+.ruleexam-tiptap.question-authoring-surface .question-option { align-items: center; min-height: 44px; box-sizing: border-box; margin-top: 4px; padding: 6px 8px; border-radius: 6px; transition: background-color .15s; }
+.ruleexam-tiptap.question-authoring-surface .question-option--manual:hover,.ruleexam-tiptap.question-authoring-surface .question-option--manual:focus-within { background: #f5f7fa; }
+.ruleexam-tiptap.question-authoring-surface .question-option__toggle { width: 30px; height: 30px; font-size: 14px; }
+.ruleexam-tiptap.question-authoring-surface .question-option[data-checked='true'] .question-option__toggle { border-color: var(--el-color-primary, #3056d3); background: var(--el-color-primary, #3056d3); color: #fff; font-weight: 600; }
+.ruleexam-tiptap.question-authoring-surface .question-option__answer-label { padding: 2px 9px; border-radius: 999px; background: var(--el-color-primary-light-9, #edf0fc); }
+.ruleexam-tiptap.question-authoring-surface .question-option__content { font-size: 14px; line-height: 1.5; }
+.ruleexam-tiptap.question-authoring-surface .question-option__content p,.ruleexam-tiptap.question-authoring-surface [data-question-stem] p { margin: 0; }
+.ruleexam-tiptap.question-authoring-surface .question-block__options { padding: 0 24px 14px; }
+.ruleexam-tiptap.question-authoring-surface .question-block__options button { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 4px 0; font: inherit; font-size: 14px; }
