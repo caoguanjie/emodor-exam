@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - 只支持 `single / multiple / judgment`；新建和修订只接受启用的 `easy / hard`，历史 `medium` 只读保留。
-- 人工录题和修改继续使用 main 现有表单，不接独立试题设计器。
+- 人工录题和修改保留 main 现有弹窗与保存链路，内容区按[最新融合设计](../specs/2026-10-26-manual-question-tiptap-design.md)接入 Tiptap；不新增独立试题设计器路由。组件/页面接入由该融合计划交付后复用，不退回旧 textarea。
 - 新业务不再读写 `concept_id`；历史表、字段和冻结快照本期不物理删除。
 - 不再产生或操作 `pending / approved / rejected` 审核流；旧审核字段只读保留，不伪造审核人、时间或原因。
 - `question.is_enabled` 是新候选是否可用的唯一生命周期事实；启停不创建内容 revision。

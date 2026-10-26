@@ -3,7 +3,7 @@
     <div class="question-preview__meta">
       <el-tag size="small">{{ typeLabel }}</el-tag>
       <el-tag size="small" type="info">{{ difficultyLabel }}</el-tag>
-      <span>{{ Number(question.score || 0) }} 分</span>
+      <span v-if="showScore && question.score != null">{{ Number(question.score) }} 分</span>
     </div>
     <div class="question-preview__stem rich-content" v-html="rendered.stem" />
     <div class="question-preview__options">
@@ -35,10 +35,11 @@ const props = withDefaults(defineProps<{
     options?: QuestionOption[];
     answer?: number[];
     analysis?: string | null;
-    score?: number;
+    score?: number | null;
   };
   revealAnswer?: boolean;
-}>(), { revealAnswer: true });
+  showScore?: boolean;
+}>(), { revealAnswer: true, showScore: false });
 const emit = defineEmits<{ ready: [result: { ok: boolean }] }>();
 
 const rendered = reactive<{ stem: string; options: QuestionOption[]; analysis: string; correctIds: string[] }>({

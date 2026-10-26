@@ -130,7 +130,8 @@ describe('enabled difficulty at question write boundaries', () => {
       difficulty: 'hard', categoryId: '999', source: 'manual', status: 'approved', conceptId: '777',
       stem: '生成后不同的题干', options: [{ key: 'A', text: '先检测' }, { key: 'B', text: '直接进入' }], answer: [0], analysis: '完成风险检查。',
     }, 'easy');
-    expect(result).toMatchObject({ difficulty: 'easy', categoryId: '7', source: 'ai', conceptId: undefined, scoreCents: 10000 });
+    expect(result).toMatchObject({ difficulty: 'easy', categoryId: '7', source: 'ai', conceptId: undefined });
+    expect(result).not.toHaveProperty('scoreCents');
   });
 
   it('persists material-generated questions using the requested difficulty instead of model tags', async () => {

@@ -254,7 +254,6 @@ export interface AiQuestionImportRow {
   options: QuestionOption[];
   answer: number[];
   analysis: string;
-  score: string;
   errors: string[];
 }
 
@@ -301,7 +300,6 @@ export interface QuestionDraftPayload extends QuestionContentFields {
   options: QuestionOption[];
   answer: number[];
   analysis: string | null;
-  score: number;
   concept_id?: Id | null;
 }
 
@@ -325,7 +323,7 @@ export interface QuestionView extends Omit<QuestionDraftPayload, 'category_id' |
 }
 
 export function questionDraftFromView(row: Pick<QuestionDraftPayload,
-  'type' | 'stem' | 'options' | 'answer' | 'analysis' | 'score' | 'concept_id'> & QuestionContentFields & {
+  'type' | 'stem' | 'options' | 'answer' | 'analysis' | 'concept_id'> & QuestionContentFields & {
     category_id: Id | null;
     difficulty: Difficulty | '' | null;
   }): QuestionDraftPayload {
@@ -333,7 +331,7 @@ export function questionDraftFromView(row: Pick<QuestionDraftPayload,
     const content = JSON.parse(JSON.stringify(row.content_json)) as QuestionContentV3;
     const fields = toQuestionFormValue({ ...content, schema: 3 });
     return { category_id: row.category_id || '', difficulty: row.difficulty || '', type: row.type,
-      ...fields, score: Number(row.score), concept_id: row.concept_id || undefined,
+      ...fields, concept_id: row.concept_id || undefined,
       content_schema_version: 3, content_json: content };
   }
   const content = row.content_schema_version === 2 ? normalizeQuestionContentV2(row.content_json) : null;
@@ -346,7 +344,7 @@ export function questionDraftFromView(row: Pick<QuestionDraftPayload,
     options,
     answer: content ? content.options.flatMap((option, index) => content.answer_option_ids.includes(option.id) ? [index] : []) : [...(row.answer || [])],
     analysis: content ? (content.analysis ? readonlyQuestionDocToHtml(content.analysis) : null) : row.analysis ?? null,
-    score: Number(row.score),
+
     concept_id: row.concept_id || undefined,
     ...(content ? { content_schema_version: 2 as const, content_json: content } : {}),
   };
@@ -462,13 +460,19 @@ export function questionHtmlToReadonlyDoc(value: string | null | undefined): Rea
 
 /** Save correctness by stable ID; `checked`/learner selections are never copied into this payload. */
 export function questionDraftWithContent(value: QuestionDraftPayload): Omit<QuestionDraftPayload, 'content_schema_version' | 'content_json'> & { content_schema_version: 2 | 3; content_json: QuestionContentV2 | QuestionContentV3 } {
+  // Project editable fields explicitly so legacy response fields cannot leak back into saves.
+  const fields: QuestionDraftPayload = {
+    category_id: value.category_id, difficulty: value.difficulty, type: value.type,
+    stem: value.stem, options: value.options.map((option) => ({ key: option.key, text: option.text })),
+    answer: [...value.answer], analysis: value.analysis, concept_id: value.concept_id,
+  };
   if (value.content_schema_version === 3) {
     const base = { ...value.content_json, schema: 3 as const } as QuestionContentV3 & { schema: 3 };
     const original = toQuestionFormValue(base);
     const changed = (['stem', 'options', 'analysis', 'answer'] as QuestionFormField[])
       .filter((key) => JSON.stringify(original[key]) !== JSON.stringify(value[key]));
     const { schema: _schema, ...content } = applyQuestionFormChanges(base, value, changed);
-    return { ...value, content_schema_version: 3, content_json: content };
+    return { ...fields, content_schema_version: 3, content_json: content };
   }
   const content = normalizeQuestionContentV2({
     stem: questionHtmlToReadonlyDoc(value.stem),
@@ -477,9 +481,7 @@ export function questionDraftWithContent(value: QuestionDraftPayload): Omit<Ques
     answer_option_ids: value.answer.map((index) => value.options[index]?.key),
   });
   return {
-    category_id: value.category_id, difficulty: value.difficulty, type: value.type,
-    stem: value.stem, options: value.options.map((option) => ({ key: option.key, text: option.text })),
-    answer: [...value.answer], analysis: value.analysis, score: value.score, concept_id: value.concept_id,
+    ...fields,
     content_schema_version: 2, content_json: content,
   };
 }
@@ -681,6 +683,9 @@ export interface TrainingPaperDetail extends TrainingPaperSummary {
   sum_score_cents: number;
   questions: TrainingPaperQuestion[];
 }
+
+/** A candidate has no paper association yet, so it carries no paper score or sort order. */
+export type TrainingPaperCandidate = Omit<TrainingPaperQuestion, 'paper_question_id' | 'score_cents' | 'sort'>;
 
 export interface PaperPreviewQuestion extends QuestionContentFields {
   question_id: Id;

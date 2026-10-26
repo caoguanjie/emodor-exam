@@ -14,7 +14,7 @@ import { CategoryService } from '../training/category.service';
 import { QuestionConceptService } from './question-concept.service';
 import { parseQuestionContent } from './question-content-dispatch';
 import { classifyQuestionAsset } from './question-authoring-media';
-import { synchronizeFormAuthoring, type AuthoringQuestionWrite, type AuthoringSavedItem } from './question-authoring-codec';
+import { synchronizeFormAuthoring, withoutAuthoringScores, authoringQuestionHash, assembleVersionAuthoring, type AuthoringQuestionWrite, type AuthoringSavedItem } from './question-authoring-codec';
 import type { AuthoringBundle } from '../../common/question-authoring';
 import { legacyHtmlDoc } from './question-content';
 import { parseRichDocV3 } from './question-content-v3';
@@ -208,7 +208,7 @@ export class QuestionVersionService implements OnModuleInit {
       analysis: draft.analysis,
       contentSchemaVersion: draft.contentSchemaVersion,
       contentJson: draft.contentJson,
-      scoreCents: draft.scoreCents,
+      scoreCents: null,
       conceptId: draft.conceptId || null,
       regulationId: draft.regulationId || null,
       regulationVersionId: draft.regulationVersionId || null,
@@ -241,7 +241,7 @@ export class QuestionVersionService implements OnModuleInit {
     question.analysis = version.analysis;
     question.contentSchemaVersion = version.contentSchemaVersion;
     question.contentJson = version.contentJson;
-    question.score = (version.scoreCents / 100).toFixed(2);
+    question.score = version.scoreCents == null ? null : (version.scoreCents / 100).toFixed(2);
     question.status = version.status;
     question.source = version.source;
   }
@@ -271,7 +271,7 @@ export class QuestionVersionService implements OnModuleInit {
       options: question.options,
       answer: question.answer,
       analysis: question.analysis,
-      scoreCents: Math.round(Number(question.score) * 100),
+      scoreCents: question.score == null ? null : Math.round(Number(question.score) * 100),
       conceptId: question.conceptId,
       regulationId: question.regulationId,
       regulationVersionId: question.versionId,
@@ -312,7 +312,7 @@ export class QuestionVersionService implements OnModuleInit {
       options: draft.options,
       answer: draft.answer,
       analysis: draft.analysis,
-      score: (draft.scoreCents / 100).toFixed(2),
+      score: null,
       status: approval ? 'approved' : 'pending',
       source: draft.source,
       createdBy: String(actorId),
@@ -526,13 +526,13 @@ export class QuestionVersionService implements OnModuleInit {
     const bundle = supplied ? placeholder : { ...placeholder, document: { ...placeholder.document, questions: { [client]: {
       type: draft.type, category_id: draft.categoryId, difficulty: draft.difficulty, concept_id: draft.conceptId || null,
       regulation_id: draft.regulationId || null, regulation_version_id: draft.regulationVersionId || null,
-      score_cents: draft.scoreCents, analysis: { type: 'doc', content: [] },
+      analysis: { type: 'doc', content: [] },
     } } } };
     version.authoringSchemaVersion = 1;
-    version.authoringJson = synchronizeFormAuthoring(base, {
+    version.authoringJson = withoutAuthoringScores(synchronizeFormAuthoring(base, {
       client_id: client, bundle, content, identity: { question_id: String(version.questionId), expected_version_id: version.id ? String(version.id) : null },
-      category_id: draft.categoryId, type: draft.type, difficulty: draft.difficulty, score: draft.scoreCents / 100, concept_id: draft.conceptId,
-    });
+      category_id: draft.categoryId, type: draft.type, difficulty: draft.difficulty, concept_id: draft.conceptId,
+    }));
   }
 
   private finalizeAuthoringIdentity(version: QuestionVersion): void {
@@ -565,6 +565,14 @@ export class QuestionVersionService implements OnModuleInit {
       this.assertExpectedVersion(question, input.identity.expected_version_id);
       current = question.currentVersionId ? await manager.getRepository(QuestionVersion).findOne({ where: { id: String(question.currentVersionId) } }) : null;
       if (question.currentVersionId && !current) throw Errors.questionVersionConflict('题目当前版本不存在');
+      const trusted = current || question;
+      if (trusted.source !== 'manual' && trusted.source !== 'ai' && trusted.source !== 'import') throw Errors.param('题目真实来源非法');
+      source = trusted.source;
+      const trustedVersionId = current ? current.regulationVersionId : question.versionId;
+      if ((meta.regulation_id || null) !== (trusted.regulationId || null) || (meta.regulation_version_id || null) !== (trustedVersionId || null)) throw Errors.param('$.regulation_id: 不允许伪造题目来源', { path: '$.regulation_id' });
+      if (current && authoringQuestionHash(assembleVersionAuthoring(current, input.client_id)) === authoringQuestionHash(input.bundle)) {
+        return this.authoringSavedItem(current, input);
+      }
       const live = await manager.query(`SELECT 1 AS blocked FROM exam_record er
         INNER JOIN paper_question pq ON pq.paper_id = er.paper_id
         WHERE er.status = 'in_progress' AND pq.question_id = ? LIMIT 1`, [String(question.id)]);
@@ -573,16 +581,11 @@ export class QuestionVersionService implements OnModuleInit {
         const linked = await manager.query('SELECT 1 AS blocked FROM paper_question WHERE question_id = ? LIMIT 1', [String(question.id)]);
         if (linked.length) throw Errors.questionInUse('题目已被 legacy 固定试卷引用，不能变更题型');
       }
-      const trusted = current || question;
-      if (trusted.source !== 'manual' && trusted.source !== 'ai' && trusted.source !== 'import') throw Errors.param('题目真实来源非法');
-      source = trusted.source;
-      const trustedVersionId = current ? current.regulationVersionId : question.versionId;
-      if ((meta.regulation_id || null) !== (trusted.regulationId || null) || (meta.regulation_version_id || null) !== (trustedVersionId || null)) throw Errors.param('$.regulation_id: 不允许伪造题目来源', { path: '$.regulation_id' });
     } else if (meta.regulation_id !== null || meta.regulation_version_id !== null) throw Errors.param('$.regulation_id: 人工新题不能指定资料来源', { path: '$.regulation_id' });
     const parsed = parseQuestionContent({ ...input.content, type: input.type });
     const { schema, ...contentJson } = parsed;
     const draft = validateAndSanitizeQuestionDraft({
-      categoryId: input.category_id, difficulty: input.difficulty, type: input.type, scoreCents: Math.round(input.score * 100),
+      categoryId: input.category_id, difficulty: input.difficulty, type: input.type,
       conceptId: input.concept_id, source, stem: '', options: [], answer: [], analysis: null,
       contentSchemaVersion: schema, contentJson, regulationId: meta.regulation_id || undefined, regulationVersionId: meta.regulation_version_id || undefined,
       sourcePageGroup: current?.sourcePageGroup ?? undefined, sourcePageStart: current?.sourcePageStart ?? undefined, sourcePageEnd: current?.sourcePageEnd ?? undefined,
@@ -597,7 +600,16 @@ export class QuestionVersionService implements OnModuleInit {
     }
     const saved = await manager.getRepository(QuestionVersion).findOne({ where: { id: versionId } });
     if (!saved?.authoringJson) throw Errors.internal('作者原稿未保存');
-    return { client_id: input.client_id, question_id: String(saved.questionId), saved_version_id: versionId, revision: Number(saved.revision), bundle: saved.authoringJson };
+    return this.authoringSavedItem(saved, input);
+  }
+
+  private authoringSavedItem(saved: QuestionVersion, input: AuthoringQuestionWrite): AuthoringSavedItem {
+    // Receipt retains this request's paper context, while persisted authoring remains score-free.
+    const bundle = structuredClone(input.bundle);
+    const meta = bundle.document.questions[input.client_id];
+    meta.question_id = String(saved.questionId); meta.base_revision = Number(saved.revision);
+    bundle.identities[input.client_id] = { question_id: String(saved.questionId), expected_version_id: String(saved.id) };
+    return { client_id: input.client_id, question_id: String(saved.questionId), saved_version_id: String(saved.id), revision: Number(saved.revision), bundle };
   }
 
   /** Upgrade-only capture for a legacy review action; it records current content, not reconstructed history. */
@@ -761,7 +773,7 @@ export class QuestionVersionService implements OnModuleInit {
       categoryId: String(version.categoryId), difficulty: version.difficulty as Difficulty, type: version.type as QuestionType,
       stem: version.stem, options: version.options as QuestionOption[], answer: version.answer, analysis: version.analysis,
       contentSchemaVersion: version.contentSchemaVersion || 1, contentJson: version.contentJson || null,
-      scoreCents: Number(version.scoreCents), conceptId: version.conceptId || undefined,
+      conceptId: version.conceptId || undefined,
       regulationId: version.regulationId || undefined, regulationVersionId: version.regulationVersionId || undefined,
       sourcePageGroup: version.sourcePageGroup ?? undefined,
       sourcePageStart: version.sourcePageStart ?? undefined,

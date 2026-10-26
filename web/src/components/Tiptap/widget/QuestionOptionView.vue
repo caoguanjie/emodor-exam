@@ -6,8 +6,22 @@
     :data-option-id="optionId"
     :data-checked="String(checked)"
     :data-review="String(runtime.getMode?.() === 'review')"
-    :class="reviewClasses"
+    :class="[reviewClasses, { 'question-option--manual': manualActions }]"
+    @dragover="acceptOptionDrag"
+    @drop="dropOption"
   >
+    <span v-if="canReorder && manualActions" class="question-option__sort" contenteditable="false">
+      <button type="button" data-option-drag-handle draggable="true" class="question-option__drag"
+        :aria-label="`拖拽选项 ${label} 排序`" @dragstart.stop="dragOption">⠿</button>
+      <span class="question-option__order">
+        <button type="button" :aria-label="`上移选项 ${label}`" :title="`上移选项 ${label}`" :disabled="optionIndex === 0" @mousedown.prevent
+          @click.stop="props.editor.commands.moveQuestionOption(optionId, optionIndex - 1)">↑</button>
+        <button type="button" :aria-label="`下移选项 ${label}`" :title="`下移选项 ${label}`" :disabled="optionIndex === optionCount - 1" @mousedown.prevent
+          @click.stop="props.editor.commands.moveQuestionOption(optionId, optionIndex + 1)">↓</button>
+      </span>
+    </span>
+    <button v-if="canReorder && !manualActions" type="button" data-option-drag-handle draggable="true" contenteditable="false"
+      class="question-option__drag" :aria-label="`拖拽选项 ${label} 排序`" @dragstart.stop="dragOption">⠿</button>
     <button
       class="question-option__toggle"
       type="button"
@@ -25,7 +39,20 @@
       data-question-option-content
       :contenteditable="contentEditable"
     />
-    <button v-if="canRemove" class="question-option__remove" type="button" contenteditable="false"
+    <span v-if="manualActions" class="question-option__actions" contenteditable="false">
+      <span v-if="checked" class="question-option__answer-label" data-answer-label>✓ 正确答案</span>
+      <button v-else-if="!interactionDisabled" type="button" class="question-option__set-answer" data-set-answer
+        :aria-label="`设选项 ${label} 为正确答案`" @mousedown.prevent @click.stop="toggleChecked">设为答案</button>
+      <button v-if="canRemove" class="question-option__remove" type="button" :aria-label="`删除选项 ${label}`"
+        @mousedown.prevent @click.stop="props.editor.commands.removeQuestionOption(optionId)">×</button>
+    </span>
+    <span v-if="canReorder && !manualActions" class="question-option__order" contenteditable="false">
+      <button type="button" :aria-label="`上移选项 ${label}`" :disabled="optionIndex === 0" @mousedown.prevent
+        @click.stop="props.editor.commands.moveQuestionOption(optionId, optionIndex - 1)">上移</button>
+      <button type="button" :aria-label="`下移选项 ${label}`" :disabled="optionIndex === optionCount - 1" @mousedown.prevent
+        @click.stop="props.editor.commands.moveQuestionOption(optionId, optionIndex + 1)">下移</button>
+    </span>
+    <button v-if="canRemove && !manualActions" class="question-option__remove" type="button" contenteditable="false"
       :aria-label="`删除选项 ${label}`" @mousedown.prevent
       @click.stop="props.editor.commands.removeQuestionOption(optionId)">删除</button>
     <span v-if="review?.missed" class="question-option__missed">漏选</span>
@@ -73,12 +100,36 @@ const review = computed(() => runtime.value.getMode?.() === 'review'
   : undefined);
 const checked = computed(() => runtime.value.getMode?.() === 'edit' || !runtime.value.getMode
   ? Boolean(props.node.attrs.checked) : Boolean(review.value?.selected));
+const manualActions = computed(() => runtime.value.showAnswerLabels?.() === true);
 const interactionDisabled = computed(() => (
   !isEditorMutationAllowed(props.editor) || (runtime.value.getMode?.() ?? 'edit') !== 'edit'
 ));
 const canRemove = computed(() => !interactionDisabled.value
   && (meta.value?.type === 'single' || meta.value?.type === 'multiple')
   && (context.value.node?.childCount ?? 0) - 1 > 2);
+const canReorder = computed(() => !interactionDisabled.value && runtime.value.canReorderOptions?.() === true
+  && (meta.value?.type === 'single' || meta.value?.type === 'multiple'));
+const optionCount = computed(() => (context.value.node?.childCount ?? 1) - 1);
+const optionIndex = computed(() => label.value.charCodeAt(0) - 65);
+const OPTION_DRAG_MIME = 'application/x-ruleexam-question-option';
+function dragOption(event: DragEvent) {
+  if (!canReorder.value || !event.dataTransfer) { event.preventDefault(); return; }
+  event.dataTransfer.setData(OPTION_DRAG_MIME, JSON.stringify({ client_id: context.value.clientId, option_id: optionId.value }));
+  event.dataTransfer.effectAllowed = 'move';
+}
+function acceptOptionDrag(event: DragEvent) {
+  if (canReorder.value && event.dataTransfer?.types?.includes(OPTION_DRAG_MIME)) event.preventDefault();
+}
+function dropOption(event: DragEvent) {
+  if (!canReorder.value) return;
+  const raw = event.dataTransfer?.getData(OPTION_DRAG_MIME);
+  if (!raw) return;
+  event.preventDefault(); event.stopPropagation();
+  try {
+    const data = JSON.parse(raw);
+    if (data.client_id === context.value.clientId) props.editor.commands.moveQuestionOption(data.option_id, optionIndex.value);
+  } catch { /* Ignore foreign drag payloads. */ }
+}
 const contentEditable = computed(() => !interactionDisabled.value && meta.value?.type !== 'judgment');
 const label = computed(() => {
   const parent = context.value.node;
@@ -149,6 +200,21 @@ function toggleChecked() {
 }
 
 .question-option__remove { flex: none; border: 0; background: transparent; color: var(--el-color-danger, #f56c6c); cursor: pointer; }
+.question-option__drag { flex: none; border: 0; background: transparent; color: var(--el-text-color-placeholder); cursor: grab; font-size: 18px; }
+.question-option__order { display: flex; flex: none; gap: 4px; }
+.question-option__order button { padding: 3px; border: 0; background: transparent; color: var(--el-text-color-secondary); cursor: pointer; }
+.question-option__order button:disabled { opacity: .35; cursor: default; }
+.question-option__answer-label { flex: none; padding: 3px 7px; border-radius: 4px; background: var(--el-color-primary-light-9, #ecf5ff); color: var(--el-color-primary, #409eff); font-size: 12px; line-height: 20px; white-space: nowrap; }
+.question-option__actions { display: flex; flex: none; align-items: center; gap: 8px; min-height: 26px; }
+.question-option__set-answer { padding: 3px 0; border: 0; background: transparent; color: var(--el-color-primary, #409eff); font-size: 12px; line-height: 20px; white-space: nowrap; cursor: pointer; opacity: 0; pointer-events: none; }
+.question-option--manual:hover .question-option__set-answer,.question-option--manual:focus-within .question-option__set-answer { opacity: 1; pointer-events: auto; }
+.question-option--manual .question-option__remove { width: 24px; height: 24px; padding: 0; border-radius: 4px; color: var(--el-text-color-placeholder, #a8abb2); font-size: 19px; line-height: 24px; }
+.question-option--manual .question-option__remove:hover,.question-option--manual .question-option__remove:focus-visible { background: var(--el-color-danger-light-9, #fef0f0); color: var(--el-color-danger, #f56c6c); }
+.question-option__sort { display: flex; flex: none; align-items: center; gap: 0; }
+.question-option__sort .question-option__drag { padding: 0; width: 14px; }
+.question-option__sort .question-option__order { flex-direction: column; gap: 0; opacity: 0; pointer-events: none; }
+.question-option__sort .question-option__order button { width: 18px; height: 13px; padding: 0; font-size: 12px; line-height: 13px; }
+.question-option--manual:hover .question-option__order,.question-option--manual:focus-within .question-option__order { opacity: 1; pointer-events: auto; }
 
 .question-option.is-correct {
   background: var(--el-color-success-light-9, #f0f9eb);

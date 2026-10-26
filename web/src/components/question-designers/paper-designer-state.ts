@@ -111,7 +111,7 @@ export function questionFingerprint(document: QuestionAuthoringDocument, clientI
     if (result.content) result.content = result.content.map(normalize);
     return result;
   };
-  const { category_id: _category, ...meta } = withoutWriteIdentity(document.questions[clientId]);
+  const { category_id: _category, score_cents: _paperScore, ...meta } = withoutWriteIdentity(document.questions[clientId]);
   meta.analysis = normalize(meta.analysis);
   const block = blocks[0];
   const answer = (block.content || []).filter((node) => node.type === 'questionOption').map((node) => node.attrs?.checked === true);

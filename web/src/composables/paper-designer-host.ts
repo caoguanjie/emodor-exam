@@ -125,6 +125,8 @@ export function createPaperDesignerHost(options: { api?: PaperDesignerHostApi; p
       const document = copy(bundle.document); const revision = document.questions[client]!.base_revision;
       if (!Number.isInteger(revision) || !revision) throw new Error('题库原稿缺少修订号');
       delete document.questions[client]!.question_id; delete document.questions[client]!.base_revision;
+      // This adapter inserts a bank question into the current paper; its initial score belongs only to that paper.
+      document.questions[client]!.score_cents = 500;
       return { document, binding: { kind: 'bound', question_id: id, question_version_id: row.current_version_id, revision, baseline_fingerprint: questionFingerprint(document, client) }, session: session(bundle) };
     },
   };
@@ -162,7 +164,7 @@ export function createPaperDesignerHost(options: { api?: PaperDesignerHostApi; p
     for (const id of submitted) {
       const index = next.document.content.content!.findIndex((block) => block.attrs?.client_id === id);
       next.document.content.content![index] = copy(normalized.document.content.content!.find((block) => block.attrs?.client_id === id)!);
-      next.document.questions[id] = copy(normalized.document.questions[id]!);
+      next.document.questions[id] = { ...copy(normalized.document.questions[id]!), score_cents: next.document.questions[id]!.score_cents };
     }
     next.session = { option_ids: { ...next.session?.option_ids, ...normalized.option_ids }, identities: {}, layouts: { ...next.session?.layouts, ...normalized.layouts } };
     attempt.value = applyQuestionCommitResult(next, { request_id: result.request_id, items: result.items.map(({ saved_version_id, ...item }) => ({ ...item, version_id: saved_version_id })) }, { request_id: attempt.request.request_id, client_ids: submitted });

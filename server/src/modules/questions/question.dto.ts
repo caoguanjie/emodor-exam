@@ -1,6 +1,6 @@
 import { Transform, Type } from 'class-transformer';
 import {
-  ArrayMaxSize, IsArray, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString,
+  ArrayMaxSize, IsArray, IsIn, IsInt, IsObject, IsOptional, IsString,
   Matches, Max, MaxLength, Min, MinLength, ValidateBy, ValidateIf, ValidateNested,
 } from 'class-validator';
 import type { Difficulty, QuestionType } from '../../common/training-contracts';
@@ -25,8 +25,6 @@ export class GenerateQuestionsDto {
   @ActiveDifficultyField() difficulty!: Difficulty;
   @IsOptional() @IsInt() @Min(1) @Max(40) question_count_single?: number;
   @IsOptional() @IsInt() @Min(0) @Max(20) question_count_multiple?: number;
-  @IsOptional() @IsNumber() @Min(0.01) score_single?: number;
-  @IsOptional() @IsNumber() @Min(0.01) score_multiple?: number;
 }
 
 export class QuestionOptionDto {
@@ -45,7 +43,6 @@ export class CreateQuestionDto {
   @ValidateIf((input) => ![2, 3].includes(input.content_schema_version) || input.options !== undefined) @IsArray() @ArrayMaxSize(26) @ValidateNested({ each: true }) @Type(() => QuestionOptionDto) options!: QuestionOptionDto[];
   @ValidateIf((input) => ![2, 3].includes(input.content_schema_version) || input.answer !== undefined) @IsArray() @ArrayMaxSize(26) @IsInt({ each: true }) answer!: number[];
   @IsOptional() @IsString() @MaxLength(100_000) analysis?: string;
-  @IsNumber() @Min(0.01) @Max(100) score!: number;
 }
 
 export class EditQuestionDto {
@@ -60,7 +57,6 @@ export class EditQuestionDto {
   @IsOptional() @IsArray() @ArrayMaxSize(26) @ValidateNested({ each: true }) @Type(() => QuestionOptionDto) options?: QuestionOptionDto[];
   @IsOptional() @IsArray() @ArrayMaxSize(26) @IsInt({ each: true }) answer?: number[];
   @IsOptional() @IsString() @MaxLength(100_000) analysis?: string | null;
-  @IsOptional() @IsNumber() @Min(0.01) @Max(100) score?: number;
 }
 
 export class ReviewQuestionDto {
@@ -118,6 +114,7 @@ export class CategoryOptionsQueryDto {
   @IsOptional() @IsString() @MaxLength(128) keyword?: string;
 }
 
+// Legacy score is accepted at the request boundary, then stripped by DTO whitelisting.
 export const QUESTION_CREATE_KEYS = [
   'category_id', 'difficulty', 'concept_id', 'type', 'stem', 'options', 'answer', 'analysis', 'score',
   'content_schema_version', 'content_json',

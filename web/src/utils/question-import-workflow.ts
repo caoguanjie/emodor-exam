@@ -241,7 +241,7 @@ function isAiPreview(value: unknown, enabledDifficulties: readonly string[]): va
     && enabledDifficulties.includes(row.difficulty)
     && ['single', 'multiple', 'judgment'].includes(row.type)
     && typeof row.category === 'string' && typeof row.concept === 'string'
-    && typeof row.stem === 'string' && typeof row.analysis === 'string' && typeof row.score === 'string'
+    && typeof row.stem === 'string' && typeof row.analysis === 'string'
     && Array.isArray(row.options) && row.options.every((option) => (
       !!option && typeof option.key === 'string' && typeof option.text === 'string'
     ))

@@ -510,18 +510,21 @@ interface IdentitySessionView {
 | difficulty | body | string | 是 | 当前启用easy / hard；固定写入整批版本，medium仅历史可读 |
 | question_count_single | body | int | 否 | 单选题量，取值 1–40，默认 20 |
 | question_count_multiple | body | int | 否 | 多选题量，取值 0–20，默认 5 |
-| score_single | body | decimal | 否 | 单选每题分值，> 0，默认 3.00 |
-| score_multiple | body | decimal | 否 | 多选每题分值，> 0，默认 8.00 |
+| score_single / score_multiple | body | legacy | 否 | 仅兼容旧客户端传入，忽略；新客户端不发送，生成题无分值 |
 
-校验规则：① 类别存在且启用、难度合法；② material 与 version 均为字符串 ID、归属匹配且版本 parsed，文本不足的 PDF 可走视觉输入；③ 分值合计 100.00；④ AI 配置完整（否则 40909）。服务端把资料映射得到的实际内部 `regulation_id/regulation_version_id`、请求 `category_id/difficulty` 写入每个 pending revision，拒绝模型覆盖。命题提示同样携带权威难度；文本批次、视觉批次与单题重生成复用 `type/stem/options/answer/analysis` 合同。外部 DTO 不接受 `regulation_id/regulation_version_id`。
+校验规则：① 类别存在且启用、难度合法；② material 与 version 均为字符串 ID、归属匹配且版本 parsed，文本不足的 PDF 可走视觉输入；③ 题量合法；④ AI 配置完整（否则 40909）。题库生成不做总分校验，100 分约束只在组卷/发布环节执行。服务端把资料映射得到的实际内部 `regulation_id/regulation_version_id`、请求 `category_id/difficulty` 写入每个 pending revision，拒绝模型覆盖。命题提示同样携带权威难度；文本批次、视觉批次与单题重生成复用 `type/stem/options/answer/analysis` 合同。外部 DTO 不接受 `regulation_id/regulation_version_id`。
 
 **GET /ai/config**（`ai_config:read`）：读取 AI 服务配置，`api_key` 掩码回显（如 `sk-****xxxx`，完整键值永不返回，07 册 4.2）。**PUT /ai/config**（`ai_config:write`）：保存 `base_url` / `api_key` / `model`——权威副本为 AES-256-GCM 加密后的配置文件，Redis 仅作缓存（07 册 4.2），并返回同样的脱敏配置结果。**POST /ai/config/test**（`ai_config:write`）：以已保存配置发起一次连通性测试，返回成功 / 失败与脱敏错误摘要（失败 → 50005）。`ai:read/write` 仅代表出题任务/题库工作流，不自动授予配置权限；管理端入口要求 `ai_config:read` 或 `ai_config:write`，但 writer-only 页面不得调用 GET、不得伪造现有配置值，只能提交空白表单并使用 PUT 返回的脱敏结果；`super_admin` 天然拥有全部注册权限。
 
-**人工题 create/edit DTO**：create 的 `category_id/difficulty/type/score` 必填；普通表单还须 `stem/options/answer`，使用 `content_schema_version:2|3 + content_json` 时由规范化内容产生兼容投影，`concept_id/analysis` 可选；edit 为部分更新并必须携带 `expected_version_id`。两者都严格拒绝 `material_id`、`regulation_id`、`regulation_version_id` 和 source，防止客户端伪造 AI/资料来源。资料 AI 生成服务在校验 `material_id + material_version_id` 后把可信来源映射为内部 `regulation_id/regulation_version_id`；§3.5.3 的专用 `questions_ai` 导入确认允许 `source=ai` 且两项来源均为空，不能借人工 DTO 伪造该例外。实体字段不全局改名。single 恰一答案，multiple 至少两答案，judgment 固定正确/错误。HTML兼容输入仅允许白名单标签与 `<img data-media-id="数字">`，schema3使用1.0的独立白名单；题干、选项和解析图片经媒体owner链路鉴权读取。
+**人工题 create/edit DTO**：create 的 `category_id/difficulty/type` 必填；普通表单还须 `stem/options/answer`，使用 `content_schema_version:2|3 + content_json` 时由规范化内容产生兼容投影，`analysis` 可选；edit 为部分更新并必须携带 `expected_version_id`。旧客户端 `score` 仅兼容接收并忽略，新客户端不发送；新题及修订不写默认分数，题库 list/detail/history 不返回分值。人工录题 UI 不提供考点/资料来源输入，修订时省略不可编辑的关联字段以保留原事实；既有概念关联 API 兼容其它业务链路。两者都严格拒绝 `material_id`、`regulation_id`、`regulation_version_id` 和 source，防止客户端伪造 AI/资料来源。资料 AI 生成服务在校验 `material_id + material_version_id` 后把可信来源映射为内部 `regulation_id/regulation_version_id`；§3.5.3 的专用 `questions_ai` 导入确认允许 `source=ai` 且两项来源均为空，不能借人工 DTO 伪造该例外。single 恰一答案，multiple 至少两答案，judgment 固定正确/错误。HTML兼容输入仅允许白名单标签与 `<img data-media-id="数字">`，schema3使用1.0的独立白名单；题干、选项和解析图片经媒体owner链路鉴权读取。
 
 **版本与审核语义**：POST 人工题创建 revision 1 并记录录入管理员的 `approved_by/approved_at`；PUT 编辑或 regenerate 创建新的 pending revision，不覆盖旧版本。`PUT /questions/{id}`、`PUT /questions/{id}/review`、`POST /questions/{id}/regenerate` 的 body 必须显式携带 `expected_version_id`：已版本化题传用户当前看到的十进制字符串 ID，未版本化 legacy 题明确传 `null`；省略或非法值返回 40001。服务在数据库锁内比较 identity 的实际 current_version_id，长时 regenerate 在发起与提交前各校验一次；不一致返回 40940，且不得创建错误 revision 或误审新版本。`POST /ai/questions` 与 `PUT /ai/questions/{id}` 的成功响应在既有兼容 view 外额外返回十进制字符串 `saved_version_id`，它是该请求实际创建的 revision receipt；写后查询得到的 `current_version_id` 可能已被另一并发修订推进，继续编辑本地提交快照时只能把 `saved_version_id` 作为下一次 `expected_version_id`。普通 GET/list view 不返回虚假的 `saved_version_id`。列表可按 `category_id/difficulty/concept_id/type/status/regulation_id/keyword` 筛选；响应同时保留旧 `id/version_id` 兼容字段并提供字符串 `question_id/current_version_id/regulation_version_id`、revision、审核元数据。旧题首次编辑/审核才捕获 revision 1，`legacy_captured_at` 明示升级快照，未知类别/难度/历史确认人/时间均保持 null，不自动补 easy。
 
 **分页与安全显示**：`GET /ai/question-concepts`、`GET /ai/question-concept-options`、`GET /ai/questions/{id}/history` 都返回 `{items,total,page,page_size}`，默认 1/20，page_size 范围 1—100。题目列表、详情、历史与未保存预览在进入 HTML 渲染前统一执行安全白名单；遗留恶意标签、事件、javascript URL 与外链图片只在响应/预览边界移除，不回写历史。受控图片只保留 `data-media-id`，再经鉴权 `/media/{id}/content` 读取。
+
+**人工 Tiptap 编辑输入（2026-10-26）**：当前新增/修订弹窗直接编辑题干、选项和解析富文本 JSON，保存使用 `content_schema_version:3 + content_json`；正确答案由编辑器选项状态映射为 `answer_option_ids`，选项排序不改变其稳定 ID。兼容 HTML/数字下标字段由 JSON 单向投影，不以旧表单快照覆盖富文本结果。沿用现行新增/修订路径、版本/启停并发锁和成功凭据；“保存并新增”是收到成功凭据后的客户端行为，不新增批量接口。图片继续仅持久化合法 `asset_id`。详见[融合设计](../superpowers/specs/2026-10-26-manual-question-tiptap-design.md)。
+
+**隐藏考点关联**：人工表单修订省略 `concept_id`。类别和题型未变时保留原关联；类别或题型改变时，新版本解除不匹配的考点关联，旧版本及历史快照不修改。
 
 **扫描 PDF 来源定位**：视觉批次把程序实际调用的 `source_page_group/source_page_start/source_page_end` 写入 revision。单题重生成只渲染该页组；PDF 只有一个页组时可确定为 group 0，多页组 legacy revision 缺少定位时返回明确参数错误，不回退第一页、不依据模型声明伪造来源。
 
@@ -574,7 +577,7 @@ schema3题目的普通预览额外返回`content_schema_version:3`与`content_js
 | GET | `/admin/questions/import-batches/{id}` | 仅 questions 批次 owner | 未提交返回 `ImportPreview`；已提交返回 `ImportResult` |
 | POST | `/admin/questions/import-batches/{id}/commit` | `{row_numbers:number[]}`，只能选预检合法行 | `ImportResult` |
 
-模板固定九列 `category/type/difficulty/concept/stem/options/answer/analysis/score`。TXT 仅接受制表符分列，`options/answer` 是 JSON 数组；支持 BOM/CRLF，不支持逗号等多义手工分隔。文件上限 5MB、数据行上限 1000；Excel 公式单元格不执行并落为行级错误，超出 I 列的真实非空值或公式按超列拒绝。完整填写说明见 [`docs/templates/question-import-format.md`](../templates/question-import-format.md)。
+新模板固定八列 `category/type/difficulty/concept/stem/options/answer/analysis`，兼容末尾有 `score` 的旧九列文件但忽略该列，不校验或存储题库分值。TXT 仅接受制表符分列，`options/answer` 是 JSON 数组；支持 BOM/CRLF，不支持逗号等多义手工分隔。文件上限 5MB、数据行上限 1000；Excel 公式不执行，业务列公式按错误行拒绝，超出所选合法表头的非空列或公式按超列拒绝。完整填写说明见 [`docs/templates/question-import-format.md`](../templates/question-import-format.md)。
 
 预检逐行复用三类客观题、富文本、受控媒体、类别、考点与来源校验。重复指纹覆盖类别、题型、难度、规范化内容与答案；已存在或本批较晚重复行列入 `duplicates`，默认不进入 `valid_rows`。确认事务锁定 owner+batch 并创建 `source=import` 的 approved identity/revision；同一行集合重试返回首次结果，换集合返回 40911。questions 入口访问他人或 students 批次返回 40302 且不暴露批次内容；不确定响应先 GET 原批次对账，不创建新预览。
 
@@ -586,15 +589,15 @@ schema3题目的普通预览额外返回`content_schema_version:3`与`content_js
 | GET | `/admin/questions/ai-import-tasks/{id}` | `ai:read`；读取本人任务状态 |
 | GET | `/admin/questions/ai-import-batches/{id}` | `ai:read`；读取本人 `questions_ai` 预览批次或已确认回执 |
 | PATCH | `/admin/questions/ai-import-batches/{id}/rows/{row}` | `ai:write`；修改生成行的可编辑题面并重新校验，返回完整批次 |
-| POST | `/admin/questions/ai-import-batches/{id}/rows/{row}/regenerate` | `ai:write`；按该生成行可信类别、题型、考点、建议分与 easy/hard 难度重新生成，返回完整批次 |
-| GET | `/admin/questions/ai-import-batches/{id}/download?format=xlsx\|txt` | `ai:read`；导出生成题的标准九列文件；二进制流，不包业务信封 |
+| POST | `/admin/questions/ai-import-batches/{id}/rows/{row}/regenerate` | `ai:write`；按该生成行可信类别、题型、考点与 easy/hard 难度重新生成，返回完整批次 |
+| GET | `/admin/questions/ai-import-batches/{id}/download?format=xlsx\|txt` | `ai:read`；导出生成题的标准八列文件；二进制流，不包业务信封 |
 | POST | `/admin/questions/ai-import-batches/{id}/commit` | `questions:write`；`{row_numbers:number[]}` 只接受合法生成行，返回 `ImportResult` |
 
-输入仍严格使用九列 `category,type,difficulty,concept,stem,options,answer,analysis,score`，文件上限 5MB、参考数据最多 50 行。每道参考题最多生成一对 easy/hard；参考行的 difficulty 不作为生成结果难度。服务端从已校验参考行固定类别、题型、考点与建议分，再按目标难度覆盖模型返回值；来源、状态、审核人和制度版本不得来自模型或客户端。
+输入使用八列 `category,type,difficulty,concept,stem,options,answer,analysis`，兼容旧九列但忽略 score；文件上限 5MB、参考数据最多 50 行。每道参考题最多生成一对 easy/hard；参考行的 difficulty 不作为生成结果难度。服务端从已校验参考行固定类别、题型、考点，再按目标难度覆盖模型返回值；来源、状态、审核人和制度版本不得来自模型或客户端。
 
 任务状态固定为 `{task_id,status,total_count,completed_count,generated_count,failed_count,batch_id?,message?}`。参考文件与参考正文只存在于任务内存；完成、失败、超时后释放，禁止写入磁盘、MySQL、Redis、资料/媒体表、审计详情或日志。Redis 仅保存无参考正文的任务状态，TTL 24 小时；服务重启后仍未完成的任务读取为 failed，要求重新上传。
 
-批次返回 `{batch_id,status,valid_rows,errors,duplicates,rows,created_ids?,committed_rows?}`，`rows` 为生成题数组，每项含 `row_number`、同名九字段及 `errors:[]`，其中 options/answer 为数组。批次只保存生成题，不保存参考行；未确认批次自 createdAt 起 24 小时有效，已确认回执不按此期限失效。有效行默认选中，异常行排除；支持全部/easy/hard 筛选、题面修改、单行重新生成与下载。
+批次返回 `{batch_id,status,valid_rows,errors,duplicates,rows,created_ids?,committed_rows?}`，`rows` 为生成题数组，每项含 `row_number`、同名八字段及 `errors:[]`，其中 options/answer 为数组，不返回 score。批次只保存生成题，不保存参考行；未确认批次自 createdAt 起 24 小时有效，已确认回执不按此期限失效。有效行默认选中，异常行排除；支持全部/easy/hard 筛选、题面修改、单行重新生成与下载。
 
 确认前 `question/question_version` 零写入。确认在批次锁事务中原子创建选中题目、revision 1 和回执，强制 `source=ai,status=pending,regulation_id=NULL,version_id=NULL`，不记录伪造的审核人/时间；人工审核后才可入卷。相同行集合重复确认返回首次结果，不同集合拒绝。全部失败不创建预览批次；部分失败只保留生成结果并报告失败数量。所有任务和批次操作必须校验 owner，批次还必须固定 `kind=questions_ai`；不得通过普通 `questions` 或 `students` 路径确认并自动审核。请求结果未知时查询原批次对账，不重发新的确认。
 
@@ -891,9 +894,7 @@ start按同一轮权威current version返回 `media.asset_id` 和精确版本票
   "category_id": "3",
   "difficulty": "hard",
   "question_count_single": 20,
-  "question_count_multiple": 5,
-  "score_single": 3,
-  "score_multiple": 8
+  "question_count_multiple": 5
 }
 ```
 

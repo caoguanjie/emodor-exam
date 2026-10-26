@@ -91,7 +91,7 @@ export class QuestionGenerationService {
     return raw ? JSON.parse(raw) : null;
   }
 
-  /** 发起校验（04 册 3.5）：配置完整 / 生效版本 parsed 且 text_content 非空 / 分值合计 = 100 */
+  /** 发起校验（04 册 3.5）：配置完整 / 生效版本 parsed 且 text_content 非空 / 题量范围；分值只在组卷校验 */
   async start(input: {
     materialId: string;
     materialVersionId: string;
@@ -99,8 +99,6 @@ export class QuestionGenerationService {
     difficulty: Difficulty;
     questionCountSingle: number;
     questionCountMultiple: number;
-    scoreSingle: number;
-    scoreMultiple: number;
     actor: { id: number; name: string };
   }) {
     assertActiveDifficulty(input.difficulty);
@@ -121,15 +119,9 @@ export class QuestionGenerationService {
       throw Errors.param('生效版本没有可用文本，且未启用 PDF 多模态解析');
     }
 
-    const { questionCountSingle: cs, questionCountMultiple: cm, scoreSingle: ss, scoreMultiple: ms } = input;
+    const { questionCountSingle: cs, questionCountMultiple: cm } = input;
     if (!Number.isInteger(cs) || cs < 1 || cs > 40) throw Errors.param('单选题量须为 1–40');
     if (!Number.isInteger(cm) || cm < 0 || cm > 20) throw Errors.param('多选题量须为 0–20');
-    if (!(ss > 0) || !(ms > 0)) throw Errors.param('每题分值须大于 0');
-    const total = Math.round((cs * ss + cm * ms) * 100) / 100;
-    if (total !== 100) {
-      throw Errors.param(`分值参数合计须等于 100.00，当前为 ${total.toFixed(2)}（差距 ${(100 - total).toFixed(2)}）`);
-    }
-
     const configured = await this.aiConfig.isConfigured();
     if (!configured) throw Errors.aiNotConfigured();
 
@@ -150,8 +142,6 @@ export class QuestionGenerationService {
       created_at: now.toISOString(),
       question_count_single: cs,
       question_count_multiple: cm,
-      score_single: ss,
-      score_multiple: ms,
     };
     await this.setTask(taskId, taskPayload);
     if (!(await this.redis.setNx(activeKey, taskId, TASK_TTL))) {
@@ -185,8 +175,6 @@ export class QuestionGenerationService {
       difficulty: input.difficulty,
       question_count_single: cs,
       question_count_multiple: cm,
-      score_single: ss,
-      score_multiple: ms,
     };
   }
 
@@ -318,7 +306,7 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
     taskId: string,
     material: Regulation,
     version: RegulationVersion,
-    input: { categoryId: string; difficulty: Difficulty; questionCountSingle: number; questionCountMultiple: number; scoreSingle: number; scoreMultiple: number; actor: { id: number; name: string } },
+    input: { categoryId: string; difficulty: Difficulty; questionCountSingle: number; questionCountMultiple: number; actor: { id: number; name: string } },
   ) {
     // 整体兜底：任何未预期异常都必须落到 failed 并释放互斥键，
     // 否则该资料会以「任务执行中」429 锁死直至 24h TTL（04 册 6.2 / AD-03 状态机）
@@ -345,7 +333,7 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
     taskId: string,
     material: Regulation,
     version: RegulationVersion,
-    input: { categoryId: string; difficulty: Difficulty; questionCountSingle: number; questionCountMultiple: number; scoreSingle: number; scoreMultiple: number; actor: { id: number; name: string } },
+    input: { categoryId: string; difficulty: Difficulty; questionCountSingle: number; questionCountMultiple: number; actor: { id: number; name: string } },
   ) {
     await this.setTask(taskId, { ...(await this.getTask(taskId) || {}), status: 'running' });
     const text = version.textContent || '';
@@ -430,7 +418,6 @@ ${sample ? `- ${sample}` : '（暂无）'}`;
       options: q.options,
       answer: q.answer,
       analysis: q.analysis,
-      scoreCents: Math.round((q.type === 'single' ? input.scoreSingle : input.scoreMultiple) * 100),
       regulationId: String(material.id),
       regulationVersionId: String(version.id),
       source: 'ai',
@@ -568,7 +555,6 @@ ${block.text || ''}
       options: q.options,
       answer: q.answer,
       analysis: q.analysis,
-      score: Number(q.score),
       status: q.status,
       source: q.source,
       created_at: q.createdAt,

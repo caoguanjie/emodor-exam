@@ -42,7 +42,7 @@
               <strong>第 {{ index + 1 }} 题</strong>
               <el-tag size="small" type="info">{{ item.gained_score === null ? '—' : `${item.gained_score} / ${item.score} 分` }}</el-tag>
             </header>
-            <QuestionPreview :question="previewQuestion(item)" :reveal-answer="true" />
+            <QuestionPreview :question="previewQuestion(item)" :reveal-answer="true" :show-score="true" />
             <div class="answer-panel">
               <h4>学员作答</h4>
               <div v-if="selectedOptionLabels(item).length" class="selected-options">

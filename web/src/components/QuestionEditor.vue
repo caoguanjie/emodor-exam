@@ -1,8 +1,14 @@
 <template>
   <el-form label-width="96px" class="question-editor">
     <div class="question-editor__grid">
+      <el-form-item label="题型" required>
+        <el-select v-model="local.type" style="width:100%" :disabled="disabled" @change="onTypeChange">
+          <el-option label="单选题" value="single" /><el-option label="多选题" value="multiple" />
+          <el-option label="判断题" value="judgment" />
+        </el-select>
+      </el-form-item>
       <el-form-item label="培训类别" required>
-        <el-select v-model="local.category_id" filterable style="width:100%" :disabled="disabled" @change="onCategoryChange">
+        <el-select v-model="local.category_id" filterable style="width:100%" :disabled="disabled">
           <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
         </el-select>
       </el-form-item>
@@ -12,30 +18,7 @@
           <el-option v-for="item in difficultyOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </el-form-item>
-      <el-form-item label="题型" required>
-        <el-select v-model="local.type" style="width:100%" :disabled="disabled" @change="onTypeChange">
-          <el-option label="单选题" value="single" /><el-option label="多选题" value="multiple" />
-          <el-option label="判断题" value="judgment" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="建议分值" required>
-        <el-input-number v-model="local.score" :min="0.01" :max="100" :precision="2" :disabled="disabled" />
-      </el-form-item>
-      <el-form-item label="考点组">
-        <el-select
-          v-model="local.concept_id"
-          clearable
-          filterable
-          remote
-          reserve-keyword
-          style="width:100%"
-          :loading="conceptLoading"
-          :remote-method="searchConcepts"
-          :disabled="disabled"
-        >
-          <el-option v-for="item in concepts" :key="item.id" :label="item.name" :value="item.id" />
-        </el-select>
-      </el-form-item>
+
     </div>
 
     <el-form-item label="题干" required>
@@ -72,9 +55,12 @@
       </el-form-item>
     </template>
 
-    <el-form-item label="答案解析">
-      <el-input v-model="local.analysis" type="textarea" :rows="3" :disabled="disabled" />
-    </el-form-item>
+    <details class="question-editor__optional" :open="analysisExpanded" @toggle="analysisExpanded = ($event.target as HTMLDetailsElement).open">
+      <summary>答案解析（选填）</summary>
+      <el-form-item label="答案解析">
+        <el-input v-model="local.analysis" type="textarea" :rows="3" :disabled="disabled" />
+      </el-form-item>
+    </details>
   </el-form>
 </template>
 
@@ -84,23 +70,22 @@ import MediaUpload from './MediaUpload.vue';
 import { newQuestionOptionId, questionDraftFromView, type Id, type QuestionDraftPayload, type QuestionOption, type QuestionType } from '../api/training-types';
 
 type CategoryOption = { id: Id; name: string };
-type ConceptOption = { id: Id; name: string };
 const props = withDefaults(defineProps<{
   modelValue: QuestionDraftPayload;
   categories?: CategoryOption[];
-  concepts?: ConceptOption[];
+
   disabled?: boolean;
   canUploadMedia?: boolean;
-  conceptLoading?: boolean;
+
   difficultyOptions?: Array<{ value: string; label: string }>;
-}>(), { categories: () => [], concepts: () => [], disabled: false, canUploadMedia: false, conceptLoading: false, difficultyOptions: () => [] });
+}>(), { categories: () => [], disabled: false, canUploadMedia: false, difficultyOptions: () => [] });
 const emit = defineEmits<{
   (event: 'update:modelValue', value: QuestionDraftPayload): void;
-  (event: 'scope-change', value: { category_id: Id; type: QuestionType }): void;
-  (event: 'concept-search', value: string): void;
+
 }>();
 
 const local = reactive<QuestionDraftPayload>(clone(props.modelValue));
+const analysisExpanded = ref(!!local.analysis?.trim());
 const pendingMediaId = ref<string | null>(null);
 let syncing = false;
 const historicalDifficulty = computed(() => local.difficulty && !props.difficultyOptions.some((item) => item.value === local.difficulty)
@@ -130,23 +115,8 @@ function normalizeType(type: QuestionType) {
 
 function onTypeChange(value: QuestionType) {
   local.type = value;
-  local.concept_id = undefined;
   if (value === 'judgment') local.options = fixedJudgmentOptions();
   normalizeType(value);
-  onScopeChange();
-}
-
-function onCategoryChange() {
-  local.concept_id = undefined;
-  onScopeChange();
-}
-
-function onScopeChange() {
-  if (local.category_id) emit('scope-change', { category_id: local.category_id, type: local.type });
-}
-
-function searchConcepts(keyword: string) {
-  emit('concept-search', keyword);
 }
 
 function toggleAnswer(index: number, checked: unknown) {
@@ -186,6 +156,7 @@ watch(() => props.modelValue, (value) => {
   syncing = true;
   Object.keys(local).forEach((key) => delete (local as any)[key]);
   Object.assign(local, clone(value));
+  analysisExpanded.value = !!local.analysis?.trim();
   normalizeType(local.type);
   syncing = false;
 }, { deep: true, flush: 'sync' });
@@ -196,7 +167,9 @@ watch(local, (value) => {
 </script>
 
 <style scoped>
-.question-editor__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 18px; }
+.question-editor__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 18px; }
+.question-editor__optional { margin-top: 8px; border-top: 1px solid var(--el-border-color-lighter); }
+.question-editor__optional summary { padding: 14px 0; cursor: pointer; color: var(--el-text-color-regular); font-size: 14px; }
 .question-editor__option { display: flex; gap: 8px; width: 100%; align-items: center; }
 .question-editor__media { display: grid; gap: 8px; width: 100%; }
 @media (max-width: 760px) { .question-editor__grid { grid-template-columns: 1fr; } }

@@ -50,8 +50,9 @@ export class QuestionVersion {
   @Column({ name: 'authoring_json', type: 'json', nullable: true })
   authoringJson: AuthoringBundle | null;
 
-  @Column({ name: 'score_cents', type: 'int', unsigned: true })
-  scoreCents: number;
+  /** Historical compatibility only; new revisions store NULL. */
+  @Column({ name: 'score_cents', type: 'int', unsigned: true, nullable: true })
+  scoreCents: number | null;
 
   @Column({ name: 'concept_id', type: 'bigint', unsigned: true, nullable: true })
   conceptId: string | null;

@@ -83,7 +83,7 @@ describe('existing form preserves canonical schema 3', () => {
   });
 
   it('retains the ordinary schema 2 create path', () => {
-    const saved = questionDraftWithContent({ category_id: '7', difficulty: 'easy', type: 'single', score: 5,
+    const saved = questionDraftWithContent({ category_id: '7', difficulty: 'easy', type: 'single',
       stem: '题干', options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }], answer: [1], analysis: null });
     expect(saved.content_schema_version).toBe(2);
     expect(saved.content_json.answer_option_ids).toEqual(['B']);

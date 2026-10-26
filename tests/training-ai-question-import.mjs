@@ -8,7 +8,7 @@ import { randomStrongPassword } from './training-access.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
-const HEADERS = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'score'];
+const HEADERS = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis'];
 
 async function captchaAnswer(ctx, captchaId) {
   const redis = new Redis({
@@ -70,7 +70,7 @@ function referenceFile(categoryId, count = 20) {
     options,
     answer: '[0]',
     analysis: `一次性参考解析-${index + 1}`,
-    score: '5',
+
   }));
   return Buffer.from(`\uFEFF${[
     HEADERS.join('\t'),

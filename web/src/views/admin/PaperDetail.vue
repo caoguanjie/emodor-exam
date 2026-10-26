@@ -31,7 +31,7 @@
       <el-button v-if="legacyPaper.status === 'draft' && !legacyStrategyLocked && auth.can('papers:write') && (legacyDirty || legacySum !== legacyPersistedSum)" type="primary" style="margin-top:14px" @click="saveLegacyQuestions">保存题单</el-button>
     </el-card>
     <el-dialog v-model="legacyPickVisible" title="选题入卷（制度范围）" width="760px">
-      <el-table :data="legacyCandidates" @selection-change="(rows: any[]) => (legacyPicked = rows)"><el-table-column type="selection" width="50" /><el-table-column prop="id" label="ID" width="70" /><el-table-column prop="stem" label="题干" min-width="280" /><el-table-column prop="score" label="建议分值" width="100" /></el-table>
+      <el-table :data="legacyCandidates" @selection-change="(rows: any[]) => (legacyPicked = rows)"><el-table-column type="selection" width="50" /><el-table-column prop="id" label="ID" width="70" /><el-table-column prop="stem" label="题干" min-width="280" /></el-table>
       <template #footer><el-button @click="legacyPickVisible = false">取消</el-button><el-button type="primary" @click="addLegacyPicked">加入试卷</el-button></template>
     </el-dialog>
   </div>
@@ -90,7 +90,7 @@
 
     <el-dialog v-model="candidateVisible" title="选择当前审核通过的题目版本" width="900px">
       <div class="toolbar"><el-select v-model="candidateQuery.type" placeholder="题型" clearable style="width:140px" @change="changeCandidateFilter"><el-option v-for="item in questionTypes" :key="item" :label="typeLabel(item)" :value="item" /></el-select><el-select v-model="candidateQuery.difficulty" placeholder="难度" clearable style="width:140px" @change="changeCandidateFilter"><el-option v-for="item in authoringOptions.difficultyOptions.value" :key="item.value" :label="item.label" :value="item.value" /></el-select></div>
-      <el-table :key="candidateSession" :data="candidates" row-key="question_version_id" @selection-change="updateCandidateSelection"><el-table-column type="selection" width="50" :reserve-selection="true" /><el-table-column prop="question_version_id" label="版本 ID" width="100" /><el-table-column prop="stem" label="题干" min-width="280" show-overflow-tooltip /><el-table-column label="题型/难度" width="120"><template #default="{ row }">{{ typeLabel(row.type) }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column><el-table-column label="考点" width="110"><template #default="{ row }">{{ row.concept_id || '独立题' }}</template></el-table-column><el-table-column label="建议分" width="90"><template #default="{ row }">{{ row.score_cents / 100 }}</template></el-table-column></el-table>
+      <el-table :key="candidateSession" :data="candidates" row-key="question_version_id" @selection-change="updateCandidateSelection"><el-table-column type="selection" width="50" :reserve-selection="true" /><el-table-column prop="question_version_id" label="版本 ID" width="100" /><el-table-column prop="stem" label="题干" min-width="280" show-overflow-tooltip /><el-table-column label="题型/难度" width="120"><template #default="{ row }">{{ typeLabel(row.type) }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column><el-table-column label="考点" width="110"><template #default="{ row }">{{ row.concept_id || '独立题' }}</template></el-table-column></el-table>
       <div class="candidate-pagination"><span class="hint inline">已选 {{ pickedCandidates.length }} 题</span><el-pagination :current-page="candidatePage.page" :page-size="candidatePage.page_size" :total="candidatePage.total" layout="total, prev, pager, next" @current-change="changeCandidatePage" /></div>
       <template #footer><el-button @click="candidateVisible = false">取消</el-button><el-button type="primary" @click="addCandidates">加入题单</el-button></template>
     </el-dialog>
@@ -103,7 +103,7 @@
         <el-table v-if="preview.capacities.length" :data="preview.capacities" size="small" style="margin-bottom:16px"><el-table-column label="难度" width="90"><template #default="{ row }">{{ difficultyLabel(row.difficulty) }}</template></el-table-column><el-table-column label="题型"><template #default="{ row }">{{ typeLabel(row.type) }}</template></el-table-column><el-table-column prop="required" label="需要考点数" /><el-table-column prop="available" label="可用考点数" /></el-table>
         <div v-for="(question, index) in preview.questions" :key="`${previewSession?.operation}:${previewRenderAttempt}:${question.question_version_id}`" class="preview-question">
           <div class="preview-title">{{ index + 1 }}.</div>
-          <QuestionPreview :question="question" :reveal-answer="previewAnswers" @ready="markPreviewQuestionReady(previewSession?.operation || 0, previewRenderAttempt, question.question_version_id, $event)" />
+          <QuestionPreview :question="question" :reveal-answer="previewAnswers" :show-score="true" @ready="markPreviewQuestionReady(previewSession?.operation || 0, previewRenderAttempt, question.question_version_id, $event)" />
         </div>
       </template>
       <template #footer><el-button :loading="previewLoading" :disabled="!previewResourcesReady" @click="printPreview">打印</el-button><el-button :disabled="!preview || previewLoading" @click="exportPreview">导出 JSON</el-button><el-button type="primary" @click="closePreview">关闭</el-button></template>
@@ -143,6 +143,7 @@ import type {
   PaperRuleInput,
   QuestionType,
   TrainingPaperDetail,
+  TrainingPaperCandidate,
   TrainingPaperQuestion,
   TrainingPaperStatus,
 } from '../../api/training-types';
@@ -217,8 +218,8 @@ const savingConfig = ref(false);
 const savingQuestions = ref(false);
 const copyingPaper = ref(false);
 const candidateVisible = ref(false);
-const candidates = ref<TrainingPaperQuestion[]>([]);
-const pickedCandidates = ref<TrainingPaperQuestion[]>([]);
+const candidates = ref<TrainingPaperCandidate[]>([]);
+const pickedCandidates = ref<TrainingPaperCandidate[]>([]);
 const candidateQuery = reactive<{ type: QuestionType | ''; difficulty: Difficulty | '' }>({ type: '', difficulty: '' });
 const candidatePage = reactive({ page: 1, page_size: 50, total: 0 });
 const candidateSession = ref(0);
@@ -491,7 +492,7 @@ async function loadCandidates() {
   const context = viewContext;
   const operation = ++candidateOperation;
   const params = { page: candidatePage.page, page_size: candidatePage.page_size, ...(candidateQuery.type ? { type: candidateQuery.type } : {}), ...(candidateQuery.difficulty ? { difficulty: candidateQuery.difficulty } : {}) };
-  const page = await http.get(`/admin/papers/${paperId}/candidates`, { params }) as Page<TrainingPaperQuestion>;
+  const page = await http.get(`/admin/papers/${paperId}/candidates`, { params }) as Page<TrainingPaperCandidate>;
   if (context !== viewContext || operation !== candidateOperation || !candidateVisible.value) return;
   candidates.value = page.items;
   candidatePage.page = page.page;
@@ -500,13 +501,13 @@ async function loadCandidates() {
 }
 async function changeCandidatePage(page: number) { candidatePage.page = page; await loadCandidates(); }
 async function changeCandidateFilter() { candidatePage.page = 1; await loadCandidates(); }
-function updateCandidateSelection(rows: TrainingPaperQuestion[]) {
+function updateCandidateSelection(rows: TrainingPaperCandidate[]) {
   const selected = new Map(pickedCandidates.value.map((item) => [String(item.question_version_id), item]));
   for (const item of candidates.value) selected.delete(String(item.question_version_id));
   for (const item of rows) selected.set(String(item.question_version_id), item);
   pickedCandidates.value = [...selected.values()];
 }
-function addCandidates() { const versionIds = new Set(fixedQuestions.value.map((item) => item.question_version_id)); const concepts = new Set(fixedQuestions.value.map((item) => item.concept_id ? `concept:${item.concept_id}` : `question:${item.question_id}`)); for (const item of pickedCandidates.value) { const key = item.concept_id ? `concept:${item.concept_id}` : `question:${item.question_id}`; if (versionIds.has(item.question_version_id) || concepts.has(key)) continue; versionIds.add(item.question_version_id); concepts.add(key); fixedQuestions.value.push({ ...clone(item), sort: fixedQuestions.value.length }); } candidateVisible.value = false; }
+function addCandidates() { const versionIds = new Set(fixedQuestions.value.map((item) => item.question_version_id)); const concepts = new Set(fixedQuestions.value.map((item) => item.concept_id ? `concept:${item.concept_id}` : `question:${item.question_id}`)); for (const item of pickedCandidates.value) { const key = item.concept_id ? `concept:${item.concept_id}` : `question:${item.question_id}`; if (versionIds.has(item.question_version_id) || concepts.has(key)) continue; versionIds.add(item.question_version_id); concepts.add(key); fixedQuestions.value.push({ ...clone(item), score_cents: 500, sort: fixedQuestions.value.length }); } candidateVisible.value = false; }
 function removeFixed(row: TrainingPaperQuestion) { fixedQuestions.value = fixedQuestions.value.filter((item) => item.question_version_id !== row.question_version_id); fixedQuestions.value.forEach((item, index) => { item.sort = index; }); }
 
 async function saveFixedQuestions() {
@@ -701,7 +702,7 @@ async function addLegacyPicked() {
   if (!legacyPaper.value) return;
   const context = viewContext;
   const operation = ++legacyMutationOperation;
-  const items = [...legacyPaper.value.questions.map((item) => ({ question_id: item.question_id, score: Number(item.score) })), ...legacyPicked.value.map((item: any) => ({ question_id: item.id, score: Number(item.score) }))];
+  const items = [...legacyPaper.value.questions.map((item) => ({ question_id: item.question_id, score: Number(item.score) })), ...legacyPicked.value.map((item: any) => ({ question_id: item.id, score: 5 }))];
   await http.put(`/ai/papers/${paperId}/questions`, { items });
   if (context !== viewContext || operation !== legacyMutationOperation) return;
   legacyPickVisible.value = false;

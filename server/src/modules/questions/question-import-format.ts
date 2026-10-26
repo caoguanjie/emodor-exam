@@ -6,7 +6,7 @@ export type QuestionImportFormat = 'xlsx' | 'txt';
 
 export const QUESTION_IMPORT_HEADERS = [
   'category', 'type', 'difficulty', 'concept', 'stem',
-  'options', 'answer', 'analysis', 'score',
+  'options', 'answer', 'analysis',
 ] as const;
 
 type QuestionImportHeader = (typeof QUESTION_IMPORT_HEADERS)[number];
@@ -31,19 +31,19 @@ const TEMPLATE_ROWS: Array<Record<QuestionImportHeader, string>> = [
     category: '', type: 'single', difficulty: 'easy', concept: '',
     stem: '<p>进入作业区域前首先应做什么？</p>',
     options: JSON.stringify([{ key: 'A', text: '完成风险确认' }, { key: 'B', text: '直接开始作业' }]),
-    answer: JSON.stringify([0]), analysis: '<p>应先完成风险确认。</p>', score: '5',
+    answer: JSON.stringify([0]), analysis: '<p>应先完成风险确认。</p>',
   },
   {
     category: '', type: 'multiple', difficulty: 'hard', concept: '',
     stem: '<p>以下哪些属于作业前检查？</p>',
     options: JSON.stringify([{ key: 'A', text: '检查防护用品' }, { key: 'B', text: '确认作业许可' }, { key: 'C', text: '跳过交底' }]),
-    answer: JSON.stringify([0, 1]), analysis: '<p>防护用品和作业许可均须确认。</p>', score: '10',
+    answer: JSON.stringify([0, 1]), analysis: '<p>防护用品和作业许可均须确认。</p>',
   },
   {
     category: '', type: 'judgment', difficulty: 'hard', concept: '',
     stem: '<p>未完成安全交底也可以开始作业。</p>',
     options: JSON.stringify([{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]),
-    answer: JSON.stringify([1]), analysis: '<p>必须先完成安全交底。</p>', score: '5',
+    answer: JSON.stringify([1]), analysis: '<p>必须先完成安全交底。</p>',
   },
 ];
 
@@ -56,10 +56,12 @@ function assertFile(file: Buffer, limits: QuestionImportLimits): void {
   if (file.length > limits.maxBytes) throw Errors.fileTooLarge('导入文件超过大小上限');
 }
 
+/** Legacy ninth score column is accepted and ignored, including nonnumeric values. */
 function assertHeader(values: string[]): void {
-  if (values.length !== QUESTION_IMPORT_HEADERS.length
+  const legacy = values.length === QUESTION_IMPORT_HEADERS.length + 1 && values.at(-1) === 'score';
+  if ((!legacy && values.length !== QUESTION_IMPORT_HEADERS.length)
     || QUESTION_IMPORT_HEADERS.some((header, index) => values[index] !== header)) {
-    throw Errors.param('模板表头不符，请下载最新导入模板填写');
+    throw Errors.param('模板表头不符，请使用 8 列模板（旧第 9 列 score 已忽略，分值在组卷时设置）');
   }
 }
 
@@ -98,10 +100,7 @@ async function parseXlsx(file: Buffer, limits: QuestionImportLimits): Promise<Pa
   }
   const worksheet = workbook.worksheets[0];
   if (!worksheet) throw Errors.param('文件为空或无数据行');
-  if (worksheet.getRow(1).actualCellCount !== QUESTION_IMPORT_HEADERS.length) {
-    throw Errors.param('模板表头不符，请下载最新导入模板填写');
-  }
-  const header = QUESTION_IMPORT_HEADERS.map((_item, index) => excelCellText(worksheet.getRow(1).getCell(index + 1)).text.trim());
+  const header = Array.from({ length: worksheet.getRow(1).cellCount }, (_item, index) => excelCellText(worksheet.getRow(1).getCell(index + 1)).text.trim());
   assertHeader(header);
 
   const rows: ParsedQuestionImportRow[] = [];
@@ -111,13 +110,13 @@ async function parseXlsx(file: Buffer, limits: QuestionImportLimits): Promise<Pa
     const errors: string[] = [];
     let hasExtraCell = false;
     excelRow.eachCell({ includeEmpty: false }, (cell, columnNumber) => {
-      if (columnNumber <= QUESTION_IMPORT_HEADERS.length) return;
+      if (columnNumber <= header.length) return;
       const parsed = excelCellText(cell);
       if (!parsed.error && parsed.text.trim() === '') return;
       hasExtraCell = true;
       if (parsed.error) errors.push(parsed.error);
     });
-    if (hasExtraCell) errors.unshift('Excel 每行必须使用 9 列');
+    if (hasExtraCell) errors.unshift(`Excel 每行必须使用 ${header.length} 列`);
     QUESTION_IMPORT_HEADERS.forEach((_header, index) => {
       const parsed = excelCellText(excelRow.getCell(index + 1));
       cells.push(parsed.text);
@@ -146,8 +145,8 @@ function parseTxt(file: Buffer, limits: QuestionImportLimits): ParsedQuestionImp
   lines.forEach((line, index) => {
     if (!line.trim()) return;
     const cells = line.split('\t');
-    if (cells.length !== QUESTION_IMPORT_HEADERS.length) {
-      rows.push(rowFromCells(index + 2, cells.slice(0, QUESTION_IMPORT_HEADERS.length), ['TXT 每行必须使用 9 列制表符分隔']));
+    if (cells.length !== header.length) {
+      rows.push(rowFromCells(index + 2, cells.slice(0, QUESTION_IMPORT_HEADERS.length), [`TXT 每行必须使用 ${header.length} 列制表符分隔`]));
       return;
     }
     rows.push(rowFromCells(index + 2, cells));
@@ -192,6 +191,7 @@ export async function buildQuestionImportFile(
   worksheet.addRow([...QUESTION_IMPORT_HEADERS]);
   for (const row of rows) worksheet.addRow(QUESTION_IMPORT_HEADERS.map((header) => row[header]));
   worksheet.getRow(1).font = { bold: true };
+  worksheet.getRow(1).getCell(8).note = '题库不设分值；分值在组卷时设置。旧模板第 9 列 score 兼容接收并忽略。';
   worksheet.columns.forEach((column, index) => {
     column.width = ['stem', 'options', 'answer', 'analysis'].includes(QUESTION_IMPORT_HEADERS[index]) ? 36 : 16;
   });

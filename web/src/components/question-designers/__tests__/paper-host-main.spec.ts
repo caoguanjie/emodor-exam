@@ -58,6 +58,21 @@ async function show(component: typeof PaperDetail | typeof Papers, url: string) 
 }
 
 describe('main fixed paper entry', () => {
+  it.each([undefined, 7300])('assigns a paper score on insertion, ignoring candidate score %s', async (oldScore) => {
+    const candidate = { question_id: '41', question_version_id: '51', type: 'single', difficulty: 'easy',
+      concept_id: null, regulation_id: null, stem: '新候选', options: [], ...(oldScore === undefined ? {} : { score_cents: oldScore }) };
+    const fallback = transport.respond;
+    transport.respond = async (method, path, body, config) => path.endsWith('/candidates')
+      ? { items: [candidate], total: 1, page: 1, page_size: 50 } : fallback(method, path, body, config);
+    const { wrapper, state } = await show(PaperDetail, '/admin/papers/100?scope=training');
+    await state.openCandidatePicker(); await flushPromises();
+    const table = wrapper.findAllComponents({ name: 'ElTable' }).find((table) => table.props('data')?.[0]?.question_version_id === '51')!;
+    expect(table.text()).not.toMatch(/建议分|默认分/);
+    table.vm.$emit('selection-change', [candidate]); await flushPromises();
+    await wrapper.findAll('button').find((button) => button.text() === '加入题单')!.trigger('click');
+    expect(state.fixedQuestions.map((item: any) => item.score_cents)).toEqual([10000, 500]);
+    expect(candidate).toEqual(expect.objectContaining({ question_id: '41' }));
+  });
   it('creates a fixed draft once and automatically opens its designer query', async () => {
     const { state, router } = await show(Papers, '/admin/papers');
     state.openTrainingCreate(); state.trainingCreate.title = '新固定卷';

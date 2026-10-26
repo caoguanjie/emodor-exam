@@ -118,7 +118,7 @@ describe('single-question fingerprints and save routing', () => {
     ['concept', (doc: QuestionAuthoringDocument) => { doc.questions['source-client'].concept_id = '21'; }],
     ['regulation', (doc: QuestionAuthoringDocument) => { doc.questions['source-client'].regulation_id = '32'; }],
     ['regulation version', (doc: QuestionAuthoringDocument) => { doc.questions['source-client'].regulation_version_id = '33'; }],
-    ['score', (doc: QuestionAuthoringDocument) => { doc.questions['source-client'].score_cents = 500; }],
+
     ['analysis', (doc: QuestionAuthoringDocument) => { doc.questions['source-client'].analysis.content = []; }],
     ['type', (doc: QuestionAuthoringDocument) => { doc.questions['source-client'].type = 'multiple'; }],
   ])('detects a changed %s', (_name, change) => {

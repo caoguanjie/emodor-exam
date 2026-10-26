@@ -62,6 +62,54 @@ function fixture(options: { inProgress?: boolean; legacyLinked?: boolean } = {})
 const requestId = '75d17f2e-1c29-4bf7-b5da-660a3b116eba';
 
 describe('authoring transaction with the real version service', () => {
+  it('stores score-free question facts, assembles without a default and keeps paper score changes out of revisions', async () => {
+    const f = fixture();
+    const first = await f.service.commit({ request_id: requestId, bundle: bundle() }, '9');
+    expect(f.state().questions[0].score).toBeNull();
+    expect(f.state().versions[0].scoreCents).toBeNull();
+    expect(f.state().versions[0].authoringJson.document.questions.local1).not.toHaveProperty('score_cents');
+    expect(first.bundle.document.questions.local1.score_cents).toBe(500);
+    const assembled = await f.service.assemble([first.items[0].saved_version_id], '9');
+    expect(assembled.document.questions.local1).not.toHaveProperty('score_cents');
+    expect(decodeAuthoringBundle(assembled)).toHaveLength(1);
+    const changed = structuredClone(first.bundle); changed.document.questions.local1.score_cents = 800;
+    const before = structuredClone(f.state().versions);
+    const receipt = await f.service.commit({ request_id: 'c938f798-b80e-4aba-a288-73467f12a0ee', bundle: changed }, '9');
+    expect(receipt.items[0]).toEqual(first.items[0]);
+    expect(receipt.bundle.document.questions.local1.score_cents).toBe(800);
+    expect(f.state().versions).toEqual(before);
+    expect(f.state().questions[0].status).toBe('approved');
+  });
+
+  it('does not create a revision or rewrite historical scores when only a paper score changes on an old version without authoring', async () => {
+    const f = fixture(); const first = await f.service.commit({ request_id: requestId, bundle: bundle() }, '9');
+    Object.assign(f.state().versions[0], { authoringJson: null, authoringSchemaVersion: null, scoreCents: 725 });
+    f.state().questions[0].score = '7.25';
+    const assembled = await f.service.assemble([first.items[0].saved_version_id], '9');
+    const client = Object.keys(assembled.document.questions)[0];
+    expect(assembled.document.questions[client]).not.toHaveProperty('score_cents');
+    assembled.document.questions[client].score_cents = 800;
+    const before = structuredClone({ questions: f.state().questions, versions: f.state().versions });
+    const receipt = await f.service.commit({ request_id: 'c938f798-b80e-4aba-a288-73467f12a0ee', bundle: assembled }, '9');
+    expect(receipt.items[0].saved_version_id).toBe(first.items[0].saved_version_id);
+    expect({ questions: f.state().questions, versions: f.state().versions }).toEqual(before);
+  });
+
+  it('creates and revises a manual question with no score at the persistence boundary', async () => {
+    const f = fixture();
+    const draft = { categoryId: '11', difficulty: 'easy' as const, type: 'single' as const, source: 'manual' as const,
+      stem: '题干', options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }], answer: [0], analysis: null };
+    const first = await f.versions.create(draft as any, '9');
+    const nextId = await f.versions.revise(first.questionId, { ...draft, analysis: '新解析' } as any, '9', first.versionId);
+    expect(f.state().questions[0].score).toBeNull();
+    expect(f.state().versions).toHaveLength(2);
+    for (const row of f.state().versions) {
+      expect(row.scoreCents).toBeNull();
+      expect(Object.values<any>(row.authoringJson.document.questions)[0]).not.toHaveProperty('score_cents');
+    }
+    expect(nextId).not.toBe(first.versionId);
+  });
+
   it.each(['top-level images', 'empty text nodes', 'ordinary nonempty nodes'])('creates, revises and assembles schema 2 %s through a valid author copy without changing exam content', async (kind) => {
     const textDoc = (text: string) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
     const imageDoc = (asset: string) => ({ type: 'doc', content: [{ type: 'image', attrs: { asset_id: asset } }] });
@@ -149,7 +197,7 @@ describe('authoring transaction with the real version service', () => {
   it('keeps the actual source while revising and writes pending with exact conflict rollback', async () => {
     const f = fixture(); const first = await f.service.commit({ request_id: requestId, bundle: bundle() }, '9');
     f.state().versions[0].source = 'import'; f.state().questions[0].source = 'import';
-    const next = structuredClone(first.bundle); next.document.questions.local1.score_cents = 600;
+    const next = structuredClone(first.bundle); next.document.questions.local1.difficulty = 'hard';
     const updated = await f.service.commit({ request_id: '84df8ef9-32a9-4112-ac24-3e8f5d2ef711', bundle: next }, '9');
     expect(f.state().versions[1]).toMatchObject({ source: 'import', status: 'pending', revision: 2 });
     const before = structuredClone(f.state());
@@ -226,12 +274,12 @@ describe('authoring transaction with the real version service', () => {
     const next = f.state().versions.find((item) => item.id === saved)!;
     expect(next.contentSchemaVersion).toBe(3); expect(next.contentJson.stem).toEqual(version.contentJson.stem);
     expect(next.contentJson.answer_option_ids).toEqual(['B']);
-    expect(next.authoringJson.document.questions.local1.score_cents).toBe(600);
+    expect(next.authoringJson.document.questions.local1).not.toHaveProperty('score_cents');
   });
 
   it('enforces the existing live-exam editing gate for the new authoring endpoint', async () => {
     const f = fixture({ inProgress: true }); const first = await f.service.commit({ request_id: requestId, bundle: bundle() }, '9');
-    const changed = structuredClone(first.bundle); changed.document.questions.local1.score_cents = 600;
+    const changed = structuredClone(first.bundle); changed.document.questions.local1.difficulty = 'hard';
     const before = structuredClone(f.state());
     await expect(f.service.commit({ request_id: 'c938f798-b80e-4aba-a288-73467f12a0ee', bundle: changed }, '9')).rejects.toMatchObject({ code: 40908 });
     expect(f.state()).toEqual(before);

@@ -14,7 +14,7 @@
       type="info"
       :closable="false"
       show-icon
-      title="TXT 固定使用 UTF-8 TSV；options 与 answer 单元格必须填写 JSON 数组，不支持逗号等手工分隔写法。"
+      title="标准模板为 8 列：category/type/difficulty/concept/stem/options/answer/analysis。TXT 固定使用 UTF-8 TSV；options 与 answer 必须填写 JSON 数组。"
       style="margin-bottom:16px"
     />
 
@@ -89,7 +89,7 @@
     </section>
 
     <section v-else class="ai-import-panel">
-      <el-alert type="info" :closable="false" show-icon title="上传标准 9 列 Excel / UTF-8 TSV 模板（最多 50 道参考题、5MB）。每题生成简单与困难两个版本；参考题不入库，文件不保留。" />
+      <el-alert type="info" :closable="false" show-icon title="上传标准 8 列 Excel / UTF-8 TSV 模板（最多 50 道参考题、5MB）。每题生成简单与困难两个版本；参考题不入库，文件不保留。" />
       <el-alert v-if="!auth.can('ai:read') || !auth.can('ai:write')" type="warning" :closable="false" title="发起并查看生成任务需要 AI 读取和编辑权限。" />
       <el-form label-width="110px" class="import-form ai-import-form">
         <el-form-item label="文件格式" required>
@@ -179,10 +179,10 @@
     </section>
 
     <el-dialog v-model="generatedPreviewVisible" title="生成题预览" width="760px" destroy-on-close>
-      <QuestionPreview v-if="generatedPreview" :question="{ ...generatedPreview, score: Number(generatedPreview.score) }" :reveal-answer="true" />
+      <QuestionPreview v-if="generatedPreview" :question="generatedPreview" :reveal-answer="true" />
     </el-dialog>
     <el-dialog v-model="editVisible" title="修改生成题" width="760px" class="re-form-dialog" :close-on-click-modal="false" :close-on-press-escape="!ai.rowBusy.value" :show-close="!ai.rowBusy.value">
-      <el-alert type="info" :closable="false" title="培训类别、题型、难度、考点和分值沿用生成约定；可校对题干、选项、答案和解析。" />
+      <el-alert type="info" :closable="false" title="培训类别、题型、难度和考点沿用生成约定；可校对题干、选项、答案和解析。" />
       <el-alert v-if="ai.commitUnknown.value" type="warning" :closable="false" title="修改结果尚未确认。请查询原批次状态，核对服务器上的最新题目后再确认导入。" />
       <el-form label-width="90px" class="generated-edit-form">
         <el-form-item label="题干"><el-input v-model="editForm.stem" type="textarea" :rows="4" placeholder="修改生成题题干" :disabled="ai.rowBusy.value" /></el-form-item>

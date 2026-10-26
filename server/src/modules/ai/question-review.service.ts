@@ -21,7 +21,8 @@ type QuestionPatch = {
   options?: QuestionOption[];
   answer?: number[];
   analysis?: string | null;
-  score?: number;
+  /** Transitional input only; ignored. */
+  score?: unknown;
 };
 
 @Injectable()
@@ -49,7 +50,6 @@ export class QuestionReviewService {
       analysis: sanitizeQuestionRichTextForDisplay(q.analysis),
       content_schema_version: q.contentSchemaVersion || 1,
       content_json: q.contentJson || null,
-      score: Number(q.score),
       status: q.status,
       source: q.source,
       created_at: q.createdAt,
@@ -150,20 +150,21 @@ export class QuestionReviewService {
   private draftFromQuestion(q: Question, patch: QuestionPatch): QuestionDraft {
     const categoryId = patch.category_id ?? q.categoryId;
     const difficulty = patch.difficulty ?? q.difficulty;
+    const type = patch.type ?? q.type;
+    const keepConcept = String(categoryId) === String(q.categoryId) && type === q.type;
     if (!categoryId) throw Errors.param('category_id 必填；旧题不会自动归入培训池');
     if (!difficulty) throw Errors.param('difficulty 必填；旧题不会自动伪造难度');
     return {
       categoryId: String(categoryId),
       difficulty: difficulty as Difficulty,
-      type: (patch.type ?? q.type) as QuestionType,
+      type: type as QuestionType,
       stem: patch.stem ?? q.stem,
       options: patch.options ?? q.options,
       answer: patch.answer ?? q.answer,
       analysis: patch.analysis === undefined ? q.analysis : patch.analysis,
       contentSchemaVersion: (patch as any).content_schema_version,
       contentJson: (patch as any).content_json,
-      scoreCents: patch.score === undefined ? Math.round(Number(q.score) * 100) : Math.round(Number(patch.score) * 100),
-      conceptId: patch.concept_id === null ? undefined : patch.concept_id ?? q.conceptId ?? undefined,
+      conceptId: patch.concept_id === undefined ? (keepConcept ? q.conceptId ?? undefined : undefined) : patch.concept_id ?? undefined,
       regulationId: q.regulationId ? String(q.regulationId) : undefined,
       regulationVersionId: q.versionId ? String(q.versionId) : undefined,
       source: q.source as QuestionDraft['source'],
@@ -180,7 +181,7 @@ export class QuestionReviewService {
     const q = await this.questionRepo.findOne({ where: { id: String(id) } });
     if (!q) throw Errors.notFound('题目不存在');
     await this.assertTypeChangeAllowed(String(q.id), q.type, patch.type);
-    const touchingCore = ['category_id', 'difficulty', 'concept_id', 'type', 'stem', 'options', 'answer', 'score', 'content_json']
+    const touchingCore = ['category_id', 'difficulty', 'concept_id', 'type', 'stem', 'options', 'answer', 'content_json']
       .some((field) => (patch as Record<string, unknown>)[field] !== undefined);
     if (touchingCore) await this.assertNotInLiveExam(id);
     const editedFields = Object.keys(patch);
@@ -197,14 +198,15 @@ export class QuestionReviewService {
   async createManual(input: {
     category_id: string; difficulty: Difficulty; concept_id?: string;
     type: QuestionType; stem: string; options: QuestionOption[]; answer: number[]; analysis?: string | null;
-    score: number;
+    /** Transitional input only; ignored. */
+    score?: unknown;
     content_schema_version?: number; content_json?: any;
   }, actor: { id: number; name: string }, ip: string | null) {
     const created = await this.versions.create({
       categoryId: String(input.category_id), difficulty: input.difficulty, type: input.type, stem: input.stem,
       options: input.options, answer: input.answer, analysis: input.analysis || null,
       contentSchemaVersion: input.content_schema_version, contentJson: input.content_json,
-      scoreCents: Math.round(Number(input.score) * 100), conceptId: input.concept_id,
+      conceptId: input.concept_id,
       source: 'manual',
     }, String(actor.id));
     await this.versions.approve(created.versionId, String(actor.id));
@@ -307,7 +309,6 @@ export class QuestionReviewService {
         categoryId: String(q.categoryId), difficulty: q.difficulty as Difficulty, conceptId: q.conceptId || undefined,
         regulationId: String(q.regulationId), regulationVersionId: String(q.versionId), source: 'ai',
         type: parsed.type, stem: parsed.stem, options: parsed.options, answer: parsed.answer, analysis: parsed.analysis,
-        scoreCents: Math.round(Number(q.score) * 100),
         sourcePageGroup, sourcePageStart, sourcePageEnd,
       }, String(actor.id), expectedVersionId);
       this.audit.log({

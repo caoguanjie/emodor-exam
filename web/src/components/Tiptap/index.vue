@@ -95,6 +95,7 @@ import './styles/editor.scss';
 import { createExtensions } from './utils/createExtensions';
 import type { MediaResolver } from './extensions/MediaImage';
 import type { PlainFieldOptions } from './extensions/PlainField';
+import type { QuestionRuntimeMeta } from './extensions/QuestionNodes';
 import {
     beginEditorControlledUpdate,
     clearNodeView,
@@ -121,6 +122,9 @@ interface Props {
     showPanels?: boolean;
     presentation?: EditorPresentation;
     questions?: Record<string, QuestionMeta>;
+    runtimeQuestions?: Record<string, QuestionRuntimeMeta>;
+    reorderOptions?: boolean;
+    showAnswerLabels?: boolean;
     displayMeta?: Record<string, { type: QuestionMeta['type']; hideOrdinal?: boolean }>;
     compact?: boolean;
     review?: Record<string, ReviewOptionState[]>;
@@ -271,13 +275,15 @@ const editor = useEditor({
     content: emptyDocument(props.profile),
     editable: props.mode === 'edit',
     extensions: createExtensions(props.profile, {
+        canReorderOptions: () => props.reorderOptions === true,
+        showAnswerLabels: () => props.showAnswerLabels === true,
         protectStructure: () => props.protectQuestionStructure,
         allowStructure: () => props.allowStructure,
         onEditBlocked: (message) => emit('edit-blocked', message),
         onUploadsChange: (state) => emit('upload-state-change', state),
         onQuestionRemoveRequest: (clientId) => emit('remove-request', clientId),
         onQuestionMoveRequest: (change) => emit('move-request', change),
-        getQuestionMeta: (clientId) => props.questions[clientId],
+        getQuestionMeta: (clientId) => props.runtimeQuestions?.[clientId] ?? props.questions[clientId],
         getDisplayMeta: (clientId) => props.displayMeta[clientId],
         getMode: () => props.mode,
         getReviewState: (clientId) => props.review[clientId],

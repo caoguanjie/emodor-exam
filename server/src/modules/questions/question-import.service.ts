@@ -50,7 +50,6 @@ export function questionImportFields(draft: QuestionDraft) {
     options: draft.options,
     answer: draft.answer,
     analysis: draft.analysis || '',
-    score: (draft.scoreCents / 100).toFixed(2),
   };
 }
 
@@ -106,14 +105,6 @@ function parseJsonArray(value: string, field: string): unknown[] {
   } catch {
     throw Errors.param(`${field} 必须是合法 JSON 数组`);
   }
-}
-
-function scoreCents(value: string): number {
-  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(value)) throw Errors.param('score 必须是最多两位小数的数字');
-  const [whole, fraction = ''] = value.split('.');
-  const cents = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
-  if (!Number.isSafeInteger(cents) || cents <= 0 || cents > 10_000) throw Errors.param('score 必须大于 0 且不超过 100');
-  return cents;
 }
 
 function questionOptions(value: unknown[]): QuestionOption[] {
@@ -200,7 +191,7 @@ export class QuestionImportService implements OnModuleInit {
       return {
         row: index + 2,
         category: '', type: '', difficulty: '', concept: '', stem: '', options: '', answer: '',
-        analysis: '', score: '', format_errors: ['导入行必须是对象'],
+        analysis: '', format_errors: ['导入行必须是对象'],
       };
     }
     const record = value as Record<string, unknown>;
@@ -216,7 +207,6 @@ export class QuestionImportService implements OnModuleInit {
       options: String(record.options ?? '').trim(),
       answer: String(record.answer ?? '').trim(),
       analysis: String(record.analysis ?? '').trim(),
-      score: String(record.score ?? '').trim(),
       format_errors: [
         ...(Array.isArray(record.format_errors) ? record.format_errors.map(String) : []),
         ...(unknown.length ? [`导入行包含不支持的字段：${unknown.join(',')}`] : []),
@@ -283,7 +273,6 @@ export class QuestionImportService implements OnModuleInit {
       options: questionOptions(parseJsonArray(row.options, 'options')),
       answer: answerIndexes(parseJsonArray(row.answer, 'answer')),
       analysis: row.analysis || null,
-      scoreCents: scoreCents(row.score),
       conceptId: concept ? String(concept.id) : undefined,
       source: kind === 'questions_ai' ? 'ai' : 'import',
     };

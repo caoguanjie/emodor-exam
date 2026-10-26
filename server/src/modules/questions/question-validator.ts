@@ -17,7 +17,6 @@ export interface QuestionDraftInput {
   options: QuestionOption[];
   answer: number[];
   analysis: string | null;
-  scoreCents: number;
   conceptId?: string;
   regulationId?: string;
   regulationVersionId?: string;
@@ -147,6 +146,9 @@ export function validateAndSanitizeQuestionDraft(
   input: QuestionDraftInput,
   validationOptions: { allowReferenceAi?: boolean } = {},
 ): ValidatedQuestionDraft {
+  // Old adapters may still provide a score; it is never a question fact.
+  const { scoreCents: _ignoredScore, ...scoreFree } = (input ?? {}) as QuestionDraftInput & { scoreCents?: unknown };
+  input = scoreFree;
   const type = input?.type;
   if (input?.contentJson != null && input.contentSchemaVersion !== 2 && input.contentSchemaVersion !== 3) throw Errors.param('内容必须声明 content_schema_version=2 或 3');
   if (!TYPES.includes(type)) throw Errors.param('题型非法（single / multiple / judgment）');
@@ -170,9 +172,6 @@ export function validateAndSanitizeQuestionDraft(
     if (Number(input.sourcePageStart) < 1 || Number(input.sourcePageEnd) < Number(input.sourcePageStart)) {
       throw Errors.param('PDF 页码来源非法');
     }
-  }
-  if (!Number.isInteger(input.scoreCents) || input.scoreCents <= 0 || input.scoreCents > 10000) {
-    throw Errors.param('建议分值须为 1–10000 整数分');
   }
 
   if (input.contentSchemaVersion === 3) {
@@ -204,7 +203,6 @@ export function validateAndSanitizeQuestionDraft(
     analysis,
     contentSchemaVersion: 2,
     contentJson,
-    scoreCents: input.scoreCents,
     conceptId,
     regulationId,
     regulationVersionId,

@@ -266,13 +266,15 @@ export class PaperService {
         if (q.regulationId !== paper.regulationId) throw Errors.param(`题目 ${it.question_id} 与试卷不属于同一制度`);
         if (seen.has(q.id)) throw Errors.param(`题目 ${it.question_id} 重复`);
         seen.add(q.id);
+        if (typeof it.score !== 'number' || !Number.isFinite(it.score) || it.score <= 0 || it.score > 100
+          || Math.abs(it.score * 100 - Math.round(it.score * 100)) > 0.000001) throw Errors.param('组卷须显式设置每题分值（最多两位小数）');
         entities.push(repo.create({
           paperId: id,
           questionId: q.id,
           questionVersionId: q.currentVersionId ? String(q.currentVersionId) : null,
           conceptId: q.conceptId ? String(q.conceptId) : null,
           sort: i,
-          score: String(it.score ?? Number(q.score)),
+          score: String(it.score),
         }));
       }
       await repo.delete({ paperId: id });
@@ -694,7 +696,7 @@ export class PaperService {
     const items = unique.slice((page - 1) * pageSize, page * pageSize).map((item) => ({
       question_id: String(item.questionId), question_version_id: String(item.versionId), revision: item.revision,
       category_id: String(item.categoryId), difficulty: item.difficulty, type: item.type, stem: item.stem,
-      options: cloneJson(item.options), score_cents: Number(item.scoreCents), concept_id: item.conceptId || null,
+      options: cloneJson(item.options), concept_id: item.conceptId || null,
       regulation_id: item.regulationId || null, source: item.source,
     }));
     return { items, total: unique.length, page, page_size: pageSize };

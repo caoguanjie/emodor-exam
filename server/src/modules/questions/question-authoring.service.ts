@@ -2,12 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { Errors } from '../../common/errors';
 import type { AuthoringBundle, AuthoringCommitRequest, AuthoringReceipt } from '../../common/question-authoring';
-import type { Difficulty, QuestionType } from '../../common/training-contracts';
 import { QuestionAuthoringCommit } from '../../entities/question-authoring-commit.entity';
 import { QuestionVersion } from '../../entities/question-version.entity';
 import { AccessService } from '../access/access.service';
-import { parseQuestionContent } from './question-content-dispatch';
-import { canonicalAuthoringHash, decodeAuthoringBundle, joinAuthoringBundles, synchronizeFormAuthoring, type AuthoringQuestionWrite, type AuthoringSavedItem } from './question-authoring-codec';
+import { canonicalAuthoringHash, decodeAuthoringBundle, joinAuthoringBundles, assembleVersionAuthoring, type AuthoringQuestionWrite, type AuthoringSavedItem } from './question-authoring-codec';
 import { QuestionVersionService } from './question-version.service';
 
 export function normalizeAuthoringRequestId(input: unknown): string {
@@ -41,29 +39,10 @@ export class QuestionAuthoringService {
       const version = await repo.findOne({ where: { id: exactId } });
       if (!version) throw Errors.notFound('题目版本不存在');
       if (!version.categoryId || !['easy', 'medium', 'hard'].includes(version.difficulty || '') || !['single', 'multiple', 'judgment'].includes(version.type)) throw Errors.param('题目版本缺少可编辑的类别、难度或题型');
-      const content = parseQuestionContent(version);
-      let base = version.authoringJson ? structuredClone(version.authoringJson) : null;
-      let client = Object.keys(base?.document.questions || {})[0] || `version_${exactId}`;
-      if (used.has(client)) {
-        const replacement = `version_${exactId}`;
-        if (base) {
-          const block = base.document.content.content?.[0]; if (block) block.attrs = { client_id: replacement };
-          base = { document: { ...base.document, questions: { [replacement]: base.document.questions[client] } },
-            option_ids: { [replacement]: base.option_ids[client] || {} }, identities: base.identities[client] ? { [replacement]: base.identities[client] } : {}, layouts: base.layouts[client] ? { [replacement]: base.layouts[client] } : {} };
-        }
-        client = replacement;
-      }
+      let client = Object.keys(version.authoringJson?.document.questions || {})[0] || `version_${exactId}`;
+      if (used.has(client)) client = `version_${exactId}`;
       used.add(client);
-      const identity = { question_id: String(version.questionId), expected_version_id: exactId };
-      const placeholder: AuthoringBundle = { document: { schema_version: 1, content: { type: 'doc', content: [] }, questions: { [client]: {
-        type: version.type as QuestionType, category_id: String(version.categoryId), difficulty: version.difficulty as Difficulty, concept_id: version.conceptId,
-        regulation_id: version.regulationId, regulation_version_id: version.regulationVersionId, analysis: { type: 'doc', content: [] }, score_cents: version.scoreCents,
-      } } }, option_ids: {}, identities: {}, layouts: {} };
-      const write: AuthoringQuestionWrite = { client_id: client, bundle: base || placeholder, identity, content, category_id: String(version.categoryId),
-        type: version.type as QuestionType, difficulty: version.difficulty as Difficulty, score: Number(version.scoreCents) / 100, concept_id: version.conceptId || undefined };
-      const bundle = synchronizeFormAuthoring(base, write);
-      bundle.document.questions[client].question_id = String(version.questionId);
-      bundle.document.questions[client].base_revision = Number(version.revision);
+      const bundle = assembleVersionAuthoring(version, client);
       bundles.push(bundle);
     }
     return joinAuthoringBundles(bundles);

@@ -277,7 +277,7 @@ describe('training demo admin slimming', () => {
 
     expect(start).toHaveBeenCalledWith({
       materialId: '41', materialVersionId: '52', categoryId: '7', difficulty: 'easy',
-      questionCountSingle: 3, questionCountMultiple: 2, scoreSingle: 4, scoreMultiple: 6,
+      questionCountSingle: 3, questionCountMultiple: 2,
       actor: { id: 9, name: 'admin' },
     });
   });

@@ -16,7 +16,7 @@ import { PaperService } from '../src/modules/ai/paper.service';
 import { ExamService } from '../src/modules/exams/exam.service';
 import { DtoValidationPipe, StrictDtoValidationPipe } from '../src/common/dto-validation.pipe';
 import {
-  CreateQuestionDto, GenerateQuestionsDto, QUESTION_CREATE_KEYS,
+  CreateQuestionDto, EditQuestionDto, GenerateQuestionsDto, QUESTION_CREATE_KEYS, QUESTION_EDIT_KEYS,
 } from '../src/modules/questions/question.dto';
 
 function baseDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraftInput {
@@ -31,13 +31,32 @@ function baseDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraftIn
     ],
     answer: [0],
     analysis: '<p>先通风、检测并履行审批。</p>',
-    scoreCents: 500,
     source: 'manual',
     ...overrides,
   };
 }
 
 describe('training question bank validation', () => {
+  it('accepts score-free manual creation and revision contracts and ignores the old score field', async () => {
+    const input = { category_id: '11', difficulty: 'easy', type: 'single', stem: '<p>题干</p>',
+      options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }], answer: [0] };
+    for (const [metatype, keys, body] of [
+      [CreateQuestionDto, QUESTION_CREATE_KEYS, input],
+      [EditQuestionDto, QUESTION_EDIT_KEYS, { expected_version_id: '101', analysis: '新解析' }],
+    ] as const) {
+      const pipe = new StrictDtoValidationPipe(keys);
+      await expect(pipe.transform(body, { type: 'body', metatype } as any)).resolves.toMatchObject(body);
+      const legacy = await pipe.transform({ ...body, score: 'ignored-invalid-score' }, { type: 'body', metatype } as any);
+      expect(legacy).toMatchObject(body); expect(legacy).not.toHaveProperty('score');
+    }
+  });
+
+  it('validates a draft without manufacturing a bank score', () => {
+    const input: any = baseDraft(); delete input.scoreCents;
+    const result = validateAndSanitizeQuestionDraft(input);
+    expect(result).not.toHaveProperty('scoreCents');
+  });
+
   it('keeps category and difficulty fixed while accepting a manual question without regulation source', () => {
     const result = validateAndSanitizeQuestionDraft(baseDraft());
 
@@ -81,6 +100,25 @@ describe('training question bank validation', () => {
       .toThrow('多选题答案至少 2 个');
   });
 
+  it('starts AI generation by quantity without any score template or total-score requirement', async () => {
+    const service = Object.create(QuestionGenerationService.prototype) as QuestionGenerationService & Record<string, any>;
+    const tasks: any[] = [];
+    Object.assign(service, {
+      categories: { assertActive: async () => undefined },
+      regRepo: { findOne: async () => ({ id: '21' }) },
+      versionRepo: { findOne: async () => ({ id: '34', parseStatus: 'parsed', textContent: '资料正文' }) },
+      aiConfig: { isConfigured: async () => true },
+      redis: { setNx: async () => true },
+      setTask: async (_id: string, task: any) => { tasks.push(task); },
+      runTask: async () => undefined,
+    });
+    const result = await service.start({ materialId: '21', materialVersionId: '34', categoryId: '11', difficulty: 'easy',
+      questionCountSingle: 1, questionCountMultiple: 0, actor: { id: 9, name: 'admin' } } as any);
+    expect(result).toMatchObject({ question_count_single: 1, question_count_multiple: 0 });
+    expect(result).not.toHaveProperty('score_single'); expect(result).not.toHaveProperty('score_multiple');
+    expect(tasks[0]).not.toHaveProperty('score_single'); expect(tasks[0]).not.toHaveProperty('score_multiple');
+  });
+
   it('accepts AI generation input by exact material and material-version ids', async () => {
     const pipe = new DtoValidationPipe();
 
@@ -89,6 +127,7 @@ describe('training question bank validation', () => {
       material_version_id: '34',
       category_id: '11',
       difficulty: 'easy',
+      score_single: 'ignored-nonnumeric', score_multiple: null,
     }, { type: 'body', metatype: GenerateQuestionsDto } as any)).resolves.toMatchObject({
       material_id: '21',
       material_version_id: '34',
@@ -234,6 +273,7 @@ describe('versioned question bank', () => {
       status: 'approved', source: 'manual', createdAt: new Date(), updatedAt: new Date(),
     } as any);
 
+    expect(view).not.toHaveProperty('score');
     expect(view.stem).not.toContain('<script');
     expect(view.stem).not.toContain('onclick');
     expect(view.stem).not.toContain('src=');
@@ -252,8 +292,34 @@ describe('versioned question bank', () => {
     expect(versions).toHaveLength(2);
     expect(versions[0]).toMatchObject({ revision: 1, stem: '<p>原始题干</p>', status: 'approved', approvedBy: null });
     expect(versions[0].legacyCapturedAt).toBeInstanceOf(Date);
+    expect(versions[0].scoreCents).toBe(250);
+    expect(versions[1].scoreCents).toBeNull();
+    expect(question.score).toBeNull();
     expect(versions[1]).toMatchObject({ revision: 2, stem: '<p>修订题干</p>', status: 'pending', createdBy: '9' });
     expect(question).toMatchObject({ currentVersionId: '101', stem: '<p>修订题干</p>', status: 'pending' });
+  });
+
+  it.each([
+    { patch: { analysis: '新解析' }, concept: '7' },
+    { patch: { category_id: '22' }, concept: null },
+    { patch: { type: 'multiple' as const, answer: [0, 1] }, concept: null },
+  ])('preserves hidden concept on ordinary edits and detaches it only from a changed category/type: $patch', async ({ patch, concept }) => {
+    const f = versionServiceFixture();
+    Object.assign(f.question, { categoryId: '11', difficulty: 'easy', conceptId: '7' });
+    f.service.concepts.assertCompatible = async (_manager: unknown, _id: string, category: string, type: string) => {
+      if (category !== '11' || type !== 'single') throw new Error('incompatible hidden concept');
+    };
+    const builder: any = { select: () => builder, from: () => builder, innerJoin: () => builder,
+      where: () => builder, andWhere: () => builder, limit: () => builder, getRawOne: async () => null };
+    const review = Object.create(QuestionReviewService.prototype);
+    Object.assign(review, { questionRepo: { findOne: async () => f.question }, versions: f.service,
+      dataSource: { createQueryBuilder: () => builder }, audit: { log: () => undefined } });
+    const result = await review.edit('5', patch, { id: 9, name: 'admin' }, null, null);
+    expect(result.concept_id).toBe(concept);
+    expect(f.versions[0].conceptId).toBe('7');
+    expect(f.versions[1].conceptId).toBe(concept);
+    expect(f.versions[1].regulationId).toBe('2');
+    expect(f.versions[1].regulationVersionId).toBe('3');
   });
 
   it('records the actual administrator and time when approving the current revision', async () => {
@@ -457,7 +523,7 @@ describe('versioned question bank', () => {
       getMany: async () => [{
         id: '501', questionId: '41', revision: 3, categoryId: '11', difficulty: 'hard', type: 'multiple',
         stem: '<p>题干</p>', options: [{ key: 'A', text: 'A' }, { key: 'B', text: 'B' }], answer: [0, 1],
-        analysis: null, scoreCents: 800, conceptId: null, regulationId: '2', regulationVersionId: '3',
+        analysis: null, scoreCents: null, conceptId: null, regulationId: '2', regulationVersionId: '3',
         source: 'ai', status: 'approved', approvedBy: '27', approvedAt: new Date('2026-10-21T08:00:00.000Z'),
       }],
     };
@@ -473,6 +539,7 @@ describe('versioned question bank', () => {
     expect(calls.some((call) => call.sql?.includes('version.regulation_id IN'))).toBe(true);
     expect(service.categories.assertActive).toHaveBeenCalledWith('11');
     expect(result[0]).toMatchObject({ questionId: '41', versionId: '501', categoryId: '11', type: 'multiple', difficulty: 'hard' });
+    expect(result[0]).not.toHaveProperty('scoreCents');
     expect(Object.isFrozen(result[0])).toBe(true);
   });
 
@@ -774,13 +841,14 @@ describe('versioned question bank', () => {
 
     const created = await service.createManual({
       category_id: '11', difficulty: 'easy', type: 'single', stem: '<p>本次创建</p>',
-      options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }], answer: [0], score: 5,
+      options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }], answer: [0],
     }, { id: 9, name: 'admin' }, null);
 
     expect(created).toMatchObject({
       question_id: '7', current_version_id: '202', saved_version_id: '201', stem: '<p>并发后的题目</p>',
     });
     expect(service.versions.approve).toHaveBeenCalledWith('201', '9');
+    expect(service.versions.create.mock.calls[0][0]).not.toHaveProperty('scoreCents');
   });
 
   it('rejects a delayed regeneration when the current version changes and creates no wrong version', async () => {

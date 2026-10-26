@@ -54,7 +54,7 @@ function singleDraft(categoryId, stem = '<p>进入受限空间前应做什么？
     options: [{ text: '先通风并检测' }, { text: '直接进入' }],
     answer: [0],
     analysis: '<p>应先通风、检测并审批。</p>',
-    score: 5,
+
   };
 }
 
@@ -201,6 +201,12 @@ async function runBody(ctx, mockPort) {
   assert.equal(String(manualWithoutRegulation.data.saved_version_id), String(manualWithoutRegulation.data.current_version_id));
   assert.ok(manualWithoutRegulation.data.approved_by);
   assert.ok(manualWithoutRegulation.data.approved_at);
+  assert.equal(Object.hasOwn(manualWithoutRegulation.data, 'score'), false, '题库响应不携带分值');
+  const scorelessRows = await ctx.queryTestDb(
+    'SELECT q.score, v.score_cents FROM question q INNER JOIN question_version v ON v.id = q.current_version_id WHERE q.id = ?',
+    [manualWithoutRegulation.data.question_id],
+  );
+  assert.deepEqual(scorelessRows.map((row) => [row.score, row.score_cents]), [[null, null]], '人工题不得暗写默认分值');
   const referencedCategoryDelete = await ctx.request(admin.actor, 'DELETE', `/admin/training-categories/${categoryId}`);
   assert.equal(referencedCategoryDelete.status, 409, '题目引用中的类别不得被删除');
   assert.equal(referencedCategoryDelete.code, 40910);
@@ -211,6 +217,29 @@ async function runBody(ctx, mockPort) {
   });
   assert.equal(multiple.status, 200);
   assert.deepEqual(multiple.data.answer, [0, 1]);
+
+  const scoredPapers = [];
+  for (const scoreCents of [2000, 7000]) {
+    const paper = await ctx.request(admin.actor, 'POST', '/admin/papers', {
+      title: `同题独立赋分 ${scoreCents} ${suffix}`, mode: 'fixed', category_id: categoryId,
+    });
+    assert.equal(paper.status, 200, JSON.stringify(paper));
+    const selected = await ctx.request(admin.actor, 'PUT', `/admin/papers/${paper.data.id}/questions`, {
+      items: [
+        { question_version_id: manualWithoutRegulation.data.current_version_id, score_cents: scoreCents },
+        { question_version_id: multiple.data.current_version_id, score_cents: 10000 - scoreCents },
+      ],
+    });
+    assert.equal(selected.status, 200, JSON.stringify(selected));
+    const published = await ctx.request(admin.actor, 'POST', `/admin/papers/${paper.data.id}/publish`);
+    assert.equal(published.status, 200, JSON.stringify(published));
+    scoredPapers.push({ id: paper.data.id, scoreCents });
+  }
+  const frozenScores = await ctx.queryTestDb(
+    'SELECT r.paper_id, rq.score_cents FROM paper_release r INNER JOIN paper_release_question rq ON rq.release_id = r.id WHERE rq.question_version_id = ? ORDER BY r.paper_id',
+    [manualWithoutRegulation.data.current_version_id],
+  );
+  assert.deepEqual(frozenScores.map((row) => Number(row.score_cents)), [2000, 7000], '同一道题在不同试卷冻结独立分值');
 
   const judgment = await ctx.request(admin.actor, 'POST', '/ai/questions', {
     ...singleDraft(categoryId, '<p>未检测可直接进入。</p>'),
@@ -326,6 +355,12 @@ async function runBody(ctx, mockPort) {
   assert.equal(edited.status, 200, JSON.stringify(edited));
   assert.equal(edited.data.status, 'pending');
   assert.equal(edited.data.revision, 2);
+  assert.equal(Object.hasOwn(edited.data, 'score'), false, '修订不重新引入题库分值');
+  const scoresAfterRevision = await ctx.queryTestDb(
+    'SELECT r.paper_id, rq.score_cents FROM paper_release r INNER JOIN paper_release_question rq ON rq.release_id = r.id WHERE r.paper_id IN (?, ?) AND rq.question_version_id = ? ORDER BY r.paper_id',
+    [scoredPapers[0].id, scoredPapers[1].id, firstVersionId],
+  );
+  assert.deepEqual(scoresAfterRevision.map((row) => Number(row.score_cents)), [2000, 7000], '题库修订不改变已发布试卷的分值');
   assert.match(edited.data.saved_version_id, /^\d+$/);
   assert.equal(String(edited.data.saved_version_id), String(edited.data.current_version_id));
   const secondVersionId = String(edited.data.saved_version_id);

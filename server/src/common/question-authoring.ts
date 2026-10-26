@@ -20,7 +20,8 @@ export interface QuestionMeta {
   regulation_id: Id | null;
   regulation_version_id: Id | null;
   analysis: JSONContent;
-  score_cents: number;
+  /** Optional paper-context value; never persisted in a question authoring draft. */
+  score_cents?: number;
   question_id?: Id;
   base_revision?: number | null;
 }

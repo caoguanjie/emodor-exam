@@ -22,14 +22,18 @@ import QuestionOptionView from '../widget/QuestionOptionView.vue';
 import { nanoid } from './WidgetNodes';
 import { createQuestionEditingProtection, QUESTION_STRUCTURE_META } from './QuestionEditingProtection';
 
+/** Runtime authoring also serves the score-free question-bank editor. Paper metadata stays strict. */
+export type QuestionRuntimeMeta = Omit<QuestionMeta, 'score_cents'> & { score_cents?: number };
 export interface QuestionNodeRuntime {
+  canReorderOptions?: () => boolean;
+  showAnswerLabels?: () => boolean;
   protectStructure?: () => boolean;
   allowStructure?: () => boolean;
   onEditBlocked?: (message: string) => void;
   onUploadsChange?: (state: { pending: boolean; count: number }) => void;
   onQuestionRemoveRequest?: (clientId: string) => void;
   onQuestionMoveRequest?: (change: { client_id: string; to_index: number }) => void;
-  getQuestionMeta?: (clientId: string) => QuestionMeta | undefined;
+  getQuestionMeta?: (clientId: string) => QuestionRuntimeMeta | undefined;
   getDisplayMeta?: (clientId: string) => { type: QuestionMeta['type']; hideOrdinal?: boolean } | undefined;
   getMode?: () => 'edit' | 'preview' | 'review';
   getReviewState?: (clientId: string) => ReviewOptionState[] | undefined;
@@ -59,6 +63,7 @@ declare module '@tiptap/core' {
       insertAuthoringControl: (attrs: Partial<TemplateControl>, position?: number) => ReturnType;
       addQuestionOption: (clientId: string) => ReturnType;
       removeQuestionOption: (optionId: string) => ReturnType;
+      moveQuestionOption: (optionId: string, toIndex: number) => ReturnType;
       setQuestionOptionChecked: (optionId: string, checked: boolean) => ReturnType;
     };
   }
@@ -451,6 +456,26 @@ const QuestionCommands = Extension.create<QuestionExtensionOptions>({
         const transaction = state.tr.delete(target.pos, target.pos + target.node.nodeSize);
         transaction.setSelection(TextSelection.near(transaction.doc.resolve(target.pos), -1));
         dispatch(transaction.setMeta(QUESTION_STRUCTURE_META, { kind: 'option-remove', client_id: context.clientId }).scrollIntoView());
+        return true;
+      },
+
+      moveQuestionOption: (optionId, toIndex) => ({ editor, state, dispatch }) => {
+        const target = findQuestionOption(state.doc, optionId);
+        const context = target && questionContextAt(state.doc, target.pos);
+        if (!target || !context || !canEditQuestionOptions(editor, this.options.runtime, context)
+          || !Number.isInteger(toIndex) || toIndex < 0 || toIndex >= context.node.childCount - 1) return false;
+        const options: ProseMirrorNode[] = [];
+        context.node.forEach((node) => { if (node.type.name === 'questionOption') options.push(node); });
+        const fromIndex = options.findIndex((node) => node.attrs.option_id === optionId);
+        if (fromIndex === toIndex) return false;
+        if (!dispatch) return true;
+        const transaction = state.tr.delete(target.pos, target.pos + target.node.nodeSize);
+        const remaining = options.filter((_, index) => index !== fromIndex);
+        const position = context.pos + 1 + context.node.firstChild!.nodeSize
+          + remaining.slice(0, toIndex).reduce((size, node) => size + node.nodeSize, 0);
+        transaction.insert(position, target.node);
+        transaction.setSelection(TextSelection.near(transaction.doc.resolve(position + 2)));
+        dispatch(transaction.setMeta(QUESTION_STRUCTURE_META, { kind: 'option-move', client_id: context.clientId, option_id: optionId }).scrollIntoView());
         return true;
       },
 

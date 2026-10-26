@@ -43,6 +43,68 @@ function sourcedPaper() {
 }
 
 describe('fixed paper phased save and recovery', () => {
+  it('loads a scoreless assembled question using its exact paper association score before save validation', async () => {
+    const value = paperFixture(); const env = await setup(value);
+    const document = copy(value.document);
+    Object.assign(document.questions.question_one!, { question_id: '40', base_revision: 1 });
+    delete (document.questions.question_one as any).score_cents;
+    env.api.get = async () => ({ ...value.paper, status: 'draft', rules: [], questions: [{ question_id: '40', question_version_id: '50', score_cents: 10000, sort: 0 }] }) as any;
+    env.api.post = async () => ({ document, option_ids: {},
+      identities: { question_one: { question_id: '40', expected_version_id: '50' } }, layouts: {} }) as any;
+    const loaded = await env.host.load();
+    expect(loaded.document.questions.question_one!.score_cents).toBe(10000);
+    expect((await env.host.saveDraft(loaded, { request_id: 'scoreless-load', intent: 'save' })).status).toBe('saved');
+    expect(env.calls.some((call) => call.path === '/admin/question-documents/commit')).toBe(false);
+    expect(env.calls.at(-1)!.body.items).toEqual([{ question_version_id: '50', score_cents: 10000 }]);
+  });
+
+  it('keeps current paper scores when a normalized commit receipt contains no question score', async () => {
+    const env = await setup(newPaper()); const post = env.api.post;
+    env.api.post = async (path, body) => {
+      const response = await post(path, body);
+      Object.values(response.bundle.document.questions).forEach((meta) => { delete (meta as any).score_cents; });
+      return response;
+    };
+    const saved = await env.host.saveDraft(newPaper(), { request_id: 'scoreless-receipt', intent: 'save' });
+    expect(saved.status).toBe('saved');
+    expect(saved.value.document.questions.question_one!.score_cents).toBe(10000);
+    expect(env.calls.at(-1)!.body.items).toEqual([{ question_version_id: '90', score_cents: 10000 }]);
+    expect((await env.host.saveDraft(saved.value, { request_id: 'reuse-after-receipt', intent: 'save' })).status).toBe('saved');
+    expect(env.calls.filter((call) => call.path === '/admin/question-documents/commit')).toHaveLength(1);
+  });
+
+  it('reuses existing question versions when only their paper scores are redistributed', async () => {
+    const first = paperFixture('100', '10', 'first'); const second = paperFixture('100', '10', 'second');
+    first.document.questions.first!.concept_id = null; second.document.questions.second!.concept_id = null;
+    const value = { ...first, document: { ...first.document,
+      content: { type: 'doc', content: [...first.document.content.content!, ...second.document.content.content!] },
+      questions: { ...first.document.questions, ...second.document.questions } },
+      bindings: { ...first.bindings, second: { ...second.bindings.second, question_id: '41', question_version_id: '51' } } } as PaperDesignerValue;
+    for (const id of ['first', 'second']) {
+      value.document.questions[id]!.score_cents = 5000;
+      (value.bindings[id] as any).baseline_fingerprint = questionFingerprint(value.document, id);
+    }
+    value.document.questions.first!.score_cents = 7000; value.document.questions.second!.score_cents = 3000;
+    const env = await setup(value);
+    expect((await env.host.saveDraft(value, { request_id: 'paper-scores-only', intent: 'save' })).status).toBe('saved');
+    expect(env.calls.some((call) => call.method === 'post')).toBe(false);
+    expect(env.calls.at(-1)!.body.items).toEqual([{ question_version_id: '50', score_cents: 7000 }, { question_version_id: '51', score_cents: 3000 }]);
+  });
+  it.each([undefined, 7300])('assigns the initial paper score instead of assembled bank score %s', async (oldScore) => {
+    const value = paperFixture(); const env = await setup(value);
+    env.api.get = async () => ({ list: [{ question_id: '40', current_version_id: '50', category_id: '10',
+      status: 'approved', difficulty: 'easy', type: 'single', stem: '题干' }], total: 1 }) as any;
+    const document = copy(value.document);
+    Object.assign(document.questions.question_one!, { question_id: '40', base_revision: 1 });
+    if (oldScore === undefined) delete (document.questions.question_one as any).score_cents;
+    else document.questions.question_one!.score_cents = oldScore;
+    env.api.post = async () => ({ document, option_ids: {}, identities: { question_one: { question_id: '40', expected_version_id: '50' } }, layouts: {} }) as any;
+    await env.host.questionLibrarySource.list({ category_id: '10', page: 1, page_size: 20 });
+    const source = await env.host.questionLibrarySource.get('40');
+    expect(source.document.questions.question_one!.score_cents).toBe(500);
+    expect(source.binding.baseline_fingerprint).toBe(questionFingerprint(source.document, 'question_one'));
+    expect(document.questions.question_one!.score_cents).toBe(oldScore);
+  });
   it('reuses an unchanged sourced version with its original provenance and matching paper source filter', async () => {
     const value = sourcedPaper(); const snapshot = copy(value); const plan = planPaperSave(value);
     expect(plan.submit.questions).toEqual({}); expect(plan.reuse).toEqual([{ client_id: 'question_one', question_id: '40', question_version_id: '50', revision: 1, score_cents: 10000 }]);

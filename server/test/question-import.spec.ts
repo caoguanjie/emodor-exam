@@ -13,6 +13,18 @@ import { Errors } from '../src/common/errors';
 import ExcelJS from 'exceljs';
 
 describe('question import format', () => {
+  it('generates an eight-column template and accepts the old ninth score column without reading its value', async () => {
+    const txt = await buildQuestionImportTemplate('txt');
+    expect(txt.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/)[0]).toBe('category\ttype\tdifficulty\tconcept\tstem\toptions\tanswer\tanalysis');
+    const old = txtFile([singleRow('题干', { score: 'not-a-number' })]);
+    const parsed = await parseQuestionImportFile(old, 'txt');
+    expect(parsed[0]).not.toHaveProperty('score');
+    const { service } = questionImportFixture();
+    const preview = await service.preview('1', old, 'txt', { categoryId: '10' });
+    expect(preview.valid_rows).toEqual([2]);
+    expect(preview.errors).toEqual([]);
+  });
+
   it('round-trips the same template rows through xlsx and UTF-8 TSV', async () => {
     const xlsx = await buildQuestionImportTemplate('xlsx');
     const txt = await buildQuestionImportTemplate('txt');
@@ -91,7 +103,7 @@ describe('question import format', () => {
     const rows = await parseQuestionImportFile(Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer), 'xlsx');
 
     expect(rows).toEqual([expect.objectContaining({
-      row: 2, category: '', concept: '', analysis: '', type: 'single', score: '5',
+      row: 2, category: '', concept: '', analysis: '', type: 'single',
     })]);
     expect(rows[0].format_errors).toBeUndefined();
   });

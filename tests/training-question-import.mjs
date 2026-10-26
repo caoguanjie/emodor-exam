@@ -13,7 +13,7 @@ const { MediaAsset } = require('./dist/entities/media-asset.entity.js');
 const { MediaService } = require('./dist/modules/media/media.service.js');
 const { QuestionVersionService } = require('./dist/modules/questions/question-version.service.js');
 
-const HEADERS = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis', 'score'];
+const HEADERS = ['category', 'type', 'difficulty', 'concept', 'stem', 'options', 'answer', 'analysis'];
 
 async function captchaAnswer(ctx, captchaId) {
   const redis = new Redis({

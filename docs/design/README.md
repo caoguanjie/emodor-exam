@@ -1,12 +1,16 @@
 # 制度学习及考试系统（EmodorRuleExam）设计方案 · 总览索引
 
+> **人工录题 Tiptap 融合（2026-10-26 最新纠正）**：按[现有新增/修订试题弹窗融合设计](../superpowers/specs/2026-10-26-manual-question-tiptap-design.md)，在当前弹窗中集成 Tiptap 题干、选项、答案设置和解析，提供选项排序、受控图片及保存并新增。下文“保留原表单”只表示保留入口与保存链路，不再表示保留文本框；Tiptap 不再仅用于试卷设计器。分值、考点、资料来源均不进入人工题表单。实现和验收按[实施计划](../superpowers/plans/2026-10-26-manual-question-tiptap.md)登记。
+
 > **一句话定位**：本文档是 EmodorRuleExam（制度学习及考试系统）全套设计方案的入口与一致性基准。2026-10-22 演示版已按批准的瘦身方案收口为三类客观题、自动评分、服务端期限、本地最小草稿、主动整卷交卷及纯timeout和考试记录；图片作答、人工阅卷、实时监控、切屏采集，以及制度/员工/部门管理入口不再属于现行产品。题干、选项和解析中的受控图片仍保留。旧制度阅读、旧固定卷自动评分和原统计依赖的共享表与只读服务继续兼容。
 >
 > **权威链接**：现行范围以[演示版瘦身实施计划](../superpowers/plans/2026-10-22-training-demo-slimming.md)为准；此前的[融合设计](../superpowers/specs/2026-10-21-training-admin-integration-design.md)和[实施总计划](../superpowers/plans/2026-10-21-training-admin-integration.md)仅保留未被瘦身裁决否定的部分。源码、自动验证、PC 操作、真实设备和生产部署仍按不同证据等级登记。
 >
 > **试题入口增量**：菜单拆分和一次性参考题 AI 生成按[已确认设计](../superpowers/specs/2026-10-22-ai-question-import-design.md)与[实施计划](../superpowers/plans/2026-10-22-ai-question-import.md)执行。文档同步不代表真实商业 AI 或生产部署已验收。
 
-> **试卷设计器增量（2026-10-23）**：按[定向集成设计](../superpowers/specs/2026-10-23-main-question-paper-designer-integration-design.md)迁入完整 PaperDesigner 及共享 Tiptap 内核。人工新增和编辑仍使用原有表单；不新增独立试题设计器或单题编辑路由。服务端增加 schema 3、版本作者原稿、幂等回执、试卷布局与客户端能力协商；当前只启用简单 `easy` / 困难 `hard`，历史 `medium` / unknown 不重分类。源码与自动化、浏览器和真实设备的证据以[本次验收记录](../../review/main-question-designers-acceptance-2026-10-23.md)分别登记。
+> **试卷设计器增量（2026-10-23）**：按[定向集成设计](../superpowers/specs/2026-10-23-main-question-paper-designer-integration-design.md)迁入完整 PaperDesigner 及共享 Tiptap 内核。人工新增和编辑按上方 2026-10-26 增量在现有弹窗内接入 Tiptap；不新增独立试题设计器或单题编辑路由。服务端增加 schema 3、版本作者原稿、幂等回执、试卷布局与客户端能力协商；当前只启用简单 `easy` / 困难 `hard`，历史 `medium` / unknown 不重分类。源码与自动化、浏览器和真实设备的证据以[本次验收记录](../../review/main-question-designers-acceptance-2026-10-23.md)分别登记。
+
+> **题库分值归属调整（2026-10-26）**：按[已确认实施范围](../superpowers/plans/2026-10-26-question-bank-without-scores.md)，题库不拥有建议/默认分值，分值只属于试卷关联和规则。人工录题仅提供题型、培训类别、难度、题干、选项、答案与可选解析，不展示考点/资料来源，也不提供新建考点组。025 将两个旧题库分数字段改为可空历史兼容列，新题与修订写 NULL；既有试卷、发布快照和考试结果不重算。当前文件导入/导出使用八列，兼容旧九列但忽略 score。下文历史九列描述以此增量及 04/05 册现行契约为准。
 
 ---
 
@@ -16,7 +20,7 @@
 
 EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考试与记录系统，同时保留旧制度阅读、旧固定卷考试及原统计的兼容链路：
 
-管理端考试管理依次为“试题管理、试卷管理、试题导入、考试记录”。试题管理承载列表、人工录题、修改、审核、预览和已有单题重新生成；独立试题导入页提供“文件导入 / AI 生成”两个 Tab。普通文件导入沿用九列 Excel/TXT 预检与 approved 确认；AI Tab 上传一次性参考题，每题最多生成 easy/hard 两题，预览修改并选行确认后才创建 pending 版本，人工审核后入卷。参考文件与参考正文不留存，生成题以 `source=ai` 且无制度版本入库。
+管理端考试管理依次为“试题管理、试卷管理、试题导入、考试记录”。试题管理承载列表、人工录题、修改、审核、预览和已有单题重新生成；独立试题导入页提供“文件导入 / AI 生成”两个 Tab。普通文件导入使用八列 Excel/TXT 预检与 approved 确认，兼容旧九列但忽略 score；AI Tab 上传一次性参考题，每题最多生成 easy/hard 两题，预览修改并选行确认后才创建 pending 版本，人工审核后入卷。参考文件与参考正文不留存，生成题以 `source=ai` 且无制度版本入库。
 
 资料管理和资料 AI 的兼容后端仍以“资料/资料版本”提供 PDF/Word 解析，并通过 `material_id + material_version_id` 生成 single/multiple；底层复用 `regulation/regulation_version` 保存真实来源与旧数据，试题列表已移除相应整批操作入口。旧制度固定卷仍要求「有效学习」双条件；新培训考试默认关闭学习门槛。学习侧继续以心跳、失焦暂停、服务端容差和滚动位图计时；新培训移动考试以权威实名、稳定item/option ID、受限Tiptap题面、不可变题单/期限、本地草稿及幂等主动整卷保障一致性；不提供服务端draft/heartbeat。仅锁后accepted_at严格早于deadline的主动交卷由SubmissionService按冻结快照同事务评分；到期统一纯timeout，不提交、不评分、不生成答案。旧/exams数字及暂存协议只作制度固定卷兼容，到期同样纯timeout；历史已评分timeout保持只读。记录列表、详情和结果保持只读。
 

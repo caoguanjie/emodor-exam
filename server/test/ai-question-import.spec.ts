@@ -27,7 +27,7 @@ const generated = (difficulty: string, overrides: Record<string, unknown> = {}) 
 });
 
 function file(rows = [refCells]) {
-  return Buffer.from([QUESTION_IMPORT_HEADERS.join('\t'), ...rows.map((row) => row.join('\t'))].join('\n'));
+  return Buffer.from([[...QUESTION_IMPORT_HEADERS, 'score'].join('\t'), ...rows.map((row) => row.join('\t'))].join('\n'));
 }
 
 function fixture() {
@@ -141,6 +141,8 @@ describe('AI import transaction boundary', () => {
     const first = await f.importer.commitAiGenerated('1', preview.batch_id, [2]);
     expect(await f.importer.commitAiGenerated('1', preview.batch_id, [2])).toEqual(first);
     expect(f.questions).toHaveLength(1);
+    expect(f.questions[0].score).toBeNull();
+    expect(f.revisions[0].scoreCents).toBeNull();
     expect(f.questions[0]).toMatchObject({ status: 'pending', source: 'ai', regulationId: null, versionId: null });
     expect(f.revisions[0]).toMatchObject({ revision: 1, status: 'pending', source: 'ai',
       approvedBy: null, approvedAt: null, reviewedBy: null, reviewedAt: null,
@@ -170,7 +172,7 @@ describe('ephemeral AI references', () => {
     if (format === 'xlsx') {
       const book = new ExcelJS.Workbook();
       const sheet = book.addWorksheet('refs');
-      sheet.addRow([...QUESTION_IMPORT_HEADERS]); sheet.addRow(refCells);
+      sheet.addRow([...QUESTION_IMPORT_HEADERS, 'score']); sheet.addRow(refCells);
       buffer = Buffer.from(await book.xlsx.writeBuffer());
     }
     const task = await f.ai.start('1', buffer, format);
@@ -178,7 +180,7 @@ describe('ephemeral AI references', () => {
     expect(done).toMatchObject({ status: 'completed', total_count: 1, completed_count: 1, generated_count: 2, failed_count: 0 });
     const batch = await f.ai.readBatch('1', done.batch_id);
     expect(batch.rows.map((row: any) => row.difficulty)).toEqual(['easy', 'hard']);
-    for (const row of batch.rows) expect(row).toMatchObject({ category: '10', type: 'single', concept: '', score: '5.00', errors: [] });
+    for (const row of batch.rows) expect(row).toMatchObject({ category: '10', type: 'single', concept: '', errors: [] });
     const persistent = JSON.stringify({ cache: [...f.cache.values()], batches: f.batches, logs: f.logs });
     expect(persistent).not.toContain(reference);
     expect(persistent).not.toContain('参考解析');
@@ -245,7 +247,7 @@ describe('ephemeral AI references', () => {
     expect(await f.importer.commitAiGenerated('1', preview.batch_id, [2])).toEqual(receipt);
   });
 
-  it('supports multiple and judgment references with the original concept and suggested score', async () => {
+  it('supports multiple and judgment references with the original concept and without a bank score', async () => {
     const f = await aiFixture();
     const cases = [
       { type: 'multiple', options, answer: [0, 1], concept: '31' },
@@ -266,7 +268,7 @@ describe('ephemeral AI references', () => {
     const done = await finished(f.ai, task.task_id);
     const batch = await f.ai.readBatch('1', done.batch_id);
     expect(batch.rows).toHaveLength(4);
-    expect(batch.rows.filter((row) => row.type === 'multiple').every((row) => row.concept === '31' && row.score === '7.25')).toBe(true);
+    expect(batch.rows.filter((row) => row.type === 'multiple').every((row) => row.concept === '31' && !('score' in row))).toBe(true);
     await f.ai.commit('1', done.batch_id, batch.valid_rows);
     expect(f.questions.map((row) => row.type).sort()).toEqual(['judgment', 'judgment', 'multiple', 'multiple']);
   });
@@ -304,7 +306,7 @@ describe('ephemeral AI references', () => {
     await expect(f.ai.commit('1', done.batch_id, [2])).rejects.toMatchObject({ code: 40302 });
   });
 
-  it('edits only generated content, regenerates with trusted fields fixed, and exports strict nine columns', async () => {
+  it('edits only generated content, regenerates with trusted fields fixed, and exports strict eight columns', async () => {
     const f = await aiFixture();
     const task = await f.ai.start('1', file(), 'txt');
     const done = await finished(f.ai, task.task_id);
@@ -315,7 +317,7 @@ describe('ephemeral AI references', () => {
     f.gateway.chat.mockResolvedValue(JSON.stringify([generated('easy', { stem: '重生成的简单题' })]));
     await f.ai.regenerateRow('1', done.batch_id, 2);
     batch = await f.ai.readBatch('1', done.batch_id);
-    expect(batch.rows[0]).toMatchObject({ stem: '重生成的简单题', category: '10', type: 'single', difficulty: 'easy', score: '5.00' });
+    expect(batch.rows[0]).toMatchObject({ stem: '重生成的简单题', category: '10', type: 'single', difficulty: 'easy' });
     const txt = (await f.ai.download('1', done.batch_id, 'txt')).toString('utf8').replace(/^\uFEFF/, '');
     expect(txt.split(/\r?\n/)[0]).toBe(QUESTION_IMPORT_HEADERS.join('\t'));
     expect(txt).toContain('重生成的简单题'); expect(txt).not.toContain(reference);

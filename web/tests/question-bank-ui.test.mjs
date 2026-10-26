@@ -2,6 +2,8 @@ import test, { after, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createServer } from 'vite';
 import { computed, createRenderer, h, inject, nextTick, provide, ref, watch } from '@vue/runtime-core';
 import TreeStore from '../node_modules/element-plus/es/components/tree/src/model/tree-store.mjs';
@@ -173,7 +175,7 @@ function plugin() {
         if (source === '../../api/http' || source === '/src/api/http.ts') return httpStubId;
         if (source === '../../stores/auth' || source === '/src/stores/auth.ts') return authStubId;
         if (source === '../../utils/format' || source === '/src/utils/format.ts') return formatStubId;
-        if (source === '../../components/QuestionEditor.vue' || source === '/src/components/QuestionEditor.vue') return editorStubId;
+        if (['../../components/QuestionEditor.vue', '/src/components/QuestionEditor.vue', '../../components/ManualQuestionEditor.vue', '/src/components/ManualQuestionEditor.vue'].includes(source)) return editorStubId;
         if (source === '../../components/QuestionPreview.vue' || source === '/src/components/QuestionPreview.vue') return previewStubId;
         if (source === '../../composables/useUnsavedChanges' || source === '/src/composables/useUnsavedChanges.ts') return unsavedStubId;
       }
@@ -186,7 +188,13 @@ function plugin() {
 }
 
 function stripViteClientGlue(code, path) {
-  let output = code
+  const dependencyStubs = { 'vue.js': 'vue', 'element-plus.js': 'virtual:question-element-test',
+    'vue-router.js': 'virtual:question-route-test', '@element-plus_icons-vue.js': 'virtual:question-icons-test' };
+  // A private cache has a runtime path, so normalize dependency imports by basename.
+  let output = code.replace(/from "([^"]+)"/g, (statement, source) => {
+    const name = source.split('/').at(-1).split('?')[0];
+    return source.includes('/deps/') && dependencyStubs[name] ? `from "${dependencyStubs[name]}"` : statement;
+  })
     .replace(/^import \{ createHotContext[\s\S]*?import\.meta\.hot = [^;]+;\s*/, '')
     .replace(/typeof __VUE_HMR_RUNTIME__[\s\S]*?(?=import _export_sfc)/, '')
     .replace(/from "\/node_modules\/\.vite\/deps\/vue\.js[^"]*"/g, 'from "vue"');
@@ -200,7 +208,7 @@ function stripViteClientGlue(code, path) {
       .replace(/from "\/src\/api\/http\.ts"/g, 'from "virtual:question-http-test"')
       .replace(/from "\/src\/stores\/auth\.ts"/g, 'from "virtual:question-auth-test"')
       .replace(/from "\/src\/utils\/format\.ts"/g, 'from "virtual:question-format-test"')
-      .replace(/from "\/src\/components\/QuestionEditor\.vue"/g, 'from "virtual:question-editor-child-test"')
+      .replace(/from "\/src\/components\/(?:Manual)?QuestionEditor\.vue"/g, 'from "virtual:question-editor-child-test"')
       .replace(/from "\/src\/components\/QuestionPreview\.vue"/g, 'from "virtual:question-preview-child-test"')
       .replace(/from "\/src\/composables\/useUnsavedChanges\.ts"/g, 'from "virtual:question-unsaved-test"')
       .replace(/from "\/node_modules\/\.vite\/deps\/vue-router\.js[^"]*"/g, 'from "virtual:question-route-test"')
@@ -607,13 +615,17 @@ function setHttp() {
   };
 }
 
+let testCacheDir;
 before(async () => {
   globalThis.__questionBankUiTest = context;
+  testCacheDir = await mkdtemp(resolve(tmpdir(), 'ruleexam-question-ui-vite-'));
   vite = await createServer({
     root: webRoot,
+    cacheDir: testCacheDir,
     configFile: resolve(webRoot, 'vite.config.ts'),
     server: { middlewareMode: true, hmr: false, ws: false },
     appType: 'custom',
+
     plugins: [plugin()],
   });
   trainingTypes = await vite.ssrLoadModule('/src/api/training-types.ts');
@@ -627,6 +639,7 @@ before(async () => {
 after(async () => {
   delete globalThis.__questionBankUiTest;
   await vite?.close();
+  if (testCacheDir) await rm(testCacheDir, { recursive: true, force: true });
 });
 
 beforeEach(() => {
@@ -835,7 +848,7 @@ test('manual question save sends restricted v2 content with unchanged option IDs
     state.editorForm.stem = '<p onclick="steal()">安全<strong>题干</strong><br><img data-media-id="42" src="https://outside.invalid/x"></p>';
     state.editorForm.options = [{ key: 'keep_b', text: '乙' }, { key: 'keep_a', text: '甲' }];
     state.editorForm.answer = [1];
-    await click(button(mounted.root, '保存并确认可用'));
+    await click(button(mounted.root, '保存'));
     const call = context.calls.find((item) => item.method === 'post' && item.url === '/ai/questions');
     assert.ok(call);
     assert.equal(call.body.content_schema_version, 2);
@@ -856,6 +869,48 @@ test('manual question save sends restricted v2 content with unchanged option IDs
     if (originalDocument === undefined) delete globalThis.document;
     else globalThis.document = originalDocument;
   }
+});
+
+test('save and add clears a successful draft only after the version receipt and retains metadata', async () => {
+  const mounted = mount(Questions);
+  await waitFor(() => button(mounted.root, '人工录题'), 'question list');
+  await click(button(mounted.root, '人工录题'));
+  const state = mounted.instance.$.setupState;
+  state.editorForm.stem = '连续录题';
+  state.editorForm.type = 'multiple';
+  state.editorForm.difficulty = 'hard';
+  state.editorForm.answer = [0, 1];
+  const originalCategory = state.editorForm.category_id;
+  const save = button(mounted.root, '保存并新增');
+  assert.ok(save, 'the existing manual dialog must support save and add');
+  await click(save);
+  assert.ok(context.calls.find((call) => call.method === 'post' && call.url === '/ai/questions'));
+  assert.equal(state.editorVisible, true);
+  assert.equal(state.editorMode, 'create');
+  assert.equal(state.editorForm.stem, '');
+  assert.equal(state.editorForm.type, 'multiple');
+  assert.equal(state.editorForm.difficulty, 'hard');
+  assert.equal(state.editorForm.category_id, originalCategory);
+  assert.equal(state.editorDirty, false);
+  mounted.unmount();
+});
+
+test('save and add keeps input after an unknown receipt instead of starting a second question', async () => {
+  const mounted = mount(Questions);
+  await waitFor(() => button(mounted.root, '人工录题'), 'question list');
+  await click(button(mounted.root, '人工录题'));
+  const state = mounted.instance.$.setupState;
+  state.editorForm.stem = '结果未知仍保留';
+  const normal = context.http;
+  context.http = async (method, url, body, config) => method === 'post' && url === '/ai/questions'
+    ? { question_id: '41' } : normal(method, url, body, config);
+  const save = button(mounted.root, '保存并新增');
+  assert.ok(save);
+  await click(save);
+  assert.equal(state.editorVisible, true);
+  assert.equal(state.editorForm.stem, '结果未知仍保留');
+  assert.equal(state.editorDirty, true);
+  mounted.unmount();
 });
 
 test('invalid stable option IDs retain the editable question and show an error without sending a write', async () => {
@@ -994,7 +1049,7 @@ test('question management exposes manual editing and single-question regeneratio
   } finally { mounted.unmount(); }
 });
 
-test('question create and preview dialogs keep their overlays inside the content area', async () => {
+test('manual question dialog escapes page transforms while preview retains its current mount', async () => {
   for (const label of ['人工录题', '预览']) {
     context.calls = [];
     const mounted = mount(Questions);
@@ -1004,7 +1059,7 @@ test('question create and preview dialogs keep their overlays inside the content
       await click(button(mounted.root, label));
       const dialog = walk(mounted.root, (node) => node.type === 'dialog')[0];
       assert.ok(dialog);
-      assert.equal(Object.hasOwn(dialog.props, 'appendToBody') || Object.hasOwn(dialog.props, 'append-to-body'), false, `${label} overlay must stay inside content`);
+      assert.equal(Object.hasOwn(dialog.props, 'appendToBody') || Object.hasOwn(dialog.props, 'append-to-body'), label === '人工录题', `${label} overlay mount`);
       if (label === '人工录题') assert.match(dialog.props.class || '', /re-form-dialog/);
     } finally { mounted.unmount(); }
   }
@@ -1026,13 +1081,13 @@ test('requires an explicit difficulty for a legacy edit and sends expected_versi
   await waitFor(() => context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), 'question list');
   await nextTick();
   await click(button(mounted.root, '修订'));
-  await waitFor(() => context.calls.some((call) => call.url === '/ai/question-concept-options'), 'editor concepts');
-  const saveBeforeChoice = button(mounted.root, '保存为待审核版本');
+  assert.equal(context.calls.some((call) => call.url === '/ai/question-concept-options'), false);
+  const saveBeforeChoice = button(mounted.root, '保存');
   assert.equal(saveBeforeChoice?.props.disabled, true, 'legacy edit cannot save until difficulty is explicitly selected');
 
   await click(button(mounted.root, 'choose-hard'));
   await nextTick();
-  await click(button(mounted.root, '保存为待审核版本'));
+  await click(button(mounted.root, '保存'));
   await waitFor(() => context.calls.some((call) => call.method === 'put' && call.url === `/ai/questions/${context.row.question_id}`), 'question edit');
   const write = context.calls.find((call) => call.method === 'put' && call.url === `/ai/questions/${context.row.question_id}`);
   assert.equal(Object.hasOwn(write.body, 'expected_version_id'), true);
@@ -1048,11 +1103,11 @@ test('a historic medium stays visible but cannot save until an enabled difficult
     await waitFor(() => button(mounted.root, '修订'), 'question list');
     await click(button(mounted.root, '修订'));
     assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'medium');
-    assert.equal(button(mounted.root, '保存为待审核版本').props.disabled, true);
-    await button(mounted.root, '保存为待审核版本').props.onClick();
+    assert.equal(button(mounted.root, '保存').props.disabled, true);
+    await button(mounted.root, '保存').props.onClick();
     assert.equal(context.calls.some((call) => call.method === 'put'), false);
     await click(button(mounted.root, 'choose-hard'));
-    assert.equal(button(mounted.root, '保存为待审核版本').props.disabled, false);
+    assert.equal(button(mounted.root, '保存').props.disabled, false);
   } finally { mounted.unmount(); }
 });
 
@@ -1065,7 +1120,7 @@ test('write-only question authors load the shared difficulty catalog and save wi
     const state = mounted.instance.$.setupState;
     state.editorForm.stem = '人工新题';
     state.editorForm.options = [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }];
-    await button(mounted.root, '保存并确认可用').props.onClick();
+    await button(mounted.root, '保存').props.onClick();
     assert.ok(context.calls.some((call) => call.method === 'get' && call.url === '/admin/questions/authoring-options'));
     assert.ok(context.calls.some((call) => call.method === 'post' && call.url === '/ai/questions'));
     assert.equal(context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), false);
@@ -1086,12 +1141,12 @@ test('a failed difficulty catalog blocks manual writes and can be retried withou
     await click(button(mounted.root, '人工录题'));
     mounted.instance.$.setupState.editorForm.stem = '待保存草稿';
     await nextTick();
-    assert.equal(button(mounted.root, '保存并确认可用').props.disabled, true);
-    await button(mounted.root, '保存并确认可用').props.onClick();
+    assert.equal(button(mounted.root, '保存').props.disabled, true);
+    await button(mounted.root, '保存').props.onClick();
     assert.equal(context.calls.some((call) => call.method === 'post' && call.url === '/ai/questions'), false);
     await click(button(mounted.root, '重试加载难度'));
     assert.equal(mounted.instance.$.setupState.editorForm.stem, '待保存草稿');
-    assert.equal(button(mounted.root, '保存并确认可用').props.disabled, false);
+    assert.equal(button(mounted.root, '保存').props.disabled, false);
   } finally { mounted.unmount(); }
 });
 
@@ -1105,13 +1160,13 @@ test('the existing form saves schema 3 answers with exact revision identity and 
     await click(button(mounted.root, '修订'));
     const state = mounted.instance.$.setupState;
     state.editorForm.stem = '<p>无法定位的替换</p>';
-    await button(mounted.root, '保存为待审核版本').props.onClick();
+    await button(mounted.root, '保存').props.onClick();
     assert.equal(context.calls.some((call) => call.method === 'put'), false);
     assert.equal(state.editorForm.stem, '<p>无法定位的替换</p>');
     assert.ok(context.messages.some((item) => item.type === 'warning' && item.message.includes('题干')));
     state.editorForm.stem = '<h2><strong>富题干</strong></h2>';
     state.editorForm.answer = [1];
-    await button(mounted.root, '保存为待审核版本').props.onClick();
+    await button(mounted.root, '保存').props.onClick();
     const write = context.calls.find((call) => call.method === 'put');
     assert.equal(write.body.content_schema_version, 3);
     assert.equal(write.body.expected_version_id, '101');
@@ -1150,19 +1205,16 @@ test('consumes and pages the questions:read concept Page without changing the le
   mounted.unmount();
 });
 
-test('consumes and pages the narrow questions:write concept options without a read request', async () => {
+test('manual authoring does not request concept options or show concept pagination', async () => {
   context.permissions = new Set(['questions:write']);
   context.row = null;
   const mounted = mount(Questions);
   await waitFor(() => context.calls.some((call) => call.url === '/ai/question-category-options'), 'write category options');
   await click(button(mounted.root, '人工录题'));
-  await waitFor(() => context.calls.some((call) => call.url === '/ai/question-concept-options'), 'write concept options');
-  const first = context.calls.find((call) => call.url === '/ai/question-concept-options');
-  assert.deepEqual(first.config.params, { category_id: '7', type: 'single', page: 1, page_size: 20 });
+  assert.equal(context.calls.some((call) => call.url === '/ai/question-concept-options'), false);
   assert.equal(context.calls.some((call) => call.method === 'get' && call.url === '/ai/questions'), false);
   assert.equal(context.calls.some((call) => call.url === '/ai/question-concepts'), false);
-  await click(button(mounted.root, `page-${context.conceptTotal}-2`));
-  await waitFor(() => context.calls.some((call) => call.url === '/ai/question-concept-options' && call.config?.params?.page === 2), 'second write concept page');
+  assert.equal(!!button(mounted.root, `page-${context.conceptTotal}-2`), false);
   mounted.unmount();
 });
 
@@ -1199,17 +1251,17 @@ test('protects the real question edit draft across cancel, stale failure, discar
     return normalHttp(method, url, body, config);
   };
   await assert.rejects(
-    () => button(mounted.root, '保存为待审核版本').props.onClick(),
+    () => button(mounted.root, '保存').props.onClick(),
     (error) => error?.code === 40940,
   );
   await nextTick();
   assert.equal(source.dirty.value, true, 'stale save must keep the draft dirty');
-  assert.ok(button(mounted.root, '保存为待审核版本'), 'stale save must keep the editor open');
+  assert.ok(button(mounted.root, '保存'), 'stale save must keep the editor open');
 
   context.confirmDecisions.push(false);
   await click(button(mounted.root, '取消'));
   assert.equal(source.dirty.value, true);
-  assert.ok(button(mounted.root, '保存为待审核版本'), 'cancelled discard must retain the editor');
+  assert.ok(button(mounted.root, '保存'), 'cancelled discard must retain the editor');
   assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'hard');
 
   context.confirmDecisions.push(true);
@@ -1222,7 +1274,7 @@ test('protects the real question edit draft across cancel, stale failure, discar
   context.http = normalHttp;
   await click(button(mounted.root, '修订'));
   await click(button(mounted.root, 'choose-hard'));
-  await click(button(mounted.root, '保存为待审核版本'));
+  await click(button(mounted.root, '保存'));
   assert.equal(source.dirty.value, false, 'successful save must clean only the editor source');
   assert.equal(mounted.instance.$.setupState.editorVisible, false);
   const saved = context.calls.findLast((call) => call.method === 'put' && call.url === `/ai/questions/${context.row.question_id}`);
@@ -1288,7 +1340,7 @@ test('keeps edits made after a delayed question submit and ignores that response
   };
 
   await click(button(mounted.root, 'choose-hard'));
-  const firstSave = button(mounted.root, '保存为待审核版本').props.onClick();
+  const firstSave = button(mounted.root, '保存').props.onClick();
   await waitFor(() => pending.length === 1, 'first delayed question save');
   await click(button(mounted.root, 'choose-easy'));
   pending[0].resolve({
@@ -1310,7 +1362,7 @@ test('keeps edits made after a delayed question submit and ignores that response
 
   await click(button(mounted.root, '修订'));
   await click(button(mounted.root, 'choose-hard'));
-  const secondSave = button(mounted.root, '保存为待审核版本').props.onClick();
+  const secondSave = button(mounted.root, '保存').props.onClick();
   await waitFor(() => pending.length === 2, 'second delayed question save');
   context.confirmDecisions.push(true);
   await click(button(mounted.root, '取消'));
@@ -1356,7 +1408,7 @@ test('uses the mutation receipt instead of a later view pointer for the next que
   };
 
   await click(button(mounted.root, 'choose-hard'));
-  const firstSave = button(mounted.root, '保存为待审核版本').props.onClick();
+  const firstSave = button(mounted.root, '保存').props.onClick();
   await waitFor(() => edits === 1, 'v2 edit request');
   await click(button(mounted.root, 'choose-easy'));
   firstGate.resolve({
@@ -1372,7 +1424,7 @@ test('uses the mutation receipt instead of a later view pointer for the next que
   assert.equal(mounted.instance.$.setupState.editorForm.difficulty, 'easy');
   assert.equal(source.dirty.value, true);
   await assert.rejects(
-    () => button(mounted.root, '保存为待审核版本').props.onClick(),
+    () => button(mounted.root, '保存').props.onClick(),
     (error) => error?.code === 40940,
   );
   const secondRequest = context.calls.filter((call) => call.method === 'put' && call.url === `/ai/questions/${context.row.question_id}`).at(-1);
@@ -1399,7 +1451,7 @@ test('keeps a question draft when a successful mutation response has no valid re
     return normalHttp(method, url, body, config);
   };
 
-  await button(mounted.root, '保存为待审核版本').props.onClick();
+  await button(mounted.root, '保存').props.onClick();
   await nextTick();
   assert.equal(mounted.instance.$.setupState.editorVisible, true);
   assert.equal(mounted.instance.$.setupState.editingExpectedVersionId, '101');
@@ -1412,7 +1464,7 @@ function aiImportBatch() {
   const question = {
     category: '7', type: 'single', concept: '9',
     options: [{ key: 'A', text: '先确认风险' }, { key: 'B', text: '直接作业' }],
-    answer: [0], analysis: '应先完成风险确认。', score: '5', errors: [],
+    answer: [0], analysis: '应先完成风险确认。', errors: [],
   };
   return {
     batch_id: '301', valid_rows: [2, 3], duplicates: [], errors: [{ row: 4, message: '答案无效' }],
@@ -1616,7 +1668,7 @@ test('AI preview edits only generated content, regenerates one row, downloads an
     await click(button(mounted.root, '预览'));
     let dialog = walk(mounted.root, (node) => node.type === 'dialog')[0];
     assert.equal(Object.hasOwn(dialog.props, 'appendToBody') || Object.hasOwn(dialog.props, 'append-to-body'), false);
-    assert.equal(walk(mounted.root, (node) => node.type === 'question-preview-stub')[0]?.props.score, 5);
+    assert.equal(walk(mounted.root, (node) => node.type === 'question-preview-stub')[0]?.props.score, undefined);
     await click(button(mounted.root, '修改'));
     dialog = walk(mounted.root, (node) => node.type === 'dialog' && node.props.title === '修改生成题')[0];
     assert.equal(Object.hasOwn(dialog.props, 'appendToBody') || Object.hasOwn(dialog.props, 'append-to-body'), false);

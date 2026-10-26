@@ -162,8 +162,6 @@ export class AiController {
       difficulty: dto.difficulty,
       questionCountSingle: dto.question_count_single ?? 20,
       questionCountMultiple: dto.question_count_multiple ?? 5,
-      scoreSingle: dto.score_single ?? 3.0,
-      scoreMultiple: dto.score_multiple ?? 8.0,
       actor: { id: user.id, name: user.username },
     });
   }

@@ -7231,7 +7231,8 @@
                       "fill": "$ink-3",
                       "content": "进行中",
                       "fontFamily": "$sans",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -7259,7 +7260,8 @@
                       "fill": "$ink-3",
                       "content": "待考试",
                       "fontFamily": "$sans",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -7287,7 +7289,8 @@
                       "fill": "$ink-3",
                       "content": "已结束",
                       "fontFamily": "$sans",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -9778,7 +9781,8 @@
                               "fill": "$ink-2",
                               "content": "重新开始",
                               "fontFamily": "$sans",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -10705,7 +10709,8 @@
                               "fill": "$ink-2",
                               "content": "返回列表",
                               "fontFamily": "$sans",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -15954,7 +15959,8 @@
                               "fill": "$ink",
                               "content": "继续答题",
                               "fontFamily": "$sans",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -17259,7 +17265,8 @@
                               "fill": "$ink-2",
                               "content": "退出",
                               "fontFamily": "$sans",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -18611,7 +18618,8 @@
                               "fill": "$ink-2",
                               "content": "查询状态",
                               "fontFamily": "$sans",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -23791,7 +23799,8 @@
                       "fill": "$ink-2",
                       "content": "单选 5",
                       "fontFamily": "$sans",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     }
                   ]
                 },
@@ -23813,7 +23822,8 @@
                       "fill": "$ink-2",
                       "content": "多选 4",
                       "fontFamily": "$sans",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     }
                   ]
                 },
@@ -23835,7 +23845,8 @@
                       "fill": "$ink-2",
                       "content": "判断 3",
                       "fontFamily": "$sans",
-                      "fontSize": 12
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     }
                   ]
                 }
@@ -28800,7 +28811,8 @@
                                   "content": "1998年",
                                   "lineHeight": 1.5,
                                   "fontFamily": "$sans",
-                                  "fontSize": 18
+                                  "fontSize": 18,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -28822,7 +28834,8 @@
                                   "content": "1999年",
                                   "lineHeight": 1.5,
                                   "fontFamily": "$sans",
-                                  "fontSize": 18
+                                  "fontSize": 18,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -28866,7 +28879,8 @@
                                   "content": "2001年",
                                   "lineHeight": 1.5,
                                   "fontFamily": "$sans",
-                                  "fontSize": 18
+                                  "fontSize": 18,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -28888,7 +28902,8 @@
                                   "content": "2002年",
                                   "lineHeight": 1.5,
                                   "fontFamily": "$sans",
-                                  "fontSize": 18
+                                  "fontSize": 18,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -28920,7 +28935,8 @@
                                   "content": "11月",
                                   "lineHeight": 1.5,
                                   "fontFamily": "$sans",
-                                  "fontSize": 18
+                                  "fontSize": 18,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -28942,7 +28958,8 @@
                                   "content": "12月",
                                   "lineHeight": 1.5,
                                   "fontFamily": "$sans",
-                                  "fontSize": 18
+                                  "fontSize": 18,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -28986,7 +29003,8 @@
                                   "content": "02月",
                                   "lineHeight": 1.5,
                                   "fontFamily": "$sans",
-                                  "fontSize": 18
+                                  "fontSize": 18,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -29008,7 +29026,8 @@
                                   "content": "03月",
                                   "lineHeight": 1.5,
                                   "fontFamily": "$sans",
-                                  "fontSize": 18
+                                  "fontSize": 18,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -29040,7 +29059,8 @@
                                   "content": "30日",
                                   "lineHeight": 1.5,
                                   "fontFamily": "$sans",
-                                  "fontSize": 18
+                                  "fontSize": 18,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -29062,7 +29082,8 @@
                                   "content": "31日",
                                   "lineHeight": 1.5,
                                   "fontFamily": "$sans",
-                                  "fontSize": 18
+                                  "fontSize": 18,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -29106,7 +29127,8 @@
                                   "content": "02日",
                                   "lineHeight": 1.5,
                                   "fontFamily": "$sans",
-                                  "fontSize": 18
+                                  "fontSize": 18,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             },
@@ -29128,7 +29150,8 @@
                                   "content": "03日",
                                   "lineHeight": 1.5,
                                   "fontFamily": "$sans",
-                                  "fontSize": 18
+                                  "fontSize": 18,
+                                  "fontWeight": "normal"
                                 }
                               ]
                             }
@@ -44976,7 +44999,8 @@
                       "fill": "$ink-3",
                       "content": "进行中",
                       "fontFamily": "$sans",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -45004,7 +45028,8 @@
                       "fill": "$ink-3",
                       "content": "待考试",
                       "fontFamily": "$sans",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -45032,7 +45057,8 @@
                       "fill": "$ink-3",
                       "content": "已结束",
                       "fontFamily": "$sans",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -46453,7 +46479,8 @@
                       "fill": "$ink-3",
                       "content": "进行中",
                       "fontFamily": "$sans",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -46481,7 +46508,8 @@
                       "fill": "$ink-3",
                       "content": "待考试",
                       "fontFamily": "$sans",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -46509,7 +46537,8 @@
                       "fill": "$ink-3",
                       "content": "已结束",
                       "fontFamily": "$sans",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -47831,7 +47860,8 @@
                       "fill": "$ink-3",
                       "content": "进行中",
                       "fontFamily": "$sans",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -47859,7 +47889,8 @@
                       "fill": "$ink-3",
                       "content": "待考试",
                       "fontFamily": "$sans",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -47887,7 +47918,8 @@
                       "fill": "$ink-3",
                       "content": "已结束",
                       "fontFamily": "$sans",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -69378,7 +69410,7 @@
                 {
                   "type": "frame",
                   "id": "bvtxi",
-                  "name": "必填属性 · 一行",
+                  "name": "必填属性 · 题型、培训类别、难度",
                   "width": "fill_container",
                   "gap": 16,
                   "children": [
@@ -69488,7 +69520,7 @@
                       "type": "frame",
                       "id": "hw2Rt",
                       "name": "难度",
-                      "width": "fill_container",
+                      "width": 224,
                       "layout": "vertical",
                       "gap": 6,
                       "children": [
@@ -69575,56 +69607,6 @@
                               ]
                             }
                           ]
-                        }
-                      ]
-                    },
-                    {
-                      "type": "frame",
-                      "id": "QMqGP",
-                      "name": "分值",
-                      "width": "fill_container",
-                      "layout": "vertical",
-                      "gap": 6,
-                      "children": [
-                        {
-                          "type": "frame",
-                          "id": "hUSA3",
-                          "name": "分值标签",
-                          "gap": 2,
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "YeKIw",
-                              "name": "标签文字",
-                              "fill": "$ink-2",
-                              "content": "分值",
-                              "fontFamily": "$sans",
-                              "fontSize": "$pc-font-content",
-                              "fontWeight": "normal"
-                            },
-                            {
-                              "type": "text",
-                              "id": "taMFb",
-                              "name": "必填",
-                              "fill": "$pc-danger",
-                              "content": "*",
-                              "fontFamily": "$sans",
-                              "fontSize": "$pc-font-content",
-                              "fontWeight": "normal"
-                            }
-                          ]
-                        },
-                        {
-                          "id": "J4ohs",
-                          "type": "ref",
-                          "ref": "H1Bzo",
-                          "name": "分值输入框",
-                          "width": "fill_container",
-                          "descendants": {
-                            "XFx0L": {
-                              "content": "5"
-                            }
-                          }
                         }
                       ]
                     }
@@ -70333,7 +70315,7 @@
                 {
                   "type": "frame",
                   "id": "sdsyn",
-                  "name": "选填信息",
+                  "name": "选填答案解析",
                   "width": "fill_container",
                   "stroke": "$pc-border",
                   "strokeWidth": {
@@ -70371,139 +70353,10 @@
                           "id": "eJ0DA",
                           "name": "标题文字",
                           "fill": "$ink-2",
-                          "content": "选填信息",
+                          "content": "答案解析（选填）",
                           "fontFamily": "$sans",
                           "fontSize": "$pc-font-content",
                           "fontWeight": "600"
-                        },
-                        {
-                          "type": "text",
-                          "id": "NuKA5",
-                          "name": "说明",
-                          "fill": "$ink-3",
-                          "content": "考点 · 资料来源 · 答案解析",
-                          "fontFamily": "$sans",
-                          "fontSize": "$pc-font-sm",
-                          "fontWeight": "normal"
-                        }
-                      ]
-                    },
-                    {
-                      "type": "frame",
-                      "id": "v3sSs",
-                      "name": "考点与资料",
-                      "width": "fill_container",
-                      "gap": 16,
-                      "children": [
-                        {
-                          "type": "frame",
-                          "id": "WhIfq",
-                          "name": "考点",
-                          "width": "fill_container",
-                          "layout": "vertical",
-                          "gap": 6,
-                          "children": [
-                            {
-                              "type": "frame",
-                              "id": "N0pcV",
-                              "name": "考点标签",
-                              "gap": 2,
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "YDrSX",
-                                  "name": "标签文字",
-                                  "fill": "$ink-2",
-                                  "content": "考点",
-                                  "fontFamily": "$sans",
-                                  "fontSize": "$pc-font-content",
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "Q4NaL",
-                              "name": "考点搜索",
-                              "width": "fill_container",
-                              "height": 32,
-                              "fill": "$surface",
-                              "cornerRadius": "$pc-radius-sm",
-                              "stroke": "$pc-input-border",
-                              "strokeWidth": 1,
-                              "gap": 8,
-                              "padding": [
-                                0,
-                                10
-                              ],
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "bzixl",
-                                  "name": "占位",
-                                  "fill": "$ink-3",
-                                  "textGrowth": "fixed-width",
-                                  "width": "fill_container",
-                                  "content": "搜索或选择考点",
-                                  "fontFamily": "$sans",
-                                  "fontSize": "$pc-font-content",
-                                  "fontWeight": "normal"
-                                },
-                                {
-                                  "type": "icon",
-                                  "id": "m3GyK",
-                                  "name": "搜索图标",
-                                  "width": 14,
-                                  "height": 14,
-                                  "icon": "search",
-                                  "library": "lucide",
-                                  "fill": "$ink-3"
-                                }
-                              ]
-                            }
-                          ]
-                        },
-                        {
-                          "type": "frame",
-                          "id": "GG3QO",
-                          "name": "资料来源",
-                          "width": "fill_container",
-                          "layout": "vertical",
-                          "gap": 6,
-                          "children": [
-                            {
-                              "type": "frame",
-                              "id": "l4hbAq",
-                              "name": "资料来源标签",
-                              "gap": 2,
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "dAns9",
-                                  "name": "标签文字",
-                                  "fill": "$ink-2",
-                                  "content": "资料来源",
-                                  "fontFamily": "$sans",
-                                  "fontSize": "$pc-font-content",
-                                  "fontWeight": "normal"
-                                }
-                              ]
-                            },
-                            {
-                              "id": "irS3l",
-                              "type": "ref",
-                              "ref": "pjU38",
-                              "name": "选择框",
-                              "width": "fill_container",
-                              "descendants": {
-                                "Z4kxG3": {
-                                  "content": "请选择资料（可选）",
-                                  "fill": "$ink-3"
-                                }
-                              }
-                            }
-                          ]
                         }
                       ]
                     },
@@ -70515,24 +70368,6 @@
                       "layout": "vertical",
                       "gap": 6,
                       "children": [
-                        {
-                          "type": "frame",
-                          "id": "v7HNG",
-                          "name": "答案解析标签",
-                          "gap": 2,
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "qiSOJ",
-                              "name": "标签文字",
-                              "fill": "$ink-2",
-                              "content": "答案解析",
-                              "fontFamily": "$sans",
-                              "fontSize": "$pc-font-content",
-                              "fontWeight": "normal"
-                            }
-                          ]
-                        },
                         {
                           "type": "frame",
                           "id": "b39bHr",
@@ -70768,9 +70603,9 @@
                     {
                       "type": "text",
                       "id": "ZFbBV",
-                      "name": "文本",
+                      "name": "未保存状态",
                       "fill": "$ink-3",
-                      "content": "· 5 分 · 已自动保存草稿",
+                      "content": "· 有未保存修改",
                       "fontFamily": "$sans",
                       "fontSize": "$pc-font-sm",
                       "fontWeight": "normal"

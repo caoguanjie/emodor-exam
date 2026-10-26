@@ -55,9 +55,9 @@ export class Question {
   @Column({ name: 'content_json', type: 'json', nullable: true })
   contentJson: QuestionContentV2 | QuestionContentV3 | null;
 
-  /** 题库建议分值；实际判分以 paper_question.score 为准 */
-  @Column({ type: 'decimal', precision: 5, scale: 2 })
-  score: string;
+  /** 仅保留旧题分值；新题与修订为 NULL，实际判分以卷内分值为准。 */
+  @Column({ type: 'decimal', precision: 5, scale: 2, nullable: true })
+  score: string | null;
 
   /** pending / approved / rejected */
   @Column({ type: 'varchar', length: 16, default: 'pending' })

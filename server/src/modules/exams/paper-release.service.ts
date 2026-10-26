@@ -56,7 +56,7 @@ export interface TrainingPublishedPaper extends PublishedPaperBase {
   categoryId: string;
   businessScope: 'training';
   mode: PaperMode;
-  pool: QuestionVersionSnapshot[];
+  pool: ScoredQuestionVersionSnapshot[];
 }
 
 export interface RegulationPublishedPaper extends PublishedPaperBase {
@@ -67,7 +67,8 @@ export interface RegulationPublishedPaper extends PublishedPaperBase {
 }
 
 export type PublishedPaper = TrainingPublishedPaper | RegulationPublishedPaper;
-export type PublishedQuestionSnapshot = QuestionVersionSnapshot | ReleaseQuestionSnapshot;
+export type ScoredQuestionVersionSnapshot = QuestionVersionSnapshot & { scoreCents: number };
+export type PublishedQuestionSnapshot = ScoredQuestionVersionSnapshot | ReleaseQuestionSnapshot;
 
 const QUESTION_TYPES = new Set<QuestionType>(['single', 'multiple', 'judgment']);
 const DIFFICULTIES = new Set<Difficulty>(['easy', 'medium', 'hard']);
@@ -133,7 +134,6 @@ function snapshotFromEntity(version: QuestionVersion): QuestionVersionSnapshot {
     options: deepClone(version.options as QuestionOption[]),
     answer: [...version.answer],
     analysis: version.analysis,
-    scoreCents: Number(version.scoreCents),
     conceptId: version.conceptId || undefined,
     regulationId: version.regulationId || undefined,
     regulationVersionId: version.regulationVersionId || undefined,
@@ -146,7 +146,7 @@ function snapshotFromEntity(version: QuestionVersion): QuestionVersionSnapshot {
   };
 }
 
-function releaseSnapshotFromEntity(version: QuestionVersion): ReleaseQuestionSnapshot {
+function releaseSnapshotFromEntity(version: QuestionVersion, scoreCents: number): ReleaseQuestionSnapshot {
   return {
     contentSchemaVersion: version.contentSchemaVersion || 1,
     contentJson: version.contentJson || null,
@@ -160,7 +160,7 @@ function releaseSnapshotFromEntity(version: QuestionVersion): ReleaseQuestionSna
     options: deepClone(version.options as QuestionOption[]),
     answer: [...version.answer],
     analysis: version.analysis,
-    scoreCents: Number(version.scoreCents),
+    scoreCents,
     conceptId: version.conceptId || undefined,
     regulationId: version.regulationId || undefined,
     regulationVersionId: version.regulationVersionId || undefined,
@@ -251,7 +251,7 @@ export class PaperReleaseService implements OnModuleInit {
   private async randomPool(
     manager: EntityManager | undefined,
     paper: ExamPaper,
-  ): Promise<{ rule: RuleSnapshot; pool: QuestionVersionSnapshot[] }> {
+  ): Promise<{ rule: RuleSnapshot; pool: ScoredQuestionVersionSnapshot[] }> {
     const configuredRules = paper.ruleConfig?.rules || [];
     if (configuredRules.length > 4 || new Set(configuredRules.map((item) => item.type)).size !== configuredRules.length) {
       throw Errors.paperRuleInvalid('随机组卷同一题型只能配置一项规则');
@@ -277,7 +277,7 @@ export class PaperReleaseService implements OnModuleInit {
       }
     }
     const scoreByType = new Map(rule.rules.map((item) => [item.type, item.scoreCents]));
-    const unique = new Map<string, QuestionVersionSnapshot>();
+    const unique = new Map<string, ScoredQuestionVersionSnapshot>();
     for (const item of pool) {
       unique.set(String(item.versionId), {
         ...deepClone(item),
@@ -291,7 +291,7 @@ export class PaperReleaseService implements OnModuleInit {
     manager: EntityManager,
     paper: ExamPaper,
     forPublication = true,
-  ): Promise<{ rule: RuleSnapshot; pool: QuestionVersionSnapshot[] }> {
+  ): Promise<{ rule: RuleSnapshot; pool: ScoredQuestionVersionSnapshot[] }> {
     const items = await manager.getRepository(PaperQuestion).find({
       where: { paperId: String(paper.id) },
       order: { sort: 'ASC', id: 'ASC' },
@@ -307,7 +307,7 @@ export class PaperReleaseService implements OnModuleInit {
     const questionMap = new Map(questions.map((item) => [String(item.id), item]));
     const regulationIds = new Set((paper.regulationIds || []).map(String));
     const seen = new Set<string>();
-    const pool: QuestionVersionSnapshot[] = [];
+    const pool: ScoredQuestionVersionSnapshot[] = [];
     const rules = new Map<string, PoolRule>();
     for (const item of items) {
       const version = versionMap.get(String(item.questionVersionId));
@@ -377,7 +377,7 @@ export class PaperReleaseService implements OnModuleInit {
       if (seen.has(groupKey)) throw Errors.paperRuleInvalid('固定题单存在重复考点');
       seen.add(groupKey);
       const scoreCents = decimalToCents(item.score);
-      const snapshot = { ...releaseSnapshotFromEntity(version), scoreCents };
+      const snapshot = releaseSnapshotFromEntity(version, scoreCents);
       pool.push(snapshot);
       item.questionVersionId = String(version.id);
       item.conceptId = version.conceptId ? String(version.conceptId) : null;
@@ -525,7 +525,7 @@ export class PaperReleaseService implements OnModuleInit {
     if (!paper || paper.businessScope !== 'training') throw Errors.notFound('培训试卷不存在');
     let releaseId: string | null = null;
     let rule: RuleSnapshot;
-    let pool: QuestionVersionSnapshot[];
+    let pool: ScoredQuestionVersionSnapshot[];
     const published = await this.latestForPaper(paperId);
     if (published) {
       if (published.businessScope !== 'training') throw Errors.paperReleaseConflict('试卷发布版本业务范围不一致');

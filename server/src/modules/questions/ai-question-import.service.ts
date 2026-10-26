@@ -144,7 +144,7 @@ export class AiQuestionImportService implements OnModuleDestroy {
     // Explicitly construct provenance. Never spread any model-owned fields.
     return this.importer.validateAiGenerated(ownerId, {
       categoryId: reference.categoryId, type: reference.type, conceptId: reference.conceptId,
-      scoreCents: reference.scoreCents, difficulty, source: 'ai',
+      difficulty, source: 'ai',
       stem: body.stem, options: body.options, answer: body.answer, analysis: body.analysis,
     });
   }
@@ -262,7 +262,7 @@ export class AiQuestionImportService implements OnModuleDestroy {
     return buildQuestionImportFile(format, batch.rows.filter((row) => batch.valid_rows.includes(row.row_number)).map((row) => ({
       category: row.category, type: row.type, difficulty: row.difficulty, concept: row.concept,
       stem: row.stem, options: JSON.stringify(row.options), answer: JSON.stringify(row.answer),
-      analysis: row.analysis, score: row.score,
+      analysis: row.analysis,
     })));
   }
 }
