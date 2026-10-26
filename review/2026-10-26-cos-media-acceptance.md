@@ -1,5 +1,7 @@
 # COS 媒体集成实施与验收记录
 
+**本地切换更新：**用户已明确授权重启，现已本地合入 main、应用 COS 033、开启 cos/cos-signed、追加准确本地 CORS 并迁移全部7个存量文件，原件保留。真实读回哈希、引用集合、视频206和品牌图浏览器读取均通过。登录后的新上传/续传、H5真实实名开播及容量仍待验。最新结果以[本地切换记录](2026-10-26-cos-local-cutover.md)为准；下文保留实施阶段证据和当时的待办快照。
+
 执行方式：用户指定 Astra 并行编排，不经过 SDD。
 
 工作副本：`/Users/caogj/Documents/emodor/RuleExam/.worktrees/cos-media-integration`，分支 `cos-media-integration`，基线 `44b9d7f`。初次实施时主工作区未提交的题库/UI 改动未复制，COS候选迁移使用030；该编号从未部署。本次整合主线已应用的029—032后改为 `033_cos_media_storage.sql`，不改写主线迁移内容或checksum。下列原候选commit与测试结果保留为历史证据，不能代替重编号后的复验。图谱项目 `RuleExam_cos` 仅用于定位，未覆盖的媒体实现按路径读取。
