@@ -61,6 +61,15 @@ function fixture(options: { inProgress?: boolean; legacyLinked?: boolean } = {})
 const requestId = '75d17f2e-1c29-4bf7-b5da-660a3b116eba';
 
 describe('authoring transaction with the real version service', () => {
+  it('rejects a bound deleted identity before idempotent content matching or compatibility projection can revive it', async () => {
+    const f = fixture();
+    const first = await f.service.commit({ request_id: requestId, bundle: bundle() }, '9');
+    Object.assign(f.state().questions[0], { deletedAt: new Date('2026-10-26T02:00:00.000Z'), isEnabled: false });
+    const input = structuredClone(first.bundle); input.identities.local1.expected_enabled = false;
+    const before = structuredClone(f.state());
+    await expect(f.service.commit({ request_id: '84df8ef9-32a9-4112-ac24-3e8f5d2ef711', bundle: input }, '9')).rejects.toMatchObject({ code: 40401 });
+    expect(f.state()).toEqual(before);
+  });
   it('rejects stale enabled authoring tokens at the same revision and accepts only an explicit refreshed save', async () => {
     const f = fixture();
     const first = await f.service.commit({ request_id: requestId, bundle: bundle() }, '9');

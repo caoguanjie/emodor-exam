@@ -20,6 +20,8 @@ const { QuestionVersionService } = require('./dist/modules/questions/question-ve
 const { PaperReleaseService } = require('./dist/modules/exams/paper-release.service.js');
 const { SamplingService } = require('./dist/modules/exams/sampling.service.js');
 const { PaperService } = require('./dist/modules/ai/paper.service.js');
+const { QuestionBankService } = require('./dist/modules/questions/question-bank.service.js');
+const { AuditService } = require('./dist/common/audit.service.js');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -225,6 +227,110 @@ export async function proveDisableWinsPublication(ctx, paperId, questionId, acto
   } finally {
     allowCommit.resolve();
     await Promise.allSettled([disabling, publishing].filter(Boolean));
+    for (const source of [pair.dataSourceA, pair.dataSourceB]) if (source.isInitialized) await source.destroy();
+  }
+}
+
+function bankServiceFor(ctx, dataSource) {
+  const versions = serviceFor(dataSource).questions;
+  return new QuestionBankService(dataSource.getRepository(Question), versions,
+    new AuditService({ logDir: ctx.env.LOG_DIR }), dataSource);
+}
+
+function observeIdentityLock(dataSource, entered) {
+  return {
+    transaction: (work) => dataSource.transaction((manager) => work(new Proxy(manager, {
+      get(target, property) {
+        if (property !== 'getRepository') return Reflect.get(target, property);
+        return (entity) => {
+          const repo = target.getRepository(entity);
+          if (entity !== Question) return repo;
+          return new Proxy(repo, {
+            get(repository, method) {
+              if (method !== 'findOne') return Reflect.get(repository, method);
+              return (options) => {
+                if (options?.lock?.mode === 'pessimistic_write') entered.resolve();
+                return repository.findOne(options);
+              };
+            },
+          });
+        };
+      },
+    }))),
+  };
+}
+
+/** Both contestants execute real services; only the transaction commit is gated. */
+export async function proveDeletePublicationOrdering(ctx, input, actorId) {
+  const pair = await createPair(ctx);
+  const staged = deferred();
+  const competingLock = deferred();
+  const allowCommit = deferred();
+  const bank = bankServiceFor(ctx, pair.dataSourceB);
+  const actor = { id: Number(actorId), name: 'question-delete-concurrency' };
+  let publishing;
+  let deleting;
+  let frozenBeforeDelete;
+  try {
+    const { paperId, questionId, versionId, deleteFirst } = input;
+    if (deleteFirst) {
+      bank.dataSource = {
+        transaction: (work) => pair.dataSourceB.transaction(async (manager) => {
+          const result = await work(manager);
+          staged.resolve();
+          await allowCommit.promise;
+          return result;
+        }),
+      };
+      deleting = capture(bank.softDelete(String(questionId), String(versionId), true, actor, null));
+      await withTimeout(staged.promise, 10_000, 'softDelete did not stage its real transaction');
+      pair.serviceA.dataSource = observeIdentityLock(pair.dataSourceA, competingLock);
+      publishing = capture(pair.serviceA.publish(String(paperId), String(actorId)));
+    } else {
+      pair.serviceA.dataSource = {
+        transaction: (work) => pair.dataSourceA.transaction(async (manager) => {
+          const result = await work(manager);
+          frozenBeforeDelete = await manager.query(
+            'SELECT rq.* FROM paper_release_question rq JOIN paper_release r ON r.id=rq.release_id WHERE r.paper_id=? ORDER BY rq.position',
+            [String(paperId)],
+          );
+          staged.resolve();
+          await allowCommit.promise;
+          return result;
+        }),
+      };
+      publishing = capture(pair.serviceA.publish(String(paperId), String(actorId)));
+      await withTimeout(staged.promise, 10_000, 'publication did not stage its real release');
+      bank.dataSource = observeIdentityLock(pair.dataSourceB, competingLock);
+      deleting = capture(bank.softDelete(String(questionId), String(versionId), true, actor, null));
+    }
+    await withTimeout(competingLock.promise, 10_000, 'competing service did not attempt the shared identity lock');
+    allowCommit.resolve();
+    const [deleteResult, publishResult] = await withTimeout(Promise.all([deleting, publishing]), 10_000, 'delete/publication ordering stalled');
+    assert(deleteResult.status === 'fulfilled' && deleteResult.value.deleted === true, 'real softDelete did not commit');
+    const [state] = await pair.dataSourceA.query(
+      'SELECT p.status,(SELECT COUNT(*) FROM paper_release WHERE paper_id=p.id) AS releases,(SELECT COUNT(*) FROM paper_release_question rq JOIN paper_release r ON r.id=rq.release_id WHERE r.paper_id=p.id) AS release_questions FROM exam_paper p WHERE p.id=?',
+      [String(paperId)],
+    );
+    if (deleteFirst) {
+      assert(publishResult.status === 'rejected' && publishResult.reason?.code === 40970, 'publication accepted the deleted identity');
+      assert(state.status === 'draft' && Number(state.releases) === 0 && Number(state.release_questions) === 0, 'delete conflict left a partial release');
+    } else {
+      assert(publishResult.status === 'fulfilled', 'publication that locked first was rejected');
+      assert(state.status === 'published' && Number(state.releases) === 1 && Number(state.release_questions) === 1, 'publication did not preserve its complete release');
+      const frozenAfterDelete = await pair.dataSourceA.query(
+        'SELECT rq.* FROM paper_release_question rq JOIN paper_release r ON r.id=rq.release_id WHERE r.paper_id=? ORDER BY rq.position',
+        [String(paperId)],
+      );
+      assert(JSON.stringify(frozenAfterDelete) === JSON.stringify(frozenBeforeDelete), 'deletion changed a committed publication snapshot');
+      const frozen = await pair.serviceA.get(publishResult.value.releaseId);
+      assert(String(frozen.pool[0].questionId) === String(questionId), 'published snapshot became unreadable after deletion');
+    }
+    return { order: deleteFirst ? 'delete-first' : 'publish-first', connection_ids: pair.connectionIds,
+      publication: publishResult.status === 'fulfilled' ? publishResult.value.releaseId : publishResult.reason.code };
+  } finally {
+    allowCommit.resolve();
+    await Promise.allSettled([deleting, publishing].filter(Boolean));
     for (const source of [pair.dataSourceA, pair.dataSourceB]) if (source.isInitialized) await source.destroy();
   }
 }

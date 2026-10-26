@@ -506,6 +506,7 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
       '026_question_lifecycle_slimming',
       '027_question_review_permission_cleanup',
       '028_access_password_backfill_probe',
+      '029_question_soft_delete',
     ]);
 
     await conn.query("INSERT INTO sys_department (name, sort, status) VALUES ('完整升级保留数据', 917, 0)");

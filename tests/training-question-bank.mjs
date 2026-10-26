@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { randomStrongPassword } from './training-access.mjs';
+import { proveQuestionSoftDelete } from './support/question-soft-delete-checks.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
@@ -445,6 +446,23 @@ async function runBody(ctx) {
   });
   assert.equal(retiredRegeneration.status, 404, '历史题目直接重生成入口已取消');
   assert.deepEqual(await ctx.queryTestDb('SELECT COUNT(*) AS total FROM question_version'), beforeRetiredWrites);
+
+  const readerUsername = `b3_reader_${suffix}`;
+  const readerPassword = randomStrongPassword(readerUsername, '删除只读员');
+  const readerRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
+    code: readerUsername, name: `B3 删除只读 ${suffix}`, permissions: ['questions:read'],
+  });
+  assert.equal(readerRole.status, 200);
+  const readerCreated = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
+    username: readerUsername, password: readerPassword, real_name: `删除只读员${suffix}`,
+    role_ids: [String(readerRole.data.id)],
+  });
+  assert.equal(readerCreated.status, 200);
+  const reader = await accountLogin(ctx, readerUsername, readerPassword, `删除只读员${suffix}`);
+  await proveQuestionSoftDelete(ctx, {
+    admin, writer, reader, categoryId, manual: edited.data, staleVersionId: firstVersionId,
+    media: withMedia.data, mediaId, scoredPapers, writerQuestion: writerRevised.data, legacyId: maliciousLegacyId,
+  });
 }
 
 export async function run(ctx) {

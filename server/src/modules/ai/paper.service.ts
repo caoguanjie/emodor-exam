@@ -262,7 +262,7 @@ export class PaperService {
         if (!q) throw Errors.param(`题目 ${it.question_id} 不存在`);
         this.assertLegacyFixedQuestion(q);
         assertActiveDifficulty(q.difficulty);
-        if (!q.isEnabled) throw Errors.paperReleaseConflict(`题目 ${it.question_id} 已停用，不能入卷`);
+        if (!q.isEnabled || q.deletedAt) throw Errors.paperReleaseConflict(`题目 ${it.question_id} 已停用或删除，不能入卷`);
         if (q.regulationId !== paper.regulationId) throw Errors.param(`题目 ${it.question_id} 与试卷不属于同一制度`);
         if (seen.has(q.id)) throw Errors.param(`题目 ${it.question_id} 重复`);
         seen.add(q.id);
@@ -505,7 +505,7 @@ export class PaperService {
           regulation_id: version?.regulationId ? String(version.regulationId) : null,
           stem: version?.stem || '',
           options: cloneJson(version?.options || []),
-          enabled: Boolean(questionMap.get(String(item.questionId))?.isEnabled),
+          enabled: Boolean(questionMap.get(String(item.questionId))?.isEnabled) && !questionMap.get(String(item.questionId))?.deletedAt,
         };
       }),
     };
@@ -635,7 +635,7 @@ export class PaperService {
         const input = items[index];
         const version = versionMap.get(String(input.question_version_id));
         const question = version && questionMap.get(String(version.questionId));
-        if (!version || !question || !question.isEnabled || String(question.currentVersionId) !== String(version.id)) {
+        if (!version || !question || !question.isEnabled || question.deletedAt || String(question.currentVersionId) !== String(version.id)) {
           throw Errors.paperReleaseConflict(`题目版本 ${input.question_version_id} 已停用或不是当前版本，请重新选题`);
         }
         if (String(version.categoryId) !== categoryId) throw Errors.paperRuleInvalid('固定题目必须与试卷属于同一培训类别');

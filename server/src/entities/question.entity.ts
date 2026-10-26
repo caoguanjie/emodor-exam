@@ -34,6 +34,10 @@ export class Question {
   @Column({ name: 'is_enabled', type: 'tinyint', width: 1, default: true })
   isEnabled: boolean;
 
+  /** Current-bank visibility only; historical reads must never be implicitly filtered. */
+  @Column({ name: 'deleted_at', type: 'datetime', precision: 3, nullable: true })
+  deletedAt: Date | null;
+
   /** single / multiple */
   @Column({ type: 'varchar', length: 16 })
   type: string;

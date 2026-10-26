@@ -19,6 +19,7 @@ import { DtoValidationPipe, StrictDtoValidationPipe } from '../src/common/dto-va
 import {
   CreateQuestionDto, EditQuestionDto, GenerateQuestionsDto, QUESTION_CREATE_KEYS, QUESTION_EDIT_KEYS,
   QuestionListQueryDto, QUESTION_LIST_KEYS,
+  DeleteQuestionDto, QUESTION_DELETE_KEYS,
 } from '../src/modules/questions/question.dto';
 
 function baseDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraftInput {
@@ -39,6 +40,19 @@ function baseDraft(overrides: Partial<QuestionDraftInput> = {}): QuestionDraftIn
 }
 
 describe('training question bank validation', () => {
+  it('requires explicit nullable version and boolean enabled baselines for deletion and rejects extra keys', async () => {
+    const pipe = new StrictDtoValidationPipe(QUESTION_DELETE_KEYS);
+    for (const expected_version_id of [null, '101']) {
+      const body = { expected_version_id, expected_enabled: false };
+      await expect(pipe.transform(body, { type: 'body', metatype: DeleteQuestionDto } as any)).resolves.toMatchObject(body);
+    }
+    for (const body of [
+      { expected_enabled: false }, { expected_version_id: undefined, expected_enabled: false },
+      { expected_version_id: 101, expected_enabled: false }, { expected_version_id: '', expected_enabled: false },
+      { expected_version_id: null }, { expected_version_id: null, expected_enabled: 'false' },
+      { expected_version_id: null, expected_enabled: false, enabled: false },
+    ]) await expect(pipe.transform(body, { type: 'body', metatype: DeleteQuestionDto } as any)).rejects.toMatchObject({ status: 400 });
+  });
   it('accepts score-free writes and rejects retired bank fields', async () => {
     const input = { category_id: '11', difficulty: 'easy', type: 'single', stem: '<p>题干</p>',
       options: [{ key: 'A', text: '是' }, { key: 'B', text: '否' }], answer: [0] };
@@ -202,6 +216,7 @@ function versionServiceFixture() {
     score: '2.50',
     status: 'approved',
     isEnabled: true,
+    deletedAt: null,
     source: 'ai',
     createdBy: '1',
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -212,6 +227,7 @@ function versionServiceFixture() {
   const questionRepo = {
     findOne: vi.fn(async ({ where }: any) => String(where.id) === question.id ? question : null),
     save: vi.fn(async (value: any) => value),
+    update: async (_id: string, patch: any) => Object.assign(question, patch),
   };
   const versionRepo = {
     create: (value: any) => ({ ...value }),
@@ -223,6 +239,7 @@ function versionServiceFixture() {
       return value;
     }),
     findOne: vi.fn(async ({ where }: any) => versions.find((item) => item.id === String(where.id)) || null),
+    findAndCount: async () => [versions, versions.length],
   };
   const manager = {
     getRepository(entity: any) {
@@ -278,6 +295,94 @@ function questionMediaPolicyFixture(input: {
 }
 
 describe('versioned question bank', () => {
+  function bankFixture() {
+    const f = versionServiceFixture();
+    const entries: any[] = [];
+    const bank: any = new QuestionReviewService(f.service.questionRepo, f.service as any,
+      { log: (entry: any) => entries.push(entry) } as any, f.service.dataSource);
+    return { ...f, bank, entries };
+  }
+
+  it('soft-deletes an already disabled question without deleting versions, scores or advancing revision', async () => {
+    const f = bankFixture();
+    f.question.isEnabled = false;
+    f.question.currentVersionId = '99';
+    f.versions.push({ id: '99', questionId: '5', revision: 3, stem: '历史题面', scoreCents: 250, createdBy: '1' });
+    const before = structuredClone({ question: f.question, versions: f.versions });
+    const receipt = await f.bank.softDelete('5', '99', false, { id: 9, name: 'admin' }, '127.0.0.1');
+    expect(receipt).toEqual({ question_id: '5', deleted: true, deleted_at: f.question.deletedAt.toISOString() });
+    expect(f.question.deletedAt).toBeInstanceOf(Date);
+    expect({ ...f.question, deletedAt: null }).toEqual(before.question);
+    expect(f.versions).toEqual(before.versions);
+    expect(f.entries).toHaveLength(1);
+    expect(f.entries[0]).toMatchObject({ action: 'question.delete', actor_id: 9, object_id: '5', source_ip: '127.0.0.1' });
+  });
+
+  it.each([
+    { version: '98', enabled: true }, { version: '99', enabled: false },
+  ])('deletion rejects a stale version or enabled baseline with zero writes: %j', async ({ version, enabled }) => {
+    const f = bankFixture(); f.question.currentVersionId = '99';
+    const before = structuredClone(f.question);
+    await expect(f.bank.softDelete('5', version, enabled, { id: 9, name: 'admin' }, null)).rejects.toMatchObject({ code: 40940 });
+    expect(f.question).toEqual(before);
+    expect(f.versions).toHaveLength(0); expect(f.entries).toHaveLength(0);
+  });
+
+  it('deletion disables an enabled legacy identity and repeats the original receipt before stale baseline checks', async () => {
+    const f = bankFixture();
+    const first = await f.bank.softDelete('5', null, true, { id: 9, name: 'admin' }, null);
+    expect(f.question.isEnabled).toBe(false);
+    const before = structuredClone(f.question);
+    const again = await f.bank.softDelete('5', '99', true, { id: 9, name: 'admin' }, null);
+    expect(again).toEqual(first); expect(f.question).toEqual(before);
+    expect(f.versions).toHaveLength(0); expect(f.entries).toHaveLength(1);
+    await expect(f.bank.softDelete('404', null, false, { id: 9, name: 'admin' }, null)).rejects.toMatchObject({ code: 40401 });
+  });
+
+  it('hides deleted current details while retaining authorized version history and legacy first-attempt capture', async () => {
+    const f = bankFixture(); f.question.deletedAt = new Date('2026-10-26T02:00:00.000Z'); f.question.isEnabled = false;
+    await expect(f.bank.getOne('5')).rejects.toMatchObject({ code: 40401 });
+    const version = await f.service.currentOrCaptureForLegacyAttempt(f.manager as any, '5');
+    const history = await f.bank.history('5', {});
+    expect(history.total).toBe(1); expect(history.items[0].id).toBe(version.id);
+    expect(f.question).toMatchObject({ isEnabled: false, score: '2.50', deletedAt: new Date('2026-10-26T02:00:00.000Z') });
+  });
+
+  it.each([undefined, true, false])('excludes deleted questions from every current list filter: enabled=%s', async (enabled) => {
+    const f = bankFixture();
+    const rows = [f.question, { ...f.question, id: '6', isEnabled: false },
+      { ...f.question, id: '7', deletedAt: new Date() }, { ...f.question, id: '8', isEnabled: false, deletedAt: new Date() }];
+    const conditions: Array<{ sql: string; params?: any }> = [];
+    const selected = () => rows.filter((row) => conditions.every(({ sql, params }) =>
+      sql.includes('deleted_at IS NULL') ? !row.deletedAt : sql.includes('is_enabled =') ? row.isEnabled === params.enabled : true));
+    const qb: any = { andWhere: (sql: string, params: any) => { conditions.push({ sql, params }); return qb; },
+      orderBy: () => qb, skip: () => qb, take: () => qb, getCount: async () => selected().length, getMany: async () => selected() };
+    f.bank.questionRepo = { createQueryBuilder: () => qb };
+    const result = await f.bank.list({ enabled });
+    expect(result.list.map((row: any) => row.question_id)).toEqual(enabled === true ? ['5'] : enabled === false ? ['6'] : ['5', '6']);
+    expect(result.total).toBe(enabled === undefined ? 2 : 1);
+  });
+
+  it('rejects all current lifecycle and revision writes for a deleted identity before compatibility can re-enable it', async () => {
+    const f = bankFixture();
+    Object.assign(f.question, { deletedAt: new Date(), isEnabled: false });
+    const before = structuredClone(f.question);
+    for (const enabled of [true, false]) await expect(f.bank.setEnabled('5', enabled, null, { id: 9, name: 'admin' }, null)).rejects.toMatchObject({ code: 40401 });
+    await expect(f.service.lockIdentityForLifecycle('5', f.manager as any)).rejects.toMatchObject({ code: 40401 });
+    await expect(f.service.assertCurrentUsable('5', f.manager as any)).rejects.toMatchObject({ code: 40401 });
+    await expect(f.service.revise('5', baseDraft(), '9', null, false)).rejects.toMatchObject({ code: 40401 });
+    await expect(f.bank.edit('5', { analysis: '新解析' }, { id: 9, name: 'admin' }, null, null, false)).rejects.toMatchObject({ code: 40401 });
+    expect(f.question).toEqual(before); expect(f.versions).toHaveLength(0); expect(f.entries).toHaveLength(0);
+  });
+
+  it('rechecks deletion under the candidate transaction identity lock even for an enabled stale row', async () => {
+    const f = versionServiceFixture();
+    Object.assign(f.question, { currentVersionId: '99', categoryId: '11', difficulty: 'easy', deletedAt: new Date(), isEnabled: true });
+    const row = { ...f.question, id: '99', questionId: '5', revision: 1 };
+    const qb: any = { innerJoin: () => qb, where: () => qb, andWhere: () => qb, orderBy: () => qb, getMany: async () => [row] };
+    f.service.versionRepo.createQueryBuilder = () => qb;
+    expect(await f.service.enabledCandidates({ categoryId: '11', type: 'single', difficulty: 'easy' }, f.manager as any)).toEqual([]);
+  });
   it('captures an unversioned legacy attempt without inventing category, difficulty, enablement or score', async () => {
     const f = versionServiceFixture();
     f.question.isEnabled = false;
@@ -638,6 +743,7 @@ describe('versioned question bank', () => {
 
     expect(calls.some((call) => call.sql?.includes('question.current_version_id = version.id'))).toBe(true);
     expect(calls.some((call) => call.sql?.includes('question.is_enabled = :enabled'))).toBe(true);
+    expect(calls.some((call) => call.sql?.includes('question.deleted_at IS NULL'))).toBe(true);
     expect(calls.some((call) => call.sql?.includes('version.regulation_id IN'))).toBe(true);
     expect(service.categories.assertActive).toHaveBeenCalledWith('11');
     expect(result[0]).toMatchObject({ questionId: '41', versionId: '501', categoryId: '11', type: 'multiple', difficulty: 'hard' });

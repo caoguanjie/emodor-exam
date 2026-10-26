@@ -438,6 +438,40 @@ function paperAdminFixture(paperOverride: Record<string, unknown> = {}) {
 }
 
 describe('training paper draft configuration', () => {
+  it('rejects selecting a deleted fixed question even if its enabled compatibility fact is stale', async () => {
+    const f = paperAdminFixture();
+    (f.questions[0] as any).deletedAt = new Date();
+    await expect(f.service.setTrainingQuestions('11', [{ question_version_id: '501', score_cents: 10000 }], { id: '9', name: 'admin' }, null)).rejects.toMatchObject({ code: 40970 });
+    expect(f.savedQuestions).toHaveLength(0);
+  });
+
+  it('keeps a deleted draft reference visible as disabled without allowing a new fixed publication', async () => {
+    const f = paperAdminFixture();
+    await f.service.setTrainingQuestions('11', [{ question_version_id: '501', score_cents: 10000 }], { id: '9', name: 'admin' }, null);
+    (f.questions[0] as any).deletedAt = new Date();
+    const detail = await f.service.trainingDetail('11');
+    expect(detail.questions).toHaveLength(1);
+    expect(detail.questions[0]).toMatchObject({ question_id: '101', question_version_id: '501', enabled: false, stem: 'single 题' });
+  });
+
+  it('checks the deleted identity inside the fixed publication transaction while preserving draft preview', async () => {
+    const f = paperAdminFixture();
+    await f.service.setTrainingQuestions('11', [{ question_version_id: '501', score_cents: 10000 }], { id: '9', name: 'admin' }, null);
+    (f.questions[0] as any).deletedAt = new Date();
+    const releases: any = Object.create(PaperReleaseService.prototype);
+    await expect(releases.fixedPool(f.manager, f.paper)).rejects.toMatchObject({ code: 40970 });
+    const preview = await releases.fixedPool(f.manager, f.paper, false);
+    expect(preview.pool).toHaveLength(1); expect(preview.pool[0].versionId).toBe('501');
+  });
+
+  it('rejects deleted legacy questions at the new paper-selection boundary', async () => {
+    const f = paperAdminFixture({ businessScope: 'regulation', regulationId: '1' });
+    Object.assign(f.questions[0], { type: 'single', regulationId: '1', difficulty: 'easy', deletedAt: new Date() });
+    (f.questionRepo as any).find = async () => [f.questions[0]];
+    f.service.detail = async () => ({});
+    await expect(f.service.setQuestions('11', [{ question_id: '101', score: 100 }], { id: 9, name: 'admin' }, null)).rejects.toMatchObject({ code: 40970 });
+    expect(f.savedQuestions).toHaveLength(0);
+  });
   it('creates a release-backed training draft with the default learning gate disabled', async () => {
     const { service, paper } = paperAdminFixture();
 

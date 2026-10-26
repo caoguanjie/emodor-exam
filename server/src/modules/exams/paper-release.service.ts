@@ -316,7 +316,7 @@ export class PaperReleaseService implements OnModuleInit {
     for (const item of items) {
       const version = versionMap.get(String(item.questionVersionId));
       const question = version && questionMap.get(String(version.questionId));
-      if (!version || !question || (forPublication && !question.isEnabled) || String(question.currentVersionId) !== String(version.id)) {
+      if (!version || !question || (forPublication && (!question.isEnabled || question.deletedAt)) || String(question.currentVersionId) !== String(version.id)) {
         throw Errors.paperReleaseConflict(`题目 ${item.questionId} 已停用或不是当前版本，请重新选题`);
       }
       if (String(version.categoryId) !== String(paper.categoryId)) throw Errors.paperRuleInvalid('固定题目与试卷培训类别不一致');

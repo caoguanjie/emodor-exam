@@ -302,6 +302,7 @@ CREATE TABLE IF NOT EXISTS `question` (
   `concept_id`         BIGINT UNSIGNED NULL COMMENT '可选同考点组',
   `current_version_id` BIGINT UNSIGNED NULL COMMENT '当前题目版本；旧题首次修订或发布时捕获',
   `is_enabled`         TINYINT(1) NOT NULL DEFAULT 1,
+  `deleted_at`         DATETIME(3) NULL,
   `type`               VARCHAR(16)  NOT NULL COMMENT 'single / multiple / judgment',
   `stem`               TEXT         NOT NULL COMMENT '题干',
   `options`            JSON         NOT NULL COMMENT '选项数组 [{key,text}]',

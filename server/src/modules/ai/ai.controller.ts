@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req } from '@nestjs/common';
 import { Request } from 'express';
 import { Type } from 'class-transformer';
 import {
@@ -18,8 +18,10 @@ import { CategoryService } from '../training/category.service';
 import {
   CategoryOptionsQueryDto,
   CreateQuestionDto,
+  DeleteQuestionDto,
   EditQuestionDto,
   QUESTION_CREATE_KEYS,
+  QUESTION_DELETE_KEYS,
   QUESTION_EDIT_KEYS,
   QUESTION_LIST_KEYS,
   QuestionHistoryQueryDto,
@@ -211,6 +213,14 @@ export class AiController {
       req.ip || null,
       expectedVersionId(req.body), expectedEnabled,
     );
+  }
+
+  @Delete('questions/:id')
+  @Roles(...REG_ADMIN)
+  @Permissions('questions:write')
+  deleteQuestion(@Param('id') id: string, @Body(new StrictDtoValidationPipe(QUESTION_DELETE_KEYS)) dto: DeleteQuestionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertRequestKeys(req.body, QUESTION_DELETE_KEYS, '删除请求');
+    return this.bank.softDelete(id, expectedVersionId(req.body), dto.expected_enabled, { id: user.id, name: user.username }, req.ip || null);
   }
 
   @Get('questions/:id/history')

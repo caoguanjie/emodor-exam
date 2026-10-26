@@ -232,6 +232,7 @@ export class QuestionVersionService implements OnModuleInit {
   }
 
   private applyCompatibility(question: Question, version: QuestionVersion): void {
+    if (question.deletedAt) throw Errors.notFound('题目不存在');
     question.categoryId = version.categoryId;
     question.difficulty = version.difficulty;
     question.conceptId = version.conceptId;
@@ -321,6 +322,7 @@ export class QuestionVersionService implements OnModuleInit {
       score: null,
       status: 'approved',
       isEnabled: true,
+      deletedAt: null,
       source: draft.source,
       createdBy: String(actorId),
     }));
@@ -463,7 +465,7 @@ export class QuestionVersionService implements OnModuleInit {
       const questionRepo = manager.getRepository(Question);
       const versionRepo = manager.getRepository(QuestionVersion);
       const question = await questionRepo.findOne({ where: { id: String(questionId) }, lock: { mode: 'pessimistic_write' } });
-      if (!question) throw Errors.notFound('题目不存在');
+      if (!question || question.deletedAt) throw Errors.notFound('题目不存在');
       this.assertExpectedVersion(question, expectedVersionId);
       this.assertExpectedEnabled(question, expectedEnabled);
       const existingMediaIds = new Set(controlledQuestionMediaIds([
@@ -544,7 +546,7 @@ export class QuestionVersionService implements OnModuleInit {
     for (const category of [...new Set(inputs.map((input) => input.category_id))].sort(order)) await this.categories.lockActive(manager, category);
     for (const question of [...new Set(inputs.flatMap((input) => input.identity ? [input.identity.question_id] : []))].sort(order)) {
       const row = await manager.getRepository(Question).findOne({ where: { id: question }, lock: { mode: 'pessimistic_write' } });
-      if (!row) throw Errors.notFound('题目不存在');
+      if (!row || row.deletedAt) throw Errors.notFound('题目不存在');
     }
   }
 
@@ -556,7 +558,7 @@ export class QuestionVersionService implements OnModuleInit {
     let question: Question | null = null;
     if (input.identity) {
       question = await manager.getRepository(Question).findOne({ where: { id: input.identity.question_id }, lock: { mode: 'pessimistic_write' } });
-      if (!question) throw Errors.notFound('题目不存在');
+      if (!question || question.deletedAt) throw Errors.notFound('题目不存在');
       this.assertExpectedVersion(question, input.identity.expected_version_id);
       this.assertExpectedEnabled(question, input.identity.expected_enabled);
       current = question.currentVersionId ? await manager.getRepository(QuestionVersion).findOne({ where: { id: String(question.currentVersionId) } }) : null;
@@ -715,6 +717,7 @@ export class QuestionVersionService implements OnModuleInit {
     const qb = repo.createQueryBuilder('version')
       .innerJoin(Question, 'question', 'question.current_version_id = version.id AND question.id = version.question_id')
       .where('question.is_enabled = :enabled', { enabled: true })
+      .andWhere('question.deleted_at IS NULL')
       .andWhere('question.category_id = version.category_id AND question.type = version.type AND question.difficulty = version.difficulty')
       .andWhere('version.category_id = :categoryId', { categoryId: String(filter.categoryId) })
       .andWhere('version.type = :type', { type: filter.type })
@@ -739,7 +742,7 @@ export class QuestionVersionService implements OnModuleInit {
     const ordered = [...rows].sort((a, b) => BigInt(a.questionId) < BigInt(b.questionId) ? -1 : BigInt(a.questionId) > BigInt(b.questionId) ? 1 : 0);
     for (const row of ordered) {
       const identity = await manager.getRepository(Question).findOne({ where: { id: String(row.questionId) }, lock: { mode: 'pessimistic_write' } });
-      if (!identity?.isEnabled || String(identity.currentVersionId || '') !== String(row.id)
+      if (!identity?.isEnabled || identity.deletedAt || String(identity.currentVersionId || '') !== String(row.id)
         || String(identity.categoryId) !== String(filter.categoryId) || identity.type !== filter.type || identity.difficulty !== filter.difficulty) continue;
       await this.assertCurrentUsable(String(row.questionId), manager);
       usable.push(row);
@@ -751,11 +754,11 @@ export class QuestionVersionService implements OnModuleInit {
   async lockIdentityForLifecycle(questionId: string, manager: EntityManager): Promise<Question> {
     const repo = manager.getRepository(Question);
     const observed = await repo.findOne({ where: { id: String(questionId) } });
-    if (!observed) throw Errors.notFound('题目不存在');
+    if (!observed || observed.deletedAt) throw Errors.notFound('题目不存在');
     const categoryId = observed.categoryId == null ? null : String(observed.categoryId);
     if (categoryId) await manager.getRepository(TrainingCategory).findOne({ where: { id: categoryId }, lock: { mode: 'pessimistic_write' } });
     const locked = await repo.findOne({ where: { id: String(questionId) }, lock: { mode: 'pessimistic_write' } });
-    if (!locked) throw Errors.notFound('题目不存在');
+    if (!locked || locked.deletedAt) throw Errors.notFound('题目不存在');
     if ((locked.categoryId == null ? null : String(locked.categoryId)) !== categoryId) throw Errors.questionVersionConflict('题目类别已改变，请刷新后重试');
     return locked;
   }

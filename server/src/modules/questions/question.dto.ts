@@ -63,6 +63,11 @@ export class SetQuestionEnabledDto {
   @IsBoolean() enabled!: boolean;
 }
 
+export class DeleteQuestionDto {
+  @ValidateIf((_input, value) => value !== null) @IsString() @IdField() expected_version_id!: string | null;
+  @IsBoolean() expected_enabled!: boolean;
+}
+
 export class QuestionListQueryDto {
   @IsOptional() @QueryNumber() @IsInt() @Min(1) page?: number;
   @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
@@ -90,6 +95,7 @@ export const QUESTION_CREATE_KEYS = [
   'content_schema_version', 'content_json',
 ] as const;
 export const QUESTION_EDIT_KEYS = ['expected_version_id', 'expected_enabled', ...QUESTION_CREATE_KEYS] as const;
+export const QUESTION_DELETE_KEYS = ['expected_version_id', 'expected_enabled'] as const;
 export const QUESTION_LIST_KEYS = [
   'page', 'page_size', 'material_id', 'category_id', 'enabled', 'type', 'difficulty', 'keyword',
 ] as const;
