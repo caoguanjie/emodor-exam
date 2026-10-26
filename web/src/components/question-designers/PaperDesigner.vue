@@ -18,7 +18,8 @@
         </div>
       </fieldset>
       <div class="designer-header__actions">
-        <span class="paper-designer__status designer-header__status" role="status">{{ saving ? '保存中…' : incomplete ? '保存未完成' : dirty ? '未保存' : '已保存' }}</span>
+        <PaperScoreStatus :total-score="value.paper.total_score ?? 100" :allocated-score-cents="allocatedScoreCents" :readonly="mode === 'readonly'" :disabled="locked" @configure="openScoreSettings" />
+        <span class="paper-designer__status paper-designer__sr-only" role="status">{{ saving ? '保存中…' : incomplete ? '保存未完成' : dirty ? '未保存' : '已保存' }}</span>
         <template v-if="mode !== 'readonly'">
           <el-button v-if="incomplete && canAbandon" :disabled="saving" @click="controller.abandonSave">放弃本次保存</el-button>
           <el-button type="primary" :loading="saving" :disabled="saving || uploading" @click="save">{{ incomplete ? '继续保存' : '保存' }}</el-button>
@@ -66,8 +67,8 @@
           :categories="categories" :regulations="questionRegulations" :total-score="value.paper.total_score ?? 100"
           :readonly="locked" category-readonly :media-resolver="mediaResolver" :can-upload-media="!!mediaAdapter" :media-adapter="mediaAdapter" :difficulty-options="difficultyOptions"
           @change="changeMeta" @type-change="changeType" @upload-state-change="analysisUploading = $event.pending" />
-        <PaperProperties v-if="panel === 'paper'" :model-value="value.paper" :categories="categories" :regulations="categoryRegulations" :courses="categoryCourses"
-          :readonly="locked" :has-questions="!!questionCount" :allocated-score-cents="allocatedScoreCents" @change="changePaper" />
+        <PaperProperties v-if="panel === 'paper'" ref="paperProperties" :model-value="value.paper" :categories="categories" :regulations="categoryRegulations" :courses="categoryCourses"
+          :readonly="locked" :has-questions="!!questionCount" @change="changePaper" />
         <div v-else-if="panel === 'template'" class="designer-template-settings">
           <TemplateSetting :model-value="templateSetting" :readonly="locked" @update:model-value="changeLayout" />
           <PaperOperationInfo :paper="value.paper" />
@@ -100,6 +101,7 @@ import { createPaperDesignerController } from '../../composables/paper-designer-
 import QuestionEditor, { type QuestionStructureChange } from './QuestionDocumentEditor.vue';
 import QuestionProperties from './QuestionProperties.vue';
 import PaperProperties from './PaperProperties.vue';
+import PaperScoreStatus from './PaperScoreStatus.vue';
 import PaperLibrarySidebar from './PaperLibrarySidebar.vue';
 import MenuBtn from '../Tiptap/components/MenuBtn.vue';
 import SvgIcon from '../Tiptap/components/SvgIcon.vue';
@@ -153,6 +155,13 @@ onBeforeUnmount(clearErrorTimer);
 const editor = ref<InstanceType<typeof QuestionEditor> | null>(null); const mainEditor = shallowRef<Editor>(); const editorKey = ref(0);
 const selectedId = ref(Object.keys(value.value.document.questions)[0] || '');
 const panel = ref<'question' | 'paper' | 'template'>(selectedId.value ? 'question' : 'paper');
+const paperProperties = ref<InstanceType<typeof PaperProperties> | null>(null);
+async function openScoreSettings() {
+  panel.value = 'paper';
+  await nextTick();
+  paperProperties.value?.focusTotalScore();
+}
+
 const templateSetting = ref(new TemplateSettingModel({ ...value.value.paper_layout?.settings, templateName: value.value.paper.title }));
 const sheetStyle = computed(() => designerSheetStyle(templateSetting.value));
 function changeLayout(settings: TemplateSettingModel) {
@@ -325,6 +334,7 @@ defineExpose({ requestClose, save, addQuestion, removeQuestion, moveQuestion });
 </script>
 
 <style scoped>
+.paper-designer__sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .paper-designer .designer-template-settings { overflow-y:auto; }
 .paper-designer .designer-template-settings :deep(.template-setting) { height:auto; overflow:visible; }
 .paper-designer__error-notice { position:absolute; top:56px; left:0; right:0; z-index:20; }

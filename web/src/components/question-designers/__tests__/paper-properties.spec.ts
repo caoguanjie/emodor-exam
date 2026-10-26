@@ -6,18 +6,14 @@ import PaperProperties from '../PaperProperties.vue';
 let wrapper: VueWrapper;
 afterEach(() => wrapper?.unmount());
 describe('paper settings sidebar', () => {
-  it('edits a configurable total and shows allocation without changing the pass score', async () => {
-    wrapper = mount(PaperProperties, { props: { modelValue: { id: '2', title: '试卷', total_score: 120, pass_score: 72 }, allocatedScoreCents: 8000 }, global: { plugins: [ElementPlus] } });
+  it('edits a configurable total without a duplicate allocation line or changing the pass score', async () => {
+    wrapper = mount(PaperProperties, { props: { modelValue: { id: '2', title: '试卷', total_score: 120, pass_score: 72 } }, global: { plugins: [ElementPlus] } });
     expect((wrapper.get('input[aria-label="试卷总分"]').element as HTMLInputElement).value).toBe('120');
     expect(wrapper.get('input[aria-label="及格分数"]').attributes('max')).toBe('120');
-    expect(wrapper.text()).toContain('已分配 80 分，还差 40 分');
+    expect(wrapper.text()).not.toContain('已分配');
     await wrapper.get('input[aria-label="试卷总分"]').setValue('150');
     expect(wrapper.emitted('change')?.at(-1)).toEqual([{ total_score: 150 }]);
     expect((wrapper.get('input[aria-label="及格分数"]').element as HTMLInputElement).value).toBe('72');
-    await wrapper.setProps({ allocatedScoreCents: 13000 });
-    expect(wrapper.text()).toContain('已分配 130 分，超出 10 分');
-    await wrapper.setProps({ allocatedScoreCents: 12000 });
-    expect(wrapper.text()).toContain('已分配 120 分，已配齐');
   });
 
   it('shows no stale learning values while the requirement is off, but retains enabled readonly values', async () => {

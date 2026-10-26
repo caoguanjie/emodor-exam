@@ -25,9 +25,8 @@
         <el-input aria-label="考试限时" type="number" inputmode="numeric" :min="1" :max="1440" :step="1" :model-value="numericDrafts.duration_minutes" :disabled="readonly" @update:model-value="changeNumeric('duration_minutes', $event)"><template #append>分钟</template></el-input>
       </el-form-item>
       <el-form-item label="试卷总分" required>
-        <el-input aria-label="试卷总分" type="number" inputmode="decimal" :min="0.01" :max="999.99" :step="0.01" :model-value="numericDrafts.total_score" :disabled="readonly" @update:model-value="changeNumeric('total_score', $event)"><template #append>分</template></el-input>
+        <el-input ref="totalScoreInput" aria-label="试卷总分" type="number" inputmode="decimal" :min="0.01" :max="999.99" :step="0.01" :model-value="numericDrafts.total_score" :disabled="readonly" @update:model-value="changeNumeric('total_score', $event)"><template #append>分</template></el-input>
       </el-form-item>
-      <div class="paper-properties__allocation" :class="{ 'is-complete': allocationDifference === 0, 'is-over': allocationDifference < 0 }" aria-live="polite">{{ allocationSummary }}</div>
       <el-form-item label="及格分数" required>
         <el-input aria-label="及格分数" type="number" inputmode="decimal" :min="0.01" :max="modelValue.total_score ?? 100" :step="0.01" :model-value="numericDrafts.pass_score" :disabled="readonly" @update:model-value="changeNumeric('pass_score', $event)"><template #append>分</template></el-input>
       </el-form-item>
@@ -47,13 +46,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue';
+import { reactive, ref, watch } from 'vue';
 import { QuestionFilled } from '@element-plus/icons-vue';
 import type { QuestionRegulationOption } from '../Tiptap/components/QuestionSetting.vue';
 import type { DesignerPaper, PaperCourseOption } from './contracts';
 const props = withDefaults(defineProps<{ modelValue: DesignerPaper; categories?: Array<{ id: string; name: string }>;
-  regulations?: QuestionRegulationOption[]; courses?: PaperCourseOption[]; readonly?: boolean; hasQuestions?: boolean; allocatedScoreCents?: number }>(), {
-  categories: () => [], regulations: () => [], courses: () => [], readonly: false, hasQuestions: false, allocatedScoreCents: 0,
+  regulations?: QuestionRegulationOption[]; courses?: PaperCourseOption[]; readonly?: boolean; hasQuestions?: boolean; }>(), {
+  categories: () => [], regulations: () => [], courses: () => [], readonly: false, hasQuestions: false,
 });
 const emit = defineEmits<{ change: [patch: Partial<DesignerPaper>] }>();
 type NumericField = 'sort_order' | 'duration_minutes' | 'total_score' | 'pass_score' | 'required_learning_minutes';
@@ -68,13 +67,12 @@ watch(() => [props.modelValue.sort_order, props.modelValue.duration_minutes, pro
     numericDrafts[key] = value == null ? '' : String(value);
   }
 }, { immediate: true });
-const allocationDifference = computed(() => Math.round((props.modelValue.total_score ?? 100) * 100) - props.allocatedScoreCents);
-const allocationSummary = computed(() => {
-  const allocated = props.allocatedScoreCents / 100;
-  const difference = allocationDifference.value;
-  if (!Number.isFinite(difference)) return `已分配 ${allocated} 分，请填写试卷总分`;
-  return `已分配 ${allocated} 分，${difference === 0 ? '已配齐' : difference > 0 ? `还差 ${difference / 100} 分` : `超出 ${-difference / 100} 分`}`;
-});
+const totalScoreInput = ref<{ focus: () => void; input?: HTMLInputElement } | null>(null);
+function focusTotalScore() {
+  totalScoreInput.value?.input?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  totalScoreInput.value?.focus();
+}
+defineExpose({ focusTotalScore });
 function changeNumeric(key: NumericField, value: string) {
   if (props.readonly || key === 'required_learning_minutes' && !props.modelValue.requires_learning) return;
   numericDrafts[key] = value;
@@ -103,8 +101,5 @@ function patch(value: Partial<DesignerPaper>) {
 .paper-properties :deep(input[type="number"]) { appearance:textfield; -moz-appearance:textfield; }
 .paper-properties :deep(input::-webkit-inner-spin-button),
 .paper-properties :deep(input::-webkit-outer-spin-button) { -webkit-appearance:none; margin:0; }
-.paper-properties__allocation { margin:-4px 0 16px; color:var(--el-text-color-secondary); font-size:12px; line-height:18px; }
-.paper-properties__allocation.is-complete { color:var(--el-color-success); }
-.paper-properties__allocation.is-over { color:var(--el-color-danger); }
 .paper-properties__hint { display:block; margin:0 0 12px; color:#b5b8be; font-size:12px; line-height:18px; }
 </style>
