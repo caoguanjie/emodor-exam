@@ -15,7 +15,6 @@ export class MediaUploadInitDto implements UploadInit {
   @IsInt() @Min(1) size_bytes!: number;
   @IsString() @Matches(/^[a-fA-F0-9]{64}$/) fingerprint_sha256!: string;
 }
-export class EmptyUploadDto {}
 
 export function normalizeUploadInit(input: UploadInit, config: AppConfig): UploadInit {
   if (!input || Object.keys(input).some(key => !UPLOAD_INIT_FIELDS.includes(key as any))

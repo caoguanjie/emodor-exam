@@ -22,7 +22,8 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, watch } from 'vue';
-import { getMediaImageContent } from '../api/media';
+import { resolvePcMedia, invalidatePcMedia } from '../services/media-content';
+import { onMediaContextChange } from '../services/media-context';
 import { normalizeQuestionContentV2, readonlyQuestionDocToHtml, sanitizeQuestionHtmlForPreview, type QuestionContentFields, type QuestionOption, type QuestionType } from '../api/training-types';
 import { questionRichDocToFormHtml, toQuestionFormValue } from '../utils/question-form-content';
 import type { QuestionContentV3 } from '../api/question-document-types';
@@ -45,23 +46,12 @@ const emit = defineEmits<{ ready: [result: { ok: boolean }] }>();
 const rendered = reactive<{ stem: string; options: QuestionOption[]; analysis: string; correctIds: string[] }>({
   stem: '', options: [], analysis: '', correctIds: [],
 });
-const objectUrls = new Set<string>();
 let renderSerial = 0;
 
 const typeLabel = computed(() => ({ single: '单选题', multiple: '多选题', judgment: '判断题' } as Record<string, string>)[props.question.type || ''] || '题目');
 const difficultyLabel = computed(() => ({ easy: '简单', medium: '中级', hard: '困难' } as Record<string, string>)[props.question.difficulty || ''] || '难度未知');
 
-function clearObjectUrls() {
-  for (const url of objectUrls) URL.revokeObjectURL(url);
-  objectUrls.clear();
-}
-
-function releaseObjectUrl(url: string) {
-  if (!objectUrls.delete(url)) return;
-  URL.revokeObjectURL(url);
-}
-
-async function decodeObjectUrl(url: string): Promise<void> {
+async function decodeMediaUrl(url: string): Promise<void> {
   if (typeof Image === 'undefined') return;
   const image = new Image();
   if (typeof image.decode === 'function') {
@@ -91,15 +81,14 @@ async function hydrate(html: string | null | undefined, serial: number, restrict
       return;
     }
     try {
-      const blob = await getMediaImageContent(assetId);
+      const ticket = await resolvePcMedia(assetId);
       if (serial !== renderSerial) return;
-      const url = URL.createObjectURL(blob);
-      objectUrls.add(url);
+      const url = ticket.content_url;
       try {
-        await decodeObjectUrl(url);
+        await decodeMediaUrl(url);
       } catch {
         if (serial !== renderSerial) return;
-        releaseObjectUrl(url);
+        invalidatePcMedia(assetId);
         ok = false;
         const fallback = document.createElement('span');
         fallback.className = 'question-preview__missing-media';
@@ -125,7 +114,6 @@ async function hydrate(html: string | null | undefined, serial: number, restrict
 
 async function renderQuestion() {
   const serial = ++renderSerial;
-  clearObjectUrls();
   let question = props.question;
   const restricted = question.content_schema_version === 2 || question.content_schema_version === 3;
   try {
@@ -180,9 +168,13 @@ async function renderQuestion() {
 }
 
 watch([() => props.question, () => props.revealAnswer], () => { void renderQuestion(); }, { deep: true, immediate: true });
-onBeforeUnmount(() => {
+const unsubscribeContext = onMediaContextChange(() => {
   renderSerial += 1;
-  clearObjectUrls();
+  rendered.stem = ''; rendered.options = []; rendered.analysis = ''; rendered.correctIds = [];
+});
+onBeforeUnmount(() => {
+  unsubscribeContext();
+  renderSerial += 1;
 });
 </script>
 

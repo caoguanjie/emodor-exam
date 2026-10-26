@@ -99,16 +99,23 @@ export function createVideoSessionClient(options: VideoClientOptions) {
     if (!Number.isFinite(remaining) || remaining <= 0) throw new ApiError(-2, '视频播放地址已过期，请重试')
     state.src = options.resolveUrl(ticket.content_url); restoring = true
     clearTicket()
-    ticketTimer = setTimeout(() => { if (current(handle)) void renewTicket(handle) }, Math.max(1000, remaining - 10000))
+    ticketTimer = setTimeout(() => { if (current(handle)) void renewTicket(handle) }, Math.min(2147483647, Math.max(1000, remaining - 10000)))
   }
-  async function renewTicket(handle: ActiveSession) {
-    if (!current(handle) || state.status === 'ended' || state.status === 'error') return
+  async function renewTicket(handle: ActiveSession, attempt = 0) {
+    const renewable = () => current(handle) && !['ended', 'error', 'stopped'].includes(state.status)
+    if (!renewable()) return
     try {
       const ticket = await getMediaTicket(handle.view.media.asset_id, 'lesson_version_video', handle.view.version_id)
-      if (current(handle)) displayTicket(handle, ticket)
+      if (renewable()) displayTicket(handle, ticket)
     } catch (error) {
+      if (!renewable()) return
+      if (attempt === 0 && error instanceof ApiError && (error.code === -1 || error.status >= 500)) {
+        clearTicket()
+        ticketTimer = setTimeout(() => { if (current(handle)) void renewTicket(handle, 1) }, 1000)
+        return
+      }
       await handleFailure(handle, error)
-      // A failed renewal stops here; a native error offers the same explicit retry.
+      // Retry only the address request; the existing session remains authoritative.
       if (current(handle)) { await event('error'); if (current(handle)) state.error = '视频加载失败，请重试' }
     }
   }

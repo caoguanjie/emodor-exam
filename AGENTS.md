@@ -6,7 +6,7 @@
 ## 目录
 
 - `docs/design/` 设计方案 8 册（01 需求 … 07 安全与非功能、README 对照表）
-- `database/` `init.sql`（39 张业务表 + 1 张迁移元数据表，共 40 张物理表，与 03 册一致）+ `seed.mjs`（口令经环境变量注入）；当前迁移 000—028，021 考试稳定选项 ID、022 设计器存储、023 课时软删除、024 学员年龄、025 题库分值历史兼容可空、026 题目启停、027 清理题目审核权限、028 续接一次性密码回填完成探针（不改账号数据）；表变更必须同步迁移、`init.sql`、entities 与设计分册
+- `database/` `init.sql`（40 张业务表 + 1 张迁移元数据表，共 41 张物理表，与 03 册一致）+ `seed.mjs`（口令经环境变量注入）；当前迁移 000—028，021 考试稳定选项 ID、022 设计器存储、023 课时软删除、024 学员年龄、025 题库分值历史兼容可空、026 题目启停、027 清理题目审核权限、028 续接一次性密码回填完成探针（不改账号数据）；表变更必须同步迁移、`init.sql`、entities 与设计分册
 - `server/` NestJS API：`src/common/`（信封/错误码/守卫链/Redis/审计）、`src/entities/`、`src/modules/`（auth/access/users/training/courses/question-materials/ai/questions/exams/statistics 等）；departments/regulations 只保留共享存储与历史只读依赖，不恢复旧管理 CRUD
 - `web/` Vue 3 + TS + Vite + Element Plus；`src/views/employee/` 学习端、`src/views/admin/` 管理端
 - `mobile/` uni-app + Vue 3 + TypeScript + Pinia + Wot UI 2.3.2；独立学员 H5 / MP-WEIXIN 入口，PC 管理端不复用其登录状态或答题入口
@@ -60,9 +60,15 @@ API 启动后监听 :3000，全局前缀 `api/v1`。本机开发用宿主 MySQL 
 - 实名运行时仅 `IDENTITY_PROVIDER=disabled|tencent`，腾讯 FaceID 使用 `ImageRecognitionV2`；Fake 只允许测试模块 override，不提供运行时 mock/test-pass。实名与媒体票据遵守[冻结契约](review/2026-10-22-learner-mobile-contract-freezes.md)，文档同步不等于真实供应商或真机已通过。
 - 视频只接受 mobile employee，开播/短票要求实名，课程学习不按来源/类别额外拦截；服务端继续按 30 秒心跳、45 秒封顶、2 秒容差和 95% 去重覆盖结算。
 - 学员端当前验证结果和未验边界统一查看 [H5 验收记录](review/2026-10-22-learner-mobile-h5-acceptance.md)，不要在本文件复制 Task/Gate 进度快照，也不要把自动化或桌面浏览器结果扩大为真机、真实供应商或生产部署结论。
-- 实名材料私有存储；姓名/证件号 AES-256-GCM 加密，证件 HMAC 查重。短期媒体票据签发和读取都须核对精确 `media_reference` 与当前业务授权；不得把 JWT 放入媒体 URL。
+- 实名材料私有存储；姓名/证件号 AES-256-GCM 加密，证件 HMAC 查重。短期媒体签发/续签须核对精确 `media_reference` 与当前业务授权；local/实名代理读取也复核。用户已选择gooodwork COS短链，已发链接有效期内仍可读（默认300秒、配置上限3600秒），不能承诺即时撤权；不得把JWT放入媒体URL。
 - AI 模块出网有 SSRF 白名单校验（仅 http/https、拒绝内网/环回），本地 Mock AI 需 `AI_EGRESS_ALLOW_HOSTS=127.0.0.1`。
 - 所有敏感值（DB/JWT/加密密钥/管理员初始口令）只经环境变量运行期注入，仓库与测试不得含可用凭据字面量。
+
+## COS 媒体增量
+
+- 采用[批准设计](docs/superpowers/specs/2026-10-26-cos-media-integration-design.md)与[Astra计划](docs/superpowers/plans/2026-10-26-cos-media-integration.md)，不经过SDD。local/COS按媒体行读取；PDF/DOCX原件仍本地。两边后端共用原COS密钥，浏览器只获精确临时授权。
+- 本分支新增 `030_cos_media_storage.sql`；029保留给主工作区并行题库候选，未复制。根 `.env` 由已有工具加载，`import-cos --from-env <明确源路径>` 只导入4项白名单；不得提交或打印真实值。
+- 实际实施/云/容量边界见[验收记录](review/2026-10-26-cos-media-acceptance.md)和[G0记录](review/2026-10-26-cos-cloud-gates.md)。不把源码、自动化或同桶配置当成真实分发/迁移完成。
 
 ## 已知坑
 

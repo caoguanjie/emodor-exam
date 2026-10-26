@@ -34,6 +34,8 @@ export const SUITE_REGISTRY = Object.freeze({
   'training-media': join(ROOT, 'tests', 'training-media.mjs'),
   'cos-media-schema': join(ROOT, 'tests', 'cos-media-schema.mjs'),
   'media-upload-races': join(ROOT, 'tests', 'media-upload-races.mjs'),
+  'media-storage-migration': join(ROOT, 'tests', 'media-storage-migration.mjs'),
+  'cos-media-flow': join(ROOT, 'tests', 'cos-media-flow.mjs'),
   'training-system': join(ROOT, 'tests', 'training-system.mjs'),
   'training-courses': join(ROOT, 'tests', 'training-courses.mjs'),
   'training-video-learning': join(ROOT, 'tests', 'training-video-learning.mjs'),
@@ -81,14 +83,31 @@ export function suiteRuntimeEnvOverrides(suitePath) {
       IDENTITY_PROVIDER: 'disabled',
     };
   }
+  if (suitePath === SUITE_REGISTRY['cos-media-flow']) {
+    return {
+      NODE_ENV: 'test',
+      SERVER_DEBUG_LOGIN_ENABLED: 'true',
+      SMS_PROVIDER: 'disabled',
+      IDENTITY_PROVIDER: 'disabled',
+      MEDIA_STORAGE_PROVIDER: 'cos',
+      COS_BUCKET: 'fixture-123',
+      COS_REGION: 'ap-shanghai',
+      COS_KEY_PREFIX: 'ruleexam/test/',
+      COS_SECRET_ID: 'fixture-secret-id',
+      COS_SECRET_KEY: 'fixture-secret-key',
+      MEDIA_DELIVERY_MODE: 'proxy',
+      MEDIA_UPLOAD_SESSION_TTL_SECONDS: '3600',
+      MEDIA_UPLOAD_GRANT_TTL_SECONDS: '60',
+    };
+  }
   return {};
 }
 
 export function suiteRuntimeApi(suitePath) {
-  if (!['mobile-identity', 'mobile-media-ticket', 'training-video-learning', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5', 'main-question-designers', 'main-question-designers-compatibility'].some((name) => SUITE_REGISTRY[name] === suitePath)) return {};
+  if (!['mobile-identity', 'mobile-media-ticket', 'training-video-learning', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5', 'main-question-designers', 'main-question-designers-compatibility', 'cos-media-flow'].some((name) => SUITE_REGISTRY[name] === suitePath)) return {};
   return {
     apiEntry: join(ROOT, 'server', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
-    apiArgs: [join(ROOT, 'server', 'test', 'identity-e2e-main.ts')],
+    apiArgs: [join(ROOT, 'server', 'test', suitePath === SUITE_REGISTRY['cos-media-flow'] ? 'cos-e2e-main.ts' : 'identity-e2e-main.ts')],
   };
 }
 

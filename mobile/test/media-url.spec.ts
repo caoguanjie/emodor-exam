@@ -3,6 +3,17 @@ const path = '../src/platform/' + 'media-url.ts'
 const ticket = '/api/v1/media/tickets/eyJ-test.signature/content'
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 describe('controlled media URL resolution', () => {
+  it('keeps an exact configured COS signed URL unchanged on H5 and MP without using the API origin', async () => {
+    const { safeMediaUrl, mediaContentUrl, resolveMediaUrl } = await import(path)
+    const origin = 'https://shared-123456.cos.ap-guangzhou.myqcloud.com'
+    const signed = `${origin}/ruleexam/dev/media/session/file.mp4?q-sign-algorithm=sha1&q-ak=unusable-fixture-id&q-sign-time=1793000000%3B1793000300&q-key-time=1793000000%3B1793000300&q-header-list=host&q-url-param-list=&q-signature=${'a'.repeat(40)}`
+    vi.stubEnv('VITE_COS_MEDIA_ORIGIN', origin); vi.stubEnv('VITE_COS_MEDIA_PREFIX', 'ruleexam/dev/media/'); vi.stubEnv('VITE_API_ORIGIN', '')
+    expect(safeMediaUrl(signed)).toBe(signed)
+    expect(mediaContentUrl(signed, 'h5')).toBe(signed)
+    expect(mediaContentUrl(signed, 'mp-weixin')).toBe(signed)
+    vi.stubGlobal('window', undefined)
+    expect(resolveMediaUrl(signed)).toBe(signed)
+  })
   it('uses the H5 page origin and preserves the root API path under the /mobile/ base', async () => {
     const { mediaContentUrl = (value: string) => value, resolveMediaUrl = (value: string) => value } = await import(path).catch(() => ({}))
     vi.stubGlobal('window', { location: { origin: 'https://learn.example', href: 'https://learn.example/mobile/#/pages/exam/take' } })

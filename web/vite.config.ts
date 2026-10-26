@@ -1,10 +1,18 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { fileURLToPath, URL } from 'node:url';
 import { createSvgIconsPlugin } from 'vite-plugin-svg-icons';
+import { publicEnvFallbackDefines } from './build/public-env';
 
 // 开发期将 /api/v1 反向代理至本机 NestJS（生产由 nginx 承担，02 册 5.2 环境规划）
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  // Keep web/.env.* and explicit process variables authoritative. Root .env
+  // supplies only absent public fields; backend COS credentials never become defines.
+  define: publicEnvFallbackDefines(
+    loadEnv(mode, fileURLToPath(new URL('../', import.meta.url)), 'VITE_'),
+    loadEnv(mode, fileURLToPath(new URL('./', import.meta.url)), 'VITE_'),
+    process.env,
+  ),
   plugins: [vue(), createSvgIconsPlugin({
     iconDirs: [fileURLToPath(new URL('./src/components/Tiptap/icons', import.meta.url))],
     symbolId: 'icon-[name]',
@@ -27,4 +35,4 @@ export default defineConfig({
     emptyOutDir: Boolean(process.env.RULEEXAM_BUILD_OUT_DIR),
     chunkSizeWarningLimit: 2000,
   },
-});
+}));

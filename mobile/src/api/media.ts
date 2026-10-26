@@ -5,6 +5,28 @@ import { safeMediaUrl } from '@/platform/media-url'
 export { safeMediaUrl } from '@/platform/media-url'
 
 export interface MediaTicketView { content_url: string; expires_at: string }
+export interface MediaTicketRequest { asset_id: string; owner_type: string; owner_id: string }
+export interface MediaBatchResult extends MediaTicketRequest { index: number; ticket: MediaTicketView | null; error: { code: number; message: string } | null }
+export async function getMediaTickets(items: MediaTicketRequest[]): Promise<MediaBatchResult[]> {
+  if (!Array.isArray(items) || items.length > 50 || items.some(item => !item || !/^[1-9]\d{0,19}$/.test(item.asset_id)
+    || !/^[1-9]\d{0,19}$/.test(item.owner_id) || typeof item.owner_type !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/.test(item.owner_type))) throw new ApiError(40001, '媒体批量请求无效')
+  if (!items.length) return []
+  const results = await request<MediaBatchResult[]>({ url: '/media/tickets/batch', method: 'POST', data: { items } })
+  if (!Array.isArray(results) || results.length !== items.length) throw new ApiError(-2, '媒体批量响应无效')
+  return results.map((result, index) => {
+    const item = items[index]
+    if (!result || result.index !== index || result.asset_id !== item.asset_id || result.owner_type !== item.owner_type || result.owner_id !== item.owner_id) throw new ApiError(-2, '媒体批量响应归属无效')
+    if (result.ticket) {
+      if (result.error !== null || typeof result.ticket.expires_at !== 'string' || !Number.isFinite(Date.parse(result.ticket.expires_at))) throw new ApiError(-2, '媒体批量响应无效')
+      safeMediaUrl(result.ticket.content_url)
+    } else if (!result.error || !Number.isInteger(result.error.code) || typeof result.error.message !== 'string') throw new ApiError(-2, '媒体批量响应无效')
+    return result
+  })
+}
+export interface MediaLimits {
+  upload_mode?: 'proxy' | 'direct'; image_max_bytes: number; allowed_image_types: string[]
+}
+export function getMediaLimits(): Promise<MediaLimits> { return request<MediaLimits>({ url: '/media/limits' }) }
 export async function getMediaTicket(assetId: string, ownerType: string, ownerId: string): Promise<MediaTicketView> {
   const ticket = await request<MediaTicketView>({ url: `/media/${encodeURIComponent(assetId)}/tickets`, method: 'POST', data: { owner_type: ownerType, owner_id: ownerId } })
   safeMediaUrl(ticket.content_url)
@@ -34,4 +56,24 @@ export async function uploadMedia<T>(url: string, file: PickedMedia, formData: R
   }
   return send(false)
 }
-export function uploadAvatar(file: PickedMedia): Promise<{ asset_id: string; status: string; duration_ms: number | null }> { return uploadMedia('/media/upload', file, { purpose: 'avatar' }) }
+export async function uploadAvatar(file: PickedMedia): Promise<{ asset_id: string; status: string; duration_ms: number | null }> {
+  const session = useSessionStore(), epoch = session.sessionEpoch
+  function same() { if (epoch !== session.sessionEpoch || session.isLoggingIn) throw new ApiError(40107, '登录会话已切换，请重新操作') }
+  same()
+  // #ifdef H5
+  if (typeof window !== 'undefined') {
+    const limits = await getMediaLimits()
+    const direct = limits.upload_mode === 'direct'
+    same()
+    if (direct) {
+      const { uploadImageDirect } = await import('@/platform/media-upload.h5')
+      same()
+      const result = await uploadImageDirect(file, 'avatar', limits)
+      same()
+      return result
+    }
+  }
+  // #endif
+  same()
+  return uploadMedia('/media/upload', file, { purpose: 'avatar' })
+}

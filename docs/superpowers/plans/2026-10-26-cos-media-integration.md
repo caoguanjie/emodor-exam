@@ -4,18 +4,18 @@
 
 **Goal:** 复用 gooodwork 的 COS 桶及通用资产设计，完成 RuleExam 图片/视频存储、PC 视频上传续传、受控独立分发和可回退的存量迁移。
 
-**Architecture:** 扩展现有媒体服务，保留资源 ID、精确业务引用和学习/考试权限；以按行 local/COS 驱动兼容存量。直传只写临时对象，服务端实际校验后发布不可变正式对象；EdgeOne 每次请求先远程鉴权，再从私有 COS/缓存发送字节。上传会话、后台处理和迁移均使用持久状态恢复。
+**Architecture:** 扩展现有媒体服务，保留资源 ID、精确业务引用和学习/考试权限；以按行 local/COS 驱动兼容存量。直传只写临时对象，服务端实际校验后发布不可变正式对象；读取沿用gooodwork：每次申请/续签先校验当前业务权限，再下发私有COS签名GET；默认300秒、配置上限3600秒，长视频自动续签保位置。上传会话、后台处理和迁移均使用持久状态恢复。
 
-**Tech Stack:** Node.js ≥22、NestJS 10、TypeORM/MySQL 8、Redis、现有 ffprobe/ffmpeg；Vue 3/Element Plus、uni-app/Wot UI 2.3.2；腾讯 COS Node/JS SDK、STS、EdgeOne Edge Functions；Vitest、现有隔离 E2E 和 Playwright。
+**Tech Stack:** Node.js ≥22、NestJS 10、TypeORM/MySQL 8、Redis、现有 ffprobe/ffmpeg；Vue 3/Element Plus、uni-app/Wot UI 2.3.2；腾讯 COS Node/JS SDK、STS、COS短链；Vitest、现有隔离 E2E 和 Playwright。
 
-**Spec:** [2026-10-26-cos-media-integration-design.md](../specs/2026-10-26-cos-media-integration-design.md)。用户已确认据此编写计划；本文件尚未执行，不能据此宣称云资源已授权、已迁移或容量已通过。
+**Spec:** [2026-10-26-cos-media-integration-design.md](../specs/2026-10-26-cos-media-integration-design.md)。用户已确认据此编写计划；已在 `.worktrees/cos-media-integration` 执行；进度与证据见 `review/2026-10-26-cos-media-acceptance.md`。用户后续明确用gooodwork短链替换EdgeOne，不能把本地实现当成真云/迁移/容量通过。
 
 ## Global Constraints
 
-- 共用 gooodwork COS 桶及同一套 `COS_SECRET_ID/COS_SECRET_KEY`，两个项目各自前缀、数据库独立；不新建 RuleExam 专用长期 COS 密钥。共享长期凭据的云权限可能覆盖两边，项目范围由适配器校验、受限客户端临时授权和边缘访问规则约束，不声称长期凭据相互隔离。
+- 共用 gooodwork COS 桶及同一套 `COS_SECRET_ID/COS_SECRET_KEY`，两个项目各自前缀、数据库独立；不新建 RuleExam 专用长期 COS 密钥。共享长期凭据的云权限可能覆盖两边，项目范围由适配器校验、受限客户端临时授权和签名对象范围约束，不声称长期凭据相互隔离。
 - 保留 `media_asset.id` 的 BIGINT/十进制字符串协议及 `media_reference(asset_id, owner_type, owner_id)`，不改课程、题库、冻结快照的 ID。
 - 图片、视频、封面、头像、Logo/轮播、实名材料纳入；PDF/DOCX 原件不迁移、不删除；Excel/TXT 等临时导入不归档。
-- 私有对象；每次新内容请求执行当前授权，缓存命中不绕过；纯 timeout 无题图、在考无解析图；实名图不进入普通边缘缓存。
+- 私有对象；签发/续签执行当前授权，纯timeout不发题图、在考不发解析图；已发COS短链到期前仍有效是用户接受的新边界。实名图继续专用代理，不签普通COS链接。
 - 默认：上传会话 24 小时、完成回执 30 天、孤儿宽限 24 小时、分块阈值 16 MiB、分块 8 MiB、每文件并发 3、处理每实例并发 2。
 - 视频默认上限 512 MiB、图片默认上限 10 MiB；MP4/H.264、音轨 AAC；现有图片类型/像素和真实解码约束保留。
 - 视频学习仍为 30 秒心跳、45 秒封顶、2 秒容差和 95% 去重覆盖；续票不能重建学习会话或补时。
@@ -29,7 +29,7 @@
 
 1. 上传 90% 时凭证过期、刷新页面或换账号：同一主体能恢复同一任务，其他主体和迟到响应不能接管；Task 4/8/10 钉住此行为。
 2. complete 成功但回包丢失、处理 lease 过期、取消同时到达：只发布一个资源，失效处理者不能覆盖正式对象；Task 4/5 的真实事务用例覆盖。
-3. 图片/视频已经命中缓存后发生停用、换版、下架或考试到期：新的请求仍被拒绝，直接访问内部映射路径也拒绝；Task 6/7 覆盖。
+3. 停用、换版、下架或考试到期后拒绝新签/续签；已发链接有界到期。PC/H5临期自动换链接保留播放位置/状态，失败和迟到响应不复活播放器；Task 6/9/10/12 覆盖。
 4. 共用桶已有版本控制，临时对象被重写或取消后迟到写入：正文校验与发布使用同一字节，清理只触及自己的准确键/版本；Task 1/5 覆盖。
 5. 迁移上传成功后进程崩溃，期间资源被删除或本地文件变化：可对账恢复，不切换错对象、不复活删除行、不影响历史引用；Task 11 覆盖。
 
@@ -45,7 +45,7 @@
 | `server/src/entities/`、`database/` | 持久定位、上传会话、迁移探针 | 2 |
 | `server/src/modules/media/` 现有服务 | 媒体校验、引用、兼容上传与读取 | 3、5、6，顺序集成 |
 | `server/src/modules/media/uploads/` | 会话、临时授权、恢复、发布任务和临时清理 | 4、5 |
-| `server/src/modules/media/delivery/`、`deploy/edgeone/` | 短票、批量签票、边缘鉴权、缓存前检查 | 6、7 |
+| `server/src/modules/media/delivery/`、`deploy/cos/` | PC预览、批量精确签票、COS短链和配置预检 | 6、7 |
 | `web/src/services/media-*`、现有媒体组件 | 上传状态与浏览器续传、URL 展示 | 8、9 |
 | `mobile/src/api/media.ts`、`platform/`、相关 store | H5 简单直传与安全媒体 URL；保持小程序/实名兼容 | 10 |
 | `server/src/modules/media/migration/`、`scripts/media/` | 只读清单、可续跑上传切换、回退 | 11 |
@@ -65,7 +65,7 @@ Task 1 公共类型/配置字段先冻结
                  +-------------------------+--------------------+
                  |                         |                    |
             Task 4 -> Task 5          Task 6 -> Task 7       Task 11 工具
-            上传会话/发布清理          读取授权/边缘函数        清单可先做
+            上传会话/发布清理          读取授权/COS预检        清单可先做
                  |                         |                apply 竞争验证等 5
                  +----------+--------------+
                             |
@@ -82,7 +82,7 @@ Task 1 公共类型/配置字段先冻结
 
 - Task 2 不必等待 Task 1 全部 COS 实现，但必须先拿到 Task 1 冻结且可编译的公共类型；Task 3 等待 1、2 都完成。Task 1 的类型交付是其内部检查点，不新增独立业务任务或空壳服务。
 - Task 3 之后，Task 4、Task 6、Task 11 清单/工具开发可以并行；共享 `MediaService` 的接线修改交根顺序整合。
-- Task 5 等 4；Task 7 的函数/本地测试等 6，可与 5 并行；G0 最终验证还须使用 5 发布出的正式对象，早期云端只读检查不受此限制。
+- Task 5 等 4；Task 7 的签名/CORS预检等 6，可与 5 并行；G0 最终验证还须使用 5 发布出的正式对象，早期云端只读检查不受此限制。
 - Task 8 的真实联调等 4、5；Task 9 等 8、6，两个 PC 任务由同一个 Web owner 顺序完成，禁止同时编辑共同文件。Task 10 的真实联调等 4、5、6；前端合约测试可先于真云 G0 完成。
 - Task 11 的清单和 manifest 逻辑可在 2、3 后完成；apply/回退的并发验收还需与 Task 5 最终清理行为一起验证。真实迁移另受 G0 和实际批次授权约束。
 - Task 12 的容量脚本、测试数据与验收结构可以提前准备；最终交付仍等待全部实现和相应真实验收证据。
@@ -108,7 +108,7 @@ Task 1 公共类型/配置字段先冻结
 | `storage/**`、`scripts/backend-env.mjs`、server 依赖锁 | 存储 owner（Task 1） | 消费冻结端口，不复制存储实现 |
 | 媒体 entity、init、新 SQL、schema 测试 | 数据 owner（Task 2） | 新字段或状态变更由根裁决后交 owner |
 | `uploads/**`、对应测试 | 上传 owner（Task 4 → 5）；Task 2 建立的 contract 冻结后只经根同意修改 | 消费方使用接口 fixture |
-| `delivery/**`、`deploy/edgeone/**`、对应测试 | 读取 owner（Task 6 → 7） | 提交独占文件及共享接线补丁 |
+| `delivery/**`、`deploy/cos/**`、对应测试 | 读取 owner（Task 6 → 7） | 提交独占文件及共享接线补丁 |
 | `app.module.ts`、`media.service.ts`、`tasks.service.ts`、`tests/run-e2e.mjs` | 根维护集成工作副本；Task 3 核心改动先整体合入，4/5/6/11 增量排队 | 子代理完成主体实现并给出精确接线改动；根不代写整条业务线 |
 | `configuration.ts`、`deploy/.env.example`、`deploy/nginx/default.conf` | 根在 Task 1/6/7/12 检查点合入 | 各 owner 提交新增键/验证规则，避免互改配置格式 |
 | `web/src/api/media.ts`、`MediaUpload.vue`、auth store、其它 PC 消费者 | 同一个 Web owner 顺序执行 Task 8 → 9 | 不因 Task 编号不同而换人同时写同一文件 |
@@ -121,18 +121,18 @@ Task 1 公共类型/配置字段先冻结
 
 测试继续按任务风险执行，但不设置每任务人工确认门。后端发布/清理与访问授权形成可运行候选（Task 5/6）后安排一次独立审查，可与前端独占文件开发并行；最终 Task 12 再审查整合候选和实际证据。reviewer 必须审固定差异，不能复用该改动的实现者；其占用计入并发预算。无需每个小 Task 固定派 reviewer 或反复更换 worker。
 
-两个上线门：**G0** 为 Task 7 的应用前缀约束、客户端临时授权/边缘访问范围、动态鉴权和 Range，**G1** 为 Task 12 的迁移和实际业务验收。G0 不要求共用的长期密钥无法读取 gooodwork 范围。G0 未满足时可做独立代码和自动化，但不切生产分发、不把代理读取称为带宽分流成功。
+两个上线门：**G0** 为 Task 7 的应用前缀约束、客户端临时授权/GET签名范围、签名范围/到期与 Range，**G1** 为 Task 12 的迁移和实际业务验收。G0 不要求共用的长期密钥无法读取 gooodwork 范围。G0 未满足时可做独立代码和自动化，但不启用真实COS分发、不把代理读取称为带宽分流成功。
 
 ### 本地配置入口
 
 | 位置 | 约定 |
 |---|---|
-| 根 `.env` | 两边相同的 `COS_SECRET_ID/COS_SECRET_KEY`、桶/地域，以及 RuleExam 自己的 `COS_KEY_PREFIX`、`MEDIA_STORAGE_PROVIDER`、分发和上传参数；真实文件不提交 |
+| 根 `.env` | 两边相同的 `COS_SECRET_ID/COS_SECRET_KEY`、桶/地域，以及 RuleExam 自己的 `COS_KEY_PREFIX`、`MEDIA_STORAGE_PROVIDER`、短链有效期和上传参数；真实文件不提交 |
 | `deploy/.env.example` | 同步所有新增键名、空占位和说明，不包含真实密钥 |
 | `scripts/backend-env.mjs` | 保留原有 init/check；新增 `import-cos --from-env <明确源路径>`，原子合并白名单并保持已有 `.env` 其他配置 |
 | 后端本地启动 | 沿用 `npm --prefix server run start:local`，应用仍只读 `process.env` |
 | 本地检查/迁移 | 从仓库根使用 `node --env-file=.env scripts/media/cos-preflight.mjs --inspect` 和 `node --env-file=.env scripts/media/migrate-local-to-cos.mjs --plan ...` |
-| 前端 | 只使用公开的媒体域名配置；`COS_SECRET_*` 不进入 `VITE_*` 或构建产物 |
+| 前端 | 只使用公开的精确COS域名/正式前缀配置；`COS_SECRET_*` 不进入 `VITE_*` 或构建产物 |
 
 导入白名单固定为 `COS_SECRET_ID/COS_SECRET_KEY/COS_BUCKET/COS_REGION`，明确的源文件必须同时具备 SecretId/SecretKey，缺少一项即整次失败，不做半写；桶/地域在源文件中存在才合并，否则保留目标已有值并交 `env:check` 检查完整性。不得复制 gooodwork 的 `COS_KEY_PREFIX`、DB/JWT/加密配置或整份环境文件；RuleExam 前缀单独维护。导入只复制已有值，不生成或轮换 COS 密钥；重复导入相同值无变更。当前已存在 `.env` 时也必须支持该合并步骤，不能只依赖遇到已有文件就退出的 `env:init`。显式进程环境优先级沿用 Node 行为，检查报告只显示键名/状态/被覆盖情况，不显示值。
 
@@ -201,9 +201,9 @@ type UploadGrant =
 
 ## Task 2: 媒体定位字段、上传会话与可续跑迁移
 
-**Files:** Modify `server/src/entities/media-asset.entity.ts`、`database/init.sql`、`server/src/app.module.ts`、`docs/design/03-数据库设计.md`、`docs/design/README.md`、`AGENTS.md`、`tests/run-e2e.mjs`；Create `server/src/entities/media-upload-session.entity.ts`、`server/src/modules/media/uploads/media-upload.contract.ts`、`database/migrations/<N>_cos_media_storage.sql`、`tests/cos-media-migration.test.mjs`、`tests/cos-media-schema.mjs`；extend `tests/migration-catalog.test.mjs`。
+**Files:** Modify `server/src/entities/media-asset.entity.ts`、`database/init.sql`、`server/src/app.module.ts`、`docs/design/03-数据库设计.md`、`docs/design/README.md`、`AGENTS.md`、`tests/run-e2e.mjs`；Create `server/src/entities/media-upload-session.entity.ts`、`server/src/modules/media/uploads/media-upload.contract.ts`、`database/migrations/030_cos_media_storage.sql`、`tests/cos-media-migration.test.mjs`、`tests/cos-media-schema.mjs`；extend `tests/migration-catalog.test.mjs`。
 
-**Interfaces:** Produces `MediaUploadSession` entity；原 `MediaAsset` 增量字段 `storageProvider`、`cosBucket`、`cosRegion`、`cosVersionId`、`etag`、`crc64`。执行第一步重查迁移目录，选定 N 并更新本计划为准确路径；已有并行 029 不可占用，不在写计划时预占编号。
+**Interfaces:** Produces `MediaUploadSession` entity；原 `MediaAsset` 增量字段 `storageProvider`、`cosBucket`、`cosRegion`、`cosVersionId`、`etag`、`crc64`。执行时已核验并选定 030；主工作区并行 029 保留，不复制到本分支。迁移运行器允许编号空缺。
 
 - [ ] **Step 1 — 写 schema 失败用例并绑定编号。** 新字段使用 provider VARCHAR(16) NOT NULL DEFAULT 'local'，bucket VARCHAR(255)、region VARCHAR(64)、version VARCHAR(255)、etag VARCHAR(255)、crc64 VARCHAR(64) 均 nullable。会话含 UUID PK、owner/uploaded_by BIGINT、request UUID、request_digest CHAR(64)、用途/原名/声明类型/大小/指纹、staging locator、uploadId、state、expiresAt、lastCredentialExpiresAt、claimId/leaseUntil、候选对象 JSON、assetId/receipt JSON、错误和时间戳。唯一键 `(uploaded_by, client_request_id)`；队列/清理索引覆盖 state+lease/expiry。断言旧行仍为 local、原 ID/引用不变、重复 request 冲突、无外键、漂移探针拒绝缺列或错误索引。
 - [ ] **Step 2 — 验证失败。** `node --test tests/cos-media-migration.test.mjs tests/migration-catalog.test.mjs`；新 DDL/探针断言失败。
@@ -247,29 +247,29 @@ type UploadGrant =
 - [ ] **Step 4 — 验证。** 重跑 Step 2；`node tests/run-e2e.mjs --ephemeral --suite media-upload-races` 验证两个独立服务实例共享真实仓储的 complete/取消/过期 claim 竞争；只替代 COS 和探测外设，不 mock 事务锁。
 - [ ] **Step 5 — 本地提交。** 本任务文件，`feat(media): 实现上传校验发布与回收恢复`。
 
-## Task 6: 受控读取地址、批量签票和边缘鉴权 API
+## Task 6: 与 gooodwork 一致的受控 COS 短链
 
-**Files:** Create `server/src/modules/media/delivery/media-delivery.contract.ts`、`server/src/modules/media/delivery/media-delivery.service.ts`、`server/src/modules/media/delivery/media-delivery.controller.ts`、`server/src/modules/media/delivery/media-edge-auth.guard.ts`、`server/src/modules/media/delivery/media-edge-auth.controller.ts`、`server/src/modules/media/delivery/pc-media-ticket.service.ts`；Modify `server/src/modules/media/media-ticket.service.ts`、`server/src/modules/media/media.service.ts`、`server/src/modules/system/system.service.ts`、`server/src/app.module.ts`、`server/src/config/configuration.ts`、`deploy/.env.example`；Test `server/test/media-delivery.spec.ts`、`server/test/media-edge-auth.spec.ts`，extend `server/test/media-ticket.spec.ts`。
+**Files:** Create `server/src/modules/media/delivery/media-delivery.contract.ts`、`media-delivery.service.ts`、`media-delivery.controller.ts`、`pc-media-ticket.service.ts`、`cos-download-url.adapter.ts`；Modify `server/src/modules/media/media-ticket.service.ts`、`media-ticket.controller.ts`、`server/src/modules/system/system.service.ts`、`system.controller.ts`、`server/src/app.module.ts`、`server/src/config/configuration.ts`、`deploy/.env.example`；Test `server/test/media-delivery.spec.ts`、`media-download-url.spec.ts`、`pc-media-ticket.spec.ts` 及既有票据测试。
 
-**Interfaces:** `media-delivery.contract.ts` 导出 `MediaTicketView={content_url:string;expires_at:string}`、`MediaTicketRequest={asset_id:string;owner_type:string;owner_id:string}`、`MediaBatchResult=MediaTicketRequest & {index:number;ticket:MediaTicketView|null;error:{code:number;message:string}|null}`、`EdgeMediaRequest={request_id:string;method:'GET'|'HEAD';path:string;range?:string}`、`EdgeMediaGrant={locator:StorageLocator;mime_type:string;size_bytes:number;cache_kind:'private'|'branding'}`。`MediaDeliveryService.issuePc(actor:AuthUser,assetId:string):Promise<MediaTicketView>`、`issueLearnerBatch(actor:AuthUser,items:MediaTicketRequest[]):Promise<MediaBatchResult[]>`、`authorizeEdge(input:EdgeMediaRequest):Promise<EdgeMediaGrant>`。批量保留重复项位置，最多 50 项；逐项授权后才可内部合并存储读取；Grant 仅可信边缘取得。
+**Interfaces:** `MediaTicketView={content_url:string;expires_at:string}`；批量请求 `MediaTicketRequest={asset_id:string;owner_type:string;owner_id:string}`，结果保留 `index`、原三元组、`ticket|null` 与受控 `error|null`。`MediaDeliveryService.issuePreview(actor,assetId)`、`issueLearnerBatch(actor,items)`；`AppConfig.mediaDelivery={mode:'proxy'|'cos-signed',readUrlTtlSeconds,videoUrlTtlSeconds}`，两个TTL默认300，范围1—3600。CosDownloadUrlAdapter只在后端调用SDK本地签名，不调用EdgeOne或额外STS。
 
-- [ ] **Step 1 — 写失败用例。** `same_asset_different_item_is_not_shared_authorization`：一个允许一个拒绝；`pc_preview_is_not_learner_ticket`：PC 可预览但 learner-only 入口拒绝；`pure_timeout_and_revoked_reference_deny`；`branding_removed_from_current_config_deny`；`forged_edge_header_and_replay_deny`；`identity_never_gets_edge_locator`。每项同时断言不返回对象键或可用 URL 给被拒绝主体。
-- [ ] **Step 2 — 验证失败。** `npm --prefix server test -- test/media-delivery.spec.ts test/media-edge-auth.spec.ts test/media-ticket.spec.ts`。
-- [ ] **Step 3 — 实现 API。** 固定 `POST /media/:assetId/preview-ticket`（PC Bearer）、`POST /media/tickets/batch`（mobile）、`POST /internal/media/authorize`（Public 仅绕过 JWT；必须自有 Edge HMAC guard，原始内部 JSON，不走普通信封）。内部 HMAC 绑定 method/body 摘要、timestamp/nonce，30 秒时差、Redis nonce 防重放，默认鉴权超时拒绝。复用 existing owner policy；PC 新票绑定 jti/iat/authVersion/sid（兼容旧无 sid），用现有 Redis 吊销及 `SessionService.isActiveFor`、当前账号权限再核对；不改 mobile 旧票的既有登出语义。所有 path/范围白名单解析后才映射 locator。配置 `MEDIA_DELIVERY_MODE=proxy|edgeone`、`MEDIA_DELIVERY_ORIGIN`、`MEDIA_EDGE_AUTH_SECRET`；只有 cos 的非实名资源签 edgeone 地址，local/实名仍走现有受控代理。
-- [ ] **Step 4 — 验证。** 重跑 Step 2，`node tests/run-e2e.mjs --ephemeral --suite mobile-media-ticket`；新增边缘合约用例覆盖缓存前授权模拟与 PC 吊销。body/query/日志不能含 JWT 或云凭据，错误不得泄漏 locator。
-- [ ] **Step 5 — 本地提交。** 本任务文件及同步的 `docs/design/04-API设计.md`、`review/2026-10-22-learner-mobile-contract-freezes.md`，`feat(media): 增加独立分发的动态授权接口`。
+- [ ] **Step 1 — 失败用例。** 同asset不同item逐项授权；PC与learner票据域隔离；纯timeout/在考解析/撤销引用拒绝新签；品牌移除拒绝跳转；identity不得取得COS直链。真实SDK本地签名包含精确VersionId、固定HTTPS桶域名、受限TTL和Cache-Control，URL无SecretKey/JWT。
+- [ ] **Step 2 — 跑失败用例。** 新单测在旧实现失败，不能以mock返回URL代替真实SDK签名检查。
+- [ ] **Step 3 — 实现。** `POST /media/:assetId/preview-ticket`（PC Bearer）、`POST /media/tickets/batch`（mobile，最多50项）；既有learner签票复用相同owner policy。PC proxy内容路径 `/media/preview-tickets/:ticket/content`，重读核对当前账号/authVersion/jti/sid/权限。COS签发先授权但不下载对象正文，准确版本通过SDK实际Query签入URL。品牌沿用 `/site-config/assets/:id/content`，每次白名单检查后307至短链，跳转no-store。local/identity仍原受控代理。Cos-signed模式已发URL到期前有效，禁止再宣称每个COS请求实时重查业务状态。
+- [ ] **Step 4 — 验证。** 相关单测/build与隔离 `mobile-media-ticket`；静态路径优先注册，严格DTO检查原始body防全局pipe提前剥字段。完整签名URL不入日志/业务数据库/作者JSON。
+- [ ] **Step 5 — 本地提交。** 提交本任务代码及根统一的契约文档；不宣称真实COS或长视频验收。
 
-## Task 7: EdgeOne 函数、共桶配置方案与 G0 真云验证
+## Task 7: COS 共桶预检、配置提案与 G0
 
-**Files:** Create `deploy/edgeone/media-auth.mjs`、`deploy/edgeone/README.md`、`deploy/cos/policy.template.json`、`deploy/cos/cors.template.json`、`scripts/media/cos-preflight.mjs`、`tests/media-edge-function.test.mjs`、`review/2026-10-26-cos-cloud-gates.md`；Modify `deploy/nginx/default.conf`（仅代理鉴权/域名 CSP 所需明确规则）。
+**Files:** Create `scripts/media/cos-preflight.mjs`、`deploy/cos/policy.template.json`、`deploy/cos/cors.template.json`、`deploy/cos/README.md`、`tests/cos-preflight.test.mjs`、`review/2026-10-26-cos-cloud-gates.md`；按确定的桶域名更新部署CSP提案。无EdgeOne函数、内部远程鉴权API或新媒体域名。
 
-**Interfaces:** `handleMediaRequest(request:Request,deps:EdgeDependencies):Promise<Response>`；模块 JSDoc 定义 `EdgeDependencies` 的 `authorize(input:EdgeMediaRequest):Promise<EdgeMediaGrant>`、`fetchOrigin(grant:EdgeMediaGrant,request:Request):Promise<Response>`、`config:{mediaOrigin:string;authOrigin:string}`；使用 Task 6 的数据契约，构建产物不 import NestJS。`cos-preflight.mjs` 默认 `--inspect` 只读，`--render-proposal` 生成受控配置建议，不自动 apply；真实写探针仅对批准的临时前缀显式 `--probe`，不修改桶策略。
+**Interfaces:** CLI 默认 `--inspect` 只读；`--render-proposal` 输出受控配置建议，绝不自动apply。真实写探针需显式 `--probe` 且限本项目专用临时前缀，不修改桶策略。入口统一 `node --env-file=.env scripts/media/cos-preflight.mjs ...`；输出不得含密钥、临时凭据、完整签名或实名字节。
 
-- [ ] **Step 1 — 写失败用例。** `cache_hit_still_calls_authorize`：每次请求 authorize 一次；`direct_internal_path_and_forged_headers_are_denied`：403 且无 origin fetch；`auth_timeout_is_fail_closed`；`range_206_is_streamed_without_buffer`：保留 Content-Range/Length/Accept-Ranges 且不调用 arrayBuffer；`ticket_cookie_bearer_never_reach_cos`。
-- [ ] **Step 2 — 验证失败。** `node --test tests/media-edge-function.test.mjs`。
-- [ ] **Step 3 — 实现函数/配置提案。** 覆盖媒体域名全部对外路径；只有票据内容和品牌白名单路由可进入鉴权。授权后用服务端返回的不可变键构造同 Host 内部 fetch，内部对象路径直接外访一律拒绝；不得依赖用户可伪造的“内部”头。函数转发流；只有通过授权后才能取共享缓存，失败 no-store；私有浏览器响应保持 private/no-store，品牌沿用 300 秒。两边后端使用共享 COS 密钥；EdgeOne 优先使用 COS 源站的服务回源授权，审阅策略并限制到 RuleExam 正式媒体前缀，不将共享长期密钥写进函数，也不再要求新增一套 RuleExam 长期密钥。记录缓存键、映射路径、函数递归/子请求行为和回源认证的具体配置；保护 identity/staging 不在分发源站允许范围。
-- [ ] **Step 4 — 自动验证及具体变更审阅。** Step 2 通过；从仓库根运行 `node --env-file=.env scripts/media/cos-preflight.mjs --inspect`，使用同一份本地共享 COS 配置；核对共享身份现有权限/STS 能力、桶 ACL/版本/CORS/前缀/域名，输出不含秘密的 proposed diff。不得为了测试隔离擅自收窄 gooodwork 正在使用的共享权限。取得该具体云配置变更授权后再人工/受控执行，未授权时保留 G0 待验，继续无依赖任务。
-- [ ] **Step 5 — G0 真云验证和提交。** 用批准的探针对象验证 RuleExam 适配器对其他前缀不发请求、下发给浏览器的临时授权对其他前缀被 COS 拒绝、边缘外访不能访问 gooodwork/identity/staging，以及缓存热后授权撤销、伪造内部请求、Range 206/416、CORS、版本读写和 gooodwork 原规则未被覆盖。不要求共享长期密钥访问 gooodwork 自身范围得到 403，也不拿它绕过适配器执行跨项目写探针。任一必要边界不满足：记录限制，停止生产分发接入，不用公开桶/静态 COS 链接替代。将真实证据或明确待验状态写入 review，提交本任务代码/模板/脱敏记录，`feat(media): 接入边缘鉴权分发并记录云端验证门`；秘密与临时对象清单不入库。
+- [ ] **Step 1 — 失败用例。** 默认仅只读SDK调用；现有CORS/策略保留、不用模板覆盖；目标前缀/域名校验；错误脱敏；探针只作用登记的临时对象和准确版本。
+- [ ] **Step 2 — 跑失败用例并实现预检。** 查询实际桶/地域/ACL/版本/CORS/策略可读性，STS与真实签名能力未运行时明确待验。仅按真实RuleExam页面来源追加必要CORS建议，精确允许内容头/Range/分块ETag，不把全桶公开读当作方案。不新建长期密钥或更改gooodwork既有身份权限。
+- [ ] **Step 3 — 形成具体配置差异。** 列出COS标准域名、页面origin、CSP img/media/connect与小程序合法域名；保留原桶规则。真实配置变更先交可审阅差异，在已有授权范围内执行必要验证。
+- [ ] **Step 4 — G0。** 真桶验证simple/multipart、实际版本定位、浏览器临时授权拒绝其它键、准确GET签名到期/Range200/206/416及CORS；去除签名直接读私有对象拒绝。读取只在申请/续签授权，旧链接有效窗口如实登记。保留gooodwork规则。
+- [ ] **Step 5 — 本地提交。** 提交工具/模板/脱敏证据，真实配置不足项标待验，不用单测冒充真云，不提交探针清单或签名。
 
 ## Task 8: PC 统一上传、进度、暂停和恢复
 
@@ -299,7 +299,7 @@ type UploadGrant =
 
 **Files:** Create `mobile/src/platform/media-upload.h5.ts`、`mobile/test/media-direct-upload.spec.ts`；Modify `mobile/src/api/media.ts`、`mobile/src/platform/media-url.ts`、`mobile/src/components/common/ProtectedImage.vue`、`mobile/src/stores/video.ts`、`mobile/src/stores/exam.ts`、`mobile/src/env.d.ts`；extend `mobile/test/media-api.spec.ts`、`mobile/test/media-url.spec.ts`、`mobile/test/video-session.spec.ts`、`mobile/test/rich-content.spec.ts`。
 
-**Interfaces:** 保留 `uploadAvatar(file:PickedMedia)`、`getMediaTicket(assetId:string,ownerType:string,ownerId:string):Promise<MediaTicketView>`；新增 `uploadImageDirect(file:PickedMedia,purpose:'avatar'):Promise<UploadResult>`、`getMediaTickets(items:MediaTicketRequest[]):Promise<MediaBatchResult[]>`。前端契约在各自 `api/media.ts` 声明且用合约测试与 Task 4/6 对齐，不从服务端源目录跨项目 import。`safeMediaUrl/resolveMediaUrl` 支持原同源票据或精确 `VITE_MEDIA_ORIGIN` HTTPS origin+固定路由；品牌使用同一 origin 的独立固定路径，不接受任意 query/host。
+**Interfaces:** 保留 `uploadAvatar(file:PickedMedia)`、`getMediaTicket(assetId:string,ownerType:string,ownerId:string):Promise<MediaTicketView>`；新增 `uploadImageDirect(file:PickedMedia,purpose:'avatar'):Promise<UploadResult>`、`getMediaTickets(items:MediaTicketRequest[]):Promise<MediaBatchResult[]>`。前端契约在各自 `api/media.ts` 声明且用合约测试与 Task 4/6 对齐，不从服务端源目录跨项目 import。`safeMediaUrl/resolveMediaUrl` 支持原同源票据或精确 `VITE_COS_MEDIA_ORIGIN` HTTPS origin + `VITE_COS_MEDIA_PREFIX` 正式对象路径 + COS签名query白名单；品牌保留原同源站点配置路径，经后端白名单检查后跳转，不接受任意 query/host。
 
 - [ ] **Step 1 — 写失败用例。** `https_allowlisted_origin_only`：相似域名、userinfo、编码路径绕过均抛错；`h5_avatar_simple_put_has_no_bearer`：COS 请求不带业务 Authorization；`mp_and_identity_keep_existing_upload`；`batch_same_asset_wrong_item_is_denied`；`renewal_keeps_video_session_and_position`；`late_upload_after_epoch_change_is_discarded`。
 - [ ] **Step 2 — 验证失败。** `npm --prefix mobile run test:unit -- test/media-direct-upload.spec.ts test/media-api.spec.ts test/media-url.spec.ts test/video-session.spec.ts test/rich-content.spec.ts`。
@@ -327,12 +327,12 @@ type UploadGrant =
 
 **Interfaces:** `cos-media-flow` 注册为隔离 E2E suite；浏览器用现有 mobile Playwright 依赖由根 harness 导入，不给仓库根新建 package.json。容量 CLI `--profile media|authz|exam|heartbeat --users 500|1000|3000 --duration-seconds N`，先只输出预计请求量/媒体字节量，显式 `--run` 才发压测请求；仅允许指定测试环境，不能默认生产。
 
-- [ ] **Step 1 — 写验收断言。** `import_upload_bind_play_roundtrip` 覆盖所有用途；`all_media_bytes_bypass_business_api_in_edge_mode` 记录网络 host/字节来源；`resume_after_reload_keeps_one_asset`；`warm_cache_revocation_blocks_new_range_request`；`migration_then_history_and_identity_read_work`。包含旧 local 数据与新 COS 数据混合运行、小程序图片兼容和 PDF/DOCX 原件路径未变。
+- [ ] **Step 1 — 写验收断言。** `import_upload_bind_play_roundtrip` 覆盖所有用途；`all_media_bytes_bypass_business_api_in_edge_mode` 记录网络 host/字节来源；`resume_after_reload_keeps_one_asset`；`revocation_blocks_renewal_and_old_url_is_bounded`；`migration_then_history_and_identity_read_work`。包含旧 local 数据与新 COS 数据混合运行、小程序图片兼容和 PDF/DOCX 原件路径未变。
 - [ ] **Step 2 — 跑失败用例。** `node tests/run-e2e.mjs --ephemeral --suite cos-media-flow`、`node tests/run-e2e.mjs --ephemeral --suite mobile-h5`；按新断言修复集成差异，不能改变既有业务授权以消除失败。
 - [ ] **Step 3 — 完成配置和文档同步。** CSP 仅追加确定的媒体域名/COS 上传连接来源，配置新域名的微信合法域名说明；更新 AD-06、表数/迁移目录、API/状态/数据流及验收边界。旧文档中“不引入对象存储”按批准设计更新，PDF/DOCX 本地例外写明；不覆盖并行题库改动。
 - [ ] **Step 4 — 必要自动验证。** server build+相关媒体/身份/课程/题图单测；web 相关组件/API单测及 `cd web` 后 `npx vue-tsc --noEmit`；mobile 类型与相关单测；`node scripts/build.mjs web h5` 原子组合构建。隔离 E2E 运行 `training-media`、`mobile-media-ticket`、`mobile-identity`、`training-courses`、`training-video-learning`、`training-publishing`、`training-question-import`、`cos-media-flow`、两个新增竞争/迁移套件。相关输入未变且此前任务证据完整的可复用；不无条件反复跑全库。
 - [ ] **Step 5 — G1 实测。** G0 通过后，测试环境验证 PC/H5 真桶上传/刷新续传/长视频续票/Range/批量题图/拒绝路径；抽取迁移样本做全量哈希对账和业务回退。容量分别跑 500/1000/3000 在线阶梯，媒体码率/题图量取实测素材，记录平均和峰值带宽、P95/P99、错误率、DB池和鉴权负载；同时记录压测机 CPU/网络和实际达到的并发，生成器不足的结果不能归因于服务端。集中登录/开考/交卷作为独立突发场景，不伪造“在线人数=每秒提交数”。任何环境/配额/真机未具备项明确待验，不能宣称数千并发通过。
-- [ ] **Step 6 — 独立整体验证与本地提交。** 检查本分支差异、关键并发/授权/迁移证据；真实生产切换另交可审阅发布配置、迁移批次和回退方案取得授权。最终记录自动化、PC/H5、真桶/边缘、真机、容量、生产部署各自状态。提交本任务文件，`test(media): 完成 COS 全链验收与交付记录`；无用户授权不 push、不删除旧文件。
+- [ ] **Step 6 — 独立整体验证与本地提交。** 检查本分支差异、关键并发/授权/迁移证据；真实生产切换另交可审阅发布配置、迁移批次和回退方案取得授权。最终记录自动化、PC/H5、真桶/签名、真机、容量、生产部署各自状态。提交本任务文件，`test(media): 完成 COS 全链验收与交付记录`；无用户授权不 push、不删除旧文件。
 
 ## 自审映射与交接
 
@@ -341,9 +341,9 @@ type UploadGrant =
 | 业务范围、表设计复用和同桶前缀 | 1/2/7/12 |
 | 实际字节校验、唯一正式发布、保留 ID/引用 | 3/4/5 |
 | 断点恢复、过期授权、刷新/换号 | 4/5/8/10 |
-| 动态授权、PC/H5/品牌/实名差异和缓存前检查 | 6/7/9/10 |
+| 动态授权、PC/H5/品牌/实名差异和签发/续签当前授权 | 6/7/9/10 |
 | 取消、迟到写入、版本删除、历史引用保护 | 1/5/11 |
 | 存量迁移、回退及 PDF/DOCX 排除 | 11/12 |
 | 真云配置授权、分级验收和容量未知 | 7/12 |
 
-本计划自审由根完成：核对设计覆盖、可验步骤、接口命名、Review Focus 和篇幅。执行方式已由用户选定为 Astra 并行编排，不再询问 SDD/其它执行方式，也不自动进入 SDD。正式实施启动后，根按依赖就绪情况直接调度，保持工作线 owner、按风险组织验证和独立审查，不把逐任务审查当成固定串行流水线。当前修订仅更新计划；尚未安装依赖、修改业务实现或操作真实云资源。
+本计划自审由根完成：核对设计覆盖、可验步骤、接口命名、Review Focus 和篇幅。执行方式已由用户选定为 Astra 并行编排，不再询问 SDD/其它执行方式，也不自动进入 SDD。正式实施启动后，根按依赖就绪情况直接调度，保持工作线 owner、按风险组织验证和独立审查，不把逐任务审查当成固定串行流水线。当前已进入实施；实际完成与未验项以验收记录为准。用户最新短链裁决覆盖原EdgeOne提案，不因此放宽上传隔离、实名、引用或学习结算。

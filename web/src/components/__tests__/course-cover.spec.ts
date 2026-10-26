@@ -2,258 +2,73 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import ElementPlus from 'element-plus';
 import CourseCover from '../CourseCover.vue';
+import { invalidateMediaContext } from '../../services/media-context';
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), createUrl: vi.fn(), revokeUrl: vi.fn() }));
-vi.mock('../../api/http', () => ({ default: { get: mocks.get } }));
-
+const mocks = vi.hoisted(() => ({ resolve: vi.fn(), invalidate: vi.fn() }));
+vi.mock('../../services/media-content', () => ({ resolvePcMedia: mocks.resolve, invalidatePcMedia: mocks.invalidate }));
 const wrappers = new Set<VueWrapper>();
-
-function imageResponse(blob: Blob) {
-  return {
-    data: blob, status: 200, statusText: 'OK', headers: { 'content-type': blob.type },
-    config: { headers: {}, responseType: 'blob' },
-  };
-}
-
+const url = (id: string) => `/api/v1/media/preview-tickets/asset${id}.signature/content`;
+const ticket = (id: string) => ({ content_url: url(id), expires_at: '2099-01-01T00:00:00.000Z' });
 function deferred() {
-  let resolve!: (value: ReturnType<typeof imageResponse>) => void;
+  let resolve!: (value: ReturnType<typeof ticket>) => void;
   let reject!: (reason: Error) => void;
-  const promise = new Promise<ReturnType<typeof imageResponse>>((yes, no) => {
-    resolve = yes;
-    reject = no;
-  });
+  const promise = new Promise<ReturnType<typeof ticket>>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-
-function render(props: { assetId?: string | null; alt?: string } = {}) {
-  const wrapper = mount(CourseCover, {
-    props, attachTo: document.body, global: { plugins: [ElementPlus] },
-  });
-  wrappers.add(wrapper);
-  return wrapper;
+function render(assetId?: string | null) {
+  const wrapper = mount(CourseCover, { props: { assetId, alt: '建筑施工安全封面' }, attachTo: document.body, global: { plugins: [ElementPlus] } });
+  wrappers.add(wrapper); return wrapper;
 }
+beforeEach(() => { vi.resetAllMocks(); mocks.resolve.mockImplementation(async id => ticket(id)); });
+afterEach(() => { wrappers.forEach(wrapper => wrapper.unmount()); wrappers.clear(); });
 
-function unmount(wrapper: VueWrapper) {
-  wrapper.unmount();
-  wrappers.delete(wrapper);
-}
-
-beforeEach(() => {
-  vi.resetAllMocks();
-  mocks.get.mockRejectedValue(new Error('Unexpected image request'));
-  mocks.createUrl.mockReturnValue('blob:course-cover');
-  const BrowserUrl = globalThis.URL;
-  // jsdom does not implement object URLs; keep its URL parsing behavior real.
-  vi.stubGlobal('URL', class extends BrowserUrl {
-    static createObjectURL = mocks.createUrl;
-    static revokeObjectURL = mocks.revokeUrl;
+describe('CourseCover controlled URL display', () => {
+  it.each([undefined, null, ''])('keeps an empty cover out of the network (%s)', async assetId => {
+    const wrapper = render(assetId); await flushPromises();
+    expect(wrapper.text()).toBe('暂无封面'); expect(mocks.resolve).not.toHaveBeenCalled();
   });
-});
-
-afterEach(() => {
-  wrappers.forEach(wrapper => wrapper.unmount());
-  wrappers.clear();
-  vi.unstubAllGlobals();
-});
-
-describe('CourseCover', () => {
-  it.each([
-    ['omitted', undefined],
-    ['null', null],
-    ['empty', ''],
-  ] as const)('shows the empty cover without requesting media when assetId is %s', async (_label, assetId) => {
-    const wrapper = render(assetId === undefined ? {} : { assetId });
-    await flushPromises();
-
-    expect(wrapper.text()).toBe('暂无封面');
-    expect(wrapper.find('img').exists()).toBe(false);
-    expect(mocks.get).not.toHaveBeenCalled();
-    expect(mocks.createUrl).not.toHaveBeenCalled();
+  it('opens the controlled URL directly in the image viewer', async () => {
+    const wrapper = render('21'); await flushPromises();
+    expect(wrapper.get('img').attributes('src')).toBe(url('21'));
+    expect(wrapper.get('img').attributes('alt')).toBe('建筑施工安全封面');
+    await wrapper.get('img').trigger('load'); await wrapper.get('img').trigger('click'); await flushPromises();
+    expect(document.body.querySelector('.el-image-viewer__wrapper img')?.getAttribute('src')).toBe(url('21'));
   });
-
-  it('loads a Blob through the controlled image API and opens that image in the viewer', async () => {
-    const request = deferred();
-    const blob = new Blob(['course cover'], { type: 'image/png' });
-    mocks.get.mockReturnValue(request.promise);
-    const wrapper = render({ assetId: 'cover/21', alt: '建筑施工安全封面' });
-
-    expect(wrapper.text()).toBe('加载中');
-    expect(wrapper.find('img').exists()).toBe(false);
-    expect(mocks.get).toHaveBeenCalledTimes(1);
-    expect(mocks.get).toHaveBeenCalledWith('/media/cover%2F21/content', { responseType: 'blob' });
-
-    request.resolve(imageResponse(blob));
-    await flushPromises();
-
-    const image = wrapper.get('img');
-    expect(image.attributes('src')).toBe('blob:course-cover');
-    expect(image.attributes('alt')).toBe('建筑施工安全封面');
-    expect(mocks.createUrl).toHaveBeenCalledTimes(1);
-    expect(mocks.createUrl.mock.calls[0]![0]).toBe(blob);
-    expect(wrapper.text()).not.toContain('加载中');
-    expect(document.body.querySelector('.el-image-viewer__wrapper')).toBeNull();
-
-    await image.trigger('load');
-    await image.trigger('click');
-    await flushPromises();
-
-    const viewer = document.body.querySelector('.el-image-viewer__wrapper');
-    expect(viewer).not.toBeNull();
-    expect(viewer!.querySelector('img')!.getAttribute('src')).toBe('blob:course-cover');
-    expect(wrapper.element.contains(viewer)).toBe(false);
+  it.each(['before', 'after'])('ignores a previous asset response arriving %s its replacement', async order => {
+    const previous = deferred(); const current = deferred();
+    mocks.resolve.mockReturnValueOnce(previous.promise).mockReturnValueOnce(current.promise);
+    const wrapper = render('21'); await wrapper.setProps({ assetId: '22' });
+    if (order === 'before') { previous.resolve(ticket('21')); await flushPromises(); expect(wrapper.find('img').exists()).toBe(false); current.resolve(ticket('22')); }
+    else { current.resolve(ticket('22')); await flushPromises(); previous.resolve(ticket('21')); }
+    await flushPromises(); expect(wrapper.get('img').attributes('src')).toBe(url('22'));
   });
-
-  it('shows a load failure without creating an object URL when the image API rejects', async () => {
-    const request = deferred();
-    mocks.get.mockReturnValue(request.promise);
-    const wrapper = render({ assetId: 'cover-a' });
-    expect(wrapper.text()).toBe('加载中');
-
-    request.reject(new Error('Image access denied'));
-    await flushPromises();
-
-    expect(wrapper.text()).toBe('加载失败');
-    expect(wrapper.find('img').exists()).toBe(false);
-    expect(document.body.querySelector('.el-image-viewer__wrapper')).toBeNull();
-    expect(mocks.createUrl).not.toHaveBeenCalled();
+  it('ignores late rejection and cancels the previous ticket request on replacement', async () => {
+    const previous = deferred(); mocks.resolve.mockReturnValueOnce(previous.promise);
+    const wrapper = render('21'); const signal = mocks.resolve.mock.calls[0][1] as AbortSignal;
+    await wrapper.setProps({ assetId: '22' }); previous.reject(new Error('old denied')); await flushPromises();
+    expect(signal.aborted).toBe(true); expect(wrapper.get('img').attributes('src')).toBe(url('22'));
   });
-
-  it.each(['before', 'after'] as const)(
-    'keeps the current asset when the previous response arrives %s the current response',
-    async (order) => {
-      const previous = deferred();
-      const current = deferred();
-      const oldBlob = new Blob(['previous cover'], { type: 'image/png' });
-      const newBlob = new Blob(['current cover'], { type: 'image/png' });
-      mocks.get.mockReturnValueOnce(previous.promise).mockReturnValueOnce(current.promise);
-      mocks.createUrl.mockReturnValue('blob:current-cover');
-      const wrapper = render({ assetId: 'cover-a' });
-
-      await wrapper.setProps({ assetId: 'cover-b' });
-      expect(wrapper.text()).toBe('加载中');
-      expect(wrapper.find('img').exists()).toBe(false);
-      expect(mocks.get).toHaveBeenNthCalledWith(2, '/media/cover-b/content', { responseType: 'blob' });
-
-      if (order === 'before') {
-        previous.resolve(imageResponse(oldBlob));
-        await flushPromises();
-        expect(wrapper.text()).toBe('加载中');
-        expect(wrapper.find('img').exists()).toBe(false);
-        expect(mocks.createUrl).not.toHaveBeenCalled();
-        current.resolve(imageResponse(newBlob));
-      } else {
-        current.resolve(imageResponse(newBlob));
-        await flushPromises();
-        expect(wrapper.get('img').attributes('src')).toBe('blob:current-cover');
-        previous.resolve(imageResponse(oldBlob));
-      }
-      await flushPromises();
-
-      expect(wrapper.get('img').attributes('src')).toBe('blob:current-cover');
-      expect(wrapper.text()).not.toContain('加载失败');
-      expect(mocks.createUrl).toHaveBeenCalledTimes(1);
-      expect(mocks.createUrl.mock.calls[0]![0]).toBe(newBlob);
-      expect(mocks.revokeUrl).not.toHaveBeenCalled();
-    },
-  );
-
-  it('does not replace the current cover with a failure from the previous asset', async () => {
-    const previous = deferred();
-    const newBlob = new Blob(['current cover'], { type: 'image/png' });
-    mocks.get.mockReturnValueOnce(previous.promise).mockResolvedValueOnce(imageResponse(newBlob));
-    const wrapper = render({ assetId: 'cover-a' });
-
-    await wrapper.setProps({ assetId: 'cover-b' });
-    await flushPromises();
-    expect(wrapper.get('img').attributes('src')).toBe('blob:course-cover');
-
-    previous.reject(new Error('Previous image access denied'));
-    await flushPromises();
-
-    expect(wrapper.get('img').attributes('src')).toBe('blob:course-cover');
-    expect(wrapper.text()).not.toContain('加载失败');
-    expect(mocks.createUrl).toHaveBeenCalledTimes(1);
-    expect(mocks.createUrl.mock.calls[0]![0]).toBe(newBlob);
+  it('does not show a response after clearing the asset or unmounting', async () => {
+    const request = deferred(); mocks.resolve.mockReturnValueOnce(request.promise);
+    const wrapper = render('21'); await wrapper.setProps({ assetId: null }); request.resolve(ticket('21')); await flushPromises();
+    expect(wrapper.text()).toBe('暂无封面'); expect(wrapper.find('img').exists()).toBe(false);
+    await wrapper.setProps({ assetId: '22' }); const signal = mocks.resolve.mock.calls.at(-1)![1] as AbortSignal;
+    wrapper.unmount(); wrappers.delete(wrapper); expect(signal.aborted).toBe(true);
   });
-
-  it('reclaims the previous object URL on asset change and the current URL on unmount', async () => {
-    const current = deferred();
-    mocks.get
-      .mockResolvedValueOnce(imageResponse(new Blob(['previous cover'], { type: 'image/png' })))
-      .mockReturnValueOnce(current.promise);
-    mocks.createUrl.mockReturnValueOnce('blob:previous-cover').mockReturnValueOnce('blob:current-cover');
-    const wrapper = render({ assetId: 'cover-a' });
-    await flushPromises();
-    expect(wrapper.get('img').attributes('src')).toBe('blob:previous-cover');
-    expect(mocks.revokeUrl).not.toHaveBeenCalled();
-
-    await wrapper.setProps({ assetId: 'cover-b' });
-
-    expect(wrapper.find('img').exists()).toBe(false);
-    expect(wrapper.text()).toBe('加载中');
-    expect(mocks.revokeUrl).toHaveBeenCalledTimes(1);
-    expect(mocks.revokeUrl).toHaveBeenCalledWith('blob:previous-cover');
-
-    current.resolve(imageResponse(new Blob(['current cover'], { type: 'image/png' })));
-    await flushPromises();
-    expect(wrapper.get('img').attributes('src')).toBe('blob:current-cover');
-    expect(mocks.revokeUrl).toHaveBeenCalledTimes(1);
-
-    unmount(wrapper);
-
-    expect(mocks.revokeUrl.mock.calls).toEqual([['blob:previous-cover'], ['blob:current-cover']]);
-    expect(wrapper.element.isConnected).toBe(false);
+  it('reports a denied ticket and refreshes an address once when image loading fails', async () => {
+    mocks.resolve.mockRejectedValueOnce(new Error('denied'));
+    const wrapper = render('21'); await flushPromises(); expect(wrapper.text()).toBe('加载失败');
+    await wrapper.setProps({ assetId: '22' }); await flushPromises();
+    await wrapper.get('img').trigger('error'); await flushPromises();
+    expect(mocks.invalidate).toHaveBeenCalledWith('22'); expect(mocks.resolve).toHaveBeenCalledTimes(3);
+    await wrapper.get('img').trigger('error'); await flushPromises(); expect(wrapper.text()).toBe('加载失败');
   });
-
-  it('clears the displayed cover and reclaims its URL without another request when assetId is removed', async () => {
-    mocks.get.mockResolvedValue(imageResponse(new Blob(['cover'], { type: 'image/png' })));
-    const wrapper = render({ assetId: 'cover-a' });
-    await flushPromises();
-    expect(wrapper.get('img').attributes('src')).toBe('blob:course-cover');
-
-    await wrapper.setProps({ assetId: null });
-
-    expect(wrapper.text()).toBe('暂无封面');
-    expect(wrapper.find('img').exists()).toBe(false);
-    expect(mocks.get).toHaveBeenCalledTimes(1);
-    expect(mocks.revokeUrl).toHaveBeenCalledTimes(1);
-    expect(mocks.revokeUrl).toHaveBeenCalledWith('blob:course-cover');
-
-    unmount(wrapper);
-    expect(mocks.revokeUrl).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not create an object URL when a pending request finishes after unmount', async () => {
-    const request = deferred();
-    mocks.get.mockReturnValue(request.promise);
-    const wrapper = render({ assetId: 'cover-a' });
-    expect(wrapper.text()).toBe('加载中');
-
-    unmount(wrapper);
-    request.resolve(imageResponse(new Blob(['late cover'], { type: 'image/png' })));
-    await flushPromises();
-
-    expect(wrapper.element.isConnected).toBe(false);
-    expect(document.body.querySelector('img')).toBeNull();
-    expect(mocks.createUrl).not.toHaveBeenCalled();
-    expect(mocks.revokeUrl).not.toHaveBeenCalled();
-  });
-
-  it('keeps the empty cover when a pending request finishes after assetId is cleared', async () => {
-    const request = deferred();
-    mocks.get.mockReturnValue(request.promise);
-    const wrapper = render({ assetId: 'cover-a' });
-
-    await wrapper.setProps({ assetId: '' });
-    expect(wrapper.text()).toBe('暂无封面');
-
-    request.resolve(imageResponse(new Blob(['late cover'], { type: 'image/png' })));
-    await flushPromises();
-
-    expect(wrapper.text()).toBe('暂无封面');
-    expect(wrapper.find('img').exists()).toBe(false);
-    expect(mocks.get).toHaveBeenCalledTimes(1);
-    expect(mocks.createUrl).not.toHaveBeenCalled();
-    expect(mocks.revokeUrl).not.toHaveBeenCalled();
+  it('clears an old account image immediately before applying any new ticket', async () => {
+    const wrapper = render('21'); await flushPromises();
+    invalidateMediaContext();
+    await flushPromises(); expect(wrapper.find('img').exists()).toBe(false);
+    expect(mocks.resolve).toHaveBeenCalledTimes(1);
+    await wrapper.setProps({ assetId: '22' }); await flushPromises();
+    expect(wrapper.get('img').attributes('src')).toBe(url('22'));
   });
 });

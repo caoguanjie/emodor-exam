@@ -8,6 +8,7 @@ import MediaUpload from '../MediaUpload.vue';
 const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), post: vi.fn(), delete: vi.fn(), image: vi.fn(), push: vi.fn(), createUrl: vi.fn(), revokeUrl: vi.fn() }));
 vi.mock('../../api/http', () => ({ default: { get: mocks.get, put: mocks.put, post: mocks.post, delete: mocks.delete } }));
 vi.mock('../../api/media', () => ({ getMediaImageContent: mocks.image }));
+vi.mock('../../services/media-content', () => ({ resolvePcMedia: async () => ({ content_url: '/api/v1/media/preview-tickets/fixture.signature/content', expires_at: '2099-01-01T00:00:00.000Z' }), invalidatePcMedia: vi.fn() }));
 vi.mock('../../stores/auth', () => ({ useAuthStore: () => ({ can: () => true }) }));
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push }), useRoute: () => ({ params: { id: '11' } }) }));
 vi.mock('../../composables/useUnsavedChanges', () => ({
@@ -130,7 +131,7 @@ describe('course presentation', () => {
     ]);
     const cells = wrapper.findAll('.el-table__body-wrapper tbody tr')[0]!.findAll('td');
     expect(cells[0]!.text()).toBe('建筑施工安全');
-    expect(cells[1]!.find('img').attributes('src')).toBe('blob:course-cover');
+    expect(cells[1]!.find('img').attributes('src')).toBe('/api/v1/media/preview-tickets/fixture.signature/content');
     expect(cells[2]!.text()).toBe('产业工人');
     expect(cells[3]!.text()).toBe('2');
     expect(cells[4]!.text()).toBe('是');

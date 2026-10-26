@@ -2,7 +2,7 @@ import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { ApiError } from '@/api/client'
 import { getAttempt, getExamHistory, getExamResult, getExams, getWrongQuestions, startExam, submitExam } from '@/api/exams'
-import { getMediaTicket } from '@/api/media'
+import { getMediaTickets } from '@/api/media'
 import type { Page } from '@/api/courses'
 import { resolveMediaUrl } from '@/platform/media-url'
 import { clearDraft, loadDraft, saveDraft } from '@/utils/exam-draft'
@@ -234,15 +234,30 @@ export const useExamStore = defineStore('mobile-exam', () => {
     const currentMedia = () => same(current, epoch) && media === mediaRevision
     const ids = [...new Set([...imageIds(question.stem), ...question.options.flatMap(o => imageIds(o.content)), ...('analysis' in question ? imageIds(question.analysis) : [])])]
     const pending = (async () => {
-      await Promise.all(ids.map(async asset => {
+      // Deduplication is local to this exact owner. The same asset on another
+      // question must receive its own authorization result.
+      for (let offset = 0; offset < ids.length && currentMedia(); offset += 50) {
+        const group = ids.slice(offset, offset + 50)
         try {
-          const ticket = await getMediaTicket(asset, 'exam_record_question', itemId)
-          if (currentMedia()) {
-            assets.value[itemId] = { ...assets.value[itemId], [asset]: resolveMediaUrl(ticket.content_url) }
-            if (mediaErrors.value[itemId]) { delete mediaErrors.value[itemId][asset]; if (!Object.keys(mediaErrors.value[itemId]).length) delete mediaErrors.value[itemId] }
+          const results = await getMediaTickets(group.map(asset => ({ asset_id: asset, owner_type: 'exam_record_question', owner_id: itemId })))
+          if (!currentMedia()) return
+          for (const row of results) {
+            if (row.ticket) {
+              assets.value[itemId] = { ...assets.value[itemId], [row.asset_id]: resolveMediaUrl(row.ticket.content_url) }
+              if (mediaErrors.value[itemId]) { delete mediaErrors.value[itemId][row.asset_id]; if (!Object.keys(mediaErrors.value[itemId]).length) delete mediaErrors.value[itemId] }
+            } else {
+              if (assets.value[itemId]) delete assets.value[itemId][row.asset_id]
+              mediaErrors.value[itemId] = { ...mediaErrors.value[itemId], [row.asset_id]: row.error?.message || '图片暂不可用' }
+            }
           }
-        } catch (error) { if (currentMedia()) mediaErrors.value[itemId] = { ...mediaErrors.value[itemId], [asset]: message(error) } }
-      }))
+        } catch (error) {
+          if (!currentMedia()) return
+          for (const asset of group) {
+            if (assets.value[itemId]) delete assets.value[itemId][asset]
+            mediaErrors.value[itemId] = { ...mediaErrors.value[itemId], [asset]: message(error) }
+          }
+        }
+      }
     })().finally(() => { if (mediaFlights.get(scope) === pending) mediaFlights.delete(scope) })
     mediaFlights.set(scope, pending); return pending
   }

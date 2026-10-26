@@ -32,6 +32,43 @@ export interface MediaUploadOptions {
   signal?: AbortSignal;
 }
 
+export type UploadState = 'uploading' | 'finalizing' | 'completed' | 'failed' | 'aborted' | 'expired';
+export interface UploadSessionView {
+  session_id: string; state: UploadState; mode: 'simple' | 'multipart'; expires_at: string;
+  part_size: number; parallel_limit: number;
+  parts: Array<{ partNumber: number; etag: string; sizeBytes: number }>;
+  result: MediaUploadResponse | null; reason_code: string | null;
+}
+export interface UploadInit {
+  client_request_id: string; purpose: MediaPurpose; owner_id?: string;
+  filename: string; mime_type: string; size_bytes: number; fingerprint_sha256: string;
+}
+export type UploadGrant =
+  | { mode: 'simple'; method: 'PUT'; url: string; headers: Record<string, string>; expires_at: string }
+  | { mode: 'multipart'; bucket: string; region: string; key: string; upload_id: string;
+      credentials: { tmp_secret_id: string; tmp_secret_key: string; token: string }; start_time: number; expired_time: number };
+export type MediaTicketView = { content_url: string; expires_at: string };
+
+export { createMediaUploadTask } from '../services/media-upload';
+export async function beginMediaUpload(input: UploadInit, signal?: AbortSignal): Promise<UploadSessionView> {
+  return await http.post('/media/upload-sessions', input, { signal }) as UploadSessionView;
+}
+export async function getMediaUploadSession(id: string, signal?: AbortSignal): Promise<UploadSessionView> {
+  return await http.get(`/media/upload-sessions/${encodeURIComponent(id)}`, { signal }) as UploadSessionView;
+}
+export async function getMediaUploadGrant(id: string, signal?: AbortSignal): Promise<UploadGrant> {
+  return await http.post(`/media/upload-sessions/${encodeURIComponent(id)}/credentials`, undefined, { signal }) as UploadGrant;
+}
+export async function completeMediaUpload(id: string, signal?: AbortSignal): Promise<UploadSessionView> {
+  return await http.post(`/media/upload-sessions/${encodeURIComponent(id)}/complete`, undefined, { signal }) as UploadSessionView;
+}
+export async function cancelMediaUpload(id: string): Promise<UploadSessionView> {
+  return await http.delete(`/media/upload-sessions/${encodeURIComponent(id)}`) as UploadSessionView;
+}
+export async function getPcMediaTicket(assetId: string, signal?: AbortSignal): Promise<MediaTicketView> {
+  return await http.post(mediaPath(assetId, '/preview-ticket'), undefined, { signal }) as MediaTicketView;
+}
+
 function mediaPath(assetId: string, suffix = ''): string {
   return `/media/${encodeURIComponent(assetId)}${suffix}`;
 }
@@ -41,6 +78,16 @@ export async function getMediaLimits(): Promise<MediaLimits> {
 }
 
 export async function uploadMedia(
+  file: File,
+  purpose: MediaPurpose,
+  options: MediaUploadOptions = {},
+): Promise<MediaUploadResponse> {
+  const { createMediaUploadTask } = await import('../services/media-upload');
+  return createMediaUploadTask(file, purpose, options).result;
+}
+
+/** Compatibility transport for local mode and the controlled proxy endpoint. */
+export async function uploadMediaProxy(
   file: File,
   purpose: MediaPurpose,
   options: MediaUploadOptions = {},

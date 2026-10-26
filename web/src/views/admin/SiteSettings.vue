@@ -74,7 +74,8 @@ import { computed, nextTick, onBeforeUnmount, onDeactivated, reactive, ref, watc
 import { ElMessage } from 'element-plus';
 import { Plus } from '@element-plus/icons-vue';
 import type { UploadFile, UploadInstance, UploadRawFile, UploadRequestOptions, UploadUserFile } from 'element-plus';
-import http, { publicSiteAssetUrl } from '../../api/http';
+import http from '../../api/http';
+import { resolvePublicBranding } from '../../services/media-content';
 import { getMediaMetadata, uploadMedia } from '../../api/media';
 import { useAuthStore } from '../../stores/auth';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
@@ -148,7 +149,7 @@ function bannerFilesFromConfig(banners: readonly SiteBannerDraft[]): SiteBannerF
     uid: Number(banner.asset_id) || nextSavedBannerUid--,
     name: `轮播图-${index + 1}`,
     status: 'success',
-    url: publicSiteAssetUrl(banner.asset_id),
+    url: resolvePublicBranding(banner.asset_id),
     assetId: banner.asset_id,
   }));
 }
@@ -159,7 +160,7 @@ function logoFilesFromConfig(assetId: string | null): SiteLogoFile[] {
     uid: Number(assetId) || -1,
     name: '网站 Logo',
     status: 'success',
-    url: publicSiteAssetUrl(assetId),
+    url: resolvePublicBranding(assetId),
     assetId,
   }];
 }

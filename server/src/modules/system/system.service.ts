@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { AuditService } from '../../common/audit.service';
@@ -11,6 +11,7 @@ import { SysRolePermission } from '../../entities/sys-role-permission.entity';
 import { AccessService } from '../access/access.service';
 import { isRegisteredPermission } from '../access/permission-catalog';
 import { MediaService, type ContentDescriptor } from '../media/media.service';
+import { CosDownloadUrlAdapter } from '../media/delivery/cos-download-url.adapter';
 
 export const REGISTERED_ADMIN_ROUTES = new Set([
   '/admin/dashboard',
@@ -126,6 +127,7 @@ export class SystemService {
     private readonly media: MediaService,
     private readonly access: AccessService,
     private readonly audit: AuditService,
+    @Optional() private readonly urls?: CosDownloadUrlAdapter,
   ) {
     this.media.registerOwnerPolicy(SITE_OWNER_TYPE, {
       allowedPurposes: ['branding'],
@@ -406,5 +408,14 @@ export class SystemService {
     const allowed = current.logo_asset_id === id || current.banners.some((banner) => banner.asset_id === id);
     if (!allowed) throw Errors.notFound('公开品牌资源不存在');
     return this.media.openPublicBrandingContent(id, rangeHeader);
+  }
+
+  async publicAssetRedirect(assetId: string) {
+    if (!this.urls) return null;
+    const id = decimalId(assetId)!;
+    const current = await this.publicConfig();
+    if (current.logo_asset_id !== id && !current.banners.some((banner) => banner.asset_id === id)) throw Errors.notFound('公开品牌资源不存在');
+    const asset = await this.media.authorizePublicBrandingAsset(id);
+    return this.urls.issue(asset, { branding: true });
   }
 }

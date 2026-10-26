@@ -1,5 +1,7 @@
 # 制度学习及考试系统（EmodorRuleExam）设计方案 · 总览索引
 
+> **COS 增量（实施中）**：按[已确认设计](../superpowers/specs/2026-10-26-cos-media-integration-design.md)与[Astra 实施计划](../superpowers/plans/2026-10-26-cos-media-integration.md)接入图片/视频存储、上传续传及存量迁移；PDF/DOCX 原件保留本地。共桶/共享后端密钥、独立数据库、按行双存储和申请/续签时授权的COS短链。实际验证状态见[验收记录](../../review/2026-10-26-cos-media-acceptance.md)，不表示真云或数千并发已通过。
+
 > **人工录题 Tiptap 融合（2026-10-26 最新纠正）**：按[现有新增/修订试题弹窗融合设计](../superpowers/specs/2026-10-26-manual-question-tiptap-design.md)，在当前弹窗中集成 Tiptap 题干、选项、答案设置和解析，提供选项排序、受控图片及保存并新增。下文“保留原表单”只表示保留入口与保存链路，不再表示保留文本框；Tiptap 不再仅用于试卷设计器。分值、考点、资料来源均不进入人工题表单。实现和验收按[实施计划](../superpowers/plans/2026-10-26-manual-question-tiptap.md)登记。
 
 > **一句话定位**：本文档是 EmodorRuleExam（制度学习及考试系统）全套设计方案的入口与一致性基准。2026-10-22 演示版已按批准的瘦身方案收口为三类客观题、自动评分、服务端期限、本地最小草稿、主动整卷交卷及纯timeout和考试记录；图片作答、人工阅卷、实时监控、切屏采集，以及制度/员工/部门管理入口不再属于现行产品。题干、选项和解析中的受控图片仍保留。旧制度阅读、旧固定卷自动评分和原统计依赖的共享表与只读服务继续兼容。
@@ -44,7 +46,7 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | 考试与成绩 | legacy数字执行协议兼容；发布/个人快照、稳定ID、本地草稿、主动整卷评分及纯timeout；统一结果、历史与错题 | 最终总分只读，不提供图片答案或人工改分 |
 | 统计与记录 | 原统计后端继续兼容但管理菜单隐藏；考试记录列表、详情与结果保留；培训统计不再含待人工评分或切屏指标 | 不提供实时监控、连接状态或切屏采集 |
 
-**实现状态规则**：未具备源码与验收证据的能力不得写成已验收。当前源码定义39张业务表，另有schema_migration，合计40张物理表；迁移000—028，021增5兼容列，022追加版本作者原稿、试卷布局和一张持久回执表，025迁移题库历史分值，026增加启停字段与候选索引，027清理题目审核权限及菜单关联，028续接一次性密码回填探针且不改账号数据；`exam_review_event` 已从现行 schema 删除。迁移 `015_demo_slimming.sql` 以保留历史数据的方式收缩字段、枚举、权限和菜单；旧迁移仍作为不可变升级历史保留。版本化迁移用于升级当前 RuleExam 数据，不是旧站数据搬迁。
+**实现状态规则**：未具备源码与验收证据的能力不得写成已验收。当前源码定义40张业务表，另有schema_migration，合计41张物理表；迁移000—028及030（029留给并行题库候选），021增5兼容列，022追加版本作者原稿、试卷布局和一张持久回执表，025迁移题库历史分值，026增加启停字段与候选索引，027清理题目审核权限及菜单关联，028续接一次性密码回填探针且不改账号数据；`exam_review_event` 已从现行 schema 删除。迁移 `015_demo_slimming.sql` 以保留历史数据的方式收缩字段、枚举、权限和菜单；旧迁移仍作为不可变升级历史保留。版本化迁移用于升级当前 RuleExam 数据，不是旧站数据搬迁。
 
 菜单前向迁移 `017_exam_question_navigation.sql` 按 route_path 复用试题管理、试卷管理、试题导入、考试记录的既有 ID，考试目录按语义定位，不假定为 ID 3；只规范四个标准入口的名称、权限和排序，保留其它自定义菜单及历史 checksum。试题管理路由允许 `questions:read OR questions:write`，试题导入要求 `questions:write`；只缓存导入页，试题管理返回时重新加载，确保新导入题可见。
 
@@ -81,7 +83,7 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | — | README.md（本文档） | 总览索引与全套文档的一致性基准（技术栈 / 术语 / 表名 / 枚举 / 模块名） | 全体读者 |
 | 01 | [01-需求分析.md](01-需求分析.md) | 业务背景、角色用例与功能 / 非功能需求的完整定义，是全部设计的源头 | 管理者、产品、评审者 |
 | 02 | [02-系统架构.md](02-系统架构.md) | 总体架构分层、技术栈落地方式与 Docker Compose 部署拓扑 | 开发人员、架构评审者 |
-| 03 | [03-数据库设计.md](03-数据库设计.md) | 当前39张业务表、1张迁移元数据表、完整字段/索引，以及共享兼容层边界 | 后端开发、评审者 |
+| 03 | [03-数据库设计.md](03-数据库设计.md) | 当前40张业务表、1张迁移元数据表、完整字段/索引，以及共享兼容层边界 | 后端开发、评审者 |
 | 04 | [04-API设计.md](04-API设计.md) | `/api/v1` REST 接口（含课程/视频、三类客观题题库、作答、自动评分、考试记录和培训统计）、统一信封与错误码 | 前后端开发 |
 | 05 | [05-模块设计.md](05-模块设计.md) | 六大模块的职责边界、内部组成，以及自动评分、记录与统计链路 | 开发人员 |
 | 06 | [06-关键流程.md](06-关键流程.md) | 端到端关键流程（解析、AI 预览确认与题库启停、学习判定、考试、评分统计）的时序与状态流转 | 开发人员、评审者 |
@@ -140,7 +142,7 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 
 ### 3.3 核心实体清单
 
-当前源码有39张业务表，表名及其字段必须与 migration、`database/init.sql`、entities 和 [03-数据库设计.md](03-数据库设计.md) 同步；另有不计入业务表清单的 `schema_migration` 元数据表，合计40张物理表。旧制度、学习和固定卷依赖的共享表继续保留，瘦身迁移删除 `exam_review_event` 并收缩考试/题库专用字段。
+当前源码有40张业务表，表名及其字段必须与 migration、`database/init.sql`、entities 和 [03-数据库设计.md](03-数据库设计.md) 同步；另有不计入业务表清单的 `schema_migration` 元数据表，合计41张物理表。旧制度、学习和固定卷依赖的共享表继续保留，瘦身迁移删除 `exam_review_event` 并收缩考试/题库专用字段。
 
 **组织权限域（2 张）**
 
@@ -205,12 +207,13 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | sys_user_role | 用户与业务角色的复合唯一关系；与 `sys_user.role` 系统身份分离。 |
 | auth_session | 可吊销浏览器会话，保存 sid、活动时间、到期时间与吊销状态。 |
 
-**受控媒体域（2 张，A4）**
+**受控媒体域（3 张，A4 + 030）**
 
 | 表名 | 一句话职责 |
 |---|---|
 | media_asset | 私有媒体资源：服务端存储键、实际类型/大小/哈希/时长、处理与内部删除重试状态。 |
 | media_reference | 媒体业务引用：按已注册 owner type 关联业务实体并保护在用资源。 |
+| media_upload_session | 持久直传会话、受限授权截止、claim/lease、候选对象和完成回执；30天后保留请求墓碑。 |
 
 **课程内容域（4 张，B1）**
 
@@ -293,6 +296,7 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | exam_record.grading_state | not_submitted / finalized | 未交卷 / 已自动最终结算 |
 | exam_record.submission_method | manual / timeout / NULL | 主动交卷 / 历史已评分超时方式 / 新纯timeout未交卷或legacy历史方式未知 |
 | media_asset.status | processing / ready / failed / deleting | 媒体状态；`deleting` 仅供物理删除失败重试，公开 API 按不存在处理 |
+| media_upload_session.state | uploading / finalizing / completed / failed / aborted / expired | 上传会话状态；不替代业务资产和引用 |
 
 > 上表登记当前 schema 枚举；固定字典只是显示镜像，不是新的语义来源。assignment/record 的 `mixed/unknown` 是历史冻结展示事实，不扩展题库可维护难度。新主动交卷写passed/failed + manual + finalized；新纯timeout写timeout + submission_method=NULL + not_submitted，score=0且submitted_at/graded_at=NULL，不评分、不生成答案、不进finalized成绩/排名分母。NULL不能单独判断legacy。历史submitted待确认，历史已评分timeout只读兼容并保留冻结结果/题图权限；其判据为finalized且score与submitted_at已知。
 

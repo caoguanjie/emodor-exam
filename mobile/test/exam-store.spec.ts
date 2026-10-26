@@ -98,7 +98,7 @@ describe('mobile exam authority and local answering', () => {
     install(o => { if (o.url.includes('/tickets')) { began = true; return new Promise(resolve => { finish = resolve }) }; return ok({ ...active(), questions: [{ ...questions[0], stem: { type: 'doc', content: [{ type: 'image', attrs: { asset_id: '901' } }] } }] }) })
     await store.recover('81'); const media = store.loadItemMedia('101')
     await vi.waitFor(() => expect(began).toBe(true))
-    expect(calls.find(o => o.url.includes('/tickets'))?.data).toEqual({ owner_type: 'exam_record_question', owner_id: '101' })
+    expect(calls.find(o => o.url.includes('/tickets'))?.data).toEqual({ items: [{ asset_id: '901', owner_type: 'exam_record_question', owner_id: '101' }] })
     useSessionStore().expireSession(); finish(ok({ content_url: '/api/v1/media/tickets/old-ticket/content', expires_at: '2026-10-22T12:00:00Z' })); await media
     expect(store.assets).toEqual({}); expect(store.questions).toEqual([])
   })
@@ -148,20 +148,35 @@ describe('mobile exam authority and local answering', () => {
     finally { releaseA(ok(result)); await Promise.all([old, submitB]) }
     expect(store.result?.record_id).toBe('82'); expect(store.phase).toBe('terminal')
   })
-  it('a later successful asset cannot erase the earlier failed asset on the same question', async () => {
+  it('keeps each denied image separate from allowed images in the same batch', async () => {
     const { useExamStore } = await import(path); const store = useExamStore()
-    vi.stubEnv('VITE_API_ORIGIN', 'https://exam.test')
-    let releaseSuccess: (value: unknown) => void = () => {}, successStarted = false
+    let releaseBatch: (value: unknown) => void = () => {}, batchStarted = false
     install(o => {
-      if (o.url.includes('/901/tickets')) return { statusCode: 403, data: { code: 40302, message: '第一张图片不可用', data: null } }
-      if (o.url.includes('/902/tickets')) { successStarted = true; return new Promise(resolve => { releaseSuccess = resolve }) }
+      if (o.url.endsWith('/tickets/batch')) { batchStarted = true; return new Promise(resolve => { releaseBatch = resolve }) }
       return ok({ ...active(), questions: [{ ...questions[0], stem: { type: 'doc', content: [{ type: 'image', attrs: { asset_id: '901' } }, { type: 'image', attrs: { asset_id: '902' } }] } }] })
     })
-    try {
-      await store.recover('81'); const media = store.loadItemMedia('101'); await vi.waitFor(() => expect(successStarted).toBe(true))
-      await vi.waitFor(() => expect(store.mediaErrors['101']?.['901']).toBe('第一张图片不可用'))
-      releaseSuccess(ok({ content_url: '/api/v1/media/tickets/success-902/content', expires_at: '2026-10-22T12:00:00Z' })); await media
-      expect(store.mediaErrors['101']).toEqual({ '901': '第一张图片不可用' }); expect(store.assets['101']['902']).toBe(`${window.location.origin}/api/v1/media/tickets/success-902/content`)
-    } finally { vi.unstubAllEnvs() }
+    await store.recover('81'); const media = store.loadItemMedia('101'); await vi.waitFor(() => expect(batchStarted).toBe(true))
+    releaseBatch(ok([
+      { index: 0, asset_id: '901', owner_type: 'exam_record_question', owner_id: '101', ticket: null, error: { code: 40302, message: '第一张图片不可用' } },
+      { index: 1, asset_id: '902', owner_type: 'exam_record_question', owner_id: '101', ticket: { content_url: '/api/v1/media/tickets/success-902/content', expires_at: '2099-01-01' }, error: null },
+    ])); await media
+    expect(store.mediaErrors['101']).toEqual({ '901': '第一张图片不可用' })
+    expect(store.assets['101']['902']).toBe(`${window.location.origin}/api/v1/media/tickets/success-902/content`)
+    expect(store.assets['101']['901']).toBeUndefined()
+  })
+  it('never reuses an allowed image ticket for another question containing the same asset', async () => {
+    const { useExamStore } = await import(path); const store = useExamStore()
+    const image = { type: 'doc', content: [{ type: 'image', attrs: { asset_id: '901' } }] }
+    install(o => {
+      if (o.url.endsWith('/tickets/batch')) return ok(o.data.items.map((item: any, index: number) => ({ ...item, index,
+        ticket: item.owner_id === '101' ? { content_url: '/api/v1/media/tickets/only-101/content', expires_at: '2099-01-01' } : null,
+        error: item.owner_id === '101' ? null : { code: 40302, message: '第二题无权查看' },
+      })))
+      return ok({ ...active(), questions: [{ ...questions[0], stem: image }, { ...questions[1], stem: image }] })
+    })
+    await store.recover('81'); await Promise.all([store.loadItemMedia('101'), store.loadItemMedia('102')])
+    expect(calls.filter(o => o.url.endsWith('/tickets/batch')).map(o => o.data.items[0].owner_id)).toEqual(['101', '102'])
+    expect(store.assets['101']['901']).toContain('only-101'); expect(store.assets['102']?.['901']).toBeUndefined()
+    expect(store.mediaErrors['102']['901']).toBe('第二题无权查看')
   })
 })

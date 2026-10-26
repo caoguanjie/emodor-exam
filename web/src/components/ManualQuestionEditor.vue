@@ -37,7 +37,7 @@
       </div>
       <TiptapEditor v-if="!hydrateError" ref="questionEditor" :model-value="questionDocument" :runtime-questions="questions" :display-meta="displayMeta"
         profile="question" :mode="locked ? 'preview' : 'edit'" presentation="inline" compact :show-toolbar="false" :show-panels="false"
-        protect-question-structure :allow-structure="false" reorder-options show-answer-labels :media-resolver="getMediaImageContent"
+        protect-question-structure :allow-structure="false" reorder-options show-answer-labels :media-resolver="resolvePcMediaSource"
         @update:model-value="changeQuestion" @edit-blocked="reportError" @selection-change="toolbarRevision++" />
     </div>
     <p class="manual-question-editor__hint">点击选项字母设置正确答案；拖拽手柄或使用上移、下移调整顺序。</p>
@@ -53,7 +53,7 @@
           <button v-if="canUploadMedia" type="button" aria-label="插入解析图片" :disabled="pending" @mousedown.prevent @click="chooseImage('analysis')"><SvgIcon icon-class="image-line" /></button>
         </div>
         <TiptapEditor v-if="!hydrateError" ref="analysisEditor" :model-value="analysisDocument" profile="rich" :mode="locked ? 'preview' : 'edit'"
-          presentation="inline" compact :show-toolbar="false" :show-panels="false" :media-resolver="getMediaImageContent"
+          presentation="inline" compact :show-toolbar="false" :show-panels="false" :media-resolver="resolvePcMediaSource"
           @update:model-value="changeAnalysis" />
       </div>
     </details>
@@ -71,7 +71,8 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import type { JSONContent } from '@tiptap/core';
 import type { QuestionContentV3 } from '../api/question-document-types';
 import type { QuestionDraftPayload, QuestionType } from '../api/training-types';
-import { getMediaImageContent, uploadMedia } from '../api/media';
+import { uploadMedia } from '../api/media';
+import { resolvePcMediaSource } from '../services/media-content';
 import TiptapEditor from './Tiptap/index.vue';
 import SvgIcon from './Tiptap/components/SvgIcon.vue';
 import type { QuestionRuntimeMeta } from './Tiptap/extensions/QuestionNodes';

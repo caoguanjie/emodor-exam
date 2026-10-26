@@ -80,6 +80,17 @@ test('invalid or shared identity encryption keys are rejected before startup', a
   assert.ok(inspectBackendEnv(values).some(row => !row.ok && row.name === 'MEDIA_TICKET_SECRET'));
 });
 
+test('media delivery environment inspection rejects unbounded signed URL lifetimes', () => {
+  for (const env of [{ MEDIA_DELIVERY_MODE: 'public' }, { MEDIA_VIDEO_URL_TTL_SECONDS: '3601' }, { MEDIA_READ_URL_TTL_SECONDS: '0' }]) {
+    const rows = inspectBackendEnv(env);
+    assert.ok(rows.some(row => row.name === Object.keys(env)[0] && !row.ok));
+  }
+  const rows = inspectBackendEnv({ MEDIA_DELIVERY_MODE: 'cos-signed', MEDIA_READ_URL_TTL_SECONDS: '300', MEDIA_VIDEO_URL_TTL_SECONDS: '3600' });
+  for (const name of ['MEDIA_DELIVERY_MODE', 'MEDIA_READ_URL_TTL_SECONDS', 'MEDIA_VIDEO_URL_TTL_SECONDS']) {
+    assert.ok(rows.some(row => row.name === name && row.ok));
+  }
+});
+
 test('an existing encrypted AI configuration prevents silent key replacement', async (t) => {
   const root = await workspace(t);
   await mkdir(join(root, 'data'));

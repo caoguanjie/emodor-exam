@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia';
 import http, { tryRefresh } from '../api/http';
+import { invalidateMediaContext, mediaContext } from '../services/media-context';
+import { mediaResumeStore } from '../services/media-upload-resume';
 
 export interface AuthUser {
   id: number;
@@ -21,6 +23,7 @@ export const useAuthStore = defineStore('auth', {
     accessToken: sessionStorage.getItem('re_token') || '',
     user: JSON.parse(sessionStorage.getItem('re_user') || 'null') as AuthUser | null,
     needChangePassword: sessionStorage.getItem('re_pwd_pending') === '1',
+    mediaTaskEpoch: mediaContext().epoch,
   }),
   getters: {
     isLoggedIn: (s) => !!s.accessToken,
@@ -38,6 +41,7 @@ export const useAuthStore = defineStore('auth', {
       sessionStorage.setItem('re_pwd_pending', v ? '1' : '0');
     },
     async login(username: string, password: string, captchaId?: string, captchaCode?: string) {
+      this.invalidateMediaTasks();
       const body: Record<string, string> = { username, password };
       if (captchaId) body.captcha_id = captchaId;
       if (captchaCode) body.captcha_code = captchaCode;
@@ -57,6 +61,7 @@ export const useAuthStore = defineStore('auth', {
     },
     async fetchProfile() {
       const u: any = await http.get('/auth/profile');
+      if (this.user && String(this.user.id) !== String(u.id)) this.invalidateMediaTasks();
       this.user = u;
       sessionStorage.setItem('re_user', JSON.stringify(u));
     },
@@ -75,18 +80,25 @@ export const useAuthStore = defineStore('auth', {
       }
     },
     async logout() {
+      this.invalidateMediaTasks();
       try {
         await http.post('/auth/logout');
       } catch { /* 忽略登出网络错误 */ }
       this.logoutLocal();
     },
     logoutLocal() {
+      this.invalidateMediaTasks();
       this.accessToken = '';
       this.user = null;
       this.needChangePassword = false;
       sessionStorage.removeItem('re_token');
       sessionStorage.removeItem('re_user');
       sessionStorage.removeItem('re_pwd_pending');
+    },
+    invalidateMediaTasks() {
+      const previous = this.user?.id;
+      this.mediaTaskEpoch = invalidateMediaContext();
+      if (previous) void mediaResumeStore.clearUser(String(previous)).catch(() => {});
     },
   },
 });

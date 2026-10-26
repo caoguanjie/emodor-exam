@@ -1,6 +1,5 @@
 import test, { after, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
@@ -9,7 +8,6 @@ import { createRenderer, h, nextTick, ref } from '@vue/runtime-core';
 const webRoot = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const componentPath = resolve(webRoot, 'src/components/MediaUpload.vue');
 const apiPath = resolve(webRoot, 'src/api/media.ts');
-const httpPath = resolve(webRoot, 'src/api/http.ts');
 const mediaStubId = '\0media-api-component-test';
 const httpStubId = '\0media-http-component-test';
 const clientComponentId = '\0media-upload-component-client-test';
@@ -302,15 +300,13 @@ test('loads the latest non-empty binding once when owner and model change in one
   mounted.unmount();
 });
 
-test('uses an upload-specific unlimited timeout while preserving cancellation', async () => {
+test('uses an unlimited timeout and explicit cancellation for the compatibility upload transport', async () => {
   const mediaApi = await vite.ssrLoadModule(`${apiPath}?timeout-test`);
   const file = new File(['video'], 'lesson.mp4', { type: 'video/mp4' });
   const controller = new AbortController();
-  await mediaApi.uploadMedia(file, 'video', { signal: controller.signal });
+  await mediaApi.uploadMediaProxy(file, 'video', { signal: controller.signal });
   assert.equal(testContext.httpConfig.config.timeout, 0);
   assert.equal(testContext.httpConfig.config.signal, controller.signal);
-  const httpSource = await readFile(httpPath, 'utf8');
-  assert.match(httpSource, /timeout:\s*60000/);
 });
 
 test('previews video through authenticated content with cancellation, not a token-bearing URL', async () => {

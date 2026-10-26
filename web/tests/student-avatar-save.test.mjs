@@ -87,6 +87,9 @@ function testPlugin() {
       if (source === '../../utils/format' && importer?.includes('/src/views/admin/Users.vue')) return formatStubId;
       if (source === '../../components/MediaUpload.vue' && importer?.includes('/src/views/admin/Users.vue')) return mediaStubId;
       if (source === '../../components/ImportPreview.vue' && importer?.includes('/src/views/admin/Users.vue')) return importPreviewStubId;
+      // This suite exercises form-save locking. The avatar display is covered
+      // by the real URL composable/component suites, not the SSR-only loader.
+      if (source === '../../components/StudentAvatar.vue' && importer?.includes('/src/views/admin/Users.vue')) return importPreviewStubId;
       if (source === '../../composables/useUnsavedChanges' && importer?.includes('/src/views/admin/Users.vue')) return unsavedStubId;
       if (source === clientComponentId) return clientComponentId;
       return undefined;
@@ -172,6 +175,10 @@ async function mountUsers() {
   const app = host.createApp(Users);
   const components = {
     'el-input': passthrough('input'),
+    'el-input-number': passthrough('input-number'),
+    'el-switch': passthrough('switch'),
+    'el-radio': passthrough('radio'),
+    'el-radio-group': passthrough('radio-group'),
     'el-select': passthrough('select'),
     'el-option': passthrough('option'),
     'el-button': passthrough('button'),
@@ -241,6 +248,7 @@ test('disables the create form while its POST result is in flight', async () => 
     username: 'new-student',
     password: 'Password1',
     real_name: '新学员',
+    phone: '13900000000',
     source: 'institution',
     category_id: 'category-1',
   });
@@ -268,7 +276,7 @@ test('disables the custom avatar control while an edit save is in flight', async
     category_id: 'category-1',
     department_id: '',
     employee_no: '',
-    phone: '',
+    phone: '13900000000',
     email: '',
     status: 1,
     avatar_id: null,

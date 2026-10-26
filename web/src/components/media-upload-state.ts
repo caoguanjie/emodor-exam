@@ -7,7 +7,7 @@
 export const MEDIA_PURPOSES = ['avatar', 'course_cover', 'video', 'question', 'branding'] as const;
 export type MediaPurpose = (typeof MEDIA_PURPOSES)[number];
 export type MediaKind = 'image' | 'video';
-export type MediaUploadStatus = 'idle' | 'uploading' | 'processing' | 'ready' | 'error';
+export type MediaUploadStatus = 'idle' | 'hashing' | 'uploading' | 'paused' | 'processing' | 'ready' | 'error';
 
 export interface MediaLimits {
   video_max_bytes: number;
@@ -15,6 +15,11 @@ export interface MediaLimits {
   probe_timeout_ms: number;
   allowed_image_types: string[];
   allowed_video_types: string[];
+  upload_mode?: 'proxy' | 'direct';
+  multipart_threshold_bytes?: number;
+  part_size_bytes?: number;
+  parallel_limit?: number;
+  upload_session_ttl_seconds?: number;
 }
 
 export interface MediaFileLike {

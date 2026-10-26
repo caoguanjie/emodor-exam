@@ -1272,16 +1272,34 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 - 生产环境经 nginx TLS 终止提供 HTTPS（07 册 4.1）；密码仅在登录/改密报文中出现，存储一律 bcrypt。
 - 响应体永不返回 `password_hash`或明文 `api_key`。在考 payload 及普通预览不返回标准 `answer/analysis`；答案版是单独授权的管理接口，不与学员下发契约共用。只有已评分冻结结果（含历史已评分timeout）可向本人下发答案/解析；新纯timeout与历史submitted均无逐题结果。
 - `trace_id`：50001 错误响应 `data.trace_id` 供日志排查。
-- 题库管理预览可读取答案与解析，但富文本图片只存 media id 并经 Bearer 鉴权内容接口换取 Blob URL，不暴露私有路径或外链。新培训在考 payload 不返回标准答案或解析；终态题图按 3.7.1 分阶段授权。不存在答题图片资源。
+- 题库管理预览可读取答案与解析，但富文本图片只存 media id 并经 Bearer 申请受控预览短票 URL，不暴露私有路径或外链。新培训在考 payload 不返回标准答案或解析；终态题图按 3.7.1 分阶段授权。不存在答题图片资源。
 
 ---
+
+## COS 媒体协议增量（030，实施状态另见验收记录）
+
+所有业务端点保留 `/api/v1` 和 `{code,message,data}`，上传成功只返回资源ID，业务保存再事务绑定引用。
+
+| 方法/路径 | 授权与返回 |
+|---|---|
+| POST /media/upload-sessions | 当前上传权限；幂等client_request_id、用途/拥有者和文件指纹；返回持久会话 |
+| GET /media/upload-sessions/:id | 原操作者与当前权限；可信COS分块列表或原完成回执 |
+| POST /media/upload-sessions/:id/credentials | 精确临时键和必要动作，短时授权，不返回长期密钥 |
+| POST /media/upload-sessions/:id/complete | 服务端核对/合并；进入finalizing，ready由后台实际探测后发布 |
+| DELETE /media/upload-sessions/:id | 原子取消；finalizing只回当前状态，不能边发布边删除 |
+| POST /media/:assetId/preview-ticket | PC Bearer管理预览，不能作为learner票据 |
+| POST /media/tickets/batch | mobile，最多50项，按每个精确owner引用授权；保留重复项位置 |
+
+`GET /media/limits` 保留原限额，增加 upload_mode、multipart_threshold_bytes、part_size_bytes、parallel_limit、upload_session_ttl_seconds；local模式继续proxy。会话状态 uploading/finalizing/completed/failed/aborted/expired，完成回执默认30天，之后保留请求墓碑。
+
+local/实名内容保留 `/media/tickets/:ticket/content`（learner）及 `/media/preview-tickets/:ticket/content`（PC代理）。COS普通ready资源在申请/续签时复核当前权限后返回标准桶域名的准确GET签名URL，返回真实 `expires_at`；默认300秒、可配置上限3600秒，旧URL到期前仍有效。品牌入口 `/site-config/assets/:id/content` 当前白名单检查后307到短链，跳转no-store。URL不含业务JWT/SecretKey，身份和staging不签普通链接。在考不发解析图，纯timeout不发题图；客户端续签不重建学习session。
 
 ## 附：与基准文档的一致性对照
 
 | 校验项 | 结果 |
 |---|---|
 | 当前路由前缀与 README 3.4 模块映射 | 一致；现行新增 `/admin/question-materials`、`/admin/questions`、`/admin/papers`、`/me/exams*` 与 `/admin/exam-records`，旧学习/考试/统计只读兼容 |
-| 当前表名/字段名（snake_case）与 03 册 | 一致：39 张业务表 + 1 张迁移元数据表（共 40 张物理表）、三类客观题、客观答案列和无监控采集字段；Gate G 实名/票据自动化与独立代码审查已通过 |
+| 当前表名/字段名（snake_case）与 03 册 | 一致：40 张业务表 + 1 张迁移元数据表（共 41 张物理表）、三类客观题、客观答案列和无监控采集字段；Gate G 实名/票据自动化与独立代码审查已通过 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
 | 心跳/失焦/乱序/草稿/超时行为与05册 | 新/me无考试draft/heartbeat，仅本地草稿/主动整卷；到期纯timeout；旧/exams心跳只为legacy协议兼容，不采集监考数据 |
 | 统计口径与 05 册 7.4.1 | 一致（七项指标逐字对齐） |

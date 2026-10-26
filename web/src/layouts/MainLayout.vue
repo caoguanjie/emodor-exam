@@ -93,7 +93,8 @@ import {
   Grid, Menu as MenuIcon, Medal, Monitor, Notebook, OfficeBuilding,
   Picture, Reading, Setting, SetUp, Tickets, User, UserFilled,
 } from '@element-plus/icons-vue';
-import http, { publicSiteAssetUrl } from '../api/http';
+import http from '../api/http';
+import { resolvePublicBranding } from '../services/media-content';
 import MediaUpload from '../components/MediaUpload.vue';
 import BusinessTabs from '../components/BusinessTabs.vue';
 import { confirmAllUnsavedChanges, confirmUnsavedChanges, useUnsavedChanges } from '../composables/useUnsavedChanges';
@@ -121,7 +122,7 @@ const iconMap:Record<string,Component>={AlarmClock,CollectionTag,Cpu,DataAnalysi
 const iconFor=(name:string|null)=>name?iconMap[name]||Setting:null;
 const roleLabel=computed(()=>auth.user?.role==='super_admin'?'超级管理员':auth.user?.role==='regulation_admin'||auth.user?.permissions?.length?'业务管理员':'学员');
 const avatarChar=computed(()=>(auth.user?.real_name||'用').slice(0,1));
-const logoSrc=computed(()=>siteConfig.logo_asset_id?publicSiteAssetUrl(siteConfig.logo_asset_id):defaultBrandLogo);
+const logoSrc=computed(()=>siteConfig.logo_asset_id?resolvePublicBranding(siteConfig.logo_asset_id):defaultBrandLogo);
 const defaultOpeneds=computed(()=>adminGroups.value.filter(group=>!group.path&&group.name!=='系统设置').map(group=>group.id));
 const homePath=computed(()=>defaultHomePath(auth.isAdmin));
 

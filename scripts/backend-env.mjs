@@ -171,7 +171,13 @@ export function inspectBackendEnv(env, { real = false } = {}) {
     : ['true', 'false'].includes(env.SERVER_DEBUG_LOGIN_ENABLED || 'false'), '真实闭环与生产环境须关闭调试登录');
   const storageProvider = env.MEDIA_STORAGE_PROVIDER || 'local';
   check('MEDIA_STORAGE_PROVIDER', ['local', 'cos'].includes(storageProvider), '仅支持 local 或 cos');
-  if (storageProvider === 'cos') {
+  const deliveryMode = env.MEDIA_DELIVERY_MODE || 'proxy';
+  check('MEDIA_DELIVERY_MODE', ['proxy', 'cos-signed'].includes(deliveryMode), '仅支持 proxy 或 cos-signed');
+  for (const name of ['MEDIA_READ_URL_TTL_SECONDS', 'MEDIA_VIDEO_URL_TTL_SECONDS']) {
+    const raw = env[name] ?? '300';
+    check(name, /^[1-9]\d*$/.test(raw) && Number(raw) <= 3600, '必须为 1—3600 秒');
+  }
+  if (storageProvider === 'cos' || deliveryMode === 'cos-signed') {
     for (const key of cosImportKeys) check(key, present(key), '未配置');
     check('COS_KEY_PREFIX', /^(?:[A-Za-z0-9_-]+\/)+$/.test(env.COS_KEY_PREFIX || ''), present('COS_KEY_PREFIX') ? '必须为有界相对目录前缀并以 / 结尾' : '未配置');
     if (present('COS_BUCKET')) check('COS_BUCKET_FORMAT', /^[a-z0-9][a-z0-9-]*-\d+$/.test(env.COS_BUCKET), '格式不正确');

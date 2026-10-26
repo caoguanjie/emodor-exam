@@ -126,6 +126,10 @@ import { MediaUploadSessionService } from './modules/media/uploads/media-upload-
 import { MediaUploadGrantService } from './modules/media/uploads/media-upload-grant.service';
 import { MediaUploadFinalizerService } from './modules/media/uploads/media-upload-finalizer.service';
 import { MediaUploadCleanupService } from './modules/media/uploads/media-upload-cleanup.service';
+import { CosDownloadUrlAdapter } from './modules/media/delivery/cos-download-url.adapter';
+import { PcMediaTicketService } from './modules/media/delivery/pc-media-ticket.service';
+import { MediaDeliveryService } from './modules/media/delivery/media-delivery.service';
+import { MediaDeliveryController } from './modules/media/delivery/media-delivery.controller';
 import { MediaTicketController } from './modules/media/media-ticket.controller';
 import { MediaTicketService } from './modules/media/media-ticket.service';
 import { IdentityController } from './modules/identity/identity.controller';
@@ -182,7 +186,7 @@ const config = loadConfig();
     AuthController, MobileAuthController, DebugMobileAuthController, AccessController, StudentsController, MeProfileController, CategoryController,
     RegulationContentController, QuestionMaterialsController, AiController, LearningController, ExamsController, TrainingExamsController, PaperAdminController, ExamAdminController,
     StatisticsController, TrainingStatisticsController, AdminDashboardController, HealthController,
-    MediaUploadSessionController, MediaController, MediaTicketController, IdentityController,
+    MediaUploadSessionController, MediaDeliveryController, MediaController, MediaTicketController, IdentityController,
     CourseAdminController, LearnerHomeController, MyCoursesController,
     VideoLearningController, QuestionImportController, AiQuestionImportController, QuestionAuthoringController, QuestionAuthoringOptionsController,
     SystemController, SiteConfigController,
@@ -201,6 +205,12 @@ const config = loadConfig();
     RedisService, AuditService, TasksService,
     MediaService, MediaProbeService, MediaTicketService, MediaPublisher,
     MediaUploadSessionService, MediaUploadGrantService, MediaUploadFinalizerService, MediaUploadCleanupService,
+    {
+      provide: CosDownloadUrlAdapter,
+      useFactory: (appConfig: AppConfig) => new CosDownloadUrlAdapter(appConfig),
+      inject: [AppConfig],
+    },
+    PcMediaTicketService, MediaDeliveryService,
     {
       provide: CosMediaStorage,
       useFactory: (appConfig: AppConfig) => appConfig.cosMedia.bucket && appConfig.cosMedia.region

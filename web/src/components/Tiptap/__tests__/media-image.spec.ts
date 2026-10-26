@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import TiptapEditor from '../index.vue';
 import { createExtensions } from '../utils/createExtensions';
 
-type Resolver = (assetId: string) => Promise<Blob>;
+type Resolver = (assetId: string) => Promise<string | Blob>;
 const editors: Editor[] = [];
 const wrappers: VueWrapper[] = [];
 const originalCreate = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
@@ -72,6 +72,7 @@ beforeEach(() => {
   revokeObjectURL.mockReset();
   Object.defineProperty(URL, 'createObjectURL', { configurable: true, writable: true, value: createObjectURL });
   Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, writable: true, value: revokeObjectURL });
+
 });
 
 afterEach(() => {
@@ -337,4 +338,26 @@ describe('controlled media image NodeView', () => {
     expect(revokeObjectURL.mock.calls.map(([url]) => url)).toEqual(expect.arrayContaining(allocated));
     expect(revokeObjectURL).toHaveBeenCalledTimes(allocated.length);
   });
+  it('renders a controlled preview URL without serializing it into the author document', async () => {
+    const url = '/api/v1/media/preview-tickets/fixture.signature/content';
+    const editor = mountEditor(async () => url);
+    await settle();
+    expect(image(editor).getAttribute('src')).toBe(url);
+    image(editor).dispatchEvent(new Event('load'));
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(JSON.stringify(editor.getJSON())).not.toContain(url);
+    expect(editor.getHTML()).not.toContain(url);
+  });
+  it('retries a failed image without changing the editor selection or document', async () => {
+    const resolver = vi.fn().mockRejectedValueOnce(new Error('temporary')).mockResolvedValue('/api/v1/media/preview-tickets/retry.signature/content');
+    const editor = mountEditor(resolver); await settle();
+    editor.commands.setTextSelection(1);
+    const selection = editor.state.selection.toJSON(); const json = editor.getJSON();
+    const button = mediaDom(editor).querySelector('button')!;
+    button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    button.click(); await settle();
+    expect(image(editor).getAttribute('src')).toBe('/api/v1/media/preview-tickets/retry.signature/content');
+    expect(editor.state.selection.toJSON()).toEqual(selection); expect(editor.getJSON()).toEqual(json);
+  });
+
 });

@@ -50,6 +50,7 @@ export class AppConfig {
   };
   mediaTicket: { secret: string; ttlSeconds: number };
   cosMedia: CosMediaConfig;
+  mediaDelivery: { mode: 'proxy' | 'cos-signed'; readUrlTtlSeconds: number; videoUrlTtlSeconds: number };
   mediaUpload: {
     sessionTtlSeconds: number;
     receiptTtlSeconds: number;
@@ -206,6 +207,14 @@ export function loadConfig(): AppConfig {
     throw new Error('IDENTITY_PROVIDER=tencent 时必须同时启用身份证 OCR 和 FaceID');
   }
   const cosMedia = readCosMediaConfig(process.env);
+  const deliveryMode = process.env.MEDIA_DELIVERY_MODE || 'proxy';
+  if (deliveryMode !== 'proxy' && deliveryMode !== 'cos-signed') throw new Error('MEDIA_DELIVERY_MODE 只支持 proxy 或 cos-signed');
+  if (deliveryMode === 'cos-signed') readCosMediaConfig({ ...process.env, MEDIA_STORAGE_PROVIDER: 'cos' });
+  const mediaDelivery: AppConfig['mediaDelivery'] = {
+    mode: deliveryMode,
+    readUrlTtlSeconds: mediaEnvInt('MEDIA_READ_URL_TTL_SECONDS', 300, 1, 3600),
+    videoUrlTtlSeconds: mediaEnvInt('MEDIA_VIDEO_URL_TTL_SECONDS', 300, 1, 3600),
+  };
   const mediaUpload: AppConfig['mediaUpload'] = {
     sessionTtlSeconds: mediaEnvInt('MEDIA_UPLOAD_SESSION_TTL_SECONDS', 86400, 60, 604800),
     receiptTtlSeconds: mediaEnvInt('MEDIA_UPLOAD_RECEIPT_TTL_SECONDS', 2592000, 86400, 7776000),
@@ -225,6 +234,7 @@ export function loadConfig(): AppConfig {
   return {
     env,
     cosMedia,
+    mediaDelivery,
     mediaUpload,
     port: Number(process.env.PORT || 3000),
     db: {

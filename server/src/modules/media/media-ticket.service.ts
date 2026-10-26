@@ -1,14 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { AppConfig } from '../../config/configuration';
 import { Errors } from '../../common/errors';
 import { MediaService } from './media.service';
+import { CosDownloadUrlAdapter } from './delivery/cos-download-url.adapter';
+import { mediaDeliverySettings } from './delivery/media-delivery.contract';
 
 export interface MediaTicketSettings { secret: string; ttlSeconds: number }
 export interface MediaTicketClaims { v: 1; asset: string; user: string; purpose: string; ownerType: string; ownerId: string; exp: number }
 @Injectable()
 export class MediaTicketService {
-  constructor(private readonly media: MediaService, private readonly config: AppConfig) {}
+  constructor(private readonly media: MediaService, private readonly config: AppConfig, @Optional() private readonly urls?: CosDownloadUrlAdapter) {}
   private settings(): MediaTicketSettings { return (this.config as AppConfig & { mediaTicket: MediaTicketSettings }).mediaTicket; }
   private signature(payload: string): Buffer {
     const secret = Buffer.from(this.settings()?.secret || '', 'base64');
@@ -17,6 +19,11 @@ export class MediaTicketService {
   }
   async issue(userId: string, assetId: string, ownerType: string, ownerId: string) {
     const asset = await this.media.authorizeTicket(userId, assetId, ownerType, ownerId);
+    const signed = this.urls?.issue(asset);
+    if (signed) return signed;
+    if (!this.urls && mediaDeliverySettings(this.config).mode === 'cos-signed' && asset.storageProvider === 'cos' && !asset.purpose.startsWith('identity_')) {
+      throw Errors.serviceUnavailable('媒体读取链接暂不可用');
+    }
     const ttl = this.settings()?.ttlSeconds || 300;
     const exp = Math.floor(Date.now() / 1000) + ttl;
     const claims: MediaTicketClaims = { v: 1, asset: String(asset.id), user: userId, purpose: asset.purpose, ownerType, ownerId, exp };

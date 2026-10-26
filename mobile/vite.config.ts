@@ -1,8 +1,15 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
+import { fileURLToPath } from "node:url";
 import uni from "@dcloudio/vite-plugin-uni";
+import { publicEnvFallbackDefines } from "./build/public-env";
 
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  define: publicEnvFallbackDefines(
+    loadEnv(mode, fileURLToPath(new URL("../", import.meta.url)), "VITE_"),
+    loadEnv(mode, fileURLToPath(new URL("./", import.meta.url)), "VITE_"),
+    process.env,
+  ),
   plugins: [uni()],
   base: "/mobile/",
   build: {
@@ -20,4 +27,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

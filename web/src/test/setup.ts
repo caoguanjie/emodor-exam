@@ -1,6 +1,6 @@
 import { afterEach } from 'vitest';
 
-afterEach(() => { document.body.innerHTML = ''; });
+afterEach(() => { if (typeof document !== 'undefined') document.body.innerHTML = ''; });
 
 if (!globalThis.ResizeObserver) {
   globalThis.ResizeObserver = class implements ResizeObserver {

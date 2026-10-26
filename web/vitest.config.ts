@@ -12,6 +12,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: [
+      'src/services/__tests__/**/*.spec.ts',
       'src/components/Tiptap/__tests__/**/*.spec.ts',
       'src/components/question-designers/__tests__/**/*.spec.ts',
       'src/utils/__tests__/**/*.spec.ts',

@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Param, Post, Put, Query, Req, Res,
+  Body, Controller, Delete, Get, Inject, Param, Post, Put, Query, Req, Res,
 } from '@nestjs/common';
 import { Type, Transform } from 'class-transformer';
 import {
@@ -211,7 +211,7 @@ export class SystemController {
 
 @Controller('site-config')
 export class SiteConfigController {
-  constructor(private readonly system: SystemService) {}
+  constructor(@Inject(SystemService) private readonly system: SystemService) {}
 
   @Get()
   @Public()
@@ -223,6 +223,15 @@ export class SiteConfigController {
   @Public()
   @SkipEnvelope()
   async content(@Param('id') id: string, @Req() req: Request, @Res() res: Response) {
+    // A COS GET signature is not a HEAD signature; keep HEAD on the proxy path.
+    const redirect = req.method === 'HEAD' ? null : await this.system.publicAssetRedirect(id);
+    if (redirect) {
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Location', redirect.content_url);
+      res.status(307).end();
+      return;
+    }
     const descriptor = await this.system.openPublicAsset(id, req.headers.range);
     res.setHeader('Cache-Control', 'public, max-age=300');
     sendMediaContent(res, descriptor);

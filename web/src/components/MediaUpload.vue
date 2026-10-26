@@ -56,6 +56,12 @@
       </button>
     </div>
 
+    <div v-if="limits?.upload_mode === 'direct'" class="media-upload__actions">
+      <button v-if="state.status === 'hashing' || state.status === 'uploading'" type="button" class="media-upload__button" @click="pauseUpload">暂停上传</button>
+      <button v-if="state.status === 'paused'" type="button" class="media-upload__button" :disabled="disabled" @click="resumeUpload">继续上传</button>
+      <button v-if="['hashing', 'uploading', 'paused', 'processing'].includes(state.status) && state.file" type="button" class="media-upload__button" @click="cancelUpload">取消上传</button>
+    </div>
+
     <p v-if="!compact" class="media-upload__hint">{{ limitHint }}</p>
 
     <img v-if="previewUrl && !isVideo && listType !== 'picture-card'" class="media-upload__preview" :src="previewUrl" alt="媒体预览" />
@@ -81,9 +87,9 @@
     <el-image-viewer v-if="previewVisible && previewUrl && !isVideo" :url-list="[previewUrl]" teleported @close="previewVisible = false" />
     <el-dialog v-if="previewVisible && isVideo" v-model="previewVisible" title="视频预览" width="min(900px, 92vw)"
       class="re-form-dialog" append-to-body destroy-on-close :before-close="beforePreviewClose">
-      <p v-if="previewLoading" role="status">正在加载视频预览，大文件可能需要一些时间，可关闭取消。</p>
+      <p v-if="previewLoading" role="status">正在申请视频预览地址…</p>
       <div v-else-if="previewError"><p role="alert">{{ previewError }}</p><button type="button" class="media-upload__button" @click="openPreview">重试预览</button></div>
-      <video v-else-if="previewUrl" ref="videoPlayer" class="media-upload__video-player" :src="previewUrl" controls preload="metadata" />
+      <video v-else-if="previewUrl" ref="videoPlayer" class="media-upload__video-player" :src="previewUrl" controls preload="metadata" @error="retryVideoPreview" @loadedmetadata="restorePreviewPosition" />
       <template #footer><el-button @click="previewVisible = false">关闭</el-button></template>
     </el-dialog>
   </div>
@@ -93,7 +99,10 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { ElButton, ElDialog, ElIcon, ElImageViewer, ElUpload, type UploadFile, type UploadInstance, type UploadUserFile } from 'element-plus';
 import { Delete, Picture, Plus, UploadFilled, VideoCamera, ZoomIn } from '@element-plus/icons-vue';
-import { getMediaImageContent, getMediaVideoContent, getMediaLimits, getMediaMetadata, uploadMedia, type MediaMetadata, type MediaUploadResponse } from '../api/media';
+import { getMediaLimits, getMediaMetadata, uploadMedia, type MediaMetadata, type MediaUploadResponse } from '../api/media';
+import { createMediaUploadTask, type MediaUploadTask } from '../services/media-upload';
+import { invalidatePcMedia, resolvePcMedia } from '../services/media-content';
+import { onMediaContextChange } from '../services/media-context';
 import {
   createMediaUploadState,
   mediaKindForPurpose,
@@ -146,7 +155,7 @@ const pictureUpload = ref<UploadInstance>();
 const previewVisible = ref(false);
 const limits = ref<MediaLimits | null>(null);
 const state = ref<MediaUploadState>(createMediaUploadState());
-watch(() => state.value.status === 'uploading' || state.value.status === 'processing' || (state.value.status === 'error' && Boolean(state.value.file)),
+watch(() => ['hashing', 'uploading', 'paused', 'processing'].includes(state.value.status) || (state.value.status === 'error' && Boolean(state.value.file)),
   pending => emit('pending', pending), { immediate: true, flush: 'sync' });
 const metadata = ref<MediaMetadata | null>(null);
 const previewUrl = ref<string | null>(null);
@@ -159,6 +168,13 @@ let pollTimer: ReturnType<typeof setTimeout> | undefined;
 let pollAttempts = 0;
 let requestSerial = 0;
 let uploadController: AbortController | null = null;
+let uploadTask: MediaUploadTask | null = null;
+let unsubscribeUpload: (() => void) | null = null;
+let previewRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+let previewPosition = 0;
+let previewWasPlaying = false;
+let previewRetries = 0;
+let previewExpiresAt = 0;
 
 const disabled = computed(() => props.disabled);
 const isVideo = computed(() => mediaKindForPurpose(props.purpose) === 'video');
@@ -181,6 +197,8 @@ const displayName = computed(() => state.value.file?.name || metadata.value?.ori
 const statusLabel = computed(() => {
   switch (state.value.status) {
     case 'uploading': return '上传中';
+    case 'hashing': return '校验文件中';
+    case 'paused': return '已暂停';
     case 'processing': return '处理中';
     case 'ready': return '已就绪';
     case 'error': return '处理失败';
@@ -225,8 +243,10 @@ function revokePreview() {
   previewVisible.value = false;
   closeVideoPreview();
   previewError.value = '';
+  previewExpiresAt = 0;
+  previewPosition = 0; previewWasPlaying = false;
   if (previewUrl.value) {
-    URL.revokeObjectURL(previewUrl.value);
+    if (previewUrl.value.startsWith('blob:')) URL.revokeObjectURL(previewUrl.value);
     previewUrl.value = null;
   }
 }
@@ -236,6 +256,9 @@ function closeVideoPreview() {
   previewController?.abort();
   previewController = null;
   previewLoading.value = false;
+  clearTimeout(previewRefreshTimer);
+  previewRetries = 0;
+  previewWasPlaying = false;
   videoPlayer.value?.pause();
 }
 
@@ -255,6 +278,10 @@ function showVideoFrame(event: Event) {
 
 async function openPreview() {
   previewVisible.value = true;
+  if (previewUrl.value && !previewUrl.value.startsWith('blob:') && isVideo.value) {
+    if (previewExpiresAt <= Date.now() + 10000) previewUrl.value = null;
+    else schedulePreviewRefresh();
+  }
   if (previewUrl.value || !isVideo.value) return;
   const assetId = currentPreviewAssetId.value;
   if (!assetId || previewLoading.value) return;
@@ -264,22 +291,81 @@ async function openPreview() {
   previewLoading.value = true;
   previewError.value = '';
   try {
-    // Saved videos may be large. Download only on a deliberate preview click,
-    // with the existing Authorization header; closing aborts the request.
-    const blob = await getMediaVideoContent(assetId, { signal: controller.signal });
-    if (serial !== previewSerial || controller.signal.aborted || assetId !== currentPreviewAssetId.value) return;
-    previewUrl.value = URL.createObjectURL(blob);
-  } catch (error) {
-    if (serial === previewSerial && !controller.signal.aborted) previewError.value = safeErrorMessage(error);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const ticket = await resolvePcMedia(assetId, controller.signal);
+        if (serial !== previewSerial || controller.signal.aborted || assetId !== currentPreviewAssetId.value) return;
+        previewUrl.value = ticket.content_url;
+        previewExpiresAt = Date.parse(ticket.expires_at);
+        schedulePreviewRefresh();
+        return;
+      } catch (error) {
+        if (serial !== previewSerial || controller.signal.aborted) return;
+        const code = error && typeof error === 'object' && 'code' in error ? Number(error.code) : NaN;
+        if (attempt === 0 && (code <= 0 || (code >= 500 && code < 600) || (code >= 50000 && code < 60000))) {
+          const retry = await new Promise<boolean>(resolve => {
+            const stop = () => { clearTimeout(timer); resolve(false); };
+            const timer = setTimeout(() => { controller.signal.removeEventListener('abort', stop); resolve(true); }, 1000);
+            controller.signal.addEventListener('abort', stop, { once: true });
+            if (controller.signal.aborted) stop();
+          });
+          if (retry) continue;
+          return;
+        }
+        previewError.value = safeErrorMessage(error);
+        return;
+      }
+    }
   } finally {
     if (serial === previewSerial) previewLoading.value = false;
     if (previewController === controller) previewController = null;
   }
 }
 
+function schedulePreviewRefresh() {
+  clearTimeout(previewRefreshTimer);
+  previewRefreshTimer = setTimeout(() => { if (previewVisible.value) void refreshVideoPreview(); }, Math.min(2147483647, Math.max(1000, previewExpiresAt - Date.now() - 10000)));
+}
+
 function abortCurrentRequest() {
+  unsubscribeUpload?.();
+  unsubscribeUpload = null;
+  uploadTask?.pause();
+  uploadTask = null;
   uploadController?.abort();
   uploadController = null;
+}
+
+function pauseUpload() { uploadTask?.pause(); }
+function resumeUpload() { void uploadTask?.resume(); }
+function cancelUpload() {
+  requestSerial += 1;
+  void uploadTask?.cancel().catch(() => {});
+  abortCurrentRequest();
+  clearPoll(); revokePreview();
+  state.value = createMediaUploadState(); metadata.value = null;
+  if (props.modelValue) void loadBoundAsset(props.modelValue);
+}
+
+async function refreshVideoPreview() {
+  if (!currentPreviewAssetId.value || state.value.file || !previewVisible.value) return;
+  if (videoPlayer.value) {
+    previewPosition = videoPlayer.value.currentTime || 0;
+    previewWasPlaying = !videoPlayer.value.paused;
+  }
+  videoPlayer.value?.pause();
+  invalidatePcMedia(currentPreviewAssetId.value);
+  previewUrl.value = null;
+  await openPreview();
+}
+function retryVideoPreview() {
+  if (previewRetries++ < 1) void refreshVideoPreview();
+  else { previewError.value = '视频预览暂不可用，请重新打开'; previewUrl.value = null; }
+}
+function restorePreviewPosition() {
+  if (videoPlayer.value && previewPosition > 0) videoPlayer.value.currentTime = previewPosition;
+  if (previewWasPlaying) void videoPlayer.value?.play().catch(() => {});
+  previewPosition = 0; previewWasPlaying = false;
 }
 
 function resetInput() {
@@ -320,10 +406,10 @@ function markAssetReady(assetId: string, durationMs: number | null) {
 async function loadPreview(asset: MediaMetadata, serial: number) {
   if (asset.media_kind !== 'image' || asset.status !== 'ready') return;
   try {
-    const blob = await getMediaImageContent(asset.asset_id);
+    const ticket = await resolvePcMedia(asset.asset_id);
     if (serial !== requestSerial) return;
     revokePreview();
-    previewUrl.value = URL.createObjectURL(blob);
+    previewUrl.value = ticket.content_url;
   } catch {
     // A preview is optional; metadata/status remain authoritative and no
     // request details are surfaced in the UI.
@@ -377,14 +463,29 @@ async function startUpload(file: File, serial = ++requestSerial) {
   state.value = reduceMediaUploadState(state.value, { type: 'upload-start' });
   const controller = new AbortController();
   uploadController = controller;
+  let taskForRequest: MediaUploadTask | null = null;
+  let unsubscribeForRequest: (() => void) | null = null;
   try {
-    const result = await uploadMedia(file, props.purpose, {
+    const options = {
       ownerId: props.ownerId,
       signal: controller.signal,
-      onProgress: (progress) => {
+      onProgress: (progress: number) => {
         if (serial === requestSerial) state.value = reduceMediaUploadState(state.value, { type: 'progress', progress });
       },
-    });
+    };
+    let result: MediaUploadResponse;
+    if (limits.value?.upload_mode === 'direct') {
+      taskForRequest = createMediaUploadTask(file, props.purpose, options);
+      uploadTask = taskForRequest;
+      unsubscribeForRequest = taskForRequest.subscribe(snapshot => {
+        if (serial !== requestSerial) return;
+        const status = snapshot.state === 'finalizing' ? 'processing' : snapshot.state === 'ready' ? state.value.status
+          : snapshot.state === 'cancelled' ? 'idle' : snapshot.state;
+        state.value = { ...state.value, status, progress: snapshot.progress };
+      });
+      unsubscribeUpload = unsubscribeForRequest;
+      result = await taskForRequest.result;
+    } else result = await uploadMedia(file, props.purpose, options);
     if (serial !== requestSerial) return;
     emit('uploaded', result);
     if (!result.asset_id) throw new Error('上传响应缺少媒体标识');
@@ -417,6 +518,8 @@ async function startUpload(file: File, serial = ++requestSerial) {
     setError(safeErrorMessage(error), assetId);
     if (assetId) await pollAsset(assetId, serial);
   } finally {
+    unsubscribeForRequest?.();
+    if (uploadTask === taskForRequest) { unsubscribeUpload = null; uploadTask = null; }
     if (uploadController === controller) uploadController = null;
   }
 }
@@ -477,6 +580,7 @@ function retry() {
 
 function clearSelection() {
   requestSerial += 1;
+  void uploadTask?.cancel().catch(() => {});
   clearPoll();
   abortCurrentRequest();
   revokePreview();
@@ -533,6 +637,8 @@ function invalidateMediaContext() {
   resetInput();
 }
 
+const unsubscribeContext = onMediaContextChange(invalidateMediaContext);
+
 watch(() => [props.ownerId, props.purpose, props.modelValue] as const, ([ownerId, purpose, assetId], previous) => {
   const previousOwnerId = previous?.[0];
   const previousPurpose = previous?.[1];
@@ -552,6 +658,7 @@ watch(() => [props.ownerId, props.purpose, props.modelValue] as const, ([ownerId
 watch(() => props.currentAssetId, () => { if (!state.value.file) revokePreview(); });
 
 onBeforeUnmount(() => {
+  unsubscribeContext();
   requestSerial += 1;
   clearPoll();
   abortCurrentRequest();

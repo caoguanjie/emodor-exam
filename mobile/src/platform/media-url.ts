@@ -1,4 +1,5 @@
 /** Leaf module: URL validation must not import API clients, stores or UI components. */
+import { assertCosMediaUrl } from './cos-media-url'
 type MediaPlatform = 'h5' | 'mp-weixin'
 class MediaUrlError extends Error {
   readonly code = -2
@@ -9,8 +10,8 @@ export function safeMediaUrl(url: string): string {
   const match = typeof url === 'string' ? /^\/api\/v1\/media\/tickets\/([A-Za-z0-9._~-]+)\/content$/.exec(url) : null
   // An unreserved single segment is normalization-stable except for these two dot segments.
   // Percent escapes, backslashes, separators and controls are excluded by the whitelist.
-  if (!match || match[1] === '.' || match[1] === '..') throw new MediaUrlError('媒体地址无效')
-  return url
+  if (match && match[1] !== '.' && match[1] !== '..') return url
+  return assertCosMediaUrl(url, import.meta.env.VITE_COS_MEDIA_ORIGIN || '', import.meta.env.VITE_COS_MEDIA_PREFIX || '')
 }
 
 function absoluteUrl(path: string, platform: MediaPlatform, origin = ''): string {
@@ -24,7 +25,8 @@ function absoluteUrl(path: string, platform: MediaPlatform, origin = ''): string
 }
 
 export function mediaContentUrl(url: string, platform: MediaPlatform, origin = ''): string {
-  return absoluteUrl(safeMediaUrl(url), platform, origin)
+  const safe = safeMediaUrl(url)
+  return safe.startsWith('https://') ? safe : absoluteUrl(safe, platform, origin)
 }
 
 function platformUrl(path: string): string {
@@ -35,7 +37,10 @@ function platformUrl(path: string): string {
 }
 
 /** Absolute H5 URLs prevent uni-h5 from prefixing /mobile/ to protected API paths. */
-export function resolveMediaUrl(url: string): string { return platformUrl(safeMediaUrl(url)) }
+export function resolveMediaUrl(url: string): string {
+  const safe = safeMediaUrl(url)
+  return safe.startsWith('https://') ? safe : platformUrl(safe)
+}
 
 /** Public branding has a separate fixed route; it never accepts arbitrary media URLs. */
 export function resolvePublicBrandingUrl(assetId: string): string {

@@ -1,7 +1,9 @@
 import { mergeAttributes, Node } from '@tiptap/core';
 import { isEditorMutationAllowed } from '../utils/widgetNodeViewRegistry';
+import { assertControlledMediaUrl, invalidatePcMedia } from '../../../services/media-content';
+import { isMediaContextCurrent, mediaContext, onMediaContextChange } from '../../../services/media-context';
 
-export type MediaResolver = (assetId: string) => Promise<Blob>;
+export type MediaResolver = (assetId: string) => Promise<string | Blob>;
 
 interface MediaImageOptions {
   mediaResolver?: MediaResolver;
@@ -95,6 +97,11 @@ export const MediaImage = Node.create<MediaImageOptions>({
       let objectUrl: string | null = null;
       let generation = 0;
       let destroyed = false;
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.textContent = '重试图片';
+      retry.onmousedown = event => event.preventDefault();
+      retry.onclick = event => { event.preventDefault(); if (isControlledMediaAssetId(assetId)) invalidatePcMedia(assetId); load(); };
 
       const render = () => {
         const id = isControlledMediaAssetId(assetId) ? assetId : '无效资源';
@@ -118,6 +125,7 @@ export const MediaImage = Node.create<MediaImageOptions>({
         } else {
           dom.replaceChildren(statusText);
         }
+        if (state === 'error' && resolver) dom.append(retry);
         dom.dispatchEvent(new CustomEvent('controlled-media-state', { bubbles: true }));
       };
 
@@ -144,15 +152,16 @@ export const MediaImage = Node.create<MediaImageOptions>({
           return;
         }
         const requestedAssetId = assetId;
-        const isCurrent = () => !destroyed && request === generation;
+        const context = mediaContext();
+        const isCurrent = () => !destroyed && request === generation && isMediaContextCurrent(context);
         state = 'loading';
         render();
         void Promise.resolve()
           .then(() => isCurrent() ? resolver(requestedAssetId) : undefined)
-          .then((blob) => {
+          .then((source) => {
             // A stale Blob never gets an ObjectURL, including after this NodeView is destroyed.
-            if (!isCurrent() || blob === undefined) return;
-            objectUrl = URL.createObjectURL(blob);
+            if (!isCurrent() || source === undefined) return;
+            const sourceUrl = typeof source === 'string' ? assertControlledMediaUrl(source) : (objectUrl = URL.createObjectURL(source));
             const resolvedImage = document.createElement('img');
             image = resolvedImage;
             resolvedImage.style.maxWidth = '100%';
@@ -174,7 +183,7 @@ export const MediaImage = Node.create<MediaImageOptions>({
             };
             resolvedImage.onerror = failed;
             render();
-            resolvedImage.src = objectUrl;
+            resolvedImage.src = sourceUrl;
           })
           .catch(() => {
             if (!isCurrent()) return;
@@ -183,6 +192,12 @@ export const MediaImage = Node.create<MediaImageOptions>({
             render();
           });
       };
+      const unsubscribeContext = onMediaContextChange(() => {
+        generation += 1;
+        releaseImage();
+        state = 'error';
+        render();
+      });
       load();
 
       return {
@@ -201,6 +216,7 @@ export const MediaImage = Node.create<MediaImageOptions>({
         destroy: () => {
           destroyed = true;
           generation += 1;
+          unsubscribeContext();
           releaseImage();
         },
       };

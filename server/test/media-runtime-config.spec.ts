@@ -5,6 +5,23 @@ import { MediaService } from '../src/modules/media/media.service';
 afterEach(() => vi.unstubAllEnvs());
 
 describe('media runtime configuration', () => {
+  it('keeps COS read URL lifetime configurable without accepting an unbounded URL', () => {
+    vi.stubEnv('MEDIA_STORAGE_PROVIDER', 'local');
+    vi.stubEnv('MEDIA_DELIVERY_MODE', 'cos-signed');
+    for (const [name, value] of Object.entries({ COS_BUCKET: 'fixture-1234567890', COS_REGION: 'ap-guangzhou', COS_KEY_PREFIX: 'ruleexam/test/', COS_SECRET_ID: 'unusable-fixture-id', COS_SECRET_KEY: 'unusable-fixture-key' })) vi.stubEnv(name, value);
+    vi.stubEnv('MEDIA_READ_URL_TTL_SECONDS', '300');
+    vi.stubEnv('MEDIA_VIDEO_URL_TTL_SECONDS', '3600');
+    expect(loadConfig().mediaDelivery).toEqual({ mode: 'cos-signed', readUrlTtlSeconds: 300, videoUrlTtlSeconds: 3600 });
+    vi.stubEnv('MEDIA_VIDEO_URL_TTL_SECONDS', '3601');
+    expect(() => loadConfig()).toThrow(/MEDIA_VIDEO_URL_TTL_SECONDS/);
+    vi.stubEnv('MEDIA_VIDEO_URL_TTL_SECONDS', '300');
+    vi.stubEnv('MEDIA_DELIVERY_MODE', 'public');
+    expect(() => loadConfig()).toThrow(/MEDIA_DELIVERY_MODE/);
+    vi.stubEnv('MEDIA_DELIVERY_MODE', 'cos-signed');
+    vi.stubEnv('COS_SECRET_KEY', undefined);
+    expect(() => loadConfig()).toThrow(/COS_SECRET_KEY/);
+  });
+
   it('advertises proxy fallback and the same upload limits used by the session service', () => {
     vi.stubEnv('MEDIA_STORAGE_PROVIDER', 'local');
     vi.stubEnv('MEDIA_UPLOAD_PART_SIZE_BYTES', '4194304');

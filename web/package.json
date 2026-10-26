@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
+    "@noble/hashes": "2.4.0",
     "@tiptap/core": "3.32.0",
     "@tiptap/extension-highlight": "3.32.0",
     "@tiptap/extension-subscript": "3.32.0",
@@ -23,6 +24,7 @@
     "@tiptap/vue-3": "3.32.0",
     "@vueuse/core": "14.4.0",
     "axios": "^1.7.5",
+    "cos-js-sdk-v5": "1.10.1",
     "element-plus": "^2.8.0",
     "fuse.js": "7.5.0",
     "moment": "2.31.0",

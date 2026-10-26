@@ -157,7 +157,8 @@ import PaperDesigner from '../../components/question-designers/PaperDesigner.vue
 import type { PaperDesignerValue, SaveContext } from '../../components/question-designers/contracts';
 import { createPaperDesignerHost } from '../../composables/paper-designer-host';
 import { useAuthoringOptions } from '../../composables/useAuthoringOptions';
-import { getMediaImageContent, uploadMedia } from '../../api/media';
+import { uploadMedia } from '../../api/media';
+import { resolvePcMediaSource } from '../../services/media-content';
 
 interface Draft {
   title: string;
@@ -276,7 +277,7 @@ const designerRelationOptions = ref<{ category: Id; regulations: NamedOption[]; 
 const designerHistoricalDifficulties = computed(() => Object.values(designerValue.value?.document.questions || {}).some((meta) => !authoringOptions.difficultyOptions.value.some((option) => option.value === meta.difficulty)));
 const designerRegulations = computed(() => designerRelationOptions.value.regulations.map((item) => ({ id: item.id, title: item.title || item.name || String(item.id), category_id: designerRelationOptions.value.category })));
 const designerCourses = computed(() => designerRelationOptions.value.courses.map((item) => ({ id: item.id, title: item.title || item.name || String(item.id), category_id: designerRelationOptions.value.category })));
-const designerMediaResolver = (id: string) => { if (!auth.can('media:read')) return Promise.reject(new Error('无图片读取权限')); return getMediaImageContent(id); };
+const designerMediaResolver = (id: string) => { if (!auth.can('media:read')) return Promise.reject(new Error('无图片读取权限')); return resolvePcMediaSource(id); };
 const designerMediaAdapter = computed(() => auth.can('media:write') && auth.can('questions:write') ? { upload: (file: File) => uploadMedia(file, 'question') } : undefined);
 const designerGuardDirty = computed(() => designerVisible.value && (designerDirty.value || !!designerHost.value?.busy.value || !!designerHost.value?.pending.value));
 useUnsavedChanges(designerGuardDirty, { canDiscard: () => designerHost.value?.canDiscard() !== false,
