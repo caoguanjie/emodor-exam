@@ -36,7 +36,9 @@ export type PaperQuestionBinding =
 export type DesignerPaper = Pick<TrainingPaperSummary, 'id' | 'title'> & Partial<Pick<
   TrainingPaperSummary,
   | 'category_id' | 'mode' | 'requires_learning' | 'regulation_ids' | 'course_ids'
-  | 'rules' | 'pass_score' | 'duration_minutes' | 'max_attempts' | 'partial_credit_ratio'
+  | 'required_learning_minutes' | 'remark' | 'sort_order'
+  | 'created_by_name' | 'updated_by_name' | 'created_at' | 'updated_at'
+  | 'rules' | 'total_score' | 'pass_score' | 'duration_minutes' | 'max_attempts' | 'partial_credit_ratio'
 >>;
 
 export interface PaperQuestionSet {

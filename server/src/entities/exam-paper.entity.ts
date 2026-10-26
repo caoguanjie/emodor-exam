@@ -24,6 +24,10 @@ export class ExamPaper {
   @Column({ name: 'requires_learning', type: 'tinyint', unsigned: true, default: 1 })
   requiresLearning: number;
 
+  /** 培训卷考前有效视频累计分钟；关闭或历史未配置时为 NULL。 */
+  @Column({ name: 'required_learning_minutes', type: 'int', unsigned: true, nullable: true })
+  requiredLearningMinutes: number | null;
+
   @Column({ name: 'regulation_ids', type: 'json', nullable: true })
   regulationIds: string[] | null;
 
@@ -39,11 +43,17 @@ export class ExamPaper {
   @Column({ type: 'varchar', length: 128 })
   title: string;
 
-  /** 恒为 100.00（固定 100 分制） */
+  @Column({ type: 'varchar', length: 1000, nullable: true })
+  remark: string | null;
+
+  @Column({ name: 'sort_order', type: 'int', default: 0 })
+  sortOrder: number;
+
+  /** 培训试卷目标总分，默认 100.00；发布时与各题合计一致 */
   @Column({ name: 'total_score', type: 'decimal', precision: 5, scale: 2, default: 100 })
   totalScore: string;
 
-  /** 及格线 (0, 100]，默认 60 */
+  /** 及格线 (0, totalScore]，默认 60 */
   @Column({ name: 'pass_score', type: 'decimal', precision: 5, scale: 2, default: 60 })
   passScore: string;
 
@@ -64,6 +74,10 @@ export class ExamPaper {
 
   @Column({ name: 'created_by', type: 'bigint' })
   createdBy: string;
+
+  /** 最后修改培训试卷配置、题单或发布状态的服务端操作者；历史未知为 NULL。 */
+  @Column({ name: 'updated_by', type: 'bigint', unsigned: true, nullable: true })
+  updatedBy: string | null;
 
   @CreateDateColumn({ name: 'created_at', precision: 3 })
   createdAt: Date;

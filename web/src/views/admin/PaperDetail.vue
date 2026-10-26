@@ -1,41 +1,5 @@
 <template>
-  <div v-if="legacyPaper" class="page-card">
-    <div class="toolbar">
-      <el-button text @click="router.push('/admin/papers')"><el-icon><ArrowLeft /></el-icon>返回</el-button>
-      <el-divider direction="vertical" />
-      <div class="detail-head"><h2 class="detail-title">{{ legacyPaper.title }}</h2><el-tag :type="statusType(legacyPaper.status)">{{ statusLabel(legacyPaper.status) }}</el-tag><el-tag :type="legacySum === 100 ? 'success' : 'danger'">{{ legacySum }} / 100 分</el-tag></div>
-      <div style="flex:1" />
-      <el-button v-if="legacyPaper.rules_locked && auth.can('papers:write')" :loading="legacyCopying" :disabled="legacyCopying" @click="copyLegacyPaper">复制为新草稿</el-button>
-      <el-button v-if="legacyPaper.status === 'draft' && auth.can('papers:publish')" type="success" :disabled="legacySum !== 100 || legacySum !== legacyPersistedSum" @click="publishLegacy">发布</el-button>
-    </div>
-    <el-alert :type="legacyPaper.rules_locked ? 'success' : 'info'" :closable="false" :title="legacyReleaseMessage" style="margin-bottom:14px" />
-    <el-card shadow="never" class="section-card">
-      <template #header>制度考试策略</template>
-      <el-form inline label-width="110px">
-        <el-form-item label="及格线"><el-input-number v-model="legacyStrategy.pass_score" :min="1" :max="100" :disabled="legacyStrategyLocked || !auth.can('papers:write')" /></el-form-item>
-        <el-form-item label="限时"><el-input-number v-model="legacyStrategy.duration_minutes" :min="1" :max="300" :disabled="legacyStrategyLocked || !auth.can('papers:write')" /></el-form-item>
-        <el-form-item label="最大次数"><el-input-number v-model="legacyStrategy.max_attempts" :min="1" :max="10" :disabled="legacyStrategyLocked || !auth.can('papers:write')" /></el-form-item>
-        <el-form-item label="漏选比例"><el-input-number v-model="legacyStrategy.partial_credit_ratio" :min="0" :max="1" :step="0.1" :disabled="legacyStrategyLocked || !auth.can('papers:write')" /></el-form-item>
-        <el-form-item><el-button v-if="auth.can('papers:write')" type="primary" :disabled="legacyStrategyLocked" @click="saveLegacyStrategy">保存策略</el-button></el-form-item>
-      </el-form>
-    </el-card>
-    <el-card shadow="never" class="section-card">
-      <template #header><div class="card-head"><span>制度固定题单</span><el-button v-if="legacyPaper.status === 'draft' && !legacyStrategyLocked && auth.can('papers:write')" type="primary" size="small" @click="legacyPickVisible = true">选题</el-button></div></template>
-      <el-table :data="legacyPaper.questions || []">
-        <el-table-column prop="sort" label="顺序" width="70" /><el-table-column prop="stem" label="题干" min-width="260" show-overflow-tooltip />
-        <el-table-column label="题型" width="90"><template #default="{ row }">{{ typeLabel(row.type) }}</template></el-table-column>
-        <el-table-column label="分值" width="170"><template #default="{ row }"><el-input-number v-model="row.score" :min="0.5" :max="100" :step="0.5" size="small" :disabled="legacyPaper.status !== 'draft' || legacyStrategyLocked || !auth.can('papers:write')" @change="legacyDirty = true" /></template></el-table-column>
-        <el-table-column label="操作" width="90"><template #default="{ row }"><FitsTableActions><FitsTableAction v-if="legacyPaper.status === 'draft' && !legacyStrategyLocked && auth.can('papers:write')" type="danger" @click="removeLegacy(row)">移除</FitsTableAction></FitsTableActions></template></el-table-column>
-      </el-table>
-      <el-button v-if="legacyPaper.status === 'draft' && !legacyStrategyLocked && auth.can('papers:write') && (legacyDirty || legacySum !== legacyPersistedSum)" type="primary" style="margin-top:14px" @click="saveLegacyQuestions">保存题单</el-button>
-    </el-card>
-    <el-dialog v-model="legacyPickVisible" title="选题入卷（制度范围）" width="760px">
-      <el-table :data="legacyCandidates" @selection-change="(rows: any[]) => (legacyPicked = rows)"><el-table-column type="selection" width="50" /><el-table-column prop="id" label="ID" width="70" /><el-table-column prop="stem" label="题干" min-width="280" /></el-table>
-      <template #footer><el-button @click="legacyPickVisible = false">取消</el-button><el-button type="primary" @click="addLegacyPicked">加入试卷</el-button></template>
-    </el-dialog>
-  </div>
-
-  <div v-else-if="paper" class="page-card paper-detail" :class="{ 'paper-preview-open': previewVisible }">
+  <div v-if="paper" class="page-card paper-detail" :class="{ 'paper-preview-open': previewVisible }">
     <div class="toolbar">
       <el-button text @click="router.push('/admin/papers')"><el-icon><ArrowLeft /></el-icon>返回</el-button>
       <el-divider direction="vertical" />
@@ -54,35 +18,41 @@
 
     <el-card shadow="never" class="section-card">
       <template #header><div class="card-head"><span>考试配置</span><el-button v-if="editable" type="primary" :loading="savingConfig" @click="saveConfig">保存配置</el-button></div></template>
-      <el-form label-width="120px">
-        <el-form-item label="试卷标题"><el-input v-model="form.title" maxlength="128" :disabled="!editable" /></el-form-item>
-        <el-form-item label="培训类别"><el-select v-model="form.category_id" filterable style="width:100%" :disabled="!editable" @change="onCategoryChange"><el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
-        <el-form-item label="资料来源筛选"><el-select v-model="form.regulation_ids" multiple filterable clearable style="width:100%" :disabled="!editable"><el-option v-for="item in regulationOptions" :key="item.id" :label="item.title" :value="item.id" /></el-select><div class="hint">留空时同类别无资料来源的人工/导入题也可用；选择后只保留指定资料来源题。</div></el-form-item>
-        <el-form-item label="关联课程"><el-select v-model="form.course_ids" multiple filterable clearable style="width:100%" :disabled="!editable"><el-option v-for="item in courseOptions" :key="item.id" :label="item.title" :value="item.id" /></el-select><div class="hint">只作覆盖范围说明，不参与题池交并，也不强制学完。</div></el-form-item>
-        <el-form-item label="学习门槛"><el-switch v-model="form.requires_learning" :disabled="!editable" /><span class="hint inline">培训默认关闭；历史固定卷仍沿用原学习门槛。</span></el-form-item>
-        <el-form-item label="及格线 / 限时"><el-input-number v-model="form.pass_score" :min="1" :max="100" :disabled="!editable" /><el-input-number v-model="form.duration_minutes" :min="1" :max="1440" :disabled="!editable" style="margin-left:12px" /></el-form-item>
-        <el-form-item label="次数 / 漏选比例"><el-input-number v-model="form.max_attempts" :min="1" :max="100" :disabled="!editable" /><el-input-number v-model="form.partial_credit_ratio" :min="0" :max="1" :step="0.1" :disabled="!editable" style="margin-left:12px" /></el-form-item>
+      <el-form label-width="180px" @submit.prevent>
+        <el-form-item label="试卷名称" required><el-input v-model="form.title" maxlength="128" :disabled="!editable" /></el-form-item>
+        <el-form-item label="考试时间（分钟）" required><el-input-number v-model="form.duration_minutes" :min="1" :max="1440" :precision="0" :disabled="!editable" /></el-form-item>
+        <el-form-item label="培训类别" required><el-select v-model="form.category_id" filterable style="width:100%" :disabled="!editable" @change="onCategoryChange"><el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+        <el-form-item label="试卷总分（分）" required><el-input-number v-model="form.total_score" :min="0.01" :max="999.99" :precision="2" :disabled="!editable" /></el-form-item>
+        <el-form-item label="及格分数（分）" required><el-input-number v-model="form.pass_score" :min="0.01" :max="form.total_score" :precision="2" :disabled="!editable" /></el-form-item>
+        <el-form-item label="考前学习要求"><el-switch v-model="form.requires_learning" :disabled="!editable" /></el-form-item>
+        <template v-if="form.requires_learning">
+          <el-form-item label="关联课程" required><el-select v-model="form.course_ids" multiple filterable clearable style="width:100%" :disabled="!editable"><el-option v-for="item in courseOptions" :key="item.id" :label="item.title" :value="item.id" /></el-select></el-form-item>
+          <el-form-item label="累计学习时长（分钟）" required><el-input-number v-model="form.required_learning_minutes" :min="1" :max="2147483647" :precision="0" :disabled="!editable" /><div class="hint">所选课程的累计有效学习时长达到要求后，学员才可开考。</div></el-form-item>
+        </template>
+        <el-form-item label="最多考试次数"><el-input-number v-model="form.max_attempts" :min="1" :max="100" :disabled="!editable" /></el-form-item>
+        <el-form-item label="漏选得分比例"><el-input-number v-model="form.partial_credit_ratio" :min="0" :max="1" :step="0.1" :disabled="!editable" /></el-form-item>
+        <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="3" :maxlength="1000" show-word-limit placeholder="选填" :disabled="!editable" /></el-form-item>
         <el-form-item v-if="form.mode === 'random'" label="题型规则">
-          <div class="rules"><div v-for="(rule, index) in form.rules" :key="rule.type" class="rule-row"><span>{{ typeLabel(rule.type) }}</span><el-input-number v-model="rule.count" :min="1" :disabled="!editable" /><el-input-number v-model="rule.score_cents" :min="1" :max="10000" :disabled="!editable" /><span>整数分</span><el-button v-if="editable" text type="danger" @click="form.rules.splice(index, 1)">移除</el-button></div><el-button v-if="editable" size="small" @click="addRule">添加题型规则</el-button><div :class="['hint', ruleTotal === 10000 ? 'ok' : 'danger']">规则总分 {{ ruleTotal / 100 }} / 100；发布同时验证简单和困难题池容量。</div></div>
+          <div class="rules"><div v-for="(rule, index) in form.rules" :key="rule.type" class="rule-row"><span>{{ typeLabel(rule.type) }}</span><el-input-number v-model="rule.count" :min="1" :disabled="!editable" /><el-input-number v-model="rule.score_cents" :min="1" :max="Math.round(form.total_score * 100)" :disabled="!editable" /><span>整数分</span><el-button v-if="editable" text type="danger" @click="form.rules.splice(index, 1)">移除</el-button></div><el-button v-if="editable" size="small" @click="addRule">添加题型规则</el-button><div :class="['hint', ruleTotal === Math.round(form.total_score * 100) ? 'ok' : 'danger']">规则总分 {{ ruleTotal / 100 }} / {{ form.total_score }}；发布同时验证简单和困难题池容量。</div></div>
         </el-form-item>
       </el-form>
     </el-card>
 
     <el-card v-if="form.mode === 'fixed'" shadow="never" class="section-card">
-      <template #header><div class="card-head"><span>固定题单（{{ fixedQuestions.length }} 题，{{ fixedTotal / 100 }} / 100 分）</span><div><el-button v-if="editable" @click="openCandidatePicker">选题</el-button><el-button v-if="editable" type="primary" :loading="savingQuestions" :disabled="fixedTotal !== 10000" @click="saveFixedQuestions">保存固定题单</el-button></div></div></template>
+      <template #header><div class="card-head"><span>固定题单（{{ fixedQuestions.length }} 题，{{ fixedTotal / 100 }} / {{ form.total_score }} 分）</span><div><el-button v-if="editable" @click="openCandidatePicker">选题</el-button><el-button v-if="editable" type="primary" :loading="savingQuestions" @click="saveFixedQuestions">保存固定题单</el-button></div></div></template>
       <el-table :data="fixedQuestions">
         <el-table-column prop="sort" label="顺序" width="70" /><el-table-column prop="stem" label="题干" min-width="260" show-overflow-tooltip />
         <el-table-column label="题型 / 难度" width="130"><template #default="{ row }">{{ typeLabel(row.type) }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column>
         <el-table-column label="启用状态" width="100"><template #default="{ row }"><el-tag :type="row.enabled === false ? 'danger' : 'success'">{{ row.enabled === false ? '已停用' : '启用' }}</el-tag></template></el-table-column>
         <el-table-column label="来源" width="120"><template #default="{ row }">{{ row.regulation_id ? `资料 ${row.regulation_id}` : '无资料来源' }}</template></el-table-column>
-        <el-table-column label="分值" width="180"><template #default="{ row }"><el-input-number v-model="row.score_cents" :min="1" :max="10000" :disabled="!editable" /><span class="hint inline">整数分</span></template></el-table-column>
+        <el-table-column label="分值" width="180"><template #default="{ row }"><el-input-number v-model="row.score_cents" :min="0" :max="Math.round(form.total_score * 100)" :disabled="!editable" /><span class="hint inline">整数分</span></template></el-table-column>
         <el-table-column label="操作" width="90"><template #default="{ row }"><FitsTableActions><FitsTableAction v-if="editable" type="danger" @click="removeFixed(row)">移除</FitsTableAction></FitsTableActions></template></el-table-column>
       </el-table>
     </el-card>
 
     <el-card v-else shadow="never" class="section-card">
       <template #header>随机组卷说明</template>
-      <el-descriptions :column="2" border><el-descriptions-item label="本机构学员">简单题池</el-descriptions-item><el-descriptions-item label="外来学员">困难题池</el-descriptions-item><el-descriptions-item label="课程关联">仅说明，不过滤题池</el-descriptions-item></el-descriptions>
+      <el-descriptions :column="2" border><el-descriptions-item label="本机构学员">简单题池</el-descriptions-item><el-descriptions-item label="外来学员">困难题池</el-descriptions-item><el-descriptions-item label="课程关联">用于考前学习要求，不过滤题池</el-descriptions-item></el-descriptions>
     </el-card>
 
     <el-dialog v-model="candidateVisible" title="选择当前启用的题目版本" width="900px">
@@ -133,7 +103,6 @@ import http from '../../api/http';
 import type {
   Difficulty,
   Id,
-  LegacyPaperDetailView,
   Page,
   PaperMode,
   PaperPreview,
@@ -162,6 +131,9 @@ interface Draft {
   regulation_ids: Id[];
   course_ids: Id[];
   requires_learning: boolean;
+  required_learning_minutes: number | null;
+  remark: string;
+  total_score: number;
   pass_score: number;
   duration_minutes: number;
   max_attempts: number;
@@ -181,33 +153,12 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const paperId = String(route.params.id);
-const legacyMode = route.query.scope === 'regulation';
 const detailRouteKey = route.fullPath;
-
-const legacyPaper = ref<LegacyPaperDetailView | null>(null);
-const legacyStrategy = reactive({ pass_score: 60, duration_minutes: 30, max_attempts: 3, partial_credit_ratio: 0.5 });
-const legacyDirty = ref(false);
-const legacyPersistedSum = ref(0);
-const legacyPickVisible = ref(false);
-const legacyCandidates = ref<any[]>([]);
-const legacyPicked = ref<any[]>([]);
-const legacyCopying = ref(false);
-const legacySum = computed(() => Math.round((legacyPaper.value?.questions || []).reduce((sum, item) => sum + Number(item.score || 0), 0) * 100) / 100);
-const legacyStrategyLocked = computed(() => !legacyPaper.value
-  || legacyPaper.value.status === 'archived'
-  || Boolean(legacyPaper.value.release_id)
-  || legacyPaper.value.rules_locked);
-const legacyReleaseMessage = computed(() => {
-  if (legacyPaper.value?.rules_locked && legacyPaper.value.release_id) return '此制度卷已生成不可变发布快照；题目内容、实际分值和规则均已冻结。需要修改时请复制为新草稿。';
-  if (legacyPaper.value?.status === 'published') return '此卷是升级前已发布且没有 release 的旧卷；保留原开考兼容，不补造历史发布快照。';
-  return '制度专项固定卷保留原数字 ID、单/多选流程与制度学习门槛；本次发布后会冻结题目内容、实际分值和规则。';
-});
 
 const paper = ref<TrainingPaperDetail | null>(null);
 const categories = ref<Array<{ id: Id; name: string }>>([]);
-const regulationOptions = ref<NamedOption[]>([]);
 const courseOptions = ref<NamedOption[]>([]);
-const form = reactive<Draft>({ title: '', mode: 'fixed', category_id: '', regulation_ids: [], course_ids: [], requires_learning: false, pass_score: 60, duration_minutes: 30, max_attempts: 3, partial_credit_ratio: 0.5, rules: [] });
+const form = reactive<Draft>({ title: '', mode: 'fixed', category_id: '', regulation_ids: [], course_ids: [], requires_learning: false, required_learning_minutes: null, remark: '', total_score: 100, pass_score: 60, duration_minutes: 30, max_attempts: 3, partial_credit_ratio: 0.5, rules: [] });
 const fixedQuestions = ref<TrainingPaperQuestion[]>([]);
 const dirty = ref(false);
 const savingConfig = ref(false);
@@ -239,14 +190,12 @@ let questionBaseline: TrainingPaperQuestion[] = [];
 let viewContext = 0;
 let trainingLoadOperation = 0;
 let trainingOptionsOperation = 0;
-let legacyLoadOperation = 0;
 let configOperation = 0;
 let configApplied = 0;
 let questionOperation = 0;
 let questionApplied = 0;
 let publicationOperation = 0;
 let copyOperation = 0;
-let legacyMutationOperation = 0;
 let previewOperation = 0;
 let candidateOperation = 0;
 let relationToken = 0;
@@ -255,6 +204,7 @@ let viewDestroyed = false;
 let completedCopyNotice = false;
 let categoryOptionsLoaded = false;
 let relationOptionsCategory: Id | null = null;
+let applyingDraft = false;
 
 const unsaved = useUnsavedChanges(dirty, { onDiscard: restoreDraft });
 const editable = computed(() => paper.value?.status === 'draft' && auth.can('papers:write'));
@@ -268,9 +218,9 @@ const designerHost = shallowRef<ReturnType<typeof createPaperDesignerHost> | nul
 const authoringOptions = useAuthoringOptions();
 let designerOperation = 0;
 let designerRelationOperation = 0;
-const designerRelationOptions = ref<{ category: Id; regulations: NamedOption[]; courses: NamedOption[] }>({ category: '', regulations: [], courses: [] });
+const designerRelationOptions = ref<{ category: Id; courses: NamedOption[] }>({ category: '', courses: [] });
 const designerHistoricalDifficulties = computed(() => Object.values(designerValue.value?.document.questions || {}).some((meta) => !authoringOptions.difficultyOptions.value.some((option) => option.value === meta.difficulty)));
-const designerRegulations = computed(() => designerRelationOptions.value.regulations.map((item) => ({ id: item.id, title: item.title || item.name || String(item.id), category_id: designerRelationOptions.value.category })));
+const designerRegulations = computed(() => (designerValue.value?.paper.regulation_ids || []).map((id) => ({ id, title: `资料 ${id}`, category_id: designerValue.value?.paper.category_id || '' })));
 const designerCourses = computed(() => designerRelationOptions.value.courses.map((item) => ({ id: item.id, title: item.title || item.name || String(item.id), category_id: designerRelationOptions.value.category })));
 const designerMediaResolver = (id: string) => { if (!auth.can('media:read')) return Promise.reject(new Error('无图片读取权限')); return getMediaImageContent(id); };
 const designerMediaAdapter = computed(() => auth.can('media:write') && auth.can('questions:write') ? { upload: (file: File) => uploadMedia(file, 'question') } : undefined);
@@ -279,16 +229,15 @@ useUnsavedChanges(designerGuardDirty, { canDiscard: () => designerHost.value?.ca
   onBlocked: () => { designerError.value = '保存结果尚未确认，请继续保存查询原请求'; }, onDiscard: releaseDesigner });
 
 function releaseDesigner() { designerOperation += 1; designerRelationOperation += 1; designerVisible.value = false; designerDirty.value = false; designerHost.value?.dispose(); designerHost.value = null; designerValue.value = null; }
-watch(() => designerValue.value?.paper.category_id, async (category) => {
+watch(() => [designerValue.value?.paper.category_id, designerValue.value?.paper.requires_learning] as const, async ([category, requiresLearning]) => {
   const operation = ++designerRelationOperation;
-  if (!category || category === designerRelationOptions.value.category) return;
-  designerRelationOptions.value = { category, regulations: [], courses: [] };
+  const context = viewContext;
+  if (!category || !requiresLearning) { designerRelationOptions.value = { category: '', courses: [] }; return; }
+  if (category === designerRelationOptions.value.category) return;
+  designerRelationOptions.value = { category: '', courses: [] };
   try {
-    const [regulations, courses] = await Promise.all([
-      http.get('/admin/papers/regulation-options', { params: { category_id: category, page: 1, page_size: 100 } }) as Promise<Page<NamedOption>>,
-      http.get('/admin/papers/course-options', { params: { category_id: category, page: 1, page_size: 100 } }) as Promise<Page<NamedOption>>,
-    ]);
-    if (operation === designerRelationOperation && designerValue.value?.paper.category_id === category) designerRelationOptions.value = { category, regulations: regulations.items, courses: courses.items };
+    const courses = await http.get('/admin/papers/course-options', { params: { category_id: category, page: 1, page_size: 100 } }) as Page<NamedOption>;
+    if (context === viewContext && operation === designerRelationOperation && designerValue.value?.paper.category_id === category && designerValue.value?.paper.requires_learning) designerRelationOptions.value = { category, courses: courses.items };
   } catch (failure) { if (operation === designerRelationOperation) designerError.value = failure instanceof Error ? failure.message : '关联选项载入失败'; }
 });
 async function openDesigner() {
@@ -306,7 +255,7 @@ async function openDesigner() {
     if (authoringOptions.error.value || !authoringOptions.difficultyOptions.value.length) throw new Error(authoringOptions.error.value || '没有启用的难度，请重试设计器');
     const value = await host.load();
     if (operation !== designerOperation || context !== viewContext || !viewActive || !canDesign.value) { host.dispose(); return; }
-    designerRelationOptions.value = { category: form.category_id, regulations: clone(regulationOptions.value), courses: clone(courseOptions.value) };
+    designerRelationOptions.value = { category: form.requires_learning && relationOptionsCategory === form.category_id ? form.category_id : '', courses: clone(courseOptions.value) };
     designerHost.value?.dispose(); designerHost.value = host; designerValue.value = value; designerDirty.value = false; designerVisible.value = true;
   } catch (failure) { host.dispose(); if (operation === designerOperation && context === viewContext) designerError.value = failure instanceof Error ? failure.message : '设计器载入失败'; }
   finally { if (operation === designerOperation) designerLoading.value = false; }
@@ -314,7 +263,16 @@ async function openDesigner() {
 async function saveDesignerDraft(value: PaperDesignerValue, context: SaveContext) {
   if (!canDesign.value || !designerHost.value || authoringOptions.error.value || !authoringOptions.difficultyOptions.value.length) throw new Error('当前无试卷编辑权限或难度目录不可用');
   if (Object.values(value.document.questions).some((meta) => !authoringOptions.difficultyOptions.value.some((option) => option.value === meta.difficulty))) throw new Error('请将停用难度题目明确重新分类后再保存');
-  const outcome = await designerHost.value.saveDraft(value, context);
+  const host = designerHost.value;
+  const view = viewContext;
+  const operation = designerOperation;
+  const submitted = clone(value);
+  if (submitted.paper.regulation_ids?.length) {
+    if (!await confirmLegacyPaperConversion()) throw new Error('已取消保存，旧版选题限制未变更');
+    if (view !== viewContext || operation !== designerOperation || host !== designerHost.value || !canDesign.value || !viewActive) throw new Error('当前试卷编辑会话已变化，请重新保存');
+    submitted.paper.regulation_ids = [];
+  }
+  const outcome = await host.saveDraft(submitted, context);
   if (outcome.status === 'saved') designerDetailRefresh.add(paperId);
   return outcome;
 }
@@ -335,8 +293,14 @@ function snapshotForm(): Draft { return clone(form); }
 function snapshotQuestions(): TrainingPaperQuestion[] { return clone(fixedQuestions.value); }
 function same(left: unknown, right: unknown) { return JSON.stringify(left) === JSON.stringify(right); }
 function syncDirty() { dirty.value = !same(snapshotForm(), formBaseline) || !same(snapshotQuestions(), questionBaseline); }
-async function restoreDraft() { Object.assign(form, clone(formBaseline)); fixedQuestions.value = clone(questionBaseline); syncDirty(); await loadRelations(form.category_id, true); }
+async function restoreDraft() { applyingDraft = true; Object.assign(form, clone(formBaseline)); applyingDraft = false; fixedQuestions.value = clone(questionBaseline); syncDirty(); await loadRelations(form.category_id, true); }
 watch(form, syncDirty, { deep: true });
+watch(() => form.requires_learning, (enabled) => {
+  if (applyingDraft) return;
+  relationToken += 1; relationOptionsCategory = null; courseOptions.value = [];
+  if (!enabled) { form.course_ids = []; form.required_learning_minutes = null; }
+  if (categoryOptionsLoaded) void loadRelations(form.category_id, true);
+}, { flush: 'sync' });
 watch(fixedQuestions, syncDirty, { deep: true });
 watch(previewVisible, (visible) => { if (!visible) invalidatePreview(); }, { flush: 'sync' });
 
@@ -346,7 +310,12 @@ function statusLabel(status: TrainingPaperStatus | string) { return ({ draft: '�
 function statusType(status: TrainingPaperStatus | string) { return status === 'published' ? 'success' : status === 'draft' ? 'info' : 'warning'; }
 
 function applyTrainingDraft(data: TrainingPaperDetail) {
+  if (form.category_id !== data.category_id || form.requires_learning !== data.requires_learning) {
+    relationToken += 1; relationOptionsCategory = null; courseOptions.value = [];
+  }
+  applyingDraft = true;
   Object.assign(form, draftFromDetail(data));
+  applyingDraft = false;
   fixedQuestions.value = clone(data.questions);
   formBaseline = snapshotForm();
   questionBaseline = snapshotQuestions();
@@ -361,6 +330,9 @@ function draftFromDetail(data: TrainingPaperDetail): Draft {
     regulation_ids: [...data.regulation_ids],
     course_ids: [...data.course_ids],
     requires_learning: data.requires_learning,
+    required_learning_minutes: data.required_learning_minutes ?? null,
+    remark: data.remark ?? '',
+    total_score: data.total_score ?? 100,
     pass_score: data.pass_score,
     duration_minutes: data.duration_minutes,
     max_attempts: data.max_attempts,
@@ -396,25 +368,18 @@ async function loadRelations(categoryId: Id, preserve: boolean) {
   const context = viewContext;
   const token = ++relationToken;
   if (!preserve) {
-    form.regulation_ids = [];
     form.course_ids = [];
-    regulationOptions.value = [];
     courseOptions.value = [];
     relationOptionsCategory = null;
   }
-  if (!categoryId || !auth.can('papers:read')) {
+  if (!categoryId || !form.requires_learning || !auth.can('papers:read')) {
     if (context !== viewContext || token !== relationToken) return;
-    regulationOptions.value = [];
     courseOptions.value = [];
     relationOptionsCategory = categoryId;
     return;
   }
-  const [regs, courses] = await Promise.all([
-    http.get('/admin/papers/regulation-options', { params: { category_id: categoryId, page: 1, page_size: 100 } }) as Promise<Page<NamedOption>>,
-    http.get('/admin/papers/course-options', { params: { category_id: categoryId, page: 1, page_size: 100 } }) as Promise<Page<NamedOption>>,
-  ]);
-  if (context !== viewContext || token !== relationToken || form.category_id !== categoryId) return;
-  regulationOptions.value = regs.items;
+  const courses = await http.get('/admin/papers/course-options', { params: { category_id: categoryId, page: 1, page_size: 100 } }) as Page<NamedOption>;
+  if (context !== viewContext || token !== relationToken || form.category_id !== categoryId || !form.requires_learning) return;
   courseOptions.value = courses.items;
   relationOptionsCategory = categoryId;
 }
@@ -428,26 +393,51 @@ async function ensureTrainingOptions() {
 }
 
 function onCategoryChange(value: Id) { void loadRelations(value, false); }
-function configPayload(submitted: Draft): Omit<Draft, 'rules'> & { rules?: PaperRuleInput[] } {
-  const payload: Omit<Draft, 'rules'> & { rules?: PaperRuleInput[] } = clone(submitted);
+function configPayload(submitted: Draft): Omit<Draft, 'rules' | 'remark'> & { rules?: PaperRuleInput[]; remark: string | null } {
+  const payload: Omit<Draft, 'rules' | 'remark'> & { rules?: PaperRuleInput[]; remark: string | null } = clone(submitted);
+  payload.course_ids = submitted.requires_learning ? [...submitted.course_ids] : [];
+  payload.required_learning_minutes = submitted.requires_learning ? submitted.required_learning_minutes : null;
+  payload.remark = submitted.remark.trim() || null;
   payload.mode = paper.value?.mode ?? formBaseline.mode;
   if (payload.mode === 'fixed') delete payload.rules;
   return payload;
 }
 
+async function confirmLegacyPaperConversion(): Promise<boolean> {
+  try {
+    await ElMessageBox.confirm('当前草稿保留旧版选题范围限制。转换会解除该限制，保留现有题目来源和历史发布版本。是否转换并继续保存？', '转换为当前试卷配置', {
+      type: 'warning', confirmButtonText: '转换并保存', cancelButtonText: '取消',
+    });
+    return true;
+  } catch { return false; }
+}
+
+function validPoints(value: number) { return Number.isFinite(value) && value > 0 && value <= 999.99 && Math.abs(value * 100 - Math.round(value * 100)) < 1e-7; }
 async function saveConfig() {
+  if (savingConfig.value) return;
+  if (!form.title.trim() || !form.category_id) { ElMessage.warning('请填写试卷名称并选择培训类别'); return; }
+  if (form.requires_learning && !form.course_ids.length) { ElMessage.warning('请至少选择一门关联课程'); return; }
+  const minutes = form.required_learning_minutes;
+  if (form.requires_learning && (minutes === null || !Number.isInteger(minutes) || minutes < 1 || minutes > 2147483647)) { ElMessage.warning('累计学习时长须为 1–2147483647 的整数分钟'); return; }
+  if (Array.from(form.remark).length > 1000) { ElMessage.warning('备注最多 1000 个字符'); return; }
   const persistedMode = paper.value?.mode ?? formBaseline.mode;
-  if (persistedMode === 'random' && ruleTotal.value !== 10000) { ElMessage.warning('随机规则总分必须等于 100 分'); return; }
-  if (form.mode !== persistedMode) form.mode = persistedMode;
+  if (!validPoints(form.total_score)) { ElMessage.warning('试卷总分须为 0.01～999.99 分，最多两位小数'); return; }
+  if (!validPoints(form.pass_score) || form.pass_score > form.total_score) { ElMessage.warning('及格分数须大于 0，且不能超过试卷总分，最多两位小数'); return; }
   const context = viewContext;
   const operation = ++configOperation;
-  const submitted = snapshotForm();
-  submitted.mode = persistedMode;
-  const submittedQuestions = snapshotQuestions();
-  const previousBaseline = clone(formBaseline);
-  const invalidatesFixedList = submitted.category_id !== previousBaseline.category_id;
   savingConfig.value = true;
   try {
+    if (editable.value && form.regulation_ids.length) {
+      if (!await confirmLegacyPaperConversion()) return;
+      if (context !== viewContext || operation !== configOperation || !editable.value || !viewActive) return;
+      form.regulation_ids = [];
+    }
+    if (form.mode !== persistedMode) form.mode = persistedMode;
+    const submitted = snapshotForm();
+    submitted.mode = persistedMode;
+    const submittedQuestions = snapshotQuestions();
+    const previousBaseline = clone(formBaseline);
+    const invalidatesFixedList = submitted.category_id !== previousBaseline.category_id;
     const response = await http.put(`/admin/papers/${paperId}`, configPayload(submitted)) as TrainingPaperDetail;
     if (context !== viewContext) return;
     const applies = operation > configApplied;
@@ -510,7 +500,6 @@ function addCandidates() { const versionIds = new Set(fixedQuestions.value.map((
 function removeFixed(row: TrainingPaperQuestion) { fixedQuestions.value = fixedQuestions.value.filter((item) => item.question_version_id !== row.question_version_id); fixedQuestions.value.forEach((item, index) => { item.sort = index; }); }
 
 async function saveFixedQuestions() {
-  if (fixedTotal.value !== 10000) { ElMessage.warning('固定题单总分必须等于 100 分'); return; }
   const context = viewContext;
   const operation = ++questionOperation;
   const submitted = snapshotQuestions();
@@ -612,7 +601,7 @@ function ordinaryPreviewExport(data: PaperPreview) {
     note: data.note,
     difficulty: data.difficulty,
     rule: {
-      total_cents: 10000,
+      total_cents: data.rule.total_cents,
       pass_cents: data.rule.pass_cents,
       duration_minutes: data.rule.duration_minutes,
       max_attempts: data.rule.max_attempts,
@@ -656,73 +645,6 @@ function exportPreview() {
   URL.revokeObjectURL(url);
 }
 
-async function loadLegacy() {
-  const context = viewContext;
-  const operation = ++legacyLoadOperation;
-  const data = await http.get(`/ai/papers/${paperId}`) as LegacyPaperDetailView;
-  if (context !== viewContext || operation !== legacyLoadOperation) return;
-  legacyPaper.value = data;
-  Object.assign(legacyStrategy, { pass_score: data.pass_score, duration_minutes: data.duration_minutes, max_attempts: data.max_attempts, partial_credit_ratio: data.partial_credit_ratio });
-  legacyPersistedSum.value = legacySum.value;
-  legacyDirty.value = false;
-  if (data.status !== 'draft' || data.rules_locked) { legacyCandidates.value = []; return; }
-  const candidatesPage = await http.get('/ai/questions', { params: { regulation_id: data.regulation_id, enabled: true, page_size: 100 } }) as { list: any[] };
-  if (context !== viewContext || operation !== legacyLoadOperation) return;
-  legacyCandidates.value = candidatesPage.list;
-}
-
-async function saveLegacyStrategy() {
-  const context = viewContext;
-  const operation = ++legacyMutationOperation;
-  await http.put(`/ai/papers/${paperId}`, clone(legacyStrategy));
-  if (context !== viewContext || operation !== legacyMutationOperation) return;
-  ElMessage.success('策略已保存');
-  await loadLegacy();
-}
-function removeLegacy(row: any) { if (!legacyPaper.value) return; legacyPaper.value.questions = legacyPaper.value.questions.filter((item) => item.question_id !== row.question_id); legacyDirty.value = true; }
-async function addLegacyPicked() {
-  if (!legacyPaper.value) return;
-  const context = viewContext;
-  const operation = ++legacyMutationOperation;
-  const items = [...legacyPaper.value.questions.map((item) => ({ question_id: item.question_id, score: Number(item.score) })), ...legacyPicked.value.map((item: any) => ({ question_id: item.id, score: 5 }))];
-  await http.put(`/ai/papers/${paperId}/questions`, { items });
-  if (context !== viewContext || operation !== legacyMutationOperation) return;
-  legacyPickVisible.value = false;
-  await loadLegacy();
-}
-async function saveLegacyQuestions() {
-  if (!legacyPaper.value) return;
-  const context = viewContext;
-  const operation = ++legacyMutationOperation;
-  await http.put(`/ai/papers/${paperId}/questions`, { items: legacyPaper.value.questions.map((item) => ({ question_id: item.question_id, score: Number(item.score) })) });
-  if (context !== viewContext || operation !== legacyMutationOperation) return;
-  ElMessage.success('题单已保存');
-  await loadLegacy();
-}
-async function publishLegacy() {
-  const context = viewContext;
-  await ElMessageBox.confirm('发布将冻结制度卷题目内容、实际分值和规则。确认发布？', '发布', { type: 'warning' });
-  if (context !== viewContext) return;
-  const operation = ++legacyMutationOperation;
-  await http.post(`/ai/papers/${paperId}/publish`);
-  if (context !== viewContext || operation !== legacyMutationOperation) return;
-  await loadLegacy();
-}
-async function copyLegacyPaper() {
-  if (legacyCopying.value) return;
-  const context = viewContext;
-  const operation = ++copyOperation;
-  legacyCopying.value = true;
-  try {
-    const copied = await http.post(`/ai/papers/${paperId}/copy`, {}) as LegacyPaperDetailView;
-    if (context !== viewContext || operation !== copyOperation) { recordCompletedCopy(); return; }
-    ElMessage.success('已复制为可编辑的新草稿');
-    await router.push({ path: `/admin/papers/${copied.id}`, query: { scope: 'regulation' } });
-  } finally {
-    if (operation === copyOperation) legacyCopying.value = false;
-  }
-}
-
 function flushCompletedCopyNotice() {
   if (viewDestroyed || !viewActive || !completedCopyNotice) return;
   completedCopyNotice = false;
@@ -736,13 +658,11 @@ function invalidateView() {
   designerLoading.value = false;
   trainingLoadOperation += 1;
   trainingOptionsOperation += 1;
-  legacyLoadOperation += 1;
   relationToken += 1;
   candidateOperation += 1;
   savingConfig.value = false;
   savingQuestions.value = false;
   candidateVisible.value = false;
-  legacyPickVisible.value = false;
   if (previewVisible.value) previewVisible.value = false;
   else invalidatePreview();
 }
@@ -756,10 +676,6 @@ async function reloadMissingTrainingDependencies() {
 }
 function reloadMissingDetail() {
   if (viewDestroyed || !viewActive) return;
-  if (legacyMode) {
-    if (!legacyPaper.value) void loadLegacy();
-    return;
-  }
   void reloadMissingTrainingDependencies();
 }
 onActivated(() => {
@@ -770,7 +686,7 @@ onActivated(() => {
 });
 onDeactivated(() => { viewActive = false; invalidateView(); });
 onBeforeUnmount(() => { releaseDesigner(); viewDestroyed = true; viewActive = false; invalidateView(); });
-onMounted(async () => { if (legacyMode) await loadLegacy(); else { if (route.query.designer !== '1') designerDetailRefresh.delete(paperId); await loadTraining(true); await loadTrainingOptions(); if (route.query.designer === '1') await openDesigner(); } });
+onMounted(async () => { if (route.query.designer !== '1') designerDetailRefresh.delete(paperId); await loadTraining(true); await loadTrainingOptions(); if (route.query.designer === '1') await openDesigner(); });
 </script>
 
 <style scoped>

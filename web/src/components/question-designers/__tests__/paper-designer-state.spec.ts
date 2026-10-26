@@ -252,16 +252,26 @@ describe('paper preflight and atomic insertion', () => {
     expect(paperLoadAction(paper())).toBe('choose-append-or-replace');
   });
 
+  it('allows unallocated and zero point draft scores while validating the configured total and pass score', () => {
+    const value = paper();
+    value.paper.total_score = 120; value.paper.pass_score = 72;
+    value.document.questions['source-client'].score_cents = 0;
+    expect(preflightPaper(value)).toEqual([]);
+    value.document.questions['source-client'].score_cents = 8000;
+    expect(preflightPaper(value)).toEqual([]);
+    value.paper.pass_score = 121;
+    expect(preflightPaper(value).some((entry) => entry.code === 'paper-score')).toBe(true);
+  });
+
   // Catches allowing deterministic failure only after creating new question records.
   it.each([
     ['title', 'title-required'], ['category', 'category-required'], ['empty', 'questions-required'],
-    ['score', 'total-score'], ['answer', 'invalid-question'],
+    ['answer', 'invalid-question'],
   ])('preflights required %s data before save', (change, code) => {
     const value = paper();
     if (change === 'title') value.paper.title = '  ';
     if (change === 'category') delete value.paper.category_id;
     if (change === 'empty') { value.document.content.content = []; value.document.questions = {}; value.bindings = {}; }
-    if (change === 'score') value.document.questions['source-client'].score_cents = 500;
     if (change === 'answer') value.document.content.content![0].content![1].attrs!.checked = false;
     expect(preflightPaper(value).map((issue) => issue.code)).toContain(code);
   });

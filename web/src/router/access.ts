@@ -17,6 +17,12 @@ export function isRetiredAdminPath(value: string): boolean {
   return RETIRED_ADMIN_PATHS.some((retired) => path === retired || path.startsWith(retired + '/'));
 }
 
+export function isRetiredLegacyPaperLocation(pathValue: string, scope: unknown): boolean {
+  const path = String(pathValue || '').split(/[?#]/, 1)[0].replace(/\/+$/, '') || '/';
+  const scopes = Array.isArray(scope) ? scope : [scope];
+  return /^\/admin\/papers\/[^/]+$/.test(path) && scopes.includes('regulation');
+}
+
 export function defaultHomePath(isAdmin: boolean): string {
   return isAdmin ? ADMIN_HOME_PATH : LEARNER_HOME_PATH;
 }

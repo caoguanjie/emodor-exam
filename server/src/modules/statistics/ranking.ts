@@ -134,17 +134,13 @@ export function buildRankingRows(
   return rows.sort((left, right) => (left[key] - right[key]) * direction);
 }
 
-function distribution(scores: number[]) {
-  const buckets = [
-    { lower: 0, upper: 60, count: 0 },
-    { lower: 60, upper: 70, count: 0 },
-    { lower: 70, upper: 80, count: 0 },
-    { lower: 80, upper: 90, count: 0 },
-    { lower: 90, upper: 100, count: 0 },
-  ];
+function distribution(scores: number[], totalCents: number) {
+  const limits = [0, 60, 70, 80, 90, 100].map(percent => totalCents * percent / 10000);
+  const buckets = limits.slice(0, -1).map((lower, index) => ({ lower, upper: limits[index + 1], count: 0 }));
   for (const score of scores) {
-    const index = score < 60 ? 0 : score < 70 ? 1 : score < 80 ? 2 : score < 90 ? 3 : 4;
-    buckets[index].count += 1;
+    const index = buckets.findIndex((bucket, position) => score >= bucket.lower
+      && (score < bucket.upper || position === buckets.length - 1 && score <= bucket.upper));
+    if (index >= 0) buckets[index].count += 1;
   }
   return buckets;
 }
@@ -171,7 +167,7 @@ function scoreGroups(records: StatisticsRecord[], releaseId: string | null, rule
         : null,
       excellent_users: null,
       pass_rate: best.length ? Math.round((passed / best.length) * 10000) / 10000 : null,
-      distribution: distribution(scores),
+      distribution: distribution(scores, rule?.totalCents ?? 10000),
     };
   });
 }

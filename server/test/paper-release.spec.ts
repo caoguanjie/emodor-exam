@@ -132,6 +132,19 @@ function releaseFixture(regulationIds: string[]) {
 }
 
 describe('immutable paper releases', () => {
+  it('freezes a configured 120-point target and keeps historical snapshots independent from later paper changes', async () => {
+    const f = releaseFixture([]);
+    f.paper.totalScore = '120.00'; f.paper.passScore = '72.00';
+    f.paper.ruleConfig.rules = [{ type: 'single', count: 1, scoreCents: 12000 }];
+    const { releaseId } = await f.service.publish('11', '9');
+    expect((await f.service.get(releaseId)).rule).toMatchObject({ totalCents: 12000, passCents: 7200 });
+    f.paper.totalScore = '100.00'; f.paper.passScore = '60.00';
+    vi.spyOn(f.service, 'latestForPaper').mockImplementation(() => f.service.get(releaseId));
+    const preview = await f.service.preview('11', 'easy');
+    expect(preview.rule).toMatchObject({ totalCents: 12000, passCents: 7200 });
+    expect(preview.questions.reduce((sum, item) => sum + item.scoreCents, 0)).toBe(12000);
+  });
+
   it('preserves schema 1 publication facts without applying new content validation to legacy rows', async () => {
     const f = releaseFixture([]);
     f.candidates[0].options.splice(1);
@@ -292,7 +305,7 @@ describe('immutable paper releases', () => {
     const draw = vi.spyOn(fixture.service.sampling, 'draw');
     const preview = await fixture.service.preview('11', 'easy');
     expect(preview.capacities.find((item) => item.difficulty === 'easy')?.available).toBe(1);
-    expect(draw).toHaveBeenCalledWith(expect.any(Array), expect.any(Array), 'easy', undefined, 'historical-concept');
+    expect(draw).toHaveBeenCalledWith(expect.any(Array), expect.any(Array), 'easy', undefined, 'historical-concept', 10000);
   });
 
   it('does not present random-pool capacity rows for a fixed-paper preview', async () => {
@@ -430,6 +443,7 @@ function paperAdminFixture(paperOverride: Record<string, unknown> = {}) {
     questionRepo,
     versionRepo: manager.getRepository(QuestionVersion),
     releaseRepo: { findOne: vi.fn(async () => null) },
+    userRepo: { findBy: vi.fn(async ({ id }: any) => id.value.map((value: string) => ({ id: value, realName: null, username: 'admin' }))) },
     dataSource: { transaction: (work: (value: any) => Promise<unknown>) => work(manager) },
     categories: { lockActive: vi.fn(async () => ({ id: '7', status: 1 })) },
     audit: { log: vi.fn() },

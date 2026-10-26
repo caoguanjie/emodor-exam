@@ -177,7 +177,6 @@ function invalidQuestion(block: JSONContent, meta: QuestionMeta): boolean {
   return !['single', 'multiple', 'judgment'].includes(meta.type)
     || !['easy', 'hard'].includes(meta.difficulty)
     || !/^[1-9]\d*$/.test(meta.category_id)
-    || !Number.isInteger(meta.score_cents) || meta.score_cents <= 0 || meta.score_cents > 10000
     || children[0]?.type !== 'questionStem' || !hasContent(children[0])
     || options.length < 2 || options.length > 26
     || options.some((node) => node.type !== 'questionOption' || !hasContent(node) || typeof node.attrs?.checked !== 'boolean')
@@ -208,7 +207,7 @@ function isPlainJudgmentLabel(node: JSONContent, expected: string): boolean {
     && (!inline[0].marks || inline[0].marks.length === 0);
 }
 
-/** Save-only checks; insertion may temporarily exceed 100 points while the author adjusts scores. */
+/** Draft saves retain unfinished allocation; publication validates positive scores and their total. */
 export function preflightPaper(value: PaperDesignerValue): DesignerIssue[] {
   const issues = questionSetIssues([value], value.paper.category_id);
   if (!value.paper.title.trim()) issues.push(issue('title-required', '请填写试卷标题'));
@@ -216,13 +215,19 @@ export function preflightPaper(value: PaperDesignerValue): DesignerIssue[] {
   const blocks = value.document.content.content || [];
   if (!blocks.length) issues.push(issue('questions-required', '试卷至少需要一道题'));
   if (validatePaperStructure(value).length) return issues;
-  for (const block of blocks) {
+  for (const [index, block] of blocks.entries()) {
     const id = String(block.attrs?.client_id);
-    if (invalidQuestion(block, value.document.questions[id])) issues.push(issue('invalid-question', '请补全题干、选项、答案及题目属性', id));
+    const meta = value.document.questions[id]!;
+    if (!Number.isInteger(meta.score_cents) || meta.score_cents < 0 || meta.score_cents > 99999) {
+      issues.push(issue('question-score', `第 ${index + 1} 题本卷分值无效，请填写 0～999.99 分，最多两位小数`, id));
+    }
+    if (invalidQuestion(block, meta)) issues.push(issue('invalid-question', `第 ${index + 1} 题：请补全题干、选项、答案及题目属性`, id));
   }
-  if (Object.values(value.document.questions).reduce((sum, meta) => sum + meta.score_cents, 0) !== 10000) {
-    issues.push(issue('total-score', '固定试卷总分必须为 100 分'));
-  }
+  const total = value.paper.total_score === undefined ? 100 : value.paper.total_score;
+  const pass = value.paper.pass_score === undefined ? 60 : value.paper.pass_score;
+  const validPoints = (points: number) => Number.isFinite(points) && points > 0 && points <= 999.99 && Math.abs(points * 100 - Math.round(points * 100)) < 1e-7;
+  if (!validPoints(total)) issues.push(issue('paper-score', '试卷总分须为 0.01～999.99 分，最多两位小数'));
+  if (!validPoints(pass) || pass > total) issues.push(issue('paper-score', '及格分数须大于 0，且不能超过试卷总分，最多两位小数'));
   return issues;
 }
 
@@ -269,6 +274,10 @@ export function insertPaper(
         layouts: { ...clone(current.session?.layouts || {}), ...copied.session?.layouts },
       } } : {}),
     };
+  for (const key of ['created_by_name', 'updated_by_name', 'created_at', 'updated_at'] as const) {
+    if (current.paper[key] === undefined) delete next.paper[key];
+    else Object.assign(next.paper, { [key]: current.paper[key] });
+  }
   return { ok: true, value: next };
 }
 

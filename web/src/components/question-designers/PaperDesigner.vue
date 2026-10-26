@@ -2,14 +2,19 @@
   <section class="paper-designer template-designer" :aria-busy="saving">
     <header class="paper-designer__toolbar designer-header">
       <div class="designer-header__title">
-        <SvgIcon icon-class="clipboard-line" class="designer-header__logo" />
+        <img :src="paperDocumentLogo" class="designer-header__logo" alt="" />
         <el-input class="designer-header__name" aria-label="顶部试卷标题" :model-value="value.paper.title" :disabled="locked"
           placeholder="未命名试卷" @update:model-value="changePaper({ title: $event })" />
       </div>
       <fieldset class="paper-designer__format designer-header__format" :disabled="locked">
         <div v-if="mode !== 'readonly'" class="designer-header__tools">
-          <MenuBtn v-if="mainEditor" :editor="mainEditor" />
-          <el-button v-if="mediaAdapter" :disabled="locked || uploading" @mousedown.prevent @click="chooseImage"><SvgIcon icon-class="image-line" />插入图片</el-button>
+          <MenuBtn v-if="mainEditor" :editor="mainEditor">
+            <template #insert-action>
+              <button v-if="mediaAdapter" type="button" class="paper-designer__insert-image" :disabled="locked || uploading" @mousedown.prevent @click="chooseImage">
+                <SvgIcon icon-class="image-line" />插入图片
+              </button>
+            </template>
+          </MenuBtn>
         </div>
       </fieldset>
       <div class="designer-header__actions">
@@ -21,7 +26,9 @@
         <el-button :disabled="saving" @click="requestClose">关闭</el-button>
       </div>
     </header>
-    <el-alert v-if="error" :title="error" type="error" :closable="false" />
+    <div v-if="error" class="paper-designer__error-notice" @mouseenter="pauseErrorNotice" @mouseleave="resumeErrorNotice">
+      <el-alert :key="error" :title="error" type="error" show-icon closable @close="dismissErrorNotice" />
+    </div>
     <el-alert v-if="Object.values(value.bindings).some((binding) => binding.kind === 'bound' && binding.enabled === false)" title="题单包含已停用题目，请移除或替换后保存。" type="warning" :closable="false" />
     <el-alert v-if="failedUpload" title="图片上传失败，可在原位置重试。" type="warning" :closable="false">
       <el-button :disabled="locked" @click="uploadFile(failedUpload)">重试上传</el-button><el-button @click="cancelImage">移除占位</el-button>
@@ -56,13 +63,14 @@
           <el-tab-pane label="模板设置" name="template" />
         </el-tabs>
         <QuestionProperties v-if="selectedMeta" v-show="panel === 'question'" :client-id="selectedId" :meta="selectedMeta" :answer-summary="answerSummary"
-          :categories="categories" :regulations="questionRegulations"
+          :categories="categories" :regulations="questionRegulations" :total-score="value.paper.total_score ?? 100"
           :readonly="locked" category-readonly :media-resolver="mediaResolver" :can-upload-media="!!mediaAdapter" :media-adapter="mediaAdapter" :difficulty-options="difficultyOptions"
           @change="changeMeta" @type-change="changeType" @upload-state-change="analysisUploading = $event.pending" />
         <PaperProperties v-if="panel === 'paper'" :model-value="value.paper" :categories="categories" :regulations="categoryRegulations" :courses="categoryCourses"
-          :readonly="locked" :has-questions="!!questionCount" @change="changePaper" />
-        <div v-else-if="panel === 'template'" class="designer-template-settings" :inert="locked">
+          :readonly="locked" :has-questions="!!questionCount" :allocated-score-cents="allocatedScoreCents" @change="changePaper" />
+        <div v-else-if="panel === 'template'" class="designer-template-settings">
           <TemplateSetting :model-value="templateSetting" :readonly="locked" @update:model-value="changeLayout" />
+          <PaperOperationInfo :paper="value.paper" />
         </div>
       </aside>
     </div>
@@ -95,6 +103,8 @@ import PaperProperties from './PaperProperties.vue';
 import PaperLibrarySidebar from './PaperLibrarySidebar.vue';
 import MenuBtn from '../Tiptap/components/MenuBtn.vue';
 import SvgIcon from '../Tiptap/components/SvgIcon.vue';
+import paperDocumentLogo from '../../assets/paper-document-logo.png';
+import PaperOperationInfo from './PaperOperationInfo.vue';
 import TemplateSetting from '../Tiptap/components/TemplateSetting.vue';
 import { TemplateSetting as TemplateSettingModel } from '../Tiptap/type';
 import { designerSheetStyle } from './designer-sheet-style';
@@ -116,6 +126,30 @@ function copy<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 const controller = createPaperDesignerController({ value: props.modelValue, mode: props.mode,
   saveDraft: (value, context) => props.saveDraft(value, context), onChange: (value) => emit('update:modelValue', value) });
 const { value, dirty, saving, incomplete, canAbandon, locked, error } = controller;
+let errorTimer: ReturnType<typeof setTimeout> | undefined;
+let errorRemaining = 15000;
+let errorStartedAt = 0;
+function clearErrorTimer() {
+  if (errorTimer !== undefined) clearTimeout(errorTimer);
+  errorTimer = undefined;
+}
+function dismissErrorNotice() { clearErrorTimer(); error.value = ''; }
+function pauseErrorNotice() {
+  if (errorTimer === undefined) return;
+  errorRemaining = Math.max(0, errorRemaining - (Date.now() - errorStartedAt));
+  clearErrorTimer();
+}
+function resumeErrorNotice() {
+  if (!error.value || errorTimer !== undefined) return;
+  errorStartedAt = Date.now();
+  errorTimer = setTimeout(dismissErrorNotice, errorRemaining);
+}
+watch(error, (message) => {
+  clearErrorTimer(); errorRemaining = 15000;
+  if (message) resumeErrorNotice();
+}, { flush: 'sync' });
+onBeforeUnmount(clearErrorTimer);
+
 const editor = ref<InstanceType<typeof QuestionEditor> | null>(null); const mainEditor = shallowRef<Editor>(); const editorKey = ref(0);
 const selectedId = ref(Object.keys(value.value.document.questions)[0] || '');
 const panel = ref<'question' | 'paper' | 'template'>(selectedId.value ? 'question' : 'paper');
@@ -134,6 +168,7 @@ watch([() => value.value.paper_layout, () => value.value.paper.title], ([layout,
   const next = new TemplateSettingModel({ ...layout?.settings, templateName: title });
   if (JSON.stringify(next) !== JSON.stringify(templateSetting.value)) templateSetting.value = next;
 }, { deep: true });
+const allocatedScoreCents = computed(() => Object.values(value.value.document.questions).reduce((sum, meta) => sum + meta.score_cents, 0));
 const questionCount = computed(() => Object.keys(value.value.document.questions).length);
 const selectedMeta = computed(() => value.value.document.questions[selectedId.value]);
 const categoryRegulations = computed(() => props.regulations.filter((item) => !item.category_id || item.category_id === value.value.paper.category_id));
@@ -290,6 +325,16 @@ defineExpose({ requestClose, save, addQuestion, removeQuestion, moveQuestion });
 </script>
 
 <style scoped>
+.paper-designer .designer-template-settings { overflow-y:auto; }
+.paper-designer .designer-template-settings :deep(.template-setting) { height:auto; overflow:visible; }
+.paper-designer__error-notice { position:absolute; top:56px; left:0; right:0; z-index:20; }
+.paper-designer__error-notice :deep(.el-alert) { border-radius:0; box-shadow:none; }
+.paper-designer__error-notice :deep(.el-alert__content) { min-width:0; padding-right:24px; }
+.paper-designer__error-notice :deep(.el-alert__title) { overflow-wrap:anywhere; }
+.paper-designer__insert-image { display:flex; align-items:center; justify-content:center; gap:4px; height:24px; margin:0 5px; padding:0 6px; border:0; background:transparent; color:inherit; font:inherit; font-size:13px; white-space:nowrap; cursor:pointer; border-radius:3px; }
+.paper-designer__insert-image:hover:not(:disabled) { background:#e6eaee; }
+.paper-designer__insert-image:focus-visible { outline:2px solid var(--el-color-primary); outline-offset:2px; }
+.paper-designer__insert-image:disabled { opacity:.5; cursor:not-allowed; }
 .paper-designer__document-title { padding-bottom:12px; margin-bottom:24px; border-bottom:1px solid var(--el-border-color-light, #e6eaee); }
 .paper-designer__title { font-size:22px; }
 .paper-designer__title :deep(.el-input__wrapper) { box-shadow:none; background:transparent; }

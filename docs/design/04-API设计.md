@@ -501,6 +501,8 @@ interface IdentitySessionView {
 
 **试卷路由归属说明**：试卷的创建/组卷/发布属于「题库启用 → 组卷 → 发布」的出题工作流（05 册 4.4.7 组卷服务隶属 AI 出题模块），故管理侧归 `/ai/papers`；面向员工的考试执行（可考列表、开考、交卷）归 `/exams`（考试评分模块）——同一资源的管理面与执行面分离，与模块边界一致。
 
+**PC 入口范围（2026-10-26）**：上述 `/ai/papers` 为后台旧制度卷兼容接口，PC 的历史固定卷 Tab、列表请求和管理详情已退场。现行 PC 试卷管理只使用 `/admin/papers`；旧 `scope=regulation` 页面链接回当前列表，不能据后台兼容接口恢复旧页面入口。
+
 **退场写入口**：`POST /ai/generate-questions`、`POST /ai/questions/{id}/regenerate`、`PUT /ai/questions/{id}/review` 及考点目录／选项CRUD均不再注册，返回404；不得接到直接启用版本服务绕过预览确认。`GET /ai/generate-status/{taskId}` 继续读取旧任务／结果，不恢复任务写入口。
 
 **GET /ai/config**（`ai_config:read`）：读取 AI 服务配置，`api_key` 掩码回显（如 `sk-****xxxx`，完整键值永不返回，07 册 4.2）。**PUT /ai/config**（`ai_config:write`）：保存 `base_url` / `api_key` / `model`——权威副本为 AES-256-GCM 加密后的配置文件，Redis 仅作缓存（07 册 4.2），并返回同样的脱敏配置结果。**POST /ai/config/test**（`ai_config:write`）：以已保存配置发起一次连通性测试，返回成功 / 失败与脱敏错误摘要（失败 → 50005）。`ai:read/write` 仅代表出题任务/题库工作流，不自动授予配置权限；管理端入口要求 `ai_config:read` 或 `ai_config:write`，但 writer-only 页面不得调用 GET、不得伪造现有配置值，只能提交空白表单并使用 PUT 返回的脱敏结果；`super_admin` 天然拥有全部注册权限。
@@ -535,8 +537,8 @@ interface IdentitySessionView {
 |---|---|---|---|
 | 1 | GET | /admin/papers/category-options | `papers:read`；启用类别 `Page<{id,name}>` |
 | 2 | GET | /admin/papers/regulation-options | `papers:read`；必传 category_id；按该类别题目的实际 `category_id + regulation_id` 关联或旧资料自身 category 匹配返回资料来源选项 |
-| 3 | GET | /admin/papers/course-options | `papers:read`；必传 category_id，课程仅作说明关联 |
-| 4 | GET | /admin/papers | `papers:read`；按 keyword/category_id/mode/status 分页，返回 `Page.items` |
+| 3 | GET | /admin/papers/course-options | `papers:read`；必传 category_id，仅返回该类别已上架课程，供考前学习要求选择 |
+| 4 | GET | /admin/papers | `papers:read`；按 keyword/category_id/mode/status 分页，固定按 `sort_order ASC,id DESC` 返回 `Page.items` |
 | 5 | POST | /admin/papers | `papers:write`；创建 training 草稿，默认 requires_learning=false |
 | 6 | GET | /admin/papers/{id} | `papers:read`；配置、固定题单及 latest_release_id |
 | 7 | PUT | /admin/papers/{id} | `papers:write`；只允许 draft，发布后返回 40970 |
@@ -551,7 +553,15 @@ interface IdentitySessionView {
 
 **现行状态边界（2026-10-26）**：新写入流程仅 `draft → published`，发布后调整沿用复制新草稿。培训和 legacy 试卷的撤回/归档写入口均不再注册；旧状态的列表、详情、快照读取和开考限制仍保留，读取接口可继续按历史状态筛选，PC 日常筛选只提供草稿、已发布。不迁移或重写历史状态。
 
-**创建/修改 DTO**：`title/mode/category_id` 为核心字段；`regulation_ids/course_ids` 是去重字符串 ID 数组，其中 regulation_ids 表示题库资料的内部来源 ID；`requires_learning` 默认 false；分数/限时/次数/漏选比例默认 60/30/3/0.5。随机卷 `rules=[{type,count,score_cents}]` 最多三项且题型唯一，并满足 `Σ(count×score_cents)=10000`；固定题单同样合计 10000。来源选项允许“当前类别题目实际关联该 regulation”或“旧资料自身 category 直接匹配”；新资料不预绑类别，跨类别创建、更新或发布返回业务冲突。
+**创建/修改 DTO**：`title/mode/category_id` 为核心字段；`regulation_ids/course_ids` 是去重字符串 ID 数组，其中 regulation_ids 表示题库资料的内部来源 ID；`requires_learning` 默认 false；`sort_order` 可选且必须为0—2147483647整数，创建默认0、更新未传保持原值；`total_score` 创建默认100、更新未传保持原值，范围0.01～999.99且最多两位小数；及格分数大于0且不超过目标总分；及格分数/限时/次数/漏选比例默认 60/30/3/0.5。随机卷 `rules=[{type,count,score_cents}]` 最多三项且题型唯一，发布时满足 `Σ(count×score_cents)=round(total_score×100)`；固定题单发布时每题score_cents为正整数且合计等于目标总分币。固定草稿题单允许score_cents=0和未配齐，保存仍校验题目完整性及合法引用。来源选项允许“当前类别题目实际关联该 regulation”或“旧资料自身 category 直接匹配”；新资料不预绑类别，跨类别创建、更新或发布返回业务冲突。
+
+**排序字段（2026-10-26 / 031）**：training列表项、创建回包、详情与更新回包均返回`sort_order:number`；复制新草稿继承源卷排序值。该字段仅为管理列表元数据，不进入`paper_release`，不影响题单顺序、学员开考、成绩统计或legacy `/ai/papers`的响应及排序。
+
+**操作信息（2026-10-26 / 032）**：`GET /admin/papers/{id}`以及training创建、配置更新、固定题单更新、复制回包在既有`created_at/updated_at`外返回`created_by_name:string|null`、`updated_by_name:string|null`。姓名按`sys_user.real_name`去空白后优先，否则回退`username`；用户已不存在或历史更新人未知返回NULL。详情对`created_by/updated_by`去重后一次查询至多两人，列表不返回姓名、不产生N+1。配置保存与题单全量替换即使值未变化也推进`updated_at`；首次发布写更新人/时间，重复发布保持幂等。客户端不得提交创建人、更新人或姓名字段。
+
+**考前学习与备注（2026-10-26 / 030）**：增加`required_learning_minutes:number|null`与`remark:string|null`，在列表/详情回显。备注最多1000字符，空白归一NULL，未传更新保留原值；只作管理信息。唯一开关`requires_learning`关闭时，新写入`course_ids=[]`、分钟为NULL；开启时必须选择至少一门同类别published课程，并设置1—2147483647的整数分钟。部分更新先合并原配置再校验，不允许单独清空必填值绕过规则。PC新增/配置/设计器隐藏资料来源输入，开启“考前学习要求”才显示课程与分钟；新增采用既有次数3、漏选比例0.5。
+
+发布前重验学习配置，release冻结开关、课程ID与分钟。`POST /me/exams/{paperId}/start`的首次/补考创建前，以本人在关联课程当前有效视频版本的`credited_ms`合计校验（已删除课时/旧版本/其它课程不计；有效重复播放沿用原累计）。不足返回40901，`data={reason_code:'LEARNING_REQUIRED',required_learning_minutes,credited_seconds,remaining_seconds,course_ids}`，不创建记录、不消耗次数；message说明仍需学习的分钟。已有进行中考试恢复优先，旧release分钟NULL保持历史行为，legacy制度阅读校验独立保留。
 
 **发布硬校验**：候选只取同培训类别、启用题的精确当前revision，题型／启用难度及可选资料来源匹配，媒体授权合法；课程不参与题池过滤。新随机两池按question_id计算容量，不足返回40971与deficits；所有新固定／随机发布也按question_id去重，新release不写concept。发布事务重新锁定身份并复核仍启用且仍指向所选版本，失效整体回滚，不留release或published状态。既有随机release则显式使用historical-concept模式：按冻结concept分组，无concept回退question_id，预览与开考保持原语义；不恢复当前考点功能、不改写历史。
 
@@ -718,7 +728,7 @@ AI通过模板接口purpose=ai下载七列参考格式；输入保留§3.5.2的�
 
 `TrainingExamOverviewRow={paper_id,title,category_id,category_name,status,release_id,total_score,duration_minutes,pass_score,participant_count,finalized_users,average_score}`。总览只列培训试卷；名称取当前试卷标题，类别和总分/时限/及格线优先使用最新发布版本及其冻结规则。无发布版本时规则与均分为 null、人数为 0，不把草稿规则伪装成正式成绩依据。总览参考人数按最新发布版本成功开考的学员去重；均分只取该版本、相同规则的 finalized 个人最高分，跨难度仅作描述汇总，不生成混合排名。
 
-`TrainingExamSummary` 固定包含：`exam`、`release_id:string|null`、`eligible_count/eligible_started_count/historical_started_count/historical_only_started_count/submitted_attempts/submitted_users/finalized_users`、`participation_rate:number|null`、`score_groups`、`difficulty_composition`、`course_completion`、`uncompleted_reasons`、`as_of`。`exam={paper_id,title,category_id,total_score,duration_minutes,pass_score,excellent_score:null}`；规则字段取发布快照，名称不声称冻结。`score_groups` 每项为 `{difficulty,finalized_users,average_score,highest_score,lowest_score,passed_users,average_duration_seconds,excellent_users:null,pass_rate,distribution:[{lower,upper,count}]}`。成绩指标统一使用同组个人最高分代表答卷，平均用时使用这些答卷的实际用时；无成绩时平均/最高/最低/平均用时为 null。当前没有优秀分规则，优秀分与人数均为 null，界面显示未设置/—，不将其当作 0。`RankRow={rank,user_id,name,gender,source,difficulty,score,duration_seconds,record_id}`，`gender='male'|'female'|null`，全部 ID 为字符串。
+`TrainingExamSummary` 固定包含：`exam`、`release_id:string|null`、`eligible_count/eligible_started_count/historical_started_count/historical_only_started_count/submitted_attempts/submitted_users/finalized_users`、`participation_rate:number|null`、`score_groups`、`difficulty_composition`、`course_completion`、`uncompleted_reasons`、`as_of`。`exam={paper_id,title,category_id,total_score,duration_minutes,pass_score,excellent_score:null}`；规则字段取发布快照，名称不声称冻结。分数分布按该组冻结总分的0%、60%、70%、80%、90%、100%划分五段，返回实际分数边界，最后一段包含满分；120分卷为[0,72)、[72,84)、[84,96)、[96,108)、[108,120]，历史100分卷保持原分段。`score_groups` 每项为 `{difficulty,finalized_users,average_score,highest_score,lowest_score,passed_users,average_duration_seconds,excellent_users:null,pass_rate,distribution:[{lower,upper,count}]}`。成绩指标统一使用同组个人最高分代表答卷，平均用时使用这些答卷的实际用时；无成绩时平均/最高/最低/平均用时为 null。当前没有优秀分规则，优秀分与人数均为 null，界面显示未设置/—，不将其当作 0。`RankRow={rank,user_id,name,gender,source,difficulty,score,duration_seconds,record_id}`，`gender='male'|'female'|null`，全部 ID 为字符串。
 
 排名与导出新增可选 `sort_by=score|duration`、`sort_order=asc|desc`。先计算标准分数名次，再按指定字段排序，最后分页；用时排序不重编名次，同值保持稳定次序。导出沿用相同排序、筛选和页码，不扩大为全量导出。
 
@@ -1184,7 +1194,7 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | 40302 | 403 | 无权访问该数据 | 数据范围越界（如读取他人学习记录、考试记录或不属于授权 owner 的题目媒体） |
 | 40401 | 404 | 资源不存在 | 路径资源（制度/试卷/记录等）不存在 |
 | 40402 | 404 | 制度内容不可见 | 阅读内容不可见；training 卷调用旧 `/exams` 开考/记录执行入口也返回此码 |
-| 40901 | 409 | 未完成有效学习，暂无考试资格 | **legacy 制度固定卷**开考校验③失败；data 附差距（时间缺口/底部段未覆盖）。新培训考试默认不使用该错误作为学习门槛 |
+| 40901 | 409 | 未完成有效学习，暂无考试资格 | legacy 制度固定卷学习资格失败，附时间缺口/底部覆盖差距；培训卷开启考前要求且有效视频分钟不足时返回 LEARNING_REQUIRED 及实际/要求/缺口，默认关闭时不检查 |
 | 40902 | 409 | 补考次数已用尽 | 开考校验④失败（attempt_no > max_attempts） |
 | 40903 | 409 | 已通过该考试，无需再次作答 | 开考校验④：前次终态 = passed |
 | 40904 | 409 | 已有进行中的考试 | active 尚有效时幂等恢复；active 已过 deadline 时提示等待 timeout sweeper，不能绕过计次创建新记录 |
@@ -1205,11 +1215,11 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | 40960 | 409 | 当前账号已完成实名认证 | POST 核验会话遇既有实名事实；data 固定含 status=verified、reason_code=null、clear_materials=[]，随后 GET 权威实名视图 |
 | 40970 | 409 | 试卷发布状态已变化 | 非 draft 修改/发布，或锁内类别/模式与预读不一致 |
 | 40971 | 409 | 候选题池容量不足 | 新随机卷初级或高级任一题型的不重复 question_id 数小于 required；data.deficits 返回 type/required/available。既有 release 的冻结抽样规则只读保留 |
-| 40972 | 409 | 试卷规则不合法 | 总分非 10000、固定题存在重复question_id／停用题／非精确当前版本/越类别或制度筛选，或随机题型规则非法 |
+| 40972 | 409 | 试卷规则不合法 | 发布题目分值合计与设定总分不符／零分／及格线越界、固定题存在重复question_id／停用题／非精确当前版本/越类别或制度筛选，或随机题型规则非法 |
 | 42201 | 422 | 文件格式不支持 | 上传非 pdf/docx（含魔法数不符） |
 | 41601 | 416 | 请求的媒体范围无效 | `Range` 语法非法、多段范围或起止超出文件边界 |
 | 42202 | 422 | 文件超过大小上限 | 题库资料超过 50MB，或媒体图片/视频超过当前配置限制；Multer 拦截与业务层统一此码 |
-| 42203 | 422 | 发布校验未通过 | 试卷发布总分不等于 100，或题目/来源/类别不满足发布规则 |
+| 42203 | 422 | 发布校验未通过 | 试卷发布题目合计不等于设定总分（旧制度卷仍为100），或题目/来源/类别不满足发布规则 |
 | 42901 | 429 | 请求过于频繁 | 普通心跳超过 30 秒节拍窗口的异常高频（限流丢弃不影响时长正确性——credited 封顶 45 秒；pause/resume 不适用节拍丢弃，另见 6.2） |
 | 50001 | 500 | 服务器内部错误 | 未分类异常（附 trace_id 供日志追踪） |
 | 50002 | 502 | AI 服务调用失败 | 大模型超时/重试后仍失败（任务置 failed，可重新发起） |

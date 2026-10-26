@@ -36,6 +36,76 @@ test('retires cancelled administration paths while preserving current learner an
   ]) assert.equal(isRetiredAdminPath?.(path), false, path);
 });
 
+test('recognizes only retired legacy paper detail locations', () => {
+  const isRetiredLegacyPaperLocation = access.isRetiredLegacyPaperLocation;
+  assert.equal(typeof isRetiredLegacyPaperLocation, 'function');
+  assert.equal(isRetiredLegacyPaperLocation?.('/admin/papers/paper-1', 'regulation'), true);
+  assert.equal(isRetiredLegacyPaperLocation?.('/admin/papers/paper-1/', 'regulation'), true);
+  assert.equal(isRetiredLegacyPaperLocation?.('/admin/papers', 'regulation'), false);
+  assert.equal(isRetiredLegacyPaperLocation?.('/admin/papers/paper-1', 'training'), false);
+  assert.equal(isRetiredLegacyPaperLocation?.('/admin/papers/paper-1', undefined), false);
+});
+
+test('global router guard retires legacy scope on same-path changes and login return', async () => {
+  const authId = '\0router-access-auth-test';
+  const authState = {
+    isLoggedIn: true,
+    needChangePassword: false,
+    isAdmin: true,
+    isSuperAdmin: true,
+    can: () => true,
+    async restore() { return true; },
+    async fetchProfile() {},
+  };
+  globalThis.__routerAccessAuthTest = authState;
+  const vite = await createServer({
+    root: fileURLToPath(new URL('../', import.meta.url)),
+    server: { middlewareMode: true, hmr: false, ws: false },
+    appType: 'custom',
+    optimizeDeps: { noDiscovery: true },
+    plugins: [{
+      name: 'legacy-paper-route-guard-test',
+      enforce: 'pre',
+      resolveId(source, importer) {
+        if ((source === '../stores/auth' || source === '/src/stores/auth.ts') && importer?.endsWith('/src/router/index.ts')) return authId;
+        return undefined;
+      },
+      load(id) {
+        if (id === authId) return 'export function useAuthStore() { return globalThis.__routerAccessAuthTest; }';
+        return undefined;
+      },
+      transform(code, id) {
+        if (id.endsWith('/src/router/index.ts')) return code
+          .replace('createWebHistory,', 'createMemoryHistory as createWebHistory,')
+          .replace(/component: \(\) => import\('[^']+'\)/g, 'component: {}');
+        return undefined;
+      },
+    }],
+  });
+  try {
+    const { router } = await vite.ssrLoadModule('/src/router/index.ts');
+    await router.push('/admin/papers/paper-1?scope=training&designer=1');
+    assert.equal(router.currentRoute.value.path, '/admin/papers/paper-1');
+    assert.deepEqual(router.currentRoute.value.query, { scope: 'training', designer: '1' });
+
+    await router.push('/admin/papers/paper-1?scope=regulation');
+    assert.equal(router.currentRoute.value.fullPath, '/admin/papers');
+
+    authState.isLoggedIn = false;
+    authState.restore = async () => false;
+    await router.push('/admin/papers/legacy-7?scope=regulation');
+    assert.equal(router.currentRoute.value.path, '/login');
+    assert.equal(router.currentRoute.value.query.redirect, '/admin/papers/legacy-7?scope=regulation');
+
+    authState.isLoggedIn = true;
+    await router.push(String(router.currentRoute.value.query.redirect));
+    assert.equal(router.currentRoute.value.fullPath, '/admin/papers');
+  } finally {
+    delete globalThis.__routerAccessAuthTest;
+    await vite.close();
+  }
+});
+
 test('registered question routes cache imports but refresh management on return and enforce separate permissions', async () => {
   const vite = await createServer({
     root: fileURLToPath(new URL('../', import.meta.url)),

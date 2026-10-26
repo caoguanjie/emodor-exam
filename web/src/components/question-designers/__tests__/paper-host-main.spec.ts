@@ -59,6 +59,18 @@ async function show(component: typeof PaperDetail | typeof Papers, url: string) 
 }
 
 describe('main fixed paper entry', () => {
+  it('creates a 120 point draft and rejects a pass score above its target', async () => {
+    const { state } = await show(Papers, '/admin/papers');
+    state.openTrainingCreate(); state.trainingCreate.title = '120分试卷';
+    expect(state.trainingCreate.total_score).toBe(100);
+    state.trainingCreate.total_score = 120; state.trainingCreate.pass_score = 121;
+    await state.createTraining('save'); await flushPromises();
+    expect(transport.calls.some(call => call.method === 'post' && call.path === '/admin/papers')).toBe(false);
+    state.trainingCreate.pass_score = 72;
+    await state.createTraining('save'); await flushPromises();
+    expect(transport.calls.find(call => call.method === 'post' && call.path === '/admin/papers')?.body).toMatchObject({ total_score: 120, pass_score: 72 });
+  });
+
   it('queries and resets the training list explicitly with only draft and published filters', async () => {
     const { wrapper, state } = await show(Papers, '/admin/papers');
     const listReads = () => transport.calls.filter((call) => call.method === 'get' && call.path === '/admin/papers');
@@ -96,33 +108,15 @@ describe('main fixed paper entry', () => {
     expect(listReads()).toHaveLength(beforeEnter + 1);
     expect(listReads().at(-1)?.config?.params).toEqual({ page: 1, page_size: 20, keyword: '回车查询' });
   });
-  it('queries and resets legacy fixed-paper filters explicitly with only draft and published options', async () => {
+  it('renders one training-paper list without a legacy tab, state, or request', async () => {
     const { wrapper, state } = await show(Papers, '/admin/papers');
-    state.activeScope = 'regulation';
-    await state.load(); await flushPromises();
-    const legacyReads = () => transport.calls.filter((call) => call.method === 'get' && call.path === '/ai/papers');
-    const status = wrapper.findAllComponents(ElSelect).find((select) => select.props('placeholder') === '状态')!;
-    expect(status.findAllComponents(ElOption).map((option) => ({ value: option.props('value'), label: option.props('label') }))).toEqual([
-      { value: 'draft', label: '草稿' },
-      { value: 'published', label: '已发布' },
-    ]);
-
-    const initialReads = legacyReads().length;
-    status.vm.$emit('update:modelValue', 'published'); status.vm.$emit('change', 'published');
-    await flushPromises();
-    expect(legacyReads()).toHaveLength(initialReads);
-
-    state.legacyQuery.page = 4;
-    await wrapper.get('input[placeholder="按历史资料 ID 筛选"]').setValue('regulation-7');
-    await wrapper.findAll('button').find((button) => button.text() === '查询')!.trigger('click');
-    await flushPromises();
-    expect(legacyReads().at(-1)?.config?.params).toEqual({ page: 1, page_size: 20, regulation_id: 'regulation-7', status: 'published' });
-
-    state.legacyQuery.page = 3;
-    await wrapper.findAll('button').find((button) => button.text() === '重置')!.trigger('click');
-    await flushPromises();
-    expect(state.legacyQuery).toMatchObject({ page: 1, page_size: 20, regulation_id: '', status: '' });
-    expect(legacyReads().at(-1)?.config?.params).toEqual({ page: 1, page_size: 20 });
+    expect(wrapper.text()).not.toContain('培训考试');
+    expect(wrapper.text()).not.toContain('历史固定卷');
+    expect(wrapper.findAllComponents({ name: 'ElTabs' })).toHaveLength(0);
+    expect(transport.calls.some((call) => call.path.startsWith('/ai/papers'))).toBe(false);
+    expect(state.activeScope).toBeUndefined();
+    expect(state.legacyQuery).toBeUndefined();
+    expect(state.loadLegacy).toBeUndefined();
   });
   it('shows a disabled draft question and prevents saving it through the designer', async () => {
     const fallback = transport.respond;
@@ -148,6 +142,30 @@ describe('main fixed paper entry', () => {
     await wrapper.findAll('button').find((button) => button.text() === '加入题单')!.trigger('click');
     expect(state.fixedQuestions.map((item: any) => item.score_cents)).toEqual([10000, 500]);
     expect(candidate).toEqual(expect.objectContaining({ question_id: '41' }));
+  });
+  it('saves a draft on the list without opening the designer and prevents a second save action while pending', async () => {
+    const fallback = transport.respond;
+    let complete!: (value: any) => void;
+    let created: ReturnType<typeof detail> | null = null;
+    transport.respond = async (method, path, body, config) => {
+      if (method === 'post' && path === '/admin/papers') return new Promise((resolve) => { complete = resolve; });
+      if (method === 'get' && path === '/admin/papers' && created) return { items: [created], total: 1, page: 1, page_size: 20 };
+      return fallback(method, path, body, config);
+    };
+    const { wrapper, state, router } = await show(Papers, '/admin/papers');
+    state.openTrainingCreate(); state.trainingCreate.title = '只保存的草稿'; await flushPromises();
+    const save = wrapper.findAll('button').find((button) => button.text() === '保存草稿')!;
+    const design = wrapper.findAll('button').find((button) => button.text() === '保存并组卷')!;
+    expect(save).toBeDefined(); expect(design).toBeDefined();
+    await save.trigger('click');
+    expect((save.element as HTMLButtonElement).disabled).toBe(true);
+    expect((design.element as HTMLButtonElement).disabled).toBe(true);
+    await design.trigger('click');
+    created = detail({ id: '101', title: '只保存的草稿' }); complete(created); await flushPromises();
+    expect(transport.calls.filter((call) => call.method === 'post' && call.path === '/admin/papers')).toHaveLength(1);
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
+    expect(state.trainingCreateVisible).toBe(false);
+    expect(wrapper.text()).toContain('只保存的草稿');
   });
   it('creates a fixed draft once and automatically opens its designer query', async () => {
     const { state, router } = await show(Papers, '/admin/papers');
@@ -314,13 +332,16 @@ describe('main fixed paper entry', () => {
     const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); expect(event.defaultPrevented).toBe(true);
     expect(transport.calls.filter((call) => call.path === '/admin/question-documents/commit')).toHaveLength(1);
   });
-  it('reloads relation options for the replacement category without changing its adopted paper settings or current draft ID', async () => {
+  it.each([false, true])('loads replacement category courses only for requires_learning=%s while retaining its settings and current draft ID', async (requiresLearning) => {
     const { wrapper } = await show(PaperDetail, '/admin/papers/100?scope=training&designer=1');
-    const designer = wrapper.getComponent(PaperDesigner); const source = paperFixture('200', '11', 'replacement'); source.paper.regulation_ids = ['31']; source.paper.course_ids = ['41'];
+    const designer = wrapper.getComponent(PaperDesigner); const source = paperFixture('200', '11', 'replacement');
+    Object.assign(source.paper, { regulation_ids: ['31'], course_ids: requiresLearning ? ['41'] : [], requires_learning: requiresLearning,
+      required_learning_minutes: requiresLearning ? 15 : null, remark: '来源备注' });
     designer.getComponent(PaperLibrarySidebar).vm.$emit('use-paper', source); await flushPromises();
     const replace = [...document.body.querySelectorAll('button')].find((button) => button.textContent?.trim() === '整卷替换')!; replace.click(); await flushPromises();
-    expect(transport.calls.some((call) => call.path === '/admin/papers/course-options' && call.config?.params.category_id === '11')).toBe(true);
-    expect(designer.props('modelValue').paper).toMatchObject({ id: '100', title: '试卷 200', category_id: '11', regulation_ids: ['31'], course_ids: ['41'] });
+    expect(transport.calls.some((call) => call.path === '/admin/papers/course-options' && call.config?.params.category_id === '11')).toBe(requiresLearning);
+    expect(transport.calls.some((call) => call.path === '/admin/papers/regulation-options')).toBe(false);
+    expect(designer.props('modelValue').paper).toMatchObject({ ...source.paper, id: '100' });
   });
   it('opens one designer session per fullPath and refreshes the cached ordinary detail after save and close', async () => {
     const fallback = transport.respond; let persisted = detail();

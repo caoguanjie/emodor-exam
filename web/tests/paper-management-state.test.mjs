@@ -29,7 +29,6 @@ const context = {
   unsavedSources: [],
   deferredRequests: new Map(),
   trainingPaper: null,
-  legacyPaper: null,
   previewOrdinary: null,
   previewAnswers: null,
   media: async () => new Blob(['image'], { type: 'image/png' }),
@@ -312,6 +311,8 @@ function trainingPaper(overrides = {}) {
     mode: 'fixed',
     category_id: 'category-1',
     requires_learning: false,
+    required_learning_minutes: null,
+    remark: null,
     regulation_ids: [],
     course_ids: [],
     rules: scores.map((score_cents) => ({ type: 'single', count: 1, score_cents })),
@@ -324,23 +325,6 @@ function trainingPaper(overrides = {}) {
     latest_release_id: null,
     sum_score_cents: 10000,
     questions: scores.map((score, index) => question(index + 1, score)),
-    ...overrides,
-  };
-}
-
-function legacyPaper(overrides = {}) {
-  return {
-    id: 7,
-    regulation_id: 11,
-    title: '制度固定卷',
-    status: 'published',
-    pass_score: 60,
-    duration_minutes: 30,
-    max_attempts: 3,
-    partial_credit_ratio: 0.5,
-    release_id: 'release-legacy-7',
-    rules_locked: true,
-    questions: [{ question_id: 31, type: 'single', stem: '冻结题', score: 100, sort: 0 }],
     ...overrides,
   };
 }
@@ -375,9 +359,6 @@ function setResponder() {
     if (method === 'GET' && path === '/admin/papers/paper-1/preview') return context.previewOrdinary;
     if (method === 'GET' && path === '/admin/papers/paper-1/preview/answers') return context.previewAnswers;
     if (method === 'GET' && path === '/regulations') return { list: [{ id: 11, title: '制度十一' }], total: 1 };
-    if (method === 'GET' && path === '/ai/papers') return { list: [context.legacyPaper], total: 1 };
-    if (method === 'GET' && path === '/ai/papers/paper-1') return context.legacyPaper;
-    if (method === 'GET' && path === '/ai/questions') return { list: [], total: 0 };
     if (method === 'POST' && path === '/admin/papers') return { ...context.trainingPaper, id: 'created-paper' };
     if (method === 'PUT' && path === '/admin/papers/paper-1') {
       context.trainingPaper = { ...context.trainingPaper, ...body, rules: body.rules ?? context.trainingPaper.rules };
@@ -388,7 +369,6 @@ function setResponder() {
       context.trainingPaper = { ...context.trainingPaper, status: 'published', latest_release_id: 'release-1' };
       return { release_id: 'release-1' };
     }
-    if (method === 'POST' && path === '/ai/papers/paper-1/copy') return legacyPaper({ id: 8, title: '制度固定卷（副本）', status: 'draft', release_id: null, rules_locked: false });
     return {};
   };
 }
@@ -450,7 +430,6 @@ beforeEach(() => {
   context.unsavedSources = [];
   context.deferredRequests = new Map();
   context.trainingPaper = trainingPaper();
-  context.legacyPaper = legacyPaper();
   context.previewOrdinary = previewFixture('普通预览');
   context.previewAnswers = previewFixture('答案预览', true);
   context.media = async () => new Blob(['image'], { type: 'image/png' });
@@ -465,13 +444,22 @@ async function mountPapers() {
   return mounted;
 }
 
-async function mountDetail(scope = 'training') {
-  context.route = { params: { id: 'paper-1' }, query: { scope } };
+async function mountDetail() {
+  context.route = { params: { id: 'paper-1' }, query: { scope: 'training' } };
   const mounted = mount(PaperDetail);
-  await waitFor(() => scope === 'training' ? mounted.state.paper : mounted.state.legacyPaper, 'paper detail');
+  await waitFor(() => mounted.state.paper, 'paper detail');
   await nextTick();
   return mounted;
 }
+
+test('mounts only the training paper list without legacy state or requests', async () => {
+  const mounted = await mountPapers();
+  assert.equal(context.calls.some((call) => call.path.startsWith('/ai/papers')), false);
+  assert.equal(mounted.state.activeScope, undefined);
+  assert.equal(mounted.state.legacyQuery, undefined);
+  assert.equal(mounted.state.loadLegacy, undefined);
+  mounted.unmount();
+});
 
 test('omits every blank list filter and ignores a stale create receipt after close and reopen', async () => {
   const mounted = await mountPapers();
@@ -489,11 +477,6 @@ test('omits every blank list filter and ignores a stale create receipt after clo
   mounted.state.searchTraining();
   await waitFor(() => context.calls.length > beforeSearch, 'cleared filter request');
   assert.deepEqual(context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers').at(-1).config.params, { page: 1, page_size: 20 });
-
-  mounted.state.activeScope = 'regulation';
-  await mounted.state.load();
-  assert.deepEqual(context.calls.filter((call) => call.method === 'GET' && call.path === '/ai/papers').at(-1).config.params, { page: 1, page_size: 20 });
-  mounted.state.activeScope = 'training';
 
   mounted.state.openTrainingCreate();
   mounted.state.trainingCreate.title = '旧创建请求';
@@ -534,14 +517,6 @@ test('creates fixed once and opens its persisted draft in the complete designer 
   await Promise.all([mounted.state.createTraining(), mounted.state.createTraining()]);
   assert.equal(context.calls.filter((call) => call.method === 'POST' && call.path === '/admin/papers').length, 1);
   assert.deepEqual(context.routerPushes, [{ path: '/admin/papers/created-paper', query: { scope: 'training', designer: '1' } }]);
-  mounted.unmount();
-});
-
-test('labels release-backed and truly pre-upgrade regulation papers separately', async () => {
-  const mounted = await mountPapers();
-  assert.equal(mounted.state.legacyReleaseLabel({ status: 'published', release_id: 'release-7', rules_locked: true }), '内容已冻结');
-  assert.equal(mounted.state.legacyReleaseLabel({ status: 'published', release_id: null, rules_locked: false }), '升级前旧卷');
-  assert.equal(mounted.state.legacyReleaseLabel({ status: 'draft', release_id: null, rules_locked: false }), '待发布冻结');
   mounted.unmount();
 });
 
@@ -821,26 +796,6 @@ test('fix2 safely reloads training detail after repeated initial KeepAlive inval
   mounted.unmount();
 });
 
-test('fix2 safely reloads legacy detail after its initial KeepAlive request was invalidated', async () => {
-  context.route = { params: { id: 'paper-1' }, query: { scope: 'regulation' } };
-  const first = deferredRequest('GET', '/ai/papers/paper-1');
-  const mounted = await mountCached(PaperDetail);
-  await waitFor(() => context.calls.filter((call) => call.method === 'GET' && call.path === '/ai/papers/paper-1').length === 1, 'first legacy detail request');
-
-  await mounted.deactivate();
-  first.resolve(legacyPaper({ title: '停用后的旧制度卷', pass_score: 61 }));
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  assert.equal(mounted.state.legacyPaper, null);
-
-  const authoritative = deferredRequest('GET', '/ai/papers/paper-1');
-  await mounted.activate();
-  assert.equal(context.calls.filter((call) => call.method === 'GET' && call.path === '/ai/papers/paper-1').length, 2);
-  authoritative.resolve(legacyPaper({ title: '重新激活后的权威制度卷', pass_score: 67 }));
-  await waitFor(() => mounted.state.legacyPaper?.title === '重新激活后的权威制度卷', 'reloaded legacy detail');
-  assert.equal(mounted.state.legacyStrategy.pass_score, 67);
-  mounted.unmount();
-});
-
 test('fix2 reactivation preserves a loaded unsaved training draft without another detail read', async () => {
   const mounted = await mountCached(PaperDetail);
   await waitFor(() => mounted.state.paper, 'loaded training detail');
@@ -859,31 +814,12 @@ test('fix2 reactivation preserves a loaded unsaved training draft without anothe
   mounted.unmount();
 });
 
-test('fix2 reactivation preserves a loaded unsaved legacy draft without another detail read', async () => {
-  context.route = { params: { id: 'paper-1' }, query: { scope: 'regulation' } };
-  context.legacyPaper = legacyPaper({ status: 'draft', release_id: null, rules_locked: false });
-  const mounted = await mountCached(PaperDetail);
-  await waitFor(() => mounted.state.legacyPaper, 'loaded legacy detail');
-  mounted.state.legacyStrategy.pass_score = 73;
-  mounted.state.legacyPaper.questions[0].score = 95;
-  mounted.state.legacyDirty = true;
-  await nextTick();
-  const detailReads = context.calls.filter((call) => call.method === 'GET' && call.path === '/ai/papers/paper-1').length;
-
-  await mounted.deactivate();
-  await mounted.activate();
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  assert.equal(context.calls.filter((call) => call.method === 'GET' && call.path === '/ai/papers/paper-1').length, detailReads);
-  assert.equal(mounted.state.legacyStrategy.pass_score, 73);
-  assert.equal(mounted.state.legacyPaper.questions[0].score, 95);
-  assert.equal(mounted.state.legacyDirty, true);
-  mounted.unmount();
-});
-
 test('fix3 restores matching relation options after the inactive initial chain used an empty category', async () => {
   context.trainingPaper = trainingPaper({
     title: '含已保存关系的培训卷',
     category_id: 'category-2',
+    requires_learning: true,
+    required_learning_minutes: 15,
     regulation_ids: ['regulation-saved'],
     course_ids: ['course-saved'],
   });
@@ -902,15 +838,14 @@ test('fix3 restores matching relation options after the inactive initial chain u
   await new Promise((resolvePromise) => setImmediate(resolvePromise));
   assert.equal(mounted.state.paper, null);
   assert.equal(mounted.state.form.category_id, '');
-  assert.deepEqual(mounted.state.regulationOptions, []);
   assert.deepEqual(mounted.state.courseOptions, []);
 
   await mounted.activate();
   await waitFor(() => mounted.state.paper?.title === '含已保存关系的培训卷', 'recovered detail');
   await new Promise((resolvePromise) => setImmediate(resolvePromise));
   assert.deepEqual(mounted.state.categories, [{ id: 'category-2', name: '类别二' }]);
-  assert.deepEqual(mounted.state.regulationOptions, [{ id: 'regulation-saved', title: '已保存制度' }]);
   assert.deepEqual(mounted.state.courseOptions, [{ id: 'course-saved', title: '已保存课程' }]);
+  assert.equal(context.calls.some((call) => call.path === '/admin/papers/regulation-options'), false);
   assert.deepEqual(mounted.state.form.regulation_ids, ['regulation-saved']);
   assert.deepEqual(mounted.state.form.course_ids, ['course-saved']);
   const relationCalls = context.calls.filter((call) => ['/admin/papers/regulation-options', '/admin/papers/course-options'].includes(call.path));
@@ -921,6 +856,8 @@ test('fix3 restores matching relation options after the inactive initial chain u
 test('fix3 reloads category options invalidated by deactivation without rebasing the current draft', async () => {
   context.trainingPaper = trainingPaper({
     category_id: 'category-1',
+    requires_learning: true,
+    required_learning_minutes: 15,
     regulation_ids: ['regulation-saved'],
     course_ids: ['course-saved'],
   });
@@ -946,7 +883,8 @@ test('fix3 reloads category options invalidated by deactivation without rebasing
 
   await mounted.activate();
   assert.equal(context.calls.filter((call) => call.path === '/admin/papers/category-options').length, 2);
-  await waitFor(() => mounted.state.regulationOptions.length === 2 && mounted.state.courseOptions.length === 2, 'reloaded category dependency chain');
+  await waitFor(() => mounted.state.courseOptions.length === 2, 'reloaded category dependency chain');
+  assert.equal(context.calls.some((call) => call.path === '/admin/papers/regulation-options'), false);
   assert.deepEqual(mounted.state.categories, [{ id: 'category-1', name: '当前类别' }]);
   assert.deepEqual(mounted.state.paper.regulation_ids, ['regulation-saved']);
   assert.deepEqual(mounted.state.paper.course_ids, ['course-saved']);
@@ -961,6 +899,8 @@ test('fix3 reloads category options invalidated by deactivation without rebasing
 test('fix3 replaces invalidated relation options once and keeps a loaded draft on later activations', async () => {
   context.trainingPaper = trainingPaper({
     category_id: 'category-1',
+    requires_learning: true,
+    required_learning_minutes: 15,
     regulation_ids: ['regulation-saved'],
     course_ids: ['course-saved'],
   });
@@ -969,10 +909,8 @@ test('fix3 replaces invalidated relation options once and keeps a loaded draft o
     regulations: [{ id: 'regulation-saved', title: '已保存制度' }, { id: 'regulation-draft', title: '草稿制度' }],
     courses: [{ id: 'course-saved', title: '已保存课程' }, { id: 'course-draft', title: '草稿课程' }],
   });
-  const staleRegulations = deferredRequest('GET', '/admin/papers/regulation-options');
   const staleCourses = deferredRequest('GET', '/admin/papers/course-options');
   const mounted = await mountCached(PaperDetail);
-  await waitFor(() => context.calls.some((call) => call.path === '/admin/papers/regulation-options'), 'first regulation option request');
   await waitFor(() => context.calls.some((call) => call.path === '/admin/papers/course-options'), 'first course option request');
   mounted.state.form.title = '关系请求期间的未保存标题';
   mounted.state.form.regulation_ids = ['regulation-saved', 'regulation-draft'];
@@ -980,16 +918,14 @@ test('fix3 replaces invalidated relation options once and keeps a loaded draft o
   await nextTick();
 
   await mounted.deactivate();
-  staleRegulations.resolve({ items: [{ id: 'stale-regulation', title: '迟到旧制度' }], total: 1, page: 1, page_size: 100 });
   staleCourses.resolve({ items: [{ id: 'stale-course', title: '迟到旧课程' }], total: 1, page: 1, page_size: 100 });
   await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  assert.deepEqual(mounted.state.regulationOptions, []);
   assert.deepEqual(mounted.state.courseOptions, []);
 
   await mounted.activate();
-  assert.equal(context.calls.filter((call) => call.path === '/admin/papers/regulation-options').length, 2);
+  assert.equal(context.calls.some((call) => call.path === '/admin/papers/regulation-options'), false);
   assert.equal(context.calls.filter((call) => call.path === '/admin/papers/course-options').length, 2);
-  await waitFor(() => mounted.state.regulationOptions.length === 2 && mounted.state.courseOptions.length === 2, 'reloaded relation options');
+  await waitFor(() => mounted.state.courseOptions.length === 2, 'reloaded relation options');
   assert.deepEqual(mounted.state.paper.regulation_ids, ['regulation-saved']);
   assert.deepEqual(mounted.state.paper.course_ids, ['course-saved']);
   assert.equal(mounted.state.form.title, '关系请求期间的未保存标题');
@@ -1185,78 +1121,6 @@ test('marks failed controlled media as non-printable and can retry the visible f
     URL.createObjectURL = originalCreateObjectUrl;
     URL.revokeObjectURL = originalRevokeObjectUrl;
   }
-});
-
-test('uses legacy release flags and ignores duplicate or stale copy completions', async () => {
-  const mounted = await mountDetail('regulation');
-  assert.equal(mounted.state.legacyStrategyLocked, true);
-  const pending = deferredRequest('POST', '/ai/papers/paper-1/copy');
-  const first = mounted.state.copyLegacyPaper();
-  const second = mounted.state.copyLegacyPaper();
-  await waitFor(() => context.calls.some((call) => call.method === 'POST' && call.path.endsWith('/copy')), 'legacy copy');
-  const copyCalls = context.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/copy'));
-  assert.equal(copyCalls.length, 1);
-  assert.deepEqual(copyCalls[0].body, {});
-  mounted.unmount();
-  pending.resolve(legacyPaper({ id: 8, status: 'draft', release_id: null, rules_locked: false }));
-  await Promise.all([first, second]);
-  assert.deepEqual(context.routerPushes, []);
-});
-
-test('keeps legacy published and archived status readable without an archive write action', async () => {
-  for (const status of ['published', 'archived']) {
-    context.legacyPaper = legacyPaper({ status });
-    const mounted = await mountDetail('regulation');
-    const actions = walk(mounted.root, (node) => node.type === 'button').map(renderedText);
-    assert.equal(actions.includes('归档'), false);
-    assert.equal(mounted.state.archiveLegacy, undefined);
-    assert.equal(context.calls.some((call) => call.method === 'POST' && call.path.endsWith('/archive')), false);
-    mounted.unmount();
-  }
-});
-
-test('fix2 keeps only pre-upgrade published strategy editable while release-backed and archived strategies stay locked', async () => {
-  context.legacyPaper = legacyPaper({ status: 'published', release_id: null, rules_locked: false });
-  let mounted = await mountDetail('regulation');
-  assert.equal(mounted.state.legacyStrategyLocked, false);
-  const publishedInputs = walk(mounted.root, (node) => node.type === 'input-number');
-  assert.equal(publishedInputs.length, 5);
-  assert.ok(publishedInputs.slice(0, 4).every((node) => node.props.disabled === false));
-  assert.equal(publishedInputs[4].props.disabled, true, 'published question rows remain read-only');
-  const publishedSave = walk(mounted.root, (node) => node.type === 'button' && renderedText(node).includes('保存策略'))[0];
-  assert.equal(publishedSave.props.disabled, false);
-  mounted.unmount();
-
-  context.legacyPaper = legacyPaper({ status: 'published', release_id: 'release-7', rules_locked: true });
-  mounted = await mountDetail('regulation');
-  assert.equal(mounted.state.legacyStrategyLocked, true);
-  assert.ok(walk(mounted.root, (node) => node.type === 'input-number').slice(0, 4).every((node) => node.props.disabled === true));
-  mounted.unmount();
-
-  context.legacyPaper = legacyPaper({ status: 'archived', release_id: null, rules_locked: false });
-  mounted = await mountDetail('regulation');
-  assert.equal(mounted.state.legacyStrategyLocked, true);
-  assert.ok(walk(mounted.root, (node) => node.type === 'input-number').slice(0, 4).every((node) => node.props.disabled === true));
-  mounted.unmount();
-});
-
-test('reports a completed legacy copy after deactivation without navigating or resending it', async () => {
-  context.route = { params: { id: 'paper-1' }, query: { scope: 'regulation' } };
-  const mounted = await mountCached(PaperDetail);
-  await waitFor(() => mounted.state.legacyPaper, 'cached legacy detail');
-  const pending = deferredRequest('POST', '/ai/papers/paper-1/copy');
-  const copy = mounted.state.copyLegacyPaper();
-  await waitFor(() => context.calls.some((call) => call.method === 'POST' && call.path.endsWith('/copy')), 'copy before deactivate');
-  await mounted.deactivate();
-  await mounted.activate();
-  const repeated = mounted.state.copyLegacyPaper();
-  assert.equal(context.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/copy')).length, 1);
-  pending.resolve(legacyPaper({ id: 9, status: 'draft', release_id: null, rules_locked: false }));
-  await Promise.all([copy, repeated]);
-  assert.deepEqual(context.routerPushes, []);
-  assert.equal(context.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/copy')).length, 1);
-  assert.ok(context.messages.some((message) => message.type === 'info' && message.message.includes('复制请求已完成')));
-  mounted.unmount();
 });
 
 function controlledMediaDocument() {

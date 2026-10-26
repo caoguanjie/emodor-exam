@@ -2,7 +2,7 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '../stores/auth';
 import {
   COURSE_ROUTE_PERMISSIONS, QUESTION_ROUTE_PERMISSIONS, defaultHomePath, postAuthPath, routeAccessAllowed,
-  isRetiredAdminPath, validPostAuthRedirect,
+  isRetiredAdminPath, isRetiredLegacyPaperLocation, validPostAuthRedirect,
 } from './access';
 
 /**
@@ -76,6 +76,7 @@ router.beforeEach(async (to) => {
     }
   }
   if (auth.needChangePassword && to.path !== '/change-password') return '/change-password';
+  if (isRetiredLegacyPaperLocation(to.path, to.query.scope)) return '/admin/papers';
   if (isRetiredAdminPath(to.path)) return defaultHomePath(auth.isAdmin);
   if (to.path === '/') return defaultHomePath(auth.isAdmin);
   if (to.meta.admin && !auth.isAdmin) return '/my/regulations';

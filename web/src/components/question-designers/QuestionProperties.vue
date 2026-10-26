@@ -24,17 +24,26 @@
     <h3 class="designer-property-group-title">答案设置</h3>
     <div class="designer-property-content">
     <el-form-item label="本卷分值" required>
-      <el-input-number aria-label="分值" :model-value="meta.score_cents / 100" :min="0.01" :max="100" :precision="2" :step="0.5" :disabled="readonly" @update:model-value="patch({ score_cents: Math.round(Number($event) * 100) })" />
+      <el-input aria-label="分值" type="number" inputmode="decimal" :min="0" :max="scoreLimit" :step="0.01" :model-value="scoreDraft" :disabled="readonly" @update:model-value="changeScore" @blur="finishScore"><template #append>分</template></el-input>
     </el-form-item>
     <el-form-item label="答案摘要"><span>{{ answerSummary || '未设置' }}</span></el-form-item>
     </div>
     <h3 class="designer-property-group-title">答案解析</h3>
     <div class="designer-property-content question-properties__rich" aria-label="解析">
-      <TiptapEditor :key="clientId" ref="analysisEditor" :model-value="meta.analysis" profile="rich" :mode="readonly ? 'preview' : 'edit'" presentation="inline"
-        :show-toolbar="!readonly" :show-panels="false" :media-resolver="mediaResolver" @update:model-value="patch({ analysis: $event })" />
+      <div class="question-properties__analysis-body">
+        <div v-if="!readonly" class="question-properties__analysis-toolbar" role="toolbar" aria-label="解析格式">
+          <button v-for="item in analysisFormats" :key="item.name" type="button" :aria-label="item.label" :title="item.label"
+            :aria-pressed="analysisFormatActive(item.name)" @mousedown.prevent @click="formatAnalysis(item.name)">
+            <span v-if="item.name === 'bulletList'" aria-hidden="true">☷</span><SvgIcon v-else :icon-class="item.icon" />
+          </button>
+          <button v-if="canUploadMedia && mediaAdapter" type="button" aria-label="插入解析图片" title="插入解析图片"
+            :disabled="analysisPending" @mousedown.prevent @click="chooseAnalysisPosition"><SvgIcon icon-class="image-line" /></button>
+        </div>
+        <TiptapEditor :key="clientId" ref="analysisEditor" :model-value="meta.analysis" profile="rich" :mode="readonly ? 'preview' : 'edit'" presentation="inline"
+          compact :show-toolbar="false" :show-panels="false" :media-resolver="mediaResolver" @update:model-value="patch({ analysis: $event })" />
+      </div>
       <input v-if="!readonly && canUploadMedia && mediaAdapter" ref="analysisInput" type="file" accept="image/*" aria-label="解析图片" hidden @change="chooseAnalysisImage" @cancel="cancelAnalysisImage" />
-      <div v-if="!readonly && canUploadMedia && mediaAdapter" class="question-properties__media-actions">
-        <el-button :disabled="analysisPending" @mousedown.prevent @click="chooseAnalysisPosition">插入解析图片</el-button>
+      <div v-if="!readonly && canUploadMedia && mediaAdapter && (analysisUploading || analysisError)" class="question-properties__media-actions">
         <span v-if="analysisUploading" role="status">解析图片上传中…</span>
         <div v-if="analysisError" role="alert">{{ analysisError }} <el-button :disabled="analysisUploading" @click="uploadAnalysisImage">重试解析图片</el-button><el-button @click="cancelAnalysisImage">取消待上传</el-button></div>
       </div>
@@ -43,7 +52,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import type { Editor } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -51,6 +60,7 @@ import type { QuestionMeta } from '../../api/question-document-types';
 import type { QuestionType as SingleQuestionType } from '../../api/training-types';
 import type { DesignerMediaAdapter, DesignerOption } from './contracts';
 import TiptapEditor from '../Tiptap/index.vue';
+import SvgIcon from '../Tiptap/components/SvgIcon.vue';
 import { isControlledMediaAssetId, type MediaResolver } from '../Tiptap/extensions/MediaImage';
 import { CONTROLLED_UPDATE_META } from '../Tiptap/utils/widgetNodeViewRegistry';
 import type { QuestionRegulationOption } from '../Tiptap/components/QuestionSetting.vue';
@@ -58,12 +68,59 @@ import type { QuestionRegulationOption } from '../Tiptap/components/QuestionSett
 const props = withDefaults(defineProps<{
   clientId: string; meta: QuestionMeta; answerSummary?: string; categories?: Array<{ id: string; name: string }>;
   regulations?: QuestionRegulationOption[];
-  readonly?: boolean; categoryReadonly?: boolean; mediaResolver?: MediaResolver; difficultyOptions?: DesignerOption[];
+  readonly?: boolean; categoryReadonly?: boolean; totalScore?: number; mediaResolver?: MediaResolver; difficultyOptions?: DesignerOption[];
   canUploadMedia?: boolean; mediaAdapter?: DesignerMediaAdapter;
-}>(), { answerSummary: '', categories: () => [], regulations: () => [], readonly: false, categoryReadonly: false,
+}>(), { answerSummary: '', categories: () => [], regulations: () => [], readonly: false, categoryReadonly: false, totalScore: 100,
   difficultyOptions: () => [] });
 const emit = defineEmits<{ change: [patch: Partial<QuestionMeta>]; 'type-change': [type: SingleQuestionType]; 'upload-state-change': [state: { pending: boolean }] }>();
+const scoreDraft = ref('');
+const scoreLimit = computed(() => Number.isFinite(props.totalScore) && props.totalScore > 0 ? Math.min(999.99, props.totalScore) : 999.99);
+watch(() => [props.clientId, props.meta.score_cents] as const, ([clientId, cents], previous) => {
+  if (previous?.[0] === clientId && scoreDraft.value !== '' && Math.round(Number(scoreDraft.value) * 100) === cents) return;
+  scoreDraft.value = String(cents / 100);
+}, { immediate: true });
+function changeScore(value: string) {
+  if (props.readonly) return;
+  scoreDraft.value = value;
+  const score = Number(value);
+  if (value.trim() && Number.isFinite(score) && score >= 0 && score <= scoreLimit.value) patch({ score_cents: Math.round(score * 100) });
+}
+function finishScore() {
+  if (props.readonly) return;
+  const score = Number(scoreDraft.value);
+  if (!scoreDraft.value.trim() || !Number.isFinite(score)) { scoreDraft.value = String(props.meta.score_cents / 100); return; }
+  const cents = Math.min(Math.round(scoreLimit.value * 100), Math.max(0, Math.round(score * 100)));
+  scoreDraft.value = String(cents / 100);
+  patch({ score_cents: cents });
+}
 const analysisEditor = ref<InstanceType<typeof TiptapEditor> | null>(null);
+type AnalysisFormat = 'bold' | 'italic' | 'underline' | 'bulletList';
+const analysisFormats: Array<{ name: AnalysisFormat; label: string; icon: string }> = [
+  { name: 'bold', label: '解析加粗', icon: 'bold' },
+  { name: 'italic', label: '解析斜体', icon: 'italic' },
+  { name: 'underline', label: '解析下划线', icon: 'underline' },
+  { name: 'bulletList', label: '解析无序列表', icon: 'list-unordered' },
+];
+const analysisRevision = ref(0);
+watch(() => analysisEditor.value?.getEditor(), (editor, _previous, onCleanup) => {
+  if (!editor) return;
+  const refresh = () => { analysisRevision.value += 1; };
+  editor.on('transaction', refresh);
+  onCleanup(() => editor.off('transaction', refresh));
+}, { flush: 'post' });
+function analysisFormatActive(name: AnalysisFormat) {
+  void analysisRevision.value;
+  return analysisEditor.value?.getEditor()?.isActive(name) ?? false;
+}
+function formatAnalysis(name: AnalysisFormat) {
+  if (props.readonly) return;
+  const chain = analysisEditor.value?.getEditor()?.chain().focus();
+  if (!chain) return;
+  if (name === 'bold') chain.toggleBold().run();
+  else if (name === 'italic') chain.toggleItalic().run();
+  else if (name === 'underline') chain.toggleUnderline().run();
+  else chain.toggleBulletList().run();
+}
 const analysisInput = ref<HTMLInputElement | null>(null); const analysisUploading = ref(false); const analysisPending = ref(false); const analysisError = ref('');
 let analysisFile: File | null = null; let analysisSerial = 0;
 let analysisAnchor: { editor: Editor; key: PluginKey<number | null> } | null = null;
@@ -135,15 +192,25 @@ onBeforeUnmount(cancelAnalysisImage);
 </script>
 
 <style scoped>
-.question-properties .el-select,.question-properties .el-input-number { width:100%; }
+.question-properties :deep(.el-input-group__append) { width:40px; padding:0; box-sizing:border-box; }
+.question-properties :deep(input[type="number"]) { appearance:textfield; -moz-appearance:textfield; }
+.question-properties :deep(input::-webkit-inner-spin-button),
+.question-properties :deep(input::-webkit-outer-spin-button) { -webkit-appearance:none; margin:0; }
+.question-properties .el-select,.question-properties .el-input { width:100%; }
 .question-properties :deep(.el-form-item__content) { min-width:0; }
 .question-properties :deep(.ruleexam-tiptap-inline-host) { width:100%; min-width:0; }
-.question-properties__rich :deep(.ruleexam-tiptap-inline-host) { box-sizing:border-box; border:1px solid #e0e5ee; border-radius:4px; overflow:hidden; }
+.question-properties__analysis-body { width:100%; min-width:0; box-sizing:border-box; overflow:hidden; border:1px solid var(--el-border-color, #dcdfe6); border-radius:6px; background:#fff; }
+.question-properties__analysis-body:focus-within { border-color:var(--el-color-primary, #3056d3); }
+.question-properties__analysis-toolbar { display:flex; align-items:center; gap:2px; min-height:36px; padding:0 6px; border-bottom:1px solid var(--el-border-color-lighter, #ebeef5); background:#fafbfc; }
+.question-properties__analysis-toolbar button { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; padding:0; border:0; border-radius:4px; color:#475569; background:transparent; cursor:pointer; font-size:16px; }
+.question-properties__analysis-toolbar button:hover,.question-properties__analysis-toolbar button[aria-pressed='true'] { background:#e8eef7; color:var(--el-color-primary, #409eff); }
+.question-properties__analysis-toolbar button:disabled { opacity:.4; cursor:default; }
+.question-properties__analysis-body :deep(.editor-main-wrapp) { border:0; box-shadow:none; background:transparent; }
 .question-properties__media-actions { width:100%; margin-top:8px; font-size:12px; }
 .question-properties :deep(.ruleexam-tiptap .header) { min-height:36px; padding:4px; }
 .question-properties :deep(.ruleexam-tiptap .header-menu) { min-width:0; padding:0; overflow-x:auto; justify-content:flex-start; }
 .question-properties :deep(.ruleexam-tiptap .header-menu .menu-btn-groups) { justify-content:flex-start; }
 .question-properties :deep(.ruleexam-tiptap .header-btns) { display:none; }
 .question-properties :deep(.ruleexam-tiptap .editor-main) { padding:0; border:0; background:#fff; }
-.question-properties :deep(.ruleexam-tiptap .ProseMirror) { min-height:150px; padding:10px; box-sizing:border-box; }
+.question-properties :deep(.ruleexam-tiptap .ProseMirror) { min-height:110px; padding:12px 20px; box-sizing:border-box; }
 </style>

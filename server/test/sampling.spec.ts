@@ -97,7 +97,7 @@ describe('release pool sampling', () => {
       [{ type: 'single', count: 1, scoreCents: 9999 }],
       'easy',
       new SequenceRandom([0]),
-    )).toThrow('10000');
+    )).toThrow('100 分');
   });
 
   it('preserves concept grouping only when explicitly sampling an existing frozen release', () => {

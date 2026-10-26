@@ -4,7 +4,7 @@ import { questionFingerprint } from '../paper-designer-state';
 export function paperFixture(id = '100', category = '10', client = 'question_one'): PaperDesignerValue {
   const value: PaperDesignerValue = {
     paper: { id, title: `试卷 ${id}`, category_id: category, mode: 'fixed', pass_score: 60, duration_minutes: 30,
-      max_attempts: 3, partial_credit_ratio: 0.5, requires_learning: false, regulation_ids: [], course_ids: [] },
+      max_attempts: 3, partial_credit_ratio: 0.5, requires_learning: false, required_learning_minutes: null, remark: null, regulation_ids: [], course_ids: [] },
     document: {
       schema_version: 1,
       content: { type: 'doc', content: [{ type: 'questionBlock', attrs: { client_id: client }, content: [

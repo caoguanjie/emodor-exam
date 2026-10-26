@@ -39,6 +39,7 @@ export const SUITE_REGISTRY = Object.freeze({
   'training-question-import': join(ROOT, 'tests', 'training-question-import.mjs'),
   'training-ai-question-import': join(ROOT, 'tests', 'training-ai-question-import.mjs'),
   'training-publishing': join(ROOT, 'tests', 'training-publishing.mjs'),
+  'training-paper-learning': join(ROOT, 'tests', 'training-paper-learning.mjs'),
   'training-attempts': join(ROOT, 'tests', 'training-attempts.mjs'),
   'training-submissions': join(ROOT, 'tests', 'training-submissions.mjs'),
   'training-records': join(ROOT, 'tests', 'training-records.mjs'),
@@ -71,7 +72,7 @@ export function suiteRuntimeEnvOverrides(suitePath) {
   if (['mobile-auth', 'training-courses'].some((name) => SUITE_REGISTRY[name] === suitePath)) {
     return { NODE_ENV: 'test', SERVER_DEBUG_LOGIN_ENABLED: 'true', SMS_PROVIDER: 'disabled' };
   }
-  if (['mobile-identity', 'mobile-media-ticket', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5', 'main-question-designers', 'main-question-designers-compatibility'].some((name) => SUITE_REGISTRY[name] === suitePath)) {
+  if (['mobile-identity', 'mobile-media-ticket', 'training-paper-learning', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5', 'main-question-designers', 'main-question-designers-compatibility'].some((name) => SUITE_REGISTRY[name] === suitePath)) {
     return {
       NODE_ENV: 'test',
       SERVER_DEBUG_LOGIN_ENABLED: 'true',
@@ -83,7 +84,7 @@ export function suiteRuntimeEnvOverrides(suitePath) {
 }
 
 export function suiteRuntimeApi(suitePath) {
-  if (!['mobile-identity', 'mobile-media-ticket', 'training-video-learning', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5', 'main-question-designers', 'main-question-designers-compatibility'].some((name) => SUITE_REGISTRY[name] === suitePath)) return {};
+  if (!['mobile-identity', 'mobile-media-ticket', 'training-video-learning', 'training-paper-learning', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5', 'main-question-designers', 'main-question-designers-compatibility'].some((name) => SUITE_REGISTRY[name] === suitePath)) return {};
   return {
     apiEntry: join(ROOT, 'server', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
     apiArgs: [join(ROOT, 'server', 'test', 'identity-e2e-main.ts')],
