@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildQuestionImportFile,
   buildQuestionImportTemplate,
   parseQuestionImportFile,
 } from '../src/modules/questions/question-import-format';
+import { QuestionImportController } from '../src/modules/questions/question-import.controller';
 import { QuestionImportService } from '../src/modules/questions/question-import.service';
 import { ImportBatchService } from '../src/modules/imports/import-batch.service';
 import { validateAndSanitizeQuestionDraft, type QuestionDraftInput } from '../src/modules/questions/question-validator';
@@ -13,9 +15,15 @@ import { Errors } from '../src/common/errors';
 import ExcelJS from 'exceljs';
 
 describe('question import format', () => {
-  it('generates a seven-column template and accepts the old ninth score column without reading its value', async () => {
-    const txt = await buildQuestionImportTemplate('txt');
+  it('keeps the AI template and generated export on the canonical seven-column contract', async () => {
+    const txt = await buildQuestionImportTemplate('txt', 'ai');
     expect(txt.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/)[0]).toBe('category\ttype\tdifficulty\tstem\toptions\tanswer\tanalysis');
+    const exported = await buildQuestionImportFile('txt', [{
+      category: '10', type: 'single', difficulty: 'easy', stem: '<p>AI 导出题</p>',
+      options: '[{"key":"A","text":"是"},{"key":"B","text":"否"}]', answer: '[0]', analysis: '',
+    }]);
+    expect(exported.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/)[0])
+      .toBe('category\ttype\tdifficulty\tstem\toptions\tanswer\tanalysis');
     const old = txtFile([singleRow('题干', { score: 'not-a-number' })]);
     const parsed = await parseQuestionImportFile(old, 'txt');
     expect(parsed[0]).not.toHaveProperty('score');
@@ -83,8 +91,8 @@ describe('question import format', () => {
   });
 
   it('round-trips the same template rows through xlsx and UTF-8 TSV', async () => {
-    const xlsx = await buildQuestionImportTemplate('xlsx');
-    const txt = await buildQuestionImportTemplate('txt');
+    const xlsx = await buildQuestionImportTemplate('xlsx', 'ai');
+    const txt = await buildQuestionImportTemplate('txt', 'ai');
 
     const xlsxRows = await parseQuestionImportFile(xlsx, 'xlsx');
     const txtRows = await parseQuestionImportFile(txt, 'txt');
@@ -92,6 +100,121 @@ describe('question import format', () => {
     expect(xlsxRows).toEqual(txtRows);
     expect(xlsxRows.map((row) => row.row)).toEqual([2, 3, 4]);
     expect(Object.keys(xlsxRows[0])).not.toContain('rubric');
+  });
+
+  it('builds an empty styled Chinese Excel input sheet with separate examples and instructions', async () => {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await buildQuestionImportTemplate('xlsx') as any);
+
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(['试题导入模板', '填写示例', '填写说明']);
+    const input = workbook.worksheets[0];
+    expect(input.getRow(1).values).toEqual([undefined, '试题内容', '试题类型', '选项内容', '答案', '难度']);
+    expect(input.actualRowCount).toBe(1);
+    expect(input.views).toEqual(expect.arrayContaining([expect.objectContaining({ state: 'frozen', ySplit: 1 })]));
+    expect(input.getCell('B2').dataValidation).toMatchObject({ type: 'list', formulae: ['"单选题,多选题,判断题"'] });
+    expect(input.getCell('E2').dataValidation).toMatchObject({ type: 'list', formulae: ['"简单,困难"'], allowBlank: true });
+    expect(workbook.getWorksheet('填写示例')!.actualRowCount).toBeGreaterThan(3);
+    expect(JSON.stringify(workbook.getWorksheet('填写说明')!.getSheetValues())).toContain('题库不设分值');
+  });
+
+  it('builds a commented human TXT template with parseable sample blocks', async () => {
+    const template = await buildQuestionImportTemplate('txt');
+    const text = template.toString('utf8').replace(/^\uFEFF/, '');
+
+    expect(text).toContain('# 试题导入 TXT 模板');
+    expect(text).toContain('[题干]');
+    expect(text).toContain('[难度]简单');
+    expect(text).not.toContain('category\ttype\tdifficulty');
+    const rows = await parseQuestionImportFile(template, 'txt');
+    expect(rows.map((row) => [row.type, row.difficulty])).toEqual([
+      ['single', 'easy'], ['multiple', 'hard'], ['judgment', 'easy'],
+    ]);
+  });
+
+  it.each([
+    { headers: ['试题内容', '试题类型', '选项内容', '答案'], difficulty: 'easy' },
+    { headers: ['试题内容', '试题类型', '选项内容', '答案', '难度'], difficulty: 'hard' },
+  ])('accepts Chinese Excel $headers.length-column rows and maps human values', async ({ headers, difficulty }) => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('导入');
+    sheet.addRow(headers);
+    const values: Record<string, string> = {
+      试题内容: '1 < 2\n第二行', 试题类型: '多选题', 选项内容: '${小于 <},${大于 >},${等于 =}', 答案: 'A,C', 难度: '困难',
+    };
+    sheet.addRow(headers.map((header) => values[header]));
+
+    const parsed = await parseQuestionImportFile(Buffer.from(await workbook.xlsx.writeBuffer()), 'xlsx');
+    expect(parsed).toEqual([expect.objectContaining({
+      row: 2, type: 'multiple', difficulty, stem: '1 < 2\n第二行',
+      options: '[{"key":"A","text":"小于 <"},{"key":"B","text":"大于 >"},{"key":"C","text":"等于 ="}]',
+      answer: '[0,2]', human_format: true,
+    })]);
+  });
+
+  it('parses BOM/CRLF block TXT, comments, multiline text, blank difficulty and judgment answers', async () => {
+    const input = Buffer.from([
+      '\uFEFF# 注释不会进入题目',
+      '[题干]1 < 2',
+      '第二行仍是题干',
+      '[类型]单选题',
+      '[选项]${正确 < 符号},${错误 > 符号}',
+      '[答案]A',
+      '[难度]',
+      '',
+      '[题干]1+1=3',
+      '[类型]判断题',
+      '[选项]',
+      '[答案]错',
+      '',
+    ].join('\r\n'), 'utf8');
+
+    const rows = await parseQuestionImportFile(input, 'txt');
+
+    expect(rows).toEqual([
+      expect.objectContaining({ row: 2, stem: '1 < 2\n第二行仍是题干', type: 'single', difficulty: 'easy', answer: '[0]' }),
+      expect.objectContaining({ row: 9, type: 'judgment', difficulty: 'easy', answer: '[1]', options: expect.stringContaining('正确') }),
+    ]);
+  });
+
+  it.each([
+    { name: 'invalid difficulty', row: ['题干', '单选题', '${是},${否}', 'A', '普通'], message: '难度必须填写简单或困难' },
+    { name: 'malformed options', row: ['题干', '单选题', '${是},不是占位选项', 'A', '简单'], message: '选项内容必须使用' },
+    { name: 'malformed answer', row: ['题干', '多选题', '${甲},${乙},${丙}', 'A,1', '简单'], message: '答案必须使用不重复的字母' },
+    { name: 'invalid judgment answer', row: ['题干', '判断题', '', '正确', '简单'], message: '判断题答案必须填写对或错' },
+  ])('reports actionable per-row errors for $name', async ({ row, message }) => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('导入');
+    sheet.addRow(['试题内容', '试题类型', '选项内容', '答案', '难度']);
+    sheet.addRow(row);
+
+    const parsed = await parseQuestionImportFile(Buffer.from(await workbook.xlsx.writeBuffer()), 'xlsx');
+
+    expect(parsed[0].format_errors).toEqual(expect.arrayContaining([expect.stringContaining(message)]));
+  });
+
+  it('rejects formulas and extra values in a Chinese Excel row without trusting cached results', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('导入');
+    sheet.addRow(['试题内容', '试题类型', '选项内容', '答案', '难度']);
+    sheet.addRow(['原题干', '单选题', '${是},${否}', 'A', '简单']);
+    sheet.getCell('A2').value = { formula: '1+1', result: '缓存题干' };
+    sheet.getCell('F2').value = '额外列';
+
+    const rows = await parseQuestionImportFile(Buffer.from(await workbook.xlsx.writeBuffer()), 'xlsx');
+
+    expect(rows[0].stem).toBe('');
+    expect(rows[0].format_errors).toEqual(expect.arrayContaining([
+      expect.stringContaining('不允许使用公式'), expect.stringContaining('5 列'),
+    ]));
+  });
+
+  it('enforces the row ceiling for human TXT blocks', async () => {
+    const blocks = Array.from({ length: 3 }, (_, index) => [
+      `[题干]题目 ${index}`, '[类型]判断题', '[选项]', '[答案]对', '[难度]简单',
+    ].join('\n')).join('\n\n');
+
+    await expect(parseQuestionImportFile(Buffer.from(blocks), 'txt', { maxBytes: 1024 * 1024, maxRows: 2 }))
+      .rejects.toMatchObject({ code: 40001, message: '单次导入上限 2 行' });
   });
 
   it('accepts a BOM and CRLF while keeping JSON cells unambiguous', async () => {
@@ -163,6 +286,60 @@ describe('question import format', () => {
       row: 2, category: '', concept: '', analysis: '', type: 'single',
     })]);
     expect(rows[0].format_errors).toBeUndefined();
+  });
+});
+
+describe('question import HTTP boundary', () => {
+  function controllerFixture() {
+    const importer = {
+      buildTemplate: vi.fn(async () => Buffer.from('template')),
+      preview: vi.fn(async () => ({ batch_id: '1', valid_rows: [], errors: [], duplicates: [] })),
+    };
+    const controller = new QuestionImportController(importer as any, {} as any);
+    return { controller, importer };
+  }
+
+  it('uses the human template by default and the canonical template only for purpose=ai', async () => {
+    const { controller, importer } = controllerFixture();
+    const response = { setHeader: vi.fn(), end: vi.fn() };
+
+    await controller.template({ format: 'txt' } as any, { query: { format: 'txt' } } as any, response as any);
+    await controller.template(
+      { format: 'txt', purpose: 'ai' } as any,
+      { query: { format: 'txt', purpose: 'ai' } } as any,
+      response as any,
+    );
+
+    expect(importer.buildTemplate.mock.calls).toEqual([['txt', 'human'], ['txt', 'ai']]);
+  });
+
+  it('requires category_id and rejects the retired page difficulty field', async () => {
+    const { controller, importer } = controllerFixture();
+    const file = { buffer: Buffer.from('file') } as Express.Multer.File;
+    const user = { id: 7 } as any;
+
+    await expect(controller.preview(file, { format: 'txt' }, user, { body: { format: 'txt' } } as any))
+      .rejects.toMatchObject({ code: 40001, message: 'category_id 必填' });
+    await expect(controller.preview(
+      file,
+      { format: 'txt', category_id: 'not-an-id' },
+      user,
+      { body: { format: 'txt', category_id: 'not-an-id' } } as any,
+    )).rejects.toMatchObject({ code: 40001, message: 'category_id 非法' });
+    await expect(controller.preview(
+      file,
+      { format: 'txt', category_id: '10', difficulty: 'hard' },
+      user,
+      { body: { format: 'txt', category_id: '10', difficulty: 'hard' } } as any,
+    )).rejects.toMatchObject({ code: 40001, message: expect.stringContaining('difficulty') });
+
+    await controller.preview(
+      file,
+      { format: 'txt', category_id: '10' },
+      user,
+      { body: { format: 'txt', category_id: '10' } } as any,
+    );
+    expect(importer.preview).toHaveBeenCalledWith('7', file.buffer, 'txt', { categoryId: '10' });
   });
 });
 
@@ -292,6 +469,48 @@ const damagedLegacyContent = [
 ];
 
 describe('question import preview', () => {
+  it('requires one active selected category before parsing or creating a batch', async () => {
+    const { service, batches } = questionImportFixture();
+    const file = txtFile([singleRow('<p>题干</p>')]);
+
+    await expect(service.preview('1', file, 'txt', {} as any))
+      .rejects.toMatchObject({ code: 40001, message: 'category_id 必填' });
+    await expect(service.preview('1', file, 'txt', { categoryId: '11' }))
+      .rejects.toMatchObject({ code: 40910, message: '培训类别不存在或已停用' });
+    expect(batches).toEqual([]);
+  });
+
+  it('makes the selected category authoritative and defaults a blank legacy difficulty to easy', async () => {
+    const { service, batches } = questionImportFixture();
+    const file = txtFile([singleRow('<p>整批类别题目</p>', { category: '999', difficulty: '' })]);
+
+    const preview = await service.preview('1', file, 'txt', { categoryId: '10' });
+
+    expect(preview.valid_rows).toEqual([2]);
+    expect(batches[0].normalizedRows.find((item: any) => item.row === 2).draft)
+      .toMatchObject({ categoryId: '10', difficulty: 'easy' });
+    expect(service.categoryRepo.findOne).toHaveBeenCalledTimes(2);
+    expect(service.categoryRepo.findOne.mock.calls).toEqual([
+      [{ where: { id: '10' } }], [{ where: { id: '10' } }],
+    ]);
+  });
+
+  it('escapes human plain text and preserves its newlines before rich-content validation', async () => {
+    const { service, batches } = questionImportFixture();
+    const file = Buffer.from([
+      '[题干]1 < 2 <img src="https://example.com/not-media.png">', '第二行 & 后续', '[类型]单选题',
+      '[选项]${小于 <},${大于 >}', '[答案]A', '[难度]简单',
+    ].join('\r\n'), 'utf8');
+
+    const preview = await service.preview('1', file, 'txt', { categoryId: '10' });
+
+    expect(preview.valid_rows).toEqual([1]);
+    const draft = batches[0].normalizedRows.find((item: any) => item.row === 1).draft;
+    expect(draft.stem).toBe('<p>1 &lt; 2 &lt;img src="https://example.com/not-media.png"&gt;</p><p>第二行 &amp; 后续</p>');
+    expect(draft.stem).not.toContain('<img src=');
+    expect(draft.options.map((option: any) => option.text)).toEqual(['<p>小于 &lt;</p>', '<p>大于 &gt;</p>']);
+  });
+
   it('retains the shared 1000-row import ceiling even when upload configuration allows more', async () => {
     const { service, batches } = questionImportFixture();
     service.config.upload.maxImportRows = 1001;
@@ -312,7 +531,7 @@ describe('question import preview', () => {
       }),
     ]);
 
-    const preview = await service.preview('1', file, 'txt', { categoryId: '10', difficulty: 'hard' });
+    const preview = await service.preview('1', file, 'txt', { categoryId: '10' });
 
     expect(preview.valid_rows).toEqual([2]);
     expect(preview.errors.some((item) => item.row === 3 && item.message.includes('题型'))).toBe(true);
@@ -420,6 +639,18 @@ describe('question import preview', () => {
 });
 
 describe('question import ownership and commit', () => {
+  it('keeps a first-line human TXT row selectable as row 1 through confirmation', async () => {
+    const { service, imports } = questionImportFixture();
+    const file = Buffer.from([
+      '[题干]首行题目', '[类型]判断题', '[选项]', '[答案]对', '[难度]简单',
+    ].join('\n'));
+    const preview = await service.preview('1', file, 'txt', { categoryId: '10' });
+
+    expect(preview.valid_rows).toEqual([1]);
+    const committed = await imports.commitQuestions('1', preview.batch_id, [1]);
+    expect(committed).toMatchObject({ committed_rows: [1], created_ids: ['100'] });
+  });
+
   it.each(damagedLegacyContent)('isolates unrelated $name during the commit current read', async ({ stem }) => {
     const stored: any[] = [];
     const { service, imports } = questionImportFixture(stored);

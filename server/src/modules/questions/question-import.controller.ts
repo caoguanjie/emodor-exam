@@ -3,20 +3,20 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request, Response } from 'express';
-import { ArrayMinSize, IsArray, IsIn, IsInt } from 'class-validator';
+import { ArrayMinSize, IsArray, IsIn, IsInt, IsOptional } from 'class-validator';
 import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator';
 import { Permissions } from '../../common/decorators/permissions.decorator';
 import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { Errors, RoleEnum } from '../../common/errors';
 import { Roles } from '../../common/guards/roles.guard';
 import { SkipEnvelope } from '../../common/response.interceptor';
-import type { Difficulty } from '../../common/training-contracts';
 import { ImportBatchService } from '../imports/import-batch.service';
-import type { QuestionImportFormat } from './question-import-format';
+import type { QuestionImportFormat, QuestionImportTemplatePurpose } from './question-import-format';
 import { QuestionImportService } from './question-import.service';
 
 class ImportFormatQueryDto {
   @IsIn(['xlsx', 'txt']) format!: QuestionImportFormat;
+  @IsOptional() @IsIn(['ai']) purpose?: 'ai';
 }
 
 class QuestionImportCommitDto {
@@ -36,12 +36,17 @@ function formatOf(value: unknown): QuestionImportFormat {
   return value;
 }
 
-function defaultsOf(body: Record<string, unknown>): { categoryId?: string; difficulty?: Difficulty } {
-  const categoryId = body.category_id === undefined || body.category_id === '' ? undefined : String(body.category_id);
-  if (categoryId !== undefined && !/^[1-9]\d*$/.test(categoryId)) throw Errors.param('category_id 非法');
-  const difficulty = body.difficulty === undefined || body.difficulty === '' ? undefined : String(body.difficulty);
-  if (difficulty !== undefined && !['easy', 'medium', 'hard'].includes(difficulty)) throw Errors.param('difficulty 非法');
-  return { categoryId, difficulty: difficulty as Difficulty | undefined };
+function purposeOf(value: unknown): QuestionImportTemplatePurpose {
+  if (value === undefined || value === '') return 'human';
+  if (value !== 'ai') throw Errors.param('purpose 必须是 ai');
+  return value;
+}
+
+function defaultsOf(body: Record<string, unknown>): { categoryId: string } {
+  if (body.category_id === undefined || body.category_id === '') throw Errors.param('category_id 必填');
+  const categoryId = String(body.category_id);
+  if (!/^[1-9]\d*$/.test(categoryId)) throw Errors.param('category_id 非法');
+  return { categoryId };
 }
 
 @Controller('admin/questions')
@@ -56,16 +61,17 @@ export class QuestionImportController {
   @Permissions('questions:write')
   @SkipEnvelope()
   async template(
-    @Query(new StrictDtoValidationPipe(['format'])) query: ImportFormatQueryDto,
+    @Query(new StrictDtoValidationPipe(['format', 'purpose'])) query: ImportFormatQueryDto,
     @Req() req: Request,
     @Res() res: Response,
   ) {
-    assertKeys(req.query, ['format'], '模板查询');
+    assertKeys(req.query, ['format', 'purpose'], '模板查询');
     const format = formatOf(query.format);
-    const buffer = await this.importer.buildTemplate(format);
+    const purpose = purposeOf(query.purpose);
+    const buffer = await this.importer.buildTemplate(format, purpose);
     res.setHeader('Content-Type', format === 'xlsx'
       ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      : 'text/tab-separated-values; charset=utf-8');
+      : purpose === 'ai' ? 'text/tab-separated-values; charset=utf-8' : 'text/plain; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="question-import-template.${format}"`);
     res.end(buffer);
   }
@@ -86,7 +92,7 @@ export class QuestionImportController {
     @Req() req: Request,
   ) {
     if (!file?.buffer) throw Errors.param('缺少上传文件');
-    const values = assertKeys(req.body || body || {}, ['format', 'category_id', 'difficulty'], '导入请求');
+    const values = assertKeys(req.body || body || {}, ['format', 'category_id'], '导入请求');
     return this.importer.preview(
       String(user.id),
       file.buffer,

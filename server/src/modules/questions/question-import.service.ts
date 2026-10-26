@@ -16,13 +16,13 @@ import {
   parseQuestionImportFile,
   type ParsedQuestionImportRow,
   type QuestionImportFormat,
+  type QuestionImportTemplatePurpose,
 } from './question-import-format';
 import { QuestionVersionService, type QuestionDraft } from './question-version.service';
 import { docHtml, legacyHtmlDoc } from './question-content';
 
 export interface QuestionImportDefaults {
-  categoryId?: Id;
-  difficulty?: Difficulty;
+  categoryId: Id;
 }
 
 interface NormalizedQuestionImportRow {
@@ -57,12 +57,19 @@ interface CandidateRow extends NormalizedQuestionImportRow {
 
 const TYPES = new Set<QuestionType>(['single', 'multiple', 'judgment']);
 const RAW_KEYS = new Set([
-  'row', 'format_errors', 'legacy_score', 'category', 'type', 'difficulty', 'concept', 'stem',
+  'row', 'format_errors', 'legacy_score', 'human_format', 'category', 'type', 'difficulty', 'concept', 'stem',
   'options', 'answer', 'analysis', 'score',
 ]);
 
 function normalizeContent(value: unknown): string {
   return String(value ?? '').replace(/>\s+</g, '><').replace(/\s+/g, ' ').trim();
+}
+
+function plainTextHtml(value: string): string {
+  const escape = (text: string) => text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return value.replace(/\r\n?|\n/g, '\n').split('\n')
+    .map((line) => `<p>${line ? escape(line) : '<br>'}</p>`).join('');
 }
 
 function normalizeRichContent(value: unknown): string {
@@ -200,8 +207,8 @@ export class QuestionImportService implements OnModuleInit {
     });
   }
 
-  buildTemplate(format: QuestionImportFormat): Promise<Buffer> {
-    return buildQuestionImportTemplate(format);
+  buildTemplate(format: QuestionImportFormat, purpose: QuestionImportTemplatePurpose = 'human'): Promise<Buffer> {
+    return buildQuestionImportTemplate(format, purpose);
   }
 
   async readBatch(ownerId: string, id: string) {
@@ -215,20 +222,21 @@ export class QuestionImportService implements OnModuleInit {
     ownerId: Id,
     file: Buffer,
     format: QuestionImportFormat,
-    defaults: QuestionImportDefaults = {},
+    defaults: QuestionImportDefaults,
   ): Promise<ReturnType<typeof publicPreview>> {
-    if (defaults.categoryId !== undefined && !/^[1-9]\d*$/.test(String(defaults.categoryId))) {
-      throw Errors.param('defaults.category_id 非法');
+    if (defaults.categoryId === undefined || defaults.categoryId === null || defaults.categoryId === '') {
+      throw Errors.param('category_id 必填');
     }
-    if (defaults.difficulty !== undefined) assertActiveDifficulty(defaults.difficulty);
+    if (!/^[1-9]\d*$/.test(String(defaults.categoryId))) throw Errors.param('category_id 非法');
+    const selectedCategory = await this.resolveCategory(String(defaults.categoryId), new Map());
     const rows = await parseQuestionImportFile(file, format, {
       maxBytes: this.config.upload.maxImportSizeMb * 1024 * 1024,
       maxRows: this.config.upload.maxImportRows,
     });
     const merged = rows.map((row) => ({
       ...row,
-      category: row.category || String(defaults.categoryId || ''),
-      difficulty: row.difficulty || String(defaults.difficulty || ''),
+      category: String(selectedCategory.id),
+      difficulty: row.difficulty || 'easy',
     }));
     return await this.importBatches.preview(String(ownerId), 'questions', merged) as ReturnType<typeof publicPreview>;
   }
@@ -244,11 +252,13 @@ export class QuestionImportService implements OnModuleInit {
     const record = value as Record<string, unknown>;
     const unknown = Object.keys(record).filter((key) => !RAW_KEYS.has(key));
     const row = Number(record.row);
+    const humanFormat = record.human_format === true;
     return {
-      row: Number.isInteger(row) && row > 1 ? row : index + 2,
+      row: Number.isInteger(row) && row > (humanFormat ? 0 : 1) ? row : index + 2,
       category: String(record.category ?? '').trim(),
       type: String(record.type ?? '').trim(),
       difficulty: String(record.difficulty ?? '').trim(),
+      human_format: humanFormat,
       concept: String(record.concept ?? '').trim(),
       legacy_score: record.legacy_score === true || Object.hasOwn(record, 'score'),
       stem: String(record.stem ?? '').trim(),
@@ -290,14 +300,16 @@ export class QuestionImportService implements OnModuleInit {
     }
     const category = await this.resolveCategory(row.category, categoryCache);
     const type = row.type as QuestionType;
+    const human = row.human_format === true;
+    const options = questionOptions(parseJsonArray(row.options, 'options'));
     const draft: QuestionDraft = {
       categoryId: String(category.id),
       difficulty: row.difficulty as Difficulty,
       type,
-      stem: row.stem,
-      options: questionOptions(parseJsonArray(row.options, 'options')),
+      stem: human ? plainTextHtml(row.stem) : row.stem,
+      options: human ? options.map((option) => ({ ...option, text: plainTextHtml(option.text) })) : options,
       answer: answerIndexes(parseJsonArray(row.answer, 'answer')),
-      analysis: row.analysis || null,
+      analysis: row.analysis ? (human ? plainTextHtml(row.analysis) : row.analysis) : null,
       source: kind === 'questions_ai' ? 'ai' : 'import',
     };
     const validated = kind === 'questions_ai'

@@ -152,6 +152,8 @@ watch([() => props.activePath, () => props.items.map((item) => item.path).join('
 
 <style scoped>
 .business-tabs {
+  position: relative;
+  z-index: 10;
   display: flex;
   flex: none;
   align-items: stretch;

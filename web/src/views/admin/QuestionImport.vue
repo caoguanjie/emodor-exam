@@ -10,111 +10,81 @@
     </el-alert>
 
     <section v-if="mode === 'file'" class="file-import-panel">
-      <el-steps class="import-steps" :active="preview ? 2 : previewBusy ? 1 : 0" finish-status="success" align-center>
-        <el-step title="下载并填写模板" description="已有文件可跳过" />
-        <el-step title="上传并预览" description="检查试题与错误提示" />
-        <el-step title="确认导入" description="确认后导入所选试题" />
-      </el-steps>
+      <header class="import-heading">
+        <h2>批量导入试题</h2>
+        <p>按模板填写并上传，预览确认后导入题库。</p>
+      </header>
 
-      <section class="import-guide-section">
-        <h3 class="import-section-title"><span class="import-step-number" aria-hidden="true">1</span>下载模板</h3>
-        <div class="import-section-body">
-          <p class="import-section-description">首次使用请下载模板，按示例填写试题并保存。已有填写好的文件，可直接进行第 2 步。</p>
-          <div class="file-actions">
-            <el-button :disabled="previewBusy || commitBusy || statusBusy" @click="downloadTemplate('xlsx')">下载 Excel 模板（推荐）</el-button>
-            <el-button :disabled="previewBusy || commitBusy || statusBusy" @click="downloadTemplate('txt')">下载 TXT 模板</el-button>
+      <div class="import-workspace">
+        <aside class="import-prep-panel">
+          <p class="import-section-kicker">01 准备试题</p>
+          <div class="import-prep-content">
+            <h3>下载标准模板</h3>
+            <p class="import-panel-description">首次导入请先下载模板，按照示例填写试题。</p>
+            <div class="template-actions">
+              <el-button :disabled="previewBusy || commitBusy || statusBusy" @click="downloadTemplate('xlsx')">下载 Excel 模板（推荐）</el-button>
+              <el-button :disabled="previewBusy || commitBusy || statusBusy" @click="downloadTemplate('txt')">下载 TXT 模板</el-button>
+            </div>
+            <p class="import-existing-hint">已有填写好的文件，可跳过下载。</p>
           </div>
-          <el-collapse class="import-help">
-            <el-collapse-item title="查看填写说明" name="instructions">
-              <p>请保留模板首行的列名与顺序，按示例填写培训类别、题型、难度、题干、选项、答案和解析。</p>
-              <p>标准模板为 7 列：<code>category/type/difficulty/stem/options/answer/analysis</code>。</p>
-              <p>TXT 文件请使用 UTF-8 编码，以制表符分列。选项与答案须填写 JSON 数组，请参照模板中的示例。</p>
-            </el-collapse-item>
-          </el-collapse>
-        </div>
-      </section>
+        </aside>
 
-      <section class="import-guide-section">
-        <h3 class="import-section-title"><span class="import-step-number" aria-hidden="true">2</span>上传试题文件</h3>
-        <div class="import-section-body">
-          <p class="import-section-description">上传已填写的模板，预览并检查结果后，再确认导入。</p>
+        <section class="import-upload-panel">
+          <p class="import-section-kicker">02 上传与预览</p>
+          <el-alert v-if="categoryError" class="category-load-error" type="error" :closable="false" :title="categoryError" show-icon>
+            <el-button link :loading="categoryLoading" @click="loadCategories">重新加载培训类别</el-button>
+          </el-alert>
+          <el-form label-width="92px" class="import-category-form">
+            <el-form-item label="培训类别" required>
+              <div class="import-category-control">
+                <el-select
+                  v-model="selectedCategoryId"
+                  filterable
+                  placeholder="请选择培训类别"
+                  class="import-category-select"
+                  :loading="categoryLoading"
+                  :disabled="interactionLocked || categoryLoading || !!categoryError"
+                  no-data-text="暂无可用培训类别"
+                >
+                  <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
+                </el-select>
+                <p>本次导入的试题将归入所选类别。</p>
+              </div>
+            </el-form-item>
+          </el-form>
+
           <el-upload
             :key="uploadKey"
+            class="question-file-upload"
+            drag
             :show-file-list="false"
             accept=".xlsx,.txt,text/plain"
             :auto-upload="false"
-            :disabled="interactionLocked"
+            :disabled="!selectedCategoryId || interactionLocked || categoryLoading || !!categoryError"
             :on-change="previewFile"
           >
-            <el-button type="primary" :loading="previewBusy" :disabled="interactionLocked">选择文件并预览</el-button>
+            <svg class="question-file-upload__icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" />
+            </svg>
+            <p class="question-file-upload__title">拖入试题文件，或点击选择</p>
+            <p class="question-file-upload__support">支持 .xlsx / .txt，单个文件不超过 5MB</p>
+            <el-button type="primary" :loading="previewBusy" :disabled="!selectedCategoryId || interactionLocked || categoryLoading || !!categoryError">选择文件并预览</el-button>
           </el-upload>
-          <p class="import-file-tip">支持 Excel（.xlsx）和 TXT（.txt），文件不超过 5MB。系统自动识别文件格式。</p>
-          <el-collapse class="import-help">
-            <el-collapse-item title="可选设置：默认类别、默认难度" name="defaults">
-              <p class="import-default-tip">仅补充文件中未填写的类别和难度，已填写的内容不会被覆盖。</p>
-              <el-form label-width="90px" class="import-form">
-                <el-form-item label="默认类别">
-                  <el-select v-model="defaults.category_id" clearable filterable placeholder="文件未填写培训类别时使用" class="import-default-select" :disabled="interactionLocked">
-                    <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item label="默认难度">
-                  <el-select v-model="defaults.difficulty" clearable placeholder="文件未填写难度时使用" class="import-default-select" :disabled="interactionLocked || !catalogReady">
-                    <el-option v-for="item in difficultyOptions" :key="item.value" :label="item.label" :value="item.value" />
-                  </el-select>
-                </el-form-item>
-              </el-form>
-            </el-collapse-item>
-          </el-collapse>
-        </div>
-      </section>
 
-    <section v-if="preview" class="preview-panel import-guide-section">
-      <h3 class="import-section-title"><span class="import-step-number" aria-hidden="true">3</span>检查并确认</h3>
-      <div class="import-section-body">
-      <p class="import-section-description">核对可导入行和错误提示，确认后所选试题将导入并启用。</p>
-      <div class="preview-summary">
-        <el-tag type="success">可导入 {{ preview.valid_rows.length }} 行</el-tag>
-        <el-tag v-if="preview.errors.length" type="danger">错误 {{ preview.errors.length }} 行</el-tag>
-        <el-tag v-if="preview.duplicates.length" type="warning">重复 {{ preview.duplicates.length }} 行</el-tag>
-        <span class="batch-id">批次 {{ preview.batch_id }}</span>
+          <section v-if="preview" class="preview-ready" aria-live="polite">
+            <div>
+              <el-tag type="success">导入预览已生成</el-tag>
+              <span>批次 {{ preview.batch_id }}，已选 {{ fileSelectedRows.length }} / {{ preview.valid_rows.length }} 行</span>
+            </div>
+            <el-button type="primary" plain @click="filePreviewVisible = true">查看预览</el-button>
+          </section>
+        </section>
       </div>
 
-      <el-alert v-for="warning in [...new Set(preview.warnings || [])]" :key="warning" type="warning" :closable="false" :title="warning" />
-      <el-table v-if="preview.rows?.length" :data="preview.rows" row-key="row_number" max-height="420">
-        <el-table-column label="选择" width="64"><template #default="{ row }"><el-checkbox :model-value="fileSelectedRows.includes(row.row_number)" :disabled="!preview.valid_rows.includes(row.row_number) || commitBusy || statusBusy || commitUnknown" :aria-label="`选择第 ${row.row_number} 行`" @update:model-value="(checked: unknown) => selectFileRow(row.row_number, checked)" /></template></el-table-column>
-        <el-table-column prop="row_number" label="行号" width="80" />
-        <el-table-column prop="stem" label="题干" min-width="280" show-overflow-tooltip />
-        <el-table-column label="题型/难度" width="140"><template #default="{ row }">{{ typeLabel[row.type as QuestionType] }} · {{ difficultyLabel(row.difficulty) }}</template></el-table-column>
-        <el-table-column label="操作" width="90"><template #default="{ row }"><FitsTableAction :disabled="commitUnknown || statusBusy" @click="previewFileRow(row)">预览</FitsTableAction></template></el-table-column>
-      </el-table>
-      <el-alert
-        v-if="preview.duplicates.length"
-        type="warning"
-        :closable="false"
-        :title="`重复行默认不导入：${preview.duplicates.join('、')}`"
-        style="margin-bottom:12px"
-      />
-      <el-table v-if="preview.errors.length" :data="preview.errors" size="small" max-height="260">
-        <el-table-column prop="row" label="行号" width="90" />
-        <el-table-column prop="message" label="错误原因" min-width="320" />
-      </el-table>
-      <el-empty v-if="!preview.valid_rows.length" description="没有可确认的行，请修正文件后重新上传" :image-size="80" />
-
-      <div class="preview-actions">
-        <el-button :disabled="!canReset" @click="resetPreview">修正后重新上传</el-button>
-        <el-button v-if="commitUnknown" :loading="statusBusy" @click="queryBatchStatus">查询原批次状态</el-button>
-        <el-button
-          type="primary"
-          :loading="commitBusy"
-          :disabled="!catalogReady || !fileSelectedRows.length || commitBusy || statusBusy || commitUnknown"
-          @click="commitImport"
-        >
-          确认导入并启用 {{ fileSelectedRows.length }} 行
-        </el-button>
-      </div>
-      </div>
-    </section>
+      <footer class="import-footnote">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.1V12a8 8 0 1 1-4.75-7.32M20 5l-8.7 8.7L8 10.4" /></svg>
+        <span>上传后可检查错误、排除重复题目，确认后再导入。</span>
+      </footer>
     </section>
 
     <section v-else class="ai-import-panel">
@@ -185,7 +155,9 @@
           <el-table-column prop="row_number" label="序号" width="70" />
           <el-table-column label="难度" width="80"><template #default="{ row }">{{ difficultyLabel(row.difficulty) }}</template></el-table-column>
           <el-table-column label="题型" width="90"><template #default="{ row }">{{ typeLabel[row.type as QuestionType] }}</template></el-table-column>
-          <el-table-column prop="stem" label="生成题题干" min-width="260" show-overflow-tooltip />
+          <el-table-column label="生成题题干" min-width="260" show-overflow-tooltip>
+            <template #default="{ row }"><div class="preview-stem-summary">{{ questionRichTextToPlainText(row.stem) }}</div></template>
+          </el-table-column>
           <el-table-column label="校验" min-width="150"><template #default="{ row }">
             <el-tag v-if="ai.selectable(row)" type="success">有效</el-tag>
             <span v-else class="row-error">{{ row.errors.join('；') || '重复或未通过校验' }}</span>
@@ -207,6 +179,24 @@
       </section>
       <div v-if="ai.canReset.value" class="preview-actions"><el-button @click="resetAi">放弃本次结果并重新上传</el-button></div>
     </section>
+
+    <QuestionImportPreviewDialog
+      v-if="dialogMounted"
+      v-model="filePreviewVisible"
+      :preview="preview"
+      :selected-rows="fileSelectedRows"
+      :type-labels="typeLabel"
+      :difficulty-label="difficultyLabel"
+      :catalog-ready="catalogReady"
+      :can-reset="canReset"
+      :commit-busy="commitBusy"
+      :status-busy="statusBusy"
+      :commit-unknown="commitUnknown"
+      @select-row="selectFileRow"
+      @reset="resetPreview"
+      @query-status="queryBatchStatus"
+      @commit="commitImport"
+    />
 
     <el-dialog v-model="generatedPreviewVisible" title="生成题预览" width="760px" destroy-on-close>
       <QuestionPreview v-if="generatedPreview" :question="generatedPreview" :reveal-answer="true" />
@@ -234,9 +224,10 @@ import { ElMessage } from 'element-plus';
 import type { UploadFile } from 'element-plus';
 import { useRouter } from 'vue-router';
 import http, { download, upload } from '../../api/http';
-import type { AiQuestionImportEdit, AiQuestionImportRow, Difficulty, Id, ImportResult, Page, QuestionType } from '../../api/training-types';
+import { questionRichTextToPlainText, type AiQuestionImportEdit, type AiQuestionImportRow, type Id, type ImportResult, type Page, type QuestionType } from '../../api/training-types';
 import { useAuthStore } from '../../stores/auth';
 import QuestionPreview from '../../components/QuestionPreview.vue';
+import QuestionImportPreviewDialog from '../../components/QuestionImportPreviewDialog.vue';
 import { FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAiQuestionImportWorkflow, useQuestionImportWorkflow } from '../../utils/question-import-workflow';
@@ -244,6 +235,20 @@ import { useAuthoringOptions } from '../../composables/useAuthoringOptions';
 import type { AuthoringOptions } from '../../api/question-authoring';
 
 type CategoryOption = { id: Id; name: string };
+const CATEGORY_PAGE_SIZE = 100;
+
+function isCategoryPage(value: unknown, expectedPage: number): value is Page<CategoryOption> {
+  if (!value || typeof value !== 'object') return false;
+  const page = value as Partial<Page<unknown>>;
+  return Array.isArray(page.items)
+    && page.items.every((item) => !!item && typeof item === 'object'
+      && typeof (item as CategoryOption).id === 'string' && /^\d+$/.test((item as CategoryOption).id)
+      && typeof (item as CategoryOption).name === 'string' && (item as CategoryOption).name.trim().length > 0)
+    && Number.isInteger(page.total) && Number(page.total) >= 0
+    && page.page === expectedPage
+    && Number.isInteger(page.page_size) && Number(page.page_size) >= 1 && Number(page.page_size) <= CATEGORY_PAGE_SIZE
+    && page.items.length <= Number(page.page_size);
+}
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -253,9 +258,13 @@ const { difficultyOptions, difficultyLabel, load: loadAuthoringOptions, loading:
 const catalogReady = computed(() => !catalogLoading.value && !catalogError.value && difficultyOptions.value.length > 0);
 const mode = ref<'file' | 'ai'>('file');
 const categories = ref<CategoryOption[]>([]);
-const defaults = reactive<{ category_id: Id | ''; difficulty: Difficulty | '' }>({ category_id: '', difficulty: '' });
+const selectedCategoryId = ref<Id | ''>('');
+const categoryLoading = ref(false);
+const categoryError = ref('');
 const uploadKey = ref(0);
 const fileSelectedRows = ref<number[]>([]);
+const filePreviewVisible = ref(false);
+const dialogMounted = ref(true);
 const aiFormat = ref<'xlsx' | 'txt'>('xlsx');
 const aiUploadKey = ref(0);
 const taskStatusLabel = { queued: '等待生成', running: '正在生成', completed: '生成完成', failed: '生成失败' };
@@ -293,6 +302,7 @@ const unsaved = useUnsavedChanges(dirty, {
   onDiscard: () => {
     workflow.discard();
     ai.discard();
+    filePreviewVisible.value = false;
     editVisible.value = false;
     generatedPreviewVisible.value = false;
     editingRow.value = null;
@@ -302,15 +312,13 @@ const unsaved = useUnsavedChanges(dirty, {
   },
 });
 
-watch(() => preview.value?.batch_id, () => { fileSelectedRows.value = [...(preview.value?.valid_rows || [])]; }, { flush: 'sync' });
+watch(() => preview.value?.batch_id, (batchId) => {
+  fileSelectedRows.value = [...(preview.value?.valid_rows || [])];
+  filePreviewVisible.value = !!batchId;
+}, { flush: 'sync' });
 function selectFileRow(row: number, checked: unknown) {
   if (!preview.value?.valid_rows.includes(row) || commitBusy.value || statusBusy.value || commitUnknown.value) return;
   fileSelectedRows.value = checked ? [...new Set([...fileSelectedRows.value, row])] : fileSelectedRows.value.filter((id) => id !== row);
-}
-function previewFileRow(row: AiQuestionImportRow) {
-  if (commitUnknown.value || statusBusy.value) return;
-  generatedPreview.value = JSON.parse(JSON.stringify(row));
-  generatedPreviewVisible.value = true;
 }
 watch(aiFormat, () => { aiUploadKey.value += 1; });
 
@@ -323,7 +331,7 @@ async function changeMode(value: string | number) {
 }
 
 function downloadAiTemplate() {
-  void download('/admin/questions/import-template', `AI参考题模板.${aiFormat.value}`, { format: aiFormat.value });
+  void download('/admin/questions/import-template', `AI参考题模板.${aiFormat.value}`, { format: aiFormat.value, purpose: 'ai' });
 }
 
 async function generateFromFile(value: UploadFile) {
@@ -389,8 +397,35 @@ function downloadGenerated(fileFormat: 'xlsx' | 'txt') {
 }
 
 async function loadCategories() {
-  const result = await http.get('/ai/question-category-options', { params: { page: 1, page_size: 100 } }) as Page<CategoryOption>;
-  categories.value = result.items || [];
+  if (categoryLoading.value) return;
+  categoryLoading.value = true;
+  categoryError.value = '';
+  categories.value = [];
+  selectedCategoryId.value = '';
+  try {
+    const firstResponse = await http.get('/ai/question-category-options', { params: { page: 1, page_size: CATEGORY_PAGE_SIZE } });
+    if (!isCategoryPage(firstResponse, 1)) throw new Error('invalid category page');
+    const expectedTotal = firstResponse.total;
+    const pageSize = firstResponse.page_size;
+    const all = [...firstResponse.items];
+    const pageCount = Math.ceil(expectedTotal / pageSize);
+    for (let page = 2; page <= pageCount; page += 1) {
+      const response = await http.get('/ai/question-category-options', { params: { page, page_size: pageSize } });
+      if (!isCategoryPage(response, page) || response.total !== expectedTotal || response.page_size !== pageSize) {
+        throw new Error('inconsistent category page');
+      }
+      all.push(...response.items);
+    }
+    const unique = new Map(all.map((item) => [item.id, item]));
+    if (unique.size !== expectedTotal) throw new Error('incomplete category options');
+    categories.value = [...unique.values()];
+  } catch {
+    categories.value = [];
+    selectedCategoryId.value = '';
+    categoryError.value = '培训类别加载失败，请重试';
+  } finally {
+    categoryLoading.value = false;
+  }
 }
 
 function downloadTemplate(fileFormat: 'xlsx' | 'txt') {
@@ -409,6 +444,11 @@ async function resetPreview() {
 async function previewFile(value: UploadFile) {
   const file = value.raw;
   if (!(file instanceof File)) return;
+  if (!selectedCategoryId.value) {
+    ElMessage.warning('请先选择培训类别');
+    uploadKey.value += 1;
+    return;
+  }
   const fileFormat = /\.xlsx$/i.test(file.name) ? 'xlsx' : /\.txt$/i.test(file.name) ? 'txt' : null;
   if (!fileFormat) {
     ElMessage.warning('请选择 Excel (.xlsx) 或 TXT (.txt) 文件');
@@ -421,11 +461,7 @@ async function previewFile(value: UploadFile) {
     return;
   }
   try {
-    const fields = Object.fromEntries(Object.entries({
-      format: fileFormat,
-      category_id: defaults.category_id,
-      difficulty: defaults.difficulty,
-    }).filter(([, item]) => item !== '')) as Record<string, string>;
+    const fields = { format: fileFormat, category_id: selectedCategoryId.value };
     await workflow.loadPreview(() => upload('/admin/questions/import-preview', file, 'file', fields));
   } finally {
     uploadKey.value += 1;
@@ -450,28 +486,53 @@ async function commitImport() {
 
 onMounted(loadCategories);
 onMounted(loadAuthoringOptions);
-onActivated(() => { workflow.activate(); ai.activate(); });
-onDeactivated(() => { workflow.deactivate(); ai.deactivate(); });
+onActivated(() => { dialogMounted.value = true; workflow.activate(); ai.activate(); });
+onDeactivated(() => {
+  dialogMounted.value = false;
+  filePreviewVisible.value = false;
+  workflow.deactivate();
+  ai.deactivate();
+});
 onBeforeUnmount(() => { workflow.deactivate(); ai.deactivate(); });
 </script>
 
 <style scoped>
 .import-form { max-width: 720px; }
-.import-steps { max-width: 840px; margin: 12px 0 30px; }
-.import-guide-section + .import-guide-section { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--el-border-color-lighter); }
-.import-section-title { display: flex; align-items: center; gap: 12px; margin: 0; color: var(--el-text-color-primary); font-size: 18px; font-weight: 600; }
-.import-step-number { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; height: 28px; border-radius: 50%; background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-size: 15px; }
-.import-section-body { margin-left: 40px; }
-.import-section-description { margin: 10px 0 16px; color: var(--el-text-color-regular); line-height: 1.7; }
-.import-help { max-width: 720px; margin-top: 16px; border-top: 0; }
-.import-help :deep(.el-collapse-item__header) { height: auto; min-height: 40px; font-weight: 400; }
-.import-help :deep(.el-collapse-item__content) { color: var(--el-text-color-regular); line-height: 1.8; }
-.import-help p { margin: 8px 0; overflow-wrap: anywhere; }
-.import-file-tip, .import-default-tip { color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.7; }
-.import-file-tip { margin: 10px 0 0; }
-.import-default-select { width: 100%; max-width: 320px; }
+.file-import-panel { min-width: 0; }
+.import-heading { margin: 28px 0 24px; }
+.import-heading h2 { margin: 0; color: var(--el-text-color-primary); font-size: 24px; line-height: 1.4; }
+.import-heading p { margin: 4px 0 0; color: var(--el-text-color-secondary); font-size: 14px; line-height: 1.7; }
+.import-workspace { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 24px; min-width: 0; }
+.import-prep-panel { box-sizing: border-box; flex: 1 1 304px; min-width: 0; }
+.import-prep-content { padding: 24px; border-radius: 8px; background: var(--el-fill-color-light, #f5f7fa); }
+.import-upload-panel { flex: 999 1 520px; min-width: 0; }
+.import-section-kicker { margin: 0 0 16px; color: var(--el-color-primary); font-size: 13px; font-weight: 600; line-height: 20px; }
+.import-prep-panel h3, .preview-title { margin: 0; color: var(--el-text-color-primary); font-size: 20px; line-height: 1.45; }
+.import-panel-description { margin: 12px 0 16px; color: var(--el-text-color-regular); font-size: 14px; line-height: 1.7; }
+.template-actions { display: grid; gap: 12px; }
+.template-actions :deep(.el-button) { width: 100%; min-height: 50px; margin-left: 0; border-color: var(--el-border-color, #dcdfe6); background: #fff; }
+.import-existing-hint { margin: 14px 0 0; color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.6; }
+.import-category-form { max-width: none; margin-top: 8px; }
+.import-category-form :deep(.el-form-item) { margin-bottom: 16px; }
+.import-category-form :deep(.el-form-item__label) { color: var(--el-text-color-primary); }
+.import-category-control { width: 100%; min-width: 0; }
+.import-category-select { width: 100%; }
+.import-category-control p { margin: 5px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
+.question-file-upload { display: block; width: 100%; }
+.question-file-upload :deep(.el-upload) { display: block; width: 100%; }
+.question-file-upload :deep(.el-upload-dragger) { box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; min-height: 240px; padding: 32px 24px; border: 1px solid var(--el-color-primary-light-7, #a0b4ef); border-radius: 8px; background: var(--el-color-primary-light-9, #edf0fc); }
+.question-file-upload :deep(.el-upload-dragger:hover), .question-file-upload :deep(.el-upload-dragger.is-dragover) { border-color: var(--el-color-primary); background: var(--el-color-primary-light-8, #dfe6fb); }
+.question-file-upload :deep(.el-upload.is-disabled .el-upload-dragger) { border-color: var(--el-border-color-lighter); background: var(--el-fill-color-lighter); cursor: not-allowed; }
+.question-file-upload__icon { width: 34px; height: 34px; margin-bottom: 14px; fill: none; stroke: var(--el-color-primary); stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.question-file-upload__title { margin: 0; color: var(--el-text-color-primary); font-size: 18px; font-weight: 600; line-height: 1.5; }
+.question-file-upload__support { margin: 7px 0 18px; color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.6; }
+.question-file-upload :deep(.el-button) { min-width: 180px; }
+.preview-ready { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; padding: 14px 16px; border: 1px solid var(--el-color-success-light-7); border-radius: 8px; background: var(--el-color-success-light-9); }
+.preview-ready > div { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-width: 0; color: var(--el-text-color-regular); font-size: 13px; }
+.import-footnote { display: flex; align-items: center; gap: 10px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--el-border-color-lighter); color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.6; }
+.import-footnote svg { flex: 0 0 auto; width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .file-actions, .preview-summary, .preview-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.preview-panel { margin-top: 22px; border-top: 1px solid #ebeef5; padding-top: 20px; }
+.preview-panel { min-width: 0; margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--el-border-color-lighter); }
 .preview-summary { margin-bottom: 14px; }
 .batch-id { color: #909399; font-size: 13px; }
 .preview-actions { justify-content: flex-end; margin-top: 18px; }
@@ -482,8 +543,12 @@ onBeforeUnmount(() => { workflow.deactivate(); ai.deactivate(); });
 .generated-option { display: flex; align-items: center; gap: 12px; width: 100%; }
 .row-error { color: var(--el-color-danger); font-size: 13px; }
 @media (max-width: 640px) {
-  .import-section-body { margin-left: 0; }
-  .import-steps :deep(.el-step__title) { font-size: 13px; }
-  .import-steps :deep(.el-step__description) { padding-right: 6px; padding-left: 6px; }
+  .import-heading { margin-top: 20px; }
+  .import-prep-content { padding: 20px; }
+  .import-category-form :deep(.el-form-item) { display: block; }
+  .import-category-form :deep(.el-form-item__label) { display: block; width: auto !important; height: auto; margin-bottom: 8px; line-height: 22px; text-align: left; }
+  .import-category-form :deep(.el-form-item__content) { margin-left: 0 !important; }
+  .question-file-upload :deep(.el-upload-dragger) { min-height: 220px; padding: 28px 16px; }
+  .preview-ready { align-items: stretch; flex-direction: column; }
 }
 </style>

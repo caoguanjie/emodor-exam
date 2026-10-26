@@ -57,6 +57,9 @@
   --el-text-color-primary: var(--re-text);
   --el-text-color-regular: var(--re-text-2);
   --el-text-color-secondary: var(--re-text-3);
+  /* ---- 滚动条：统一使用 Element Plus 的中性灰，不使用偏蓝的旧色板 ---- */
+  --re-scrollbar-thumb: rgba(138, 145, 156, 0.32);
+  --re-scrollbar-thumb-hover: rgba(138, 145, 156, 0.56);
   --el-fill-color-light: #f6f8fb;
   --el-fill-color-lighter: #fafbfd;
   --el-font-family: var(--re-font);
@@ -145,6 +148,10 @@ body {
 .el-tabs__active-bar { height: 3px; border-radius: 2px; }
 
 /* ---------- 弹层 ---------- */
+/* Element Plus 各模态组件会用自己的 *-parent--hidden 类锁定 body；
+   本项目实际滚动宿主是 MainLayout 的 .main，需要同步锁定。 */
+body[class*="-parent--hidden"] .main { overflow: hidden; }
+
 .el-dialog { border-radius: 14px; box-shadow: var(--re-shadow-pop); }
 .el-dialog__header { margin-right: 0; padding-bottom: 12px; border-bottom: 1px solid var(--re-border); }
 .el-dialog__title { font-weight: 600; }
@@ -238,14 +245,33 @@ body {
 .el-statistic__number { font-weight: 600; color: var(--re-text); }
 .el-descriptions__label { color: var(--re-text-3); }
 
-/* ---------- 滚动条 ---------- */
+/* ---------- 滚动条：原生滚动区 + Element Plus el-scrollbar ---------- */
+/* el-scrollbar 使用组件内部的 CSS 变量；必须直接挂在组件类上才能覆盖其默认值。 */
+.el-scrollbar {
+  --el-scrollbar-bg-color: var(--el-text-color-secondary);
+  --el-scrollbar-hover-bg-color: var(--el-text-color-secondary);
+  --el-scrollbar-opacity: 0.32;
+  --el-scrollbar-hover-opacity: 0.56;
+}
+
+/* el-dialog__body、页面 main 等 overflow:auto 区域仍是浏览器原生滚动条。 */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: #c9d0dd; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #aab3c5; }
+::-webkit-scrollbar-thumb { background: var(--re-scrollbar-thumb); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--re-scrollbar-thumb-hover); }
 ::-webkit-scrollbar-track { background: transparent; }
+html { scrollbar-color: var(--re-scrollbar-thumb) transparent; scrollbar-width: thin; }
 
 /* ---------- 焦点可见性 ---------- */
-:focus-visible { outline: 2px solid var(--re-primary); outline-offset: 2px; border-radius: 4px; }
+/* Element Plus 文本控件已有容器聚焦边框，内部输入元素不重复叠加 outline。
+   数字输入、自动补全和单日期输入复用 el-input__inner；普通控件仍保留键盘焦点提示。 */
+:focus-visible:not(:where(
+  .el-input__inner,
+  .el-select__input,
+  .el-textarea__inner,
+  .el-range-input,
+  .el-cascader__search-input,
+  .el-input-tag__input
+)) { outline: 2px solid var(--re-primary); outline-offset: 2px; border-radius: 4px; }
 
 /* ---------- 通用小工具 ---------- */
 .re-mono { font-family: var(--re-mono); font-variant-numeric: tabular-nums; }
