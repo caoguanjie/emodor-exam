@@ -1,0 +1,23 @@
+{
+  "review_only": true,
+  "apply_automatically": false,
+  "replace_existing_shared_policy": false,
+  "create_long_term_identity": false,
+  "inspection_actions": ["name/cos:HeadBucket", "name/cos:GetBucketLocation", "name/cos:GetBucketACL", "name/cos:GetBucketVersioning", "name/cos:GetBucketCORS", "name/cos:GetBucketPolicy"],
+  "backend_object_actions": ["name/cos:HeadObject", "name/cos:GetObject", "name/cos:PutObject", "name/cos:DeleteObject"],
+  "backend_multipart_actions": ["name/cos:InitiateMultipartUpload", "name/cos:ListMultipartUploads", "name/cos:ListParts", "name/cos:CompleteMultipartUpload", "name/cos:AbortMultipartUpload", "name/cos:GetBucketObjectVersions"],
+  "exact_resource_examples": [
+    "qcs::cos:<COS_REGION>:uid/<APPID>:<COS_BUCKET>/<COS_KEY_PREFIX>staging/<session-id>.upload",
+    "qcs::cos:<COS_REGION>:uid/<APPID>:<COS_BUCKET>/<COS_KEY_PREFIX>media/<session-id>/<claim-id>.png"
+  ],
+  "browser_temporary_simple_actions": ["name/cos:PutObject"],
+  "browser_temporary_multipart_actions": ["name/cos:UploadPart", "name/cos:ListParts"],
+  "probe_only_actions": ["name/cos:GetObjectACL"],
+  "notes": [
+    "This is an action reference, not a bucket/CAM policy document. Review only missing action additions with the existing identity owner.",
+    "Do not replace gooodwork rules, principals, or the shared SecretId/SecretKey. No wildcard browser key resources.",
+    "Bucket metadata/list actions may need bucket-specific resources and prefix conditions; an exact object example is not proof that CAM accepts it for a list action.",
+    "Application prefix checks do not isolate the shared long-term credential from other projects.",
+    "The probe additionally reads GetObjectACL only for its own objects to verify private ACL; it never changes bucket versioning/CORS/policy."
+  ]
+}
