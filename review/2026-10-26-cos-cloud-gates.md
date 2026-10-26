@@ -6,16 +6,26 @@
 
 | 项目 | 当前状态 | 验证方式 |
 |---|---|---|
-| 共用桶/地域、ACL、版本、现有CORS/策略 | 待只读核验 | cos-preflight --inspect，权限不足明确unknown |
+| 共用桶/地域、ACL、版本、现有CORS/策略 | 真实只读检查完成；桶为 public-read | 地域匹配，无 Bucket Policy，未开启版本，CORS 为 0 条；没有改桶设置 |
 | 应用前缀/版本/分页 | 自动化通过，真桶待验 | adapter拒越界；真实SDK本机HTTP/XML两页测试；真桶另验 |
-| simple/multipart/STS准确键授权 | 自动化通过，真桶待验 | 本次随机临时前缀内探针，不影响gooodwork对象 |
-| 签名准确版本、到期、200/206/416 | SDK本地签名及受控浏览器通过，真桶待验 | 无版本、准确版本及字符串null版本均支持；未签名读应拒绝 |
-| 浏览器CORS / CSP / 小程序域名 | 待实际来源与配置 | 保留现有规则，仅提出追加差异，不默认通配或覆盖 |
-| gooodwork现有规则保留 | 待配置读回 | 变更前后对比，不更改共享长期身份权限 |
+| simple/multipart/STS准确键授权 | 真实探针通过 | 准确临时键 simple PUT、UploadPart/ListParts、合并；越键 simple PUT 和分块均 403 |
+| 签名准确版本、到期、200/206/416 | 真桶无版本对象通过；其它版本由本机 SDK 测试覆盖 | 实际 SHA 一致、200/206/416、匿名/过期/换键拒绝；没有为测试打开桶版本 |
+| 浏览器CORS / CSP / 小程序域名 | 已生成本地 PC/H5 精确来源提案，未应用 | localhost/127.0.0.1 的 5173/5174；正式来源和微信控制台另验 |
+| gooodwork现有规则保留 | 本次未变更 | 不修改桶 ACL、Policy、CORS、版本或共享长期身份权限 |
 
 共享长期凭据仍可能访问gooodwork自身范围，不能把它当成项目隔离失败；独立验证adapter/临时上传授权/签名目标的准确范围。后端凭据配置相同已经本地核对，配置存在不代表云权限可用。
 
 真实写探针仅使用本项目明确批准的随机临时前缀和小随机数据；登记准确键/版本/ownership后清理，未知或不再属于本次的对象保留报告。未开启或暂停版本控制是受支持状态，不为验证修改整个桶设置。任何桶级配置修改须先交具体差异，不能用模板覆盖共享规则。
+
+## 2026-10-26 真实探针记录
+
+根从 worktree `.env` 注入已授权共享配置，调用 `cos-preflight --inspect`，再使用 `ruleexam/dev/staging/probe/<随机 UUID>/` 内三个随机键及每个 64 字节随机内容执行受限探针。全过程未触及已有业务对象，未把凭据或签名 URL 输出至日志。
+
+探针证明：本桶虽然 public-read，但对象显式 `private` 后匿名 GET 返回 403；带该头的 simple PUT 仅需准确键 `PutObject` 临时权限。multipart 初始化也显式 private。正式代码的 simple grant 曾漏签此头，已在 `124e948` 补齐并通过独立复审；签名篡改/移除头的回归已通过。
+
+实际结果 `probe.status=pass`；清理结果 `status=pass, deleted_object_count=2, aborted_upload_count=1, pending_object_count=0`。真实桶没有版本，因此本次不声称真云验证了 Enabled/Suspended 两种状态。探针还没有经过正式业务签票接口、真实浏览器直传或长视频会话。
+
+私有探针 journal 与只读存量盘点在 `/Users/caogj/Documents/emodor/RuleExam-cos-operations/2026-10-26/`，0600，不提交 Git。工具仍输出 `ready=false/g0=not-verified`，桶 public-read 的诊断没有被改成“桶私有”；G0 的浏览器与应用链路待验。
 
 ## G1
 

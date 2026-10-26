@@ -438,9 +438,9 @@ interface IdentitySessionView {
 | FACE_MISMATCH / FACE_QUALITY_FAILED | `['face']` | 重新现场拍正脸 |
 | IDENTITY_ALREADY_BOUND / SESSION_EXPIRED / null | `[]` | 展示受控原因；不静默合并或自动清材料 |
 
-签票 DTO 仅接受 `owner_type`（最长 64）和 `owner_id`。已冻结 owner 为 `identity_verification_user + user ID`、`user_avatar + user ID`、`training_course_cover + course ID`，Task 12增加 `lesson_version_video + version ID`，视频专属资格见3.10；题图由Task 13/14再冻结。签发前须存在精确 `media_reference(asset_id,owner_type,owner_id)` 并通过对应票据授权；视频使用独立learner-only authorizer，不能直接借用PC管理预览的 `authorizeRead` 旁路。内容读取验证HMAC/expiry后，再按票内actor/asset/purpose/owner重查同一引用、当前业务权限及资源ready/未删除；撤销引用或权限后旧票据也不得继续读。
+签票 DTO 仅接受 `owner_type`（最长 64）和 `owner_id`。已冻结 owner 为 `identity_verification_user + user ID`、`user_avatar + user ID`、`training_course_cover + course ID`，Task 12增加 `lesson_version_video + version ID`，视频专属资格见3.10；题图由Task 13/14再冻结。签发前须存在精确 `media_reference(asset_id,owner_type,owner_id)` 并通过对应票据授权；视频使用独立learner-only authorizer，不能直接借用PC管理预览的 `authorizeRead` 旁路。proxy 内容读取验证 HMAC/expiry 后，再按票内 actor/asset/purpose/owner 重查同一引用、当前业务权限及资源 ready/未删除；撤销引用或权限后旧代理票据不得继续读。COS 普通媒体在申请/续签时完成同样的业务检查，已发 COS 链接到期前仍有效；实名材料始终代理。
 
-`content_url` 为站内相对 URL，仅含短期票据，默认 300 秒，不含 access/refresh JWT、真实文件名、磁盘路径或供应商凭据。票据无效/过期返回 40302/HTTP 403；客户端重新签发，不能把访问令牌放 URL。Range 沿用单段 `bytes=start-end`/后缀范围，成功返回 206、`Content-Range/Accept-Ranges/Content-Length`，无 Range 为 200；非法、多段或不可满足范围为 41601/HTTP 416。内容响应使用 `private, no-store`、`inline` 和 `nosniff`。
+proxy/local/实名场景的 `content_url` 为站内相对 URL，仅含短期票据；COS 普通媒体可返回准确配置桶域名和正式前缀下的 HTTPS 签名 URL。默认 300 秒，COS 可配置至 3600 秒；两者均不含 access/refresh JWT、真实文件名、磁盘路径或 SecretKey。以下错误码/内容响应约定针对应用代理入口，COS 直接返回供应商状态。票据无效/过期返回 40302/HTTP 403；客户端重新签发，不能把访问令牌放 URL。Range 沿用单段 `bytes=start-end`/后缀范围，成功返回 206、`Content-Range/Accept-Ranges/Content-Length`，无 Range 为 200；非法、多段或不可满足范围为 41601/HTTP 416。内容响应使用 `private, no-store`、`inline` 和 `nosniff`。
 
 自动化仅在 Nest TestingModule override Provider 后走完整三图/会话/轮询/绑定；真实腾讯及真机验收另记，不以本节契约同步宣称已通过。
 
@@ -801,7 +801,7 @@ type CourseProgress = { required:number; completed:number; completion_rate:numbe
 
 start按同一轮权威current version返回 `media.asset_id` 和精确版本票据，禁止从课程详情旧缓存拼播放地址；事务提交后若签票前发生换版/下架/授权变化，须先关闭本次新session再失败，不返回半成品或遗留未知活动会话。票据即将过期可用start返回的asset_id/version_id重签，只换src并恢复当前播放器位置，不重建session或补时。未实名/被拒绝为40302 + `data.reason_code='IDENTITY_REQUIRED'`，核验处理中为40302 + `IDENTITY_PENDING`；只按reason_code引导。已结束/被替换session返回40950；下架、换版、引用失效或课程不可学先关闭活动session再返回40951，客户端停止播放/心跳并刷新权威进度，不自动start。
 
-视频短票签发及每次内容读取使用独立learner-only authorizer：重查启用employee、无有效管理权限、已有实名、published/current、ready资产及精确引用。通用Bearer内容读取仍兼容具备 `courses:read` 的PC管理预览；普通学员通用读取仍须实名及published/current，video不允许以上传者 `asset.owner_id===actor_id` 短路。角色/权限变化、停用、下架、换版或引用撤销即时使旧学员短票失效。
+视频短票签发/续签以及 proxy 的每次内容读取使用独立 learner-only authorizer：重查启用employee、无有效管理权限、已有实名、published/current、ready资产及精确引用。通用Bearer内容读取仍兼容具备 `courses:read` 的PC管理预览；普通学员通用读取仍须实名及published/current，video不允许以上传者 `asset.owner_id===actor_id` 短路。角色/权限变化、停用、下架、换版或引用撤销后，拒绝新签/续签及旧代理票据；已发 COS 链接在到期前仍可读取。
 
 心跳以数据库中的 `last_seq/last_heartbeat_at/anchor_position_ms/anchor_state` 为权威，进程重启后继续。仅前一锚点为 playing 且本拍为 playing/ended 时可确认区间；先以完整的非负服务端实际间隔判断 `forward_ms ≤ server_elapsed_ms + 2000`，再将有效时长取服务端间隔、45 秒和真实位置前进量的最小值。过大前进不增加 `coverage_ms`，只把下一拍锚点移到新位置。paused/buffering/background 不计时；重复观看可增加 `credited_ms`，合并后的覆盖区间不重复增加。`state=ended` 同拍结算合法区间后关闭会话。
 
