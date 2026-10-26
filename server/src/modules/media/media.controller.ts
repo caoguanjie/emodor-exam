@@ -8,8 +8,8 @@ import { Permissions } from '../../common/decorators/permissions.decorator';
 import { SkipEnvelope } from '../../common/response.interceptor';
 import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { Errors } from '../../common/errors';
-import { AccessService } from '../access/access.service';
 import { MediaService } from './media.service';
+import { sendMediaContent } from './media-content.response';
 import { MEDIA_UPLOAD_PURPOSES, type MediaUploadPurpose } from './media-policy';
 import { MediaUploadInterceptor } from './media-upload.interceptor';
 
@@ -26,10 +26,7 @@ function assertBodyKeys(body: unknown): void {
 
 @Controller('media')
 export class MediaController {
-  constructor(
-    private readonly media: MediaService,
-    private readonly access: AccessService,
-  ) {}
+  constructor(private readonly media: MediaService) {}
 
   @Get('limits')
   limits() {
@@ -47,15 +44,7 @@ export class MediaController {
     assertBodyKeys(req.body);
     if (!file) throw Errors.param('缺少上传文件');
     const actorId = String(user.id);
-    const ownerId = dto.owner_id ? String(dto.owner_id) : actorId;
-    if (ownerId !== actorId) {
-      if (dto.purpose !== 'avatar') throw Errors.forbidden('只能为本人上传该媒体用途');
-      // The final managed-student boundary is repeated by UsersService during
-      // avatar bind. This check only protects the generic upload endpoint.
-      await this.access.assertAllowed(actorId, 'students:write');
-    } else if (dto.purpose !== 'avatar') {
-      await this.access.assertAllowed(actorId, 'media:write');
-    }
+    const { ownerId } = await this.media.assertUploadAllowed(user, dto.purpose, dto.owner_id);
     const result = await this.media.upload(actorId, dto.purpose, file, ownerId);
     return {
       asset_id: result.assetId,
@@ -73,18 +62,7 @@ export class MediaController {
   @SkipEnvelope()
   async content(@Param('id') id: string, @CurrentUser() user: AuthUser, @Req() req: Request, @Res() res: Response) {
     const descriptor = await this.media.openContent(String(user.id), id, req.headers.range);
-    const start = descriptor.range?.start ?? 0;
-    const end = descriptor.range?.end ?? descriptor.size - 1;
-    res.status(descriptor.range ? 206 : 200);
-    res.setHeader('Content-Type', descriptor.asset.mimeType);
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Length', String(end - start + 1));
-    res.setHeader('Cache-Control', 'private, no-store');
-    if (descriptor.range) res.setHeader('Content-Range', `bytes ${start}-${end}/${descriptor.size}`);
-    res.setHeader('Content-Disposition', 'inline');
-    res.sendFile(descriptor.path, { acceptRanges: true }, (error) => {
-      if (error && !res.headersSent) res.status(404).end();
-    });
+    sendMediaContent(res, descriptor);
   }
 
   @Delete(':id')

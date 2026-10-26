@@ -274,9 +274,11 @@ describe('A5 system configuration safety contracts', () => {
       );
 
       await expect(service.assertPublicBrandingCandidate('41')).resolves.toBeUndefined();
-      await expect(service.openPublicBrandingContent('41')).resolves.toMatchObject({
-        asset, path: join(root, storageKey), size: 15, range: null,
-      });
+      const descriptor = await service.openPublicBrandingContent('41');
+      expect(descriptor).toMatchObject({ asset, size: 15, range: null });
+      const parts: Buffer[] = [];
+      for await (const chunk of descriptor.stream) parts.push(Buffer.from(chunk));
+      expect(Buffer.concat(parts).toString()).toBe('public-branding');
       referenced = false;
       await expect(service.openPublicBrandingContent('41')).rejects.toMatchObject({ code: 40401 });
       asset.purpose = 'avatar';

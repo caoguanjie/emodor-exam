@@ -6,6 +6,7 @@ import { Public } from '../../common/guards/public.decorator';
 import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { SkipEnvelope } from '../../common/response.interceptor';
 import { MediaTicketService } from './media-ticket.service';
+import { sendMediaContent } from './media-content.response';
 import { Errors } from '../../common/errors';
 class MediaTicketDto {
   @IsString() @MaxLength(64) owner_type!: string;
@@ -22,13 +23,6 @@ export class MediaTicketController {
   @Public() @Get('tickets/:ticket/content') @SkipEnvelope()
   async content(@Param('ticket') ticket: string, @Req() req: Request, @Res() res: Response) {
     const descriptor = await this.tickets.open(ticket, req.headers.range);
-    const start = descriptor.range?.start || 0; const end = descriptor.range?.end ?? descriptor.size - 1;
-    res.status(descriptor.range ? 206 : 200);
-    res.setHeader('Content-Type', descriptor.asset.mimeType);
-    res.setHeader('Accept-Ranges', 'bytes'); res.setHeader('Content-Length', String(end - start + 1));
-    res.setHeader('Cache-Control', 'private, no-store'); res.setHeader('Content-Disposition', 'inline');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    if (descriptor.range) res.setHeader('Content-Range', `bytes ${start}-${end}/${descriptor.size}`);
-    res.sendFile(descriptor.path, { acceptRanges: true }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+    sendMediaContent(res, descriptor);
   }
 }

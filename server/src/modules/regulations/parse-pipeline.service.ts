@@ -148,7 +148,7 @@ export class ParsePipelineService {
    * data:image/ 图片放行且单图 base64 ≤ 2MB、总数 ≤ 50；<a> 强制 rel="noopener noreferrer" 并移除 target。
    */
   private sanitize(html: string): string {
-    const imgMatches = html.match(/data:image\/[a-zA-Z+]+;base64,[A-Za-z0-9+/=]+/g) || [];
+    const imgMatches: string[] = html.match(/data:image\/[a-zA-Z+]+;base64,[A-Za-z0-9+/=]+/g) || [];
     const oversized = imgMatches.filter((m) => m.length > 2 * 1024 * 1024).length;
     if (imgMatches.length > 50 || oversized > 0) {
       // 超限：剥离全部内嵌图片，保留文字结构（防 MEDIUMTEXT 撑爆与浏览器内存放大）

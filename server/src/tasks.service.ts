@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { ParsePipelineService } from './modules/regulations/parse-pipeline.service';
 import { LearningSessionService } from './modules/learning/learning-session.service';
@@ -6,6 +6,8 @@ import { ExamService } from './modules/exams/exam.service';
 import { StatisticsService } from './modules/statistics/statistics.service';
 import { MediaService } from './modules/media/media.service';
 import { VideoSessionService } from './modules/video-learning/video-session.service';
+import { MediaUploadFinalizerService } from './modules/media/uploads/media-upload-finalizer.service';
+import { MediaUploadCleanupService } from './modules/media/uploads/media-upload-cleanup.service';
 
 /**
  * 定时任务编排（02 册 2.2 横切能力，06 册 4.3 双触发）：
@@ -19,6 +21,7 @@ export class TasksService {
   private readonly logger = new Logger(TasksService.name);
   private examSweepRunning = false;
   private learningSweepRunning = false;
+  private uploadCleanupRunning = false;
 
   constructor(
     private readonly examService: ExamService,
@@ -27,7 +30,25 @@ export class TasksService {
     private readonly statistics: StatisticsService,
     private readonly media: MediaService,
     private readonly videoLearning: VideoSessionService,
+    @Optional() private readonly uploadFinalizer?: MediaUploadFinalizerService,
+    @Optional() private readonly uploadCleanup?: MediaUploadCleanupService,
   ) {}
+
+  /** Claims and the instance slot limit belong to the finalizer; idle slots can be refilled. */
+  @Interval(1_000)
+  async finalizeMediaUploads() {
+    try { await this.uploadFinalizer?.runOnce(); }
+    catch { this.logger.warn('媒体上传后台校验暂未完成，等待持久任务重试'); }
+  }
+
+  @Interval(60_000)
+  async sweepUploadSessions() {
+    if (this.uploadCleanupRunning) return;
+    this.uploadCleanupRunning = true;
+    try { await this.uploadCleanup?.runOnce(new Date()); }
+    catch { this.logger.warn('媒体上传清理暂未完成，等待持久任务重试'); }
+    finally { this.uploadCleanupRunning = false; }
+  }
 
   /** 触发器一（主）：超时未交卷收口，每 30 秒。 */
   @Interval(30_000)

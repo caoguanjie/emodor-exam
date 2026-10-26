@@ -41,6 +41,7 @@ import { ExamRecordQuestion } from './entities/exam-record-question.entity';
 import { ExamAnswer } from './entities/exam-answer.entity';
 import { SchemaMigration } from './entities/schema-migration.entity';
 import { MediaAsset } from './entities/media-asset.entity';
+import { MediaUploadSession } from './entities/media-upload-session.entity';
 import { MediaReference } from './entities/media-reference.entity';
 import { TrainingCourse } from './entities/training-course.entity';
 import { CourseChapter } from './entities/course-chapter.entity';
@@ -116,6 +117,15 @@ import { TasksService } from './tasks.service';
 import { MediaController } from './modules/media/media.controller';
 import { MediaService } from './modules/media/media.service';
 import { MediaProbeService } from './modules/media/media-probe.service';
+import { MediaPublisher } from './modules/media/media-publisher.service';
+import { MediaStorageRouter } from './modules/media/storage/media-storage.router';
+import { LocalMediaStorage } from './modules/media/storage/local-media-storage';
+import { CosMediaStorage } from './modules/media/storage/cos-media-storage';
+import { MediaUploadSessionController } from './modules/media/uploads/media-upload-session.controller';
+import { MediaUploadSessionService } from './modules/media/uploads/media-upload-session.service';
+import { MediaUploadGrantService } from './modules/media/uploads/media-upload-grant.service';
+import { MediaUploadFinalizerService } from './modules/media/uploads/media-upload-finalizer.service';
+import { MediaUploadCleanupService } from './modules/media/uploads/media-upload-cleanup.service';
 import { MediaTicketController } from './modules/media/media-ticket.controller';
 import { MediaTicketService } from './modules/media/media-ticket.service';
 import { IdentityController } from './modules/identity/identity.controller';
@@ -158,7 +168,7 @@ const config = loadConfig();
       ExamAssignment, ExamRecord, ExamRecordQuestion, ExamAnswer, SchemaMigration,
       TrainingCategory, ImportBatch,
       SysRole, SysPermission, SysRolePermission, SysUserRole, AuthSession,
-      MediaAsset, MediaReference,
+      MediaAsset, MediaReference, MediaUploadSession,
       TrainingCourse, CourseChapter, CourseLesson, LessonVersion,
       VideoLearningRecord, VideoLearningSession,
       QuestionConcept, QuestionVersion, QuestionAuthoringCommit,
@@ -172,7 +182,7 @@ const config = loadConfig();
     AuthController, MobileAuthController, DebugMobileAuthController, AccessController, StudentsController, MeProfileController, CategoryController,
     RegulationContentController, QuestionMaterialsController, AiController, LearningController, ExamsController, TrainingExamsController, PaperAdminController, ExamAdminController,
     StatisticsController, TrainingStatisticsController, AdminDashboardController, HealthController,
-    MediaController, MediaTicketController, IdentityController,
+    MediaUploadSessionController, MediaController, MediaTicketController, IdentityController,
     CourseAdminController, LearnerHomeController, MyCoursesController,
     VideoLearningController, QuestionImportController, AiQuestionImportController, QuestionAuthoringController, QuestionAuthoringOptionsController,
     SystemController, SiteConfigController,
@@ -189,7 +199,24 @@ const config = loadConfig();
     ExamHistoryService, ExamRecordsService,
     ShuffleService, GradingService, PaperReleaseService, SamplingService, StatisticsService, TrainingStatisticsService,
     RedisService, AuditService, TasksService,
-    MediaService, MediaProbeService, MediaTicketService,
+    MediaService, MediaProbeService, MediaTicketService, MediaPublisher,
+    MediaUploadSessionService, MediaUploadGrantService, MediaUploadFinalizerService, MediaUploadCleanupService,
+    {
+      provide: CosMediaStorage,
+      useFactory: (appConfig: AppConfig) => appConfig.cosMedia.bucket && appConfig.cosMedia.region
+        && appConfig.cosMedia.keyPrefix && appConfig.cosMedia.secretId && appConfig.cosMedia.secretKey
+        ? new CosMediaStorage(appConfig.cosMedia) : null,
+      inject: [AppConfig],
+    },
+    {
+      provide: MediaStorageRouter,
+      useFactory: (appConfig: AppConfig, cos: CosMediaStorage | null) => new MediaStorageRouter(
+        appConfig.cosMedia,
+        new LocalMediaStorage(appConfig.upload.dir),
+        cos ?? undefined,
+      ),
+      inject: [AppConfig, CosMediaStorage],
+    },
     IdentityService, IdentityCrypto, IdentityImageService,
     {
       provide: IDENTITY_PROVIDER,

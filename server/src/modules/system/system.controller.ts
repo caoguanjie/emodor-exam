@@ -15,6 +15,7 @@ import { Public } from '../../common/guards/public.decorator';
 import { SkipEnvelope } from '../../common/response.interceptor';
 import { AuditQueryService } from './audit-query.service';
 import { SystemService } from './system.service';
+import { sendMediaContent } from '../media/media-content.response';
 
 const QueryNumber = () => Transform(({ value }) => (
   value === undefined || value === null || value === '' ? undefined : Number(value)
@@ -223,17 +224,7 @@ export class SiteConfigController {
   @SkipEnvelope()
   async content(@Param('id') id: string, @Req() req: Request, @Res() res: Response) {
     const descriptor = await this.system.openPublicAsset(id, req.headers.range);
-    const start = descriptor.range?.start ?? 0;
-    const end = descriptor.range?.end ?? descriptor.size - 1;
-    res.status(descriptor.range ? 206 : 200);
-    res.setHeader('Content-Type', descriptor.asset.mimeType);
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Length', String(end - start + 1));
     res.setHeader('Cache-Control', 'public, max-age=300');
-    if (descriptor.range) res.setHeader('Content-Range', `bytes ${start}-${end}/${descriptor.size}`);
-    res.setHeader('Content-Disposition', 'inline');
-    res.sendFile(descriptor.path, { acceptRanges: true }, (error) => {
-      if (error && !res.headersSent) res.status(404).end();
-    });
+    sendMediaContent(res, descriptor);
   }
 }

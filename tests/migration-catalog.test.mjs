@@ -8,10 +8,13 @@ test('every shipped migration is accepted by the real runner before database acc
   const migrations = await listMigrations();
   assert.ok(migrations.length > 0);
   for (const migration of migrations) assert.ok(migration.steps.length > 0, migration.id);
-  assert.deepEqual(migrations.slice(-4).map((migration) => migration.id), [
+  assert.deepEqual(migrations.slice(-5).map((migration) => migration.id), [
     '025_question_bank_without_scores', '026_question_lifecycle_slimming', '027_question_review_permission_cleanup',
     '028_access_password_backfill_probe',
+    '030_cos_media_storage',
   ]);
   const lifecycle = migrations.find((migration) => migration.id === '026_question_lifecycle_slimming');
   assert.equal(lifecycle.steps[0].replacesCheck, '025_question_bank_without_scores/question_score_nullable');
+  const cos = migrations.find((migration) => migration.id === '030_cos_media_storage');
+  assert.equal(cos.steps[0].replacesCheck, '003_media/create_media_asset');
 });

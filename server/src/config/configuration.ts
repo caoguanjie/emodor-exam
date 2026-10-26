@@ -1,4 +1,5 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
+import { CosMediaConfig, readCosMediaConfig } from '../modules/media/storage/cos-media.config';
 
 /**
  * 全局配置读取。全部连接类与密钥类配置经环境变量注入（02 册 5.3 配置管理），
@@ -48,6 +49,20 @@ export class AppConfig {
     faceId: TencentIdentityEndpointConfig;
   };
   mediaTicket: { secret: string; ttlSeconds: number };
+  cosMedia: CosMediaConfig;
+  mediaUpload: {
+    sessionTtlSeconds: number;
+    receiptTtlSeconds: number;
+    multipartThresholdBytes: number;
+    partSizeBytes: number;
+    parallelLimit: number;
+    grantTtlSeconds: number;
+    finalizerConcurrency: number;
+    leaseSeconds: number;
+    renewSeconds: number;
+    maxAttempts: number;
+    orphanGraceSeconds: number;
+  };
   corsOrigins: string[];
   dataDir: string;
   logDir: string;
@@ -190,8 +205,27 @@ export function loadConfig(): AppConfig {
   if (identityProvider === 'tencent' && (!idCardOcrEnabled || !faceIdEnabled)) {
     throw new Error('IDENTITY_PROVIDER=tencent 时必须同时启用身份证 OCR 和 FaceID');
   }
+  const cosMedia = readCosMediaConfig(process.env);
+  const mediaUpload: AppConfig['mediaUpload'] = {
+    sessionTtlSeconds: mediaEnvInt('MEDIA_UPLOAD_SESSION_TTL_SECONDS', 86400, 60, 604800),
+    receiptTtlSeconds: mediaEnvInt('MEDIA_UPLOAD_RECEIPT_TTL_SECONDS', 2592000, 86400, 7776000),
+    multipartThresholdBytes: mediaEnvInt('MEDIA_MULTIPART_THRESHOLD_BYTES', 16777216, 1048576, 536870912),
+    partSizeBytes: mediaEnvInt('MEDIA_UPLOAD_PART_SIZE_BYTES', 8388608, 1048576, 67108864),
+    parallelLimit: mediaEnvInt('MEDIA_UPLOAD_PARALLEL_LIMIT', 3, 1, 6),
+    grantTtlSeconds: mediaEnvInt('MEDIA_UPLOAD_GRANT_TTL_SECONDS', 1800, 60, 7200),
+    finalizerConcurrency: mediaEnvInt('MEDIA_FINALIZER_CONCURRENCY', 2, 1, 8),
+    leaseSeconds: mediaEnvInt('MEDIA_FINALIZER_LEASE_SECONDS', 120, 60, 900),
+    renewSeconds: mediaEnvInt('MEDIA_FINALIZER_RENEW_SECONDS', 30, 5, 300),
+    maxAttempts: mediaEnvInt('MEDIA_FINALIZER_MAX_ATTEMPTS', 5, 1, 20),
+    orphanGraceSeconds: mediaEnvInt('MEDIA_ORPHAN_GRACE_SECONDS', 86400, 3600, 604800),
+  };
+  if (mediaUpload.renewSeconds * 2 >= mediaUpload.leaseSeconds) {
+    throw new Error('MEDIA_FINALIZER_RENEW_SECONDS 必须小于 lease 的一半');
+  }
   return {
     env,
+    cosMedia,
+    mediaUpload,
     port: Number(process.env.PORT || 3000),
     db: {
       type: 'mysql',

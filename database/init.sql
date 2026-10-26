@@ -1,6 +1,6 @@
 -- =====================================================================
 -- EmodorRuleExam 制度学习及考试系统 · 数据库初始化脚本
--- 依据 docs/design/03-数据库设计.md 建表（当前 39 张业务表 + 1 张迁移元数据表，InnoDB + utf8mb4）
+-- 依据 docs/design/03-数据库设计.md 建表（当前 40 张业务表 + 1 张迁移元数据表，InnoDB + utf8mb4）
 -- 时间字段 DATETIME(3)；无数据库级外键（03 册 1.6 节，应用层维护）
 -- 枚举字段 VARCHAR + 应用层校验（03 册 1.7 节）
 -- 种子数据（根部门 / 超级管理员）由 database/seed.mjs 按环境变量生成，
@@ -562,6 +562,12 @@ CREATE TABLE IF NOT EXISTS `media_asset` (
   `original_name` VARCHAR(255) NULL COMMENT '仅展示元数据，不参与路径拼接',
   `mime_type`     VARCHAR(128) NOT NULL,
   `storage_key`   VARCHAR(512) NOT NULL COMMENT '服务端生成的私有相对路径',
+  `storage_provider` VARCHAR(16) NOT NULL DEFAULT 'local',
+  `cos_bucket` VARCHAR(255) NULL,
+  `cos_region` VARCHAR(64) NULL,
+  `cos_version_id` VARCHAR(255) NULL,
+  `etag` VARCHAR(255) NULL,
+  `crc64` VARCHAR(64) NULL,
   `size_bytes`    BIGINT UNSIGNED NOT NULL,
   `sha256`        CHAR(64) NOT NULL,
   `status`        VARCHAR(16) NOT NULL DEFAULT 'processing' COMMENT 'processing / ready / failed；deleting 为内部删除重试墓碑',
@@ -574,6 +580,46 @@ CREATE TABLE IF NOT EXISTS `media_asset` (
   KEY `idx_media_asset_owner_purpose` (`owner_id`, `purpose`),
   KEY `idx_media_asset_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='受控媒体资源';
+
+CREATE TABLE IF NOT EXISTS `media_upload_session` (
+  `id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `owner_id` BIGINT UNSIGNED NOT NULL,
+  `uploaded_by` BIGINT UNSIGNED NOT NULL,
+  `client_request_id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `request_digest` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `purpose` VARCHAR(32) NOT NULL,
+  `original_name` VARCHAR(255) NULL,
+  `mime_type` VARCHAR(128) NOT NULL,
+  `size_bytes` BIGINT UNSIGNED NOT NULL,
+  `fingerprint_sha256` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `mode` VARCHAR(16) NOT NULL,
+  `part_size` INT UNSIGNED NOT NULL,
+  `parallel_limit` TINYINT UNSIGNED NOT NULL DEFAULT '3',
+  `staging_locator` JSON NULL,
+  `upload_id` VARCHAR(255) NULL,
+  `state` VARCHAR(16) NOT NULL DEFAULT 'uploading',
+  `expires_at` DATETIME(3) NOT NULL,
+  `last_credential_expires_at` DATETIME(3) NULL,
+  `claim_id` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  `lease_until` DATETIME(3) NULL,
+  `finalize_attempts` TINYINT UNSIGNED NOT NULL DEFAULT '0',
+  `candidate_objects` JSON NULL,
+  `asset_id` BIGINT UNSIGNED NULL,
+  `receipt` JSON NULL,
+  `receipt_expires_at` DATETIME(3) NULL,
+  `reason_code` VARCHAR(64) NULL,
+  `error_message` VARCHAR(512) NULL,
+  `finalized_at` DATETIME(3) NULL,
+  `cleaned_at` DATETIME(3) NULL,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_media_upload_request` (`uploaded_by`, `client_request_id`),
+  KEY `idx_media_upload_queue` (`state`, `lease_until`),
+  KEY `idx_media_upload_expiry` (`state`, `expires_at`),
+  KEY `idx_media_upload_credentials` (`state`, `last_credential_expires_at`),
+  KEY `idx_media_upload_receipt` (`state`, `receipt_expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='持久媒体上传会话与请求墓碑';
 
 CREATE TABLE IF NOT EXISTS `media_reference` (
   `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

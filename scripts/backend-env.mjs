@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { lstat, readFile, realpath, writeFile } from 'node:fs/promises';
+import { chmod, lstat, open, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnv } from 'node:util';
@@ -8,6 +8,8 @@ const repositoryRoot = fileURLToPath(new URL('../', import.meta.url));
 const identityKeys = ['IDENTITY_DATA_ENCRYPTION_KEY', 'IDENTITY_FINGERPRINT_SECRET', 'MEDIA_TICKET_SECRET'];
 const systemKeys = ['JWT_SECRET', 'EXAM_SHUFFLE_SECRET', 'APP_ENCRYPTION_KEY', ...identityKeys];
 const smsKeys = ['YUNXIN_SMS_APP_KEY', 'YUNXIN_SMS_APP_SECRET', 'YUNXIN_SMS_LOGIN_CODE_TEMPLATE_ID'];
+const cosImportKeys = ['COS_SECRET_ID', 'COS_SECRET_KEY', 'COS_BUCKET', 'COS_REGION'];
+const runtimeOverrides = new WeakMap();
 
 async function readOptionalEnv(path) {
   try {
@@ -88,7 +90,57 @@ export async function readBackendEnv(root = repositoryRoot, environment = proces
   try { source = await readFile(join(root, '.env'), 'utf8'); }
   catch { throw new Error('缺少或无法读取根目录 .env，请先执行 npm --prefix server run env:init。'); }
   // Match Node --env-file precedence: an exported variable wins over the file.
-  return { ...parseEnv(source), ...environment };
+  const parsed = parseEnv(source);
+  const values = { ...parsed, ...environment };
+  runtimeOverrides.set(values, new Set(Object.keys(parsed).filter(key => Object.hasOwn(environment, key))));
+  return values;
+}
+
+export async function importLocalCosEnv(root, sourceEnvPath) {
+  const target = resolve(root, '.env');
+  const sourcePath = resolve(sourceEnvPath);
+  if (sourcePath === target) throw new Error('COS 导入源文件不得与目标 .env 相同。');
+  const sourceReal = await realpath(sourcePath).catch(() => { throw new Error('无法读取明确指定的 COS 源文件。'); });
+  const targetReal = await realpath(target).catch(() => null);
+  if (sourceReal === targetReal) throw new Error('COS 导入源文件不得与目标 .env 相同。');
+  const source = await readOptionalEnv(sourcePath);
+  for (const key of ['COS_SECRET_ID', 'COS_SECRET_KEY']) {
+    if (!source[key]?.trim()) throw new Error(`COS 源文件缺少 ${key}；未合并任何配置。`);
+  }
+  const keys = cosImportKeys.filter(key => Object.hasOwn(source, key));
+  // Validate quoting before touching the destination. The source pair is all or nothing.
+  const incoming = keys.map(key => `${key}=${quoteValue(key, source[key])}`).join('\n');
+  const lockPath = join(root, '.env.cos-import.lock');
+  let lock;
+  try { lock = await open(lockPath, 'wx', 0o600); }
+  catch { throw new Error('COS 配置导入正在进行或目录不可写，请稍后重试。'); }
+  const temporary = join(root, `.env.cos-import-${randomBytes(12).toString('hex')}.tmp`);
+  try {
+    let before = '';
+    try {
+      const info = await lstat(target);
+      if (!info.isFile() || info.isSymbolicLink()) throw new Error('目标 .env 必须是普通文件。');
+      before = await readFile(target, 'utf8');
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const prior = parseEnv(before);
+    if (keys.every(key => prior[key] === source[key])) {
+      await chmod(target, 0o600);
+      return { changed: false, keys };
+    }
+    // Append a final Node env override block to preserve comments and every unrelated
+    // value byte-for-byte, including multiline secrets belonging to other services.
+    const after = `${before}${before && !before.endsWith('\n') ? '\n' : ''}# COS 白名单导入（其余项目配置保持原样）\n${incoming}\n`;
+    await writeFile(temporary, after, { flag: 'wx', mode: 0o600 });
+    await rename(temporary, target);
+    return { changed: true, keys };
+  } catch (error) {
+    if (error?.message?.startsWith('目标 .env')) throw error;
+    throw new Error('COS 配置原子合并失败；请检查文件权限。');
+  } finally {
+    await rm(temporary, { force: true });
+    await lock.close();
+    await rm(lockPath, { force: true });
+  }
 }
 
 export function inspectBackendEnv(env, { real = false } = {}) {
@@ -117,6 +169,16 @@ export function inspectBackendEnv(env, { real = false } = {}) {
   check('SERVER_DEBUG_LOGIN_ENABLED', (real || env.NODE_ENV === 'production')
     ? (env.SERVER_DEBUG_LOGIN_ENABLED || 'false') === 'false'
     : ['true', 'false'].includes(env.SERVER_DEBUG_LOGIN_ENABLED || 'false'), '真实闭环与生产环境须关闭调试登录');
+  const storageProvider = env.MEDIA_STORAGE_PROVIDER || 'local';
+  check('MEDIA_STORAGE_PROVIDER', ['local', 'cos'].includes(storageProvider), '仅支持 local 或 cos');
+  if (storageProvider === 'cos') {
+    for (const key of cosImportKeys) check(key, present(key), '未配置');
+    check('COS_KEY_PREFIX', /^(?:[A-Za-z0-9_-]+\/)+$/.test(env.COS_KEY_PREFIX || ''), present('COS_KEY_PREFIX') ? '必须为有界相对目录前缀并以 / 结尾' : '未配置');
+    if (present('COS_BUCKET')) check('COS_BUCKET_FORMAT', /^[a-z0-9][a-z0-9-]*-\d+$/.test(env.COS_BUCKET), '格式不正确');
+    if (present('COS_REGION')) check('COS_REGION_FORMAT', /^[a-z][a-z0-9-]+$/.test(env.COS_REGION), '格式不正确');
+  }
+  const overrides = runtimeOverrides.get(env);
+  if (overrides) for (const row of rows) if (overrides.has(row.name)) row.status += '（进程环境覆盖 .env）';
   return rows;
 }
 
@@ -126,8 +188,14 @@ export function formatReport(rows) {
 
 async function main() {
   const [command, ...args] = process.argv.slice(2);
+  if (command === 'import-cos') {
+    if (args.length !== 2 || args[0] !== '--from-env' || !args[1]) throw new Error('用法：node scripts/backend-env.mjs import-cos --from-env <明确源路径>');
+    const result = await importLocalCosEnv(repositoryRoot, args[1]);
+    console.log(`${result.changed ? '已原子合并' : '配置相同，未重复写入'} COS 白名单：${result.keys.join(', ')}；根 .env 权限为 600。`);
+    return;
+  }
   if (!['init', 'check'].includes(command) || args.some(arg => command !== 'check' || arg !== '--real')) {
-    throw new Error('用法：node scripts/backend-env.mjs init|check [--real]');
+    throw new Error('用法：node scripts/backend-env.mjs init|check [--real]，或 import-cos --from-env <明确源路径>');
   }
   if (command === 'init') {
     const { created } = await initializeLocalEnv();

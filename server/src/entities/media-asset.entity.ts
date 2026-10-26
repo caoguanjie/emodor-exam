@@ -29,6 +29,24 @@ export class MediaAsset {
   @Column({ name: 'storage_key', type: 'varchar', length: 512 })
   storageKey: string;
 
+  @Column({ name: 'storage_provider', type: 'varchar', length: 16, default: 'local' })
+  storageProvider: 'local' | 'cos';
+
+  @Column({ name: 'cos_bucket', type: 'varchar', length: 255, nullable: true })
+  cosBucket: string | null;
+
+  @Column({ name: 'cos_region', type: 'varchar', length: 64, nullable: true })
+  cosRegion: string | null;
+
+  @Column({ name: 'cos_version_id', type: 'varchar', length: 255, nullable: true })
+  cosVersionId: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  etag: string | null;
+
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  crc64: string | null;
+
   @Column({ name: 'size_bytes', type: 'bigint', unsigned: true })
   sizeBytes: string;
 

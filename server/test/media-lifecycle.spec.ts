@@ -11,13 +11,16 @@ import { MediaProbeUnavailableError } from '../src/modules/media/media-probe.ser
 const roots: string[] = [];
 
 function serviceFor(root: string, probe: unknown = { probe: async () => ({ mimeType: 'image/png', width: 1, height: 1 }) }) {
+  let stored: any;
   const assetRepo: any = {
     create: (value: any) => ({ ...value, id: '99', createdAt: new Date(), updatedAt: new Date() }),
-    save: async (value: any) => value,
+    save: async (value: any) => { stored = value; return value; },
+    findOne: async () => stored,
   };
   const referenceRepo: any = { find: async () => [] };
   const config: any = { upload: { dir: root }, media: DEFAULT_MEDIA_LIMITS };
-  return new MediaService(assetRepo, referenceRepo, {} as any, config, probe as any);
+  const manager = { getRepository: (entity: unknown) => entity === MediaAsset ? assetRepo : referenceRepo };
+  return new MediaService(assetRepo, referenceRepo, { transaction: async (work: any) => work(manager) } as any, config, probe as any);
 }
 
 function managerFor(asset: any) {

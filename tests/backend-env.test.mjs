@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
 import { spawnSync } from 'node:child_process';
-import { initializeLocalEnv, inspectBackendEnv, readBackendEnv, formatReport } from '../scripts/backend-env.mjs';
+import { initializeLocalEnv, inspectBackendEnv, readBackendEnv, formatReport, importLocalCosEnv } from '../scripts/backend-env.mjs';
 
 async function workspace(t) {
   const root = await mkdtemp(join(tmpdir(), 'ruleexam-env-test-'));
@@ -98,4 +98,55 @@ test('CLI fails closed on missing real-provider configuration and never prints s
   assert.equal(run.status, 1);
   assert.match(run.stdout, /TENCENT_FACEID_SECRET_KEY: 未配置/);
   for (const key of ['JWT_SECRET', 'APP_ENCRYPTION_KEY', 'IDENTITY_DATA_ENCRYPTION_KEY']) assert.equal(`${run.stdout}${run.stderr}`.includes(values[key]), false);
+});
+
+test('COS import atomically merges only the four allowed keys and preserves all other local values', async (t) => {
+  const root = await workspace(t);
+  const original = "# retain comment\nDB_PASSWORD='local value'\nJWT_SECRET='local jwt fixture'\nCOS_KEY_PREFIX='ruleexam/test/'\nCOS_BUCKET='old-1234567890'\n";
+  await writeFile(join(root, '.env'), original);
+  const source = join(root, 'source.env');
+  await writeFile(source, "COS_SECRET_ID='unusable-source-id'\nCOS_SECRET_KEY='unusable-source-key'\nCOS_BUCKET='new-1234567890'\nCOS_REGION='ap-guangzhou'\nCOS_KEY_PREFIX='gooodwork/prod/'\nJWT_SECRET='foreign fixture'\nDB_PASSWORD='foreign fixture'\n");
+  const result = await importLocalCosEnv(root, source);
+  assert.deepEqual(result, { changed: true, keys: ['COS_SECRET_ID', 'COS_SECRET_KEY', 'COS_BUCKET', 'COS_REGION'] });
+  const after = await readFile(join(root, '.env'), 'utf8');
+  assert.ok(after.startsWith(original));
+  const values = parseEnv(after);
+  assert.equal(values.COS_SECRET_ID, 'unusable-source-id');
+  assert.equal(values.COS_SECRET_KEY, 'unusable-source-key');
+  assert.equal(values.COS_BUCKET, 'new-1234567890');
+  assert.equal(values.COS_KEY_PREFIX, 'ruleexam/test/');
+  assert.equal(values.DB_PASSWORD, 'local value');
+  assert.equal(values.JWT_SECRET, 'local jwt fixture');
+  assert.equal((await stat(join(root, '.env'))).mode & 0o777, 0o600);
+  assert.equal(JSON.stringify(result).includes('unusable-source'), false);
+  assert.deepEqual(await importLocalCosEnv(root, source), { changed: false, keys: result.keys });
+  assert.equal(await readFile(join(root, '.env'), 'utf8'), after);
+});
+
+test('COS import rejects an incomplete source pair without changing any destination byte', async (t) => {
+  const root = await workspace(t); const before = 'COS_SECRET_ID=existing-id\nCOS_SECRET_KEY=existing-key\n';
+  await writeFile(join(root, '.env'), before); const source = join(root, 'source.env');
+  await writeFile(source, 'COS_SECRET_ID=unusable-id\nCOS_BUCKET=fixture-1234567890\n');
+  await assert.rejects(importLocalCosEnv(root, source), /COS_SECRET_KEY/);
+  assert.equal(await readFile(join(root, '.env'), 'utf8'), before);
+  await assert.rejects(importLocalCosEnv(root, join(root, '.env')), /源文件/);
+  assert.equal(await readFile(join(root, '.env'), 'utf8'), before);
+});
+
+test('COS import leaves optional bucket and region intact when the explicit source has only the key pair', async (t) => {
+  const root = await workspace(t);
+  await writeFile(join(root, '.env'), 'COS_BUCKET=fixture-1234567890\nCOS_REGION=ap-shanghai\n');
+  const source = join(root, 'source.env'); await writeFile(source, 'COS_SECRET_ID=unusable-id\nCOS_SECRET_KEY=unusable-key\n');
+  assert.deepEqual((await importLocalCosEnv(root, source)).keys, ['COS_SECRET_ID', 'COS_SECRET_KEY']);
+  const values = await readBackendEnv(root, {});
+  assert.equal(values.COS_BUCKET, 'fixture-1234567890'); assert.equal(values.COS_REGION, 'ap-shanghai');
+});
+
+test('COS environment inspection refuses incomplete configuration and unsafe prefixes without exposing values', () => {
+  const absent = inspectBackendEnv({ MEDIA_STORAGE_PROVIDER: 'cos' });
+  for (const key of ['COS_SECRET_ID', 'COS_SECRET_KEY', 'COS_BUCKET', 'COS_REGION', 'COS_KEY_PREFIX']) assert.ok(absent.some(row => row.name === key && !row.ok));
+  const secret = 'unusable-fixture-private-value';
+  const rows = inspectBackendEnv({ MEDIA_STORAGE_PROVIDER: 'cos', COS_BUCKET: 'fixture-1234567890', COS_REGION: 'ap-shanghai', COS_SECRET_ID: secret, COS_SECRET_KEY: secret, COS_KEY_PREFIX: '../foreign/' });
+  assert.ok(rows.some(row => row.name === 'COS_KEY_PREFIX' && !row.ok));
+  assert.equal(formatReport(rows).includes(secret), false);
 });
