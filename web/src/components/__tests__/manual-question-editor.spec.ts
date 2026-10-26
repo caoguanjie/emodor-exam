@@ -18,8 +18,8 @@ function draft(): QuestionDraftPayload {
     ] }, options: [{ id: 'option_a', content: doc('甲乙') }, { id: 'option_b', content: doc('丙丁') }, { id: 'option_c', content: doc('戊己') }],
     answer_option_ids: ['option_b'], analysis: null } };
 }
-async function show(value = draft(), extra: Record<string, unknown> = {}) {
-  const wrapper = mount(ManualQuestionEditor, { props: { modelValue: value, categories: [{ id: '10', name: '安全培训' }],
+async function show(value = draft(), extra: Record<string, unknown> = {}, attachTo?: Element) {
+  const wrapper = mount(ManualQuestionEditor, { attachTo, props: { modelValue: value, categories: [{ id: '10', name: '安全培训' }],
     difficultyOptions: [{ value: 'easy', label: '简单' }, { value: 'hard', label: '困难' }], ...extra }, global: { plugins: [ElementPlus] } });
   wrappers.push(wrapper); await flushPromises(); return wrapper;
 }
@@ -154,6 +154,24 @@ describe('manual question Tiptap editor', () => {
     const count = wrapper.emitted('update:modelValue')!.length;
     await wrapper.setProps({ modelValue: { ...next, category_id: '20' } }); await flushPromises();
     expect(wrapper.emitted('update:modelValue')).toHaveLength(count);
+  });
+
+  it('adds a blank option and focuses its caret so typing needs no removal of sample text', async () => {
+    const wrapper = await show(draft(), {}, document.body);
+    const core = wrapper.vm.getEditor()!;
+    // jsdom has no text layout; exercise real focus without measuring scroll geometry.
+    core.view.setProps({ handleScrollToSelection: () => true });
+    const add = button(wrapper, '添加选项');
+    (add.element as HTMLButtonElement).focus();
+    await add.trigger('click'); await flushPromises();
+    const added = core.state.doc.firstChild!.lastChild!;
+    expect.soft(added.textContent).toBe('');
+    expect(core.state.selection.$from.node(-1).attrs.option_id).toBe(added.attrs.option_id);
+    await vi.waitFor(() => expect(document.activeElement === core.view.dom).toBe(true));
+    core.commands.insertContent('新输入的内容'); await flushPromises();
+    expect(core.state.doc.firstChild!.lastChild!.textContent).toBe('新输入的内容');
+    expect(latest(wrapper).options[3]!.text).toBe('<p>新输入的内容</p>');
+    expect(latest(wrapper).content_json!.answer_option_ids).toEqual(['option_b']);
   });
 
   it('supports option buttons, keyboard sorting and dragging while answers follow stable identities', async () => {

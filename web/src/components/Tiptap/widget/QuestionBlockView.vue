@@ -18,7 +18,7 @@
     <NodeViewContent class="question-block__content" />
     <footer v-if="canEditOptions" class="question-block__options" contenteditable="false">
       <button type="button" aria-label="添加选项" :disabled="optionCount >= 26"
-        @mousedown.prevent @click.stop="props.editor.commands.addQuestionOption(clientId)">添加选项</button>
+        @mousedown.prevent @click.stop="props.editor.chain().addQuestionOption(clientId).focus().run()">添加选项</button>
     </footer>
   </NodeViewWrapper>
 </template>

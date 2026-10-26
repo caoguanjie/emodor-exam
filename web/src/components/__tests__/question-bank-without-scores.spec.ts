@@ -67,14 +67,14 @@ describe('question bank has no scores', () => {
     api.get.mockImplementation(async (path: string, ...args: unknown[]) => path === '/ai/questions'
       ? { list: [{ ...row(), enabled: false }], total: 1 } : previous(path, ...args));
     const { wrapper } = await show();
-    await click(wrapper, '修订');
+    await click(wrapper, '修改');
     expect(editorDialog().text()).toContain('该题当前已停用，保存本次修订后将启用。');
     await click(wrapper, '保存并启用');
     expect(api.put.mock.calls[0]).toEqual(['/ai/questions/40', expect.objectContaining({
       expected_version_id: '50', expected_enabled: false,
     })]);
   });
-  it.each(['人工录题', '修订'])('mounts the %s overlay on body outside the animated page containing block', async (action) => {
+  it.each(['人工录题', '修改'])('keeps the %s overlay inside the current page content', async (action) => {
     const { wrapper } = await show();
     const page = wrapper.get('.question-page').element as HTMLElement;
     page.classList.add('page-enter');
@@ -82,8 +82,8 @@ describe('question bank has no scores', () => {
     await click(wrapper, action);
     const dialog = editorDialog().element;
     const overlay = dialog.closest('.el-overlay');
-    expect(overlay?.parentElement === document.body).toBe(true);
-    expect(page.contains(dialog)).toBe(false);
+    expect(overlay?.parentElement).toBe(page);
+    expect(page.contains(dialog)).toBe(true);
     expect(dialog.querySelector('.el-dialog__header')).not.toBeNull();
     expect(dialog.querySelector('.el-dialog__footer')).not.toBeNull();
   });
@@ -156,7 +156,7 @@ describe('question bank has no scores', () => {
     const { wrapper } = await show();
     expect(wrapper.text()).not.toMatch(/建议分|默认分/);
     expect(wrapper.text()).not.toContain('考点组');
-    await click(wrapper, '修订');
+    await click(wrapper, '修改');
     expect(editorDialog().text()).not.toMatch(/考点|资料来源|分值/);
     expect(api.get.mock.calls.some(([path]) => path === '/ai/question-concept-options')).toBe(false);
     expect(wrapper.findComponent(ManualQuestionEditor).props('modelValue')).not.toHaveProperty('concept_id');
@@ -169,7 +169,8 @@ describe('question bank has no scores', () => {
     const form = wrapper.getComponent(ManualQuestionEditor);
     await form.findAll('.question-option__toggle')[1]!.trigger('click');
     await changeRichStem(form, '修改的题干');
-    expect(editorDialog().get('.el-dialog__footer').text()).toContain('正确答案：B');
+    expect(editorDialog().get('.editor-summary__answers').attributes('aria-label')).toBe('正确答案：B');
+    expect(editorDialog().get('.editor-summary__answer').text()).toBe('B');
     expect(editorDialog().get('.el-dialog__footer').text()).toContain('有未保存修改');
     expect(editorDialog().get('.el-dialog__footer').text()).not.toMatch(/分值|自动保存/);
     const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('继续编辑'));
@@ -183,7 +184,7 @@ describe('question bank has no scores', () => {
 
   it.each(['create', 'edit'] as const)('%s submits controlled content without a score, retaining version semantics', async (mode) => {
     const { wrapper } = await show();
-    await click(wrapper, mode === 'create' ? '人工录题' : '修订');
+    await click(wrapper, mode === 'create' ? '人工录题' : '修改');
     const form = wrapper.getComponent(ManualQuestionEditor);
     await changeRichStem(form, '已改题干', true);
     const instance = (form.vm as any).getEditor();
@@ -213,7 +214,7 @@ describe('question bank has no scores', () => {
       ? { list: [{ ...row(), stem: '<p><strong>原有加粗题干</strong></p>', analysis: '<p><em>原有斜体解析</em></p>' }], total: 1 }
       : normalGet(path));
     const { wrapper } = await show();
-    await click(wrapper, '修订');
+    await click(wrapper, '修改');
     expect(editorDialog().get('.el-dialog__footer').text()).toContain('暂无未保存修改');
     await click(wrapper, '保存');
     const body = api.put.mock.calls.at(-1)![1];
@@ -226,7 +227,7 @@ describe('question bank has no scores', () => {
 
   it.each(['question', 'analysis'])('protects an invalid first %s edit on cancel and route leave', async (target) => {
     const { wrapper, router } = await show();
-    await click(wrapper, '修订');
+    await click(wrapper, '修改');
     const form = wrapper.getComponent(ManualQuestionEditor);
     const instance = target === 'question' ? form.vm.getEditor()! : form.vm.getAnalysisEditor()!;
     instance.commands.setTextSelection(target === 'question' ? 3 : 1);
