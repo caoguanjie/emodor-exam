@@ -1,9 +1,5 @@
 <template>
   <div class="page-card">
-    <div class="toolbar">
-      <el-button @click="router.push('/admin/questions')">返回试题管理</el-button>
-    </div>
-
     <el-tabs :model-value="mode" @update:model-value="changeMode">
       <el-tab-pane name="file" label="文件导入" />
       <el-tab-pane name="ai" label="AI 生成" />
