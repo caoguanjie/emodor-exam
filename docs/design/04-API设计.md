@@ -6,7 +6,7 @@
 
 > **状态边界（2026-10-22）**：Task13/14 / Gate H2已实现并自动验证：新移动考试使用三类客观题、稳定ID/受限Tiptap、本地草稿、实名主动整卷提交与纯timeout。主动截止前受理才自动评分；到期不提交、不评分。旧`/exams`数字协议仅兼容制度固定卷，不能访问training release；历史已评分timeout保持只读。PC只保留题库、组卷与只读记录。真实后端浏览器全链、真实短信/腾讯、真实弱网和微信开发者工具/真机仍未验。其他已删除能力不因兼容路由恢复。
 
-> **试题入口合同（2026-10-26）**：`/admin/questions` 提供查询、人工录题、修订、预览与启用／停用；独立 `/admin/questions/import` 提供文件导入和参考题AI预览确认。旧考点CRUD、审核、资料直接生成与历史题直接重生成写路由退场；AI配置、旧任务／结果及历史来源读取继续保留。当前AI确认入口见§3.5.3，不新增资料AI或单题预览路由。
+> **试题入口合同（2026-10-26）**：`/admin/questions` 提供查询、人工录题、修改、预览、状态开关与逻辑删除；独立 `/admin/questions/import` 提供文件导入和参考题AI预览确认。旧考点CRUD、审核、资料直接生成与历史题直接重生成写路由退场；AI配置、旧任务／结果及历史来源读取继续保留。当前AI确认入口见§3.5.3，不新增资料AI或单题预览路由。
 
 > **移动认证增量（2026-10-22）**：§3.1.1 登记学员 H5 短信认证、独立 mobile 会话与调试登录的当前接口。真实手机号收码/验码仍需人工验收；接口与自动回归通过不能替代真实短信、实名供应商或微信真机验收。
 
@@ -482,13 +482,13 @@ interface IdentitySessionView {
 | 10 | GET | /ai/question-concepts | 已退场，404；历史表保留 |
 | 11 | GET | /ai/question-concept-options | 已退场，404 |
 | 12 | POST | /ai/question-concepts | 已退场，404 |
-| 13 | GET | /ai/questions | `questions:read`；版本兼容视图分页筛选 |
+| 13 | GET | /ai/questions | `questions:read`；版本兼容视图分页筛选，所有启停筛选均排除已删 |
 | 14 | POST | /ai/questions | `questions:write`；人工录入直接启用，首版本兼容approved、审核元数据NULL |
 | 15 | PUT | /ai/questions/{id}/enabled | `questions:write`；显式enabled与expected_version_id，启停不增内容版本 |
 | 16 | PUT | /ai/questions/{id} | `questions:write`；同时校验expected_version_id和expected_enabled，修订保存并启用；在考核心编辑仍拒绝40908 |
 | 17 | POST | /ai/questions/{id}/regenerate | 已退场，404；重生成仅在未确认AI导入批次内提供 |
 | 18 | GET | /ai/questions/{id}/history | `questions:read`；revision 历史与真实审核元数据，返回 Page |
-| 19 | GET | /ai/questions/{id} | `questions:read`；题目当前兼容视图 |
+| 19 | GET | /ai/questions/{id} | `questions:read`；题目当前兼容视图，已删40401 |
 | 20 | GET | /ai/papers | 试卷列表（筛选 regulation_id/status） |
 | 21 | POST | /ai/papers | 创建试卷 |
 | 22 | GET | /ai/papers/{id} | 试卷详情 |
@@ -497,6 +497,7 @@ interface IdentitySessionView {
 | 25 | POST | /ai/papers/{id}/publish | 发布试卷，校验 SUM(score)=100 |
 | 26 | POST | /ai/papers/{id}/copy | `papers:write`；按冻结事实复制为新 draft，body 只接受空对象 |
 | 27 | POST | /ai/papers/{id}/archive | 归档试卷 |
+| 28 | DELETE | /ai/questions/{id} | `questions:write`；版本／启停双基线逻辑删除，保留历史，重复返回原回执 |
 
 **试卷路由归属说明**：试卷的创建/组卷/发布属于「题库启用 → 组卷 → 发布」的出题工作流（05 册 4.4.7 组卷服务隶属 AI 出题模块），故管理侧归 `/ai/papers`；面向员工的考试执行（可考列表、开考、交卷）归 `/exams`（考试评分模块）——同一资源的管理面与执行面分离，与模块边界一致。
 
@@ -509,6 +510,8 @@ interface IdentitySessionView {
 **版本与启停语义**：人工新建、修订、文件确认和AI选行确认均直接启用；新版本兼容status=approved，但approved_by/approved_at/reviewed_by/reviewed_at/review_reason均NULL，不伪造审核事实。修订在同一事务锁内同时比较identity的current_version_id和is_enabled；版本化题传字符串expected_version_id，真正legacy明确null，启停状态必须显式布尔expected_enabled。任一不符返回40940且零新版本、不恢复启用；停用题明确以expected_enabled=false保存后创建新版本并启用。启停接口只接收enabled和expected_version_id，同目标重试幂等，恢复时在锁内验证结构、类别、启用难度、来源及媒体，失败不恢复。POST／PUT成功额外返回本次实际saved_version_id，普通GET／list不伪造保存回执；列表接受page/page_size/material_id/category_id/enabled/type/difficulty/keyword，不接受concept/status。当前视图返回enabled及question_id/current_version_id/revision，不输出考点、建议分或审核工作流字段。旧题首次修订诚实捕获旧版本，legacy_captured_at仅代表升级捕获，未知历史事实保持null。
 
 **分页与安全显示**：版本history返回`{items,total,page,page_size}`，默认1/20，上限100；考点列表与选项路由退场。题目列表、详情、历史及未保存预览统一安全白名单清洗；遗留脚本、事件、javascript URL和外链图片只在响应边界移除，不回写历史。受控图片经鉴权媒体接口读取。
+
+**逻辑删除（029）**：`DELETE /ai/questions/{id}`严格body为`{expected_version_id:string|null,expected_enabled:boolean}`，版本键必须显式存在，legacy允许null；成功data为`{question_id:string,deleted:true,deleted_at:ISO字符串}`。事务锁定身份后，已删直接返回原时间；否则同时比较current_version_id与is_enabled，不符40940且零写。首次仅写deleted_at与is_enabled=false，不建版本／不删行，首次审计；不存在40401。当前GET详情已删40401，全部列表（含停用／全部）排除已删，history继续可读。恢复、修订、带身份作者提交与新发布锁内拒绝已删；既有草稿引用保留但不可发布，历史release／个人题单／结果和旧无release开考不套用当前删除过滤。客户端不自动重发未知DELETE：先GET当前详情对账，40401移出列表；仍存在则应用服务器状态；读回失败保留该题写锁并提示刷新。开关在独立状态列，操作列仅预览／修改／删除，180px且表头和按钮居中。
 
 **人工 Tiptap 编辑输入（2026-10-26）**：当前新增/修订弹窗直接编辑题干、选项和解析富文本 JSON，保存使用 `content_schema_version:3 + content_json`；正确答案由编辑器选项状态映射为 `answer_option_ids`，选项排序不改变其稳定 ID。兼容 HTML/数字下标字段由 JSON 单向投影，不以旧表单快照覆盖富文本结果。沿用现行新增/修订路径、版本/启停并发锁和成功凭据；“保存并新增”是收到成功凭据后的客户端行为，不新增批量接口。图片继续仅持久化合法 `asset_id`。详见[融合设计](../superpowers/specs/2026-10-26-manual-question-tiptap-design.md)。
 
@@ -560,12 +563,12 @@ schema3题目的普通预览额外返回`content_schema_version:3`与`content_js
 
 | 方法 | 路径 | 输入 | 输出 |
 |---|---|---|---|
-| GET | `/admin/questions/import-template?format=xlsx\|txt` | 严格格式枚举 | 与实际解析器同列的二进制模板；TXT 为 UTF-8 TSV |
-| POST | `/admin/questions/import-preview` | multipart `file`、`format`；可选 `category_id/difficulty` 默认值 | `ImportPreview` |
+| GET | `/admin/questions/import-template?format=xlsx\|txt` | 严格格式枚举；可选 `purpose=ai` | 默认中文五列 XLSX / 标签分块 TXT；AI 返回原七列参考模板 |
+| POST | `/admin/questions/import-preview` | multipart `file`、`format`、必填 `category_id`，对整批生效 | `ImportPreview` |
 | GET | `/admin/questions/import-batches/{id}` | 仅 questions 批次 owner | 未提交返回 `ImportPreview`；已提交返回 `ImportResult` |
 | POST | `/admin/questions/import-batches/{id}/commit` | `{row_numbers:number[]}`，只能选预检合法行 | `ImportResult` |
 
-新模板固定七列`category,type,difficulty,stem,options,answer,analysis`；兼容旧九列`category,type,difficulty,concept,stem,options,answer,analysis,score`及仅少concept或仅少score的两种八列，按表头映射。非空旧concept返回行错误“考点组已取消，请清空后重试”；旧score任何值仅忽略，批次warnings提供一次“旧模板分值已忽略，请在组卷时设置”。TXT只接受UTF-8 TSV，options/answer为JSON数组，支持BOM/CRLF；5MB、1000行硬上限。业务列公式按行错误拒绝，旧score公式忽略且不执行；超表头的非空数据／公式拒绝。见[填写说明](../templates/question-import-format.md)。
+普通模板为中文五列“试题内容、试题类型、选项内容、答案、难度”，兼容旧中文四列；难度只填简单／困难，缺失或空白默认easy。TXT采用[题干]/[类型]/[选项]/[答案]/[难度]分块，选项为`${内容},${内容}`，答案为字母或对／错。Excel首张空白数据表，另设示例、说明表且不参与解析。所选category_id覆盖整批文件类别，不能使用页面默认难度。仍兼容英文七列`category,type,difficulty,stem,options,answer,analysis`；兼容旧九列`category,type,difficulty,concept,stem,options,answer,analysis,score`及仅少concept或仅少score的两种八列，按表头映射。非空旧concept返回行错误“考点组已取消，请清空后重试”；旧score任何值仅忽略，批次warnings提供一次“旧模板分值已忽略，请在组卷时设置”。旧英文TXT仍使用UTF-8 TSV、options/answer为JSON数组；中文TXT及旧TSV均支持BOM/CRLF；5MB、1000行硬上限。业务列公式按行错误拒绝，旧score公式忽略且不执行；超表头的非空数据／公式拒绝。见[填写说明](../templates/question-import-format.md)。
 
 预检复用三题型、富文本、媒体、类别及来源校验。ImportPreview含`batch_id,valid_rows,errors,duplicates,warnings,rows`，rows为有效题逐题预览（row_number及七字段，options/answer为数组）；指纹不含concept或score。确认锁定owner+batch，在同一事务创建启用的import身份／版本与回执`{batch_id,created_ids,committed_rows,enabled:true}`；同集合返回原回执，换集合40911。跨owner/kind为40302；未知响应先GET原批次。旧未提交draft显式去concept/score投影，已提交旧批次原回执不重写。
 
@@ -581,7 +584,7 @@ schema3题目的普通预览额外返回`content_schema_version:3`与`content_js
 | GET | `/admin/questions/ai-import-batches/{id}/download?format=xlsx\|txt` | `ai:read`；导出生成题的标准七列文件；二进制流，不包业务信封 |
 | POST | `/admin/questions/ai-import-batches/{id}/commit` | `questions:write`；`{row_numbers:number[]}` 只接受合法生成行，返回 `ImportResult` |
 
-输入与§3.5.2的七列及旧九列／两种八列映射完全一致，5MB、最多50参考行；旧concept非空固定报错，旧score仅warnings。每道参考题最多生成一对easy／hard，参考行difficulty不作为生成目标。服务端固定类别、题型与目标难度，不让模型／客户端指定来源、状态、审核人、考点、分值或资料版本。
+AI通过模板接口purpose=ai下载七列参考格式；输入保留§3.5.2的旧英文七列及九列／两种八列映射，5MB、最多50参考行；旧concept非空固定报错，旧score仅warnings。每道参考题最多生成一对easy／hard，参考行difficulty不作为生成目标。服务端固定类别、题型与目标难度，不让模型／客户端指定来源、状态、审核人、考点、分值或资料版本。
 
 任务状态固定为 `{task_id,status,total_count,completed_count,generated_count,failed_count,batch_id?,message?,warnings?}`。参考文件与参考正文只存在于任务内存；完成、失败、超时后释放，禁止写入磁盘、MySQL、Redis、资料/媒体表、审计详情或日志。Redis 仅保存无参考正文的任务状态，TTL 24 小时；服务重启后仍未完成的任务读取为 failed，要求重新上传。
 
@@ -1194,7 +1197,7 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | 40913 | 409 | 媒体仍被业务引用，不能删除 | `media_reference` 存在时删除媒体资源 |
 | 40920 | 409 | 系统配置仍被引用，不能删除 | 菜单存在子项/对应权限被角色引用，或固定业务字典尝试修改/删除 |
 | 40930 | 409 | 课程状态冲突 | 必学视频未就绪、已上架课程直接修改章节/课时结构，或视频资源缺少有效服务端时长 |
-| 40940 | 409 | 题目版本或启停状态已变化／当前版本损坏 | 修订的expected_version_id或expected_enabled与同一锁内identity不一致，或启停版本令牌不匹配；零新revision、不隐式恢复，客户端保留输入并刷新 |
+| 40940 | 409 | 题目版本或启停状态已变化／当前版本损坏 | 修订的expected_version_id或expected_enabled与同一锁内identity不一致，或启停版本令牌不匹配；删除双基线冲突同码，零新revision、不隐式恢复，客户端保留输入并刷新 |
 | 40950 | 409 | 视频学习会话已结束或被替换 | 心跳指向已关闭、已被阅读/视频新会话取代或不属于当前活动所有者的会话 |
 | 40951 | 409 | 课程或视频版本当前不可学习 | 课程下架、课时当前版本替换，或会话后续范围检查失败；服务端先关闭活动视频所有权再返回 |
 | 40960 | 409 | 当前账号已完成实名认证 | POST 核验会话遇既有实名事实；data 固定含 status=verified、reason_code=null、clear_materials=[]，随后 GET 权威实名视图 |
