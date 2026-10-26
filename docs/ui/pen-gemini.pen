@@ -73335,6 +73335,3167 @@
           ]
         }
       ]
+    },
+    {
+      "type": "frame",
+      "id": "peoWf",
+      "x": 14340,
+      "y": 1060,
+      "name": "24 题目预览 · 新 A 纯净阅读",
+      "context": "第二轮重做。严格复用用户指定 t2Stxx 下 ovvFq 的760宽弹窗、52高标题栏、60高底栏与8圆角。仅题目、选项、正确答案、答案解析，全部只读；无题型、培训类别、难度、来源、版本历史及属性输入框。共用Tiptap文档渲染样式，保留加粗图片列表。编辑按钮同窗切到现有ManualQuestionEditor，保存后回预览。",
+      "clip": true,
+      "width": 1440,
+      "height": 1080,
+      "fill": "$board",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "Fzqud",
+          "name": "方案标题 · 画板说明",
+          "width": "fill_container",
+          "height": 104,
+          "gap": "$pc-space-16",
+          "padding": [
+            0,
+            "$pc-space-32"
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "VlBIO",
+              "name": "方案名称",
+              "fill": "$ink",
+              "content": "A / 纯净阅读",
+              "fontFamily": "$sans",
+              "fontSize": "$qp-font-hero",
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "rEIvZ",
+              "name": "弹性间隔",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "text",
+              "id": "ftDx5",
+              "name": "方案定位",
+              "fill": "$ink-2",
+              "content": "仅用文字层级呈现题目，最轻的一版",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-body",
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Z0Fd9h",
+          "name": "A · 纯文字轻量弹窗",
+          "clip": true,
+          "width": "fill_container",
+          "height": 820,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "id": "xoZ6t",
+              "type": "ref",
+              "ref": "HLC4P",
+              "name": "题库背景",
+              "layoutPosition": "absolute",
+              "x": 0,
+              "y": 0,
+              "width": 1440,
+              "height": 820
+            },
+            {
+              "type": "rectangle",
+              "id": "R5Y8tG",
+              "layoutPosition": "absolute",
+              "x": 0,
+              "y": 0,
+              "name": "弹窗遮罩",
+              "fill": "#0F172A73",
+              "width": 1440,
+              "height": 820
+            },
+            {
+              "type": "frame",
+              "id": "jktJj",
+              "name": "A / 纯净阅读 · 题目预览弹窗",
+              "clip": true,
+              "width": 760,
+              "fill": "$surface",
+              "cornerRadius": "$qp-modal-radius",
+              "effect": {
+                "type": "shadow",
+                "shadowType": "outer",
+                "color": "#0F172A33",
+                "offset": {
+                  "x": 0,
+                  "y": 16
+                },
+                "blur": 48
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "vn6OF",
+                  "name": "弹窗标题栏",
+                  "width": "fill_container",
+                  "height": 52,
+                  "stroke": "$pc-border",
+                  "strokeWidth": {
+                    "bottom": 1
+                  },
+                  "padding": [
+                    0,
+                    16,
+                    0,
+                    24
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "T7NJ4",
+                      "name": "标题",
+                      "fill": "$ink",
+                      "content": "题目预览",
+                      "fontFamily": "$sans",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "qyDXJ",
+                      "name": "间隔",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "frame",
+                      "id": "RpvCH",
+                      "name": "关闭弹窗",
+                      "width": 28,
+                      "height": 28,
+                      "cornerRadius": 4,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "p2jzd",
+                          "name": "关闭弹窗图标",
+                          "width": 15,
+                          "height": 15,
+                          "icon": "x",
+                          "library": "lucide",
+                          "fill": "$ink-2"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "LXqv4",
+                  "name": "仅题目选项答案解析",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": "$pc-space-16",
+                  "padding": [
+                    20,
+                    24
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "F467u7",
+                      "name": "题目 · Tiptap 只读题干",
+                      "fill": "$ink",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "参考文献[44]《建筑地基基础设计规范》对应的标准编号是？",
+                      "lineHeight": 1.75,
+                      "fontFamily": "$sans",
+                      "fontSize": "$qp-font-stem",
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "e7q1I",
+                      "name": "单列纯文本选项",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": "$pc-space-8",
+                      "padding": [
+                        0,
+                        4
+                      ],
+                      "children": [
+                        {
+                          "id": "l9wOc",
+                          "type": "ref",
+                          "ref": "c1sRZT",
+                          "name": "只读选项 A",
+                          "width": "fill_container",
+                          "height": 28,
+                          "padding": 0,
+                          "gap": "$pc-space-8",
+                          "fill": "$surface",
+                          "strokeWidth": 0,
+                          "cornerRadius": 0,
+                          "alignItems": "center",
+                          "descendants": {
+                            "XdZtG": {
+                              "width": 22,
+                              "height": 28,
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "justifyContent": "start"
+                            },
+                            "bQulY": {
+                              "content": "A.",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal",
+                              "fill": "$ink-2"
+                            },
+                            "dx2Gu": {
+                              "padding": 0,
+                              "gap": 0
+                            },
+                            "MpCgw": {
+                              "content": "DBJ 440100/T 277",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "lineHeight": 1.6,
+                              "fill": "$ink"
+                            },
+                            "q0eNtM": {
+                              "enabled": false
+                            }
+                          }
+                        },
+                        {
+                          "id": "luVNx",
+                          "type": "ref",
+                          "ref": "c1sRZT",
+                          "name": "只读选项 B",
+                          "width": "fill_container",
+                          "height": 28,
+                          "padding": 0,
+                          "gap": "$pc-space-8",
+                          "fill": "$surface",
+                          "strokeWidth": 0,
+                          "cornerRadius": 0,
+                          "alignItems": "center",
+                          "descendants": {
+                            "XdZtG": {
+                              "width": 22,
+                              "height": 28,
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "justifyContent": "start"
+                            },
+                            "bQulY": {
+                              "content": "B.",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal",
+                              "fill": "$ink-2"
+                            },
+                            "dx2Gu": {
+                              "padding": 0,
+                              "gap": 0
+                            },
+                            "MpCgw": {
+                              "content": "DBJ 15-31",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "lineHeight": 1.6,
+                              "fill": "$ink"
+                            },
+                            "q0eNtM": {
+                              "enabled": false
+                            }
+                          }
+                        },
+                        {
+                          "id": "VGgrB",
+                          "type": "ref",
+                          "ref": "c1sRZT",
+                          "name": "只读选项 C",
+                          "width": "fill_container",
+                          "height": 28,
+                          "padding": 0,
+                          "gap": "$pc-space-8",
+                          "fill": "$surface",
+                          "strokeWidth": 0,
+                          "cornerRadius": 0,
+                          "alignItems": "center",
+                          "descendants": {
+                            "XdZtG": {
+                              "width": 22,
+                              "height": 28,
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "justifyContent": "start"
+                            },
+                            "bQulY": {
+                              "content": "C.",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal",
+                              "fill": "$ink-2"
+                            },
+                            "dx2Gu": {
+                              "padding": 0,
+                              "gap": 0
+                            },
+                            "MpCgw": {
+                              "content": "DBJ/T 15-140",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "lineHeight": 1.6,
+                              "fill": "$ink"
+                            },
+                            "q0eNtM": {
+                              "enabled": false
+                            }
+                          }
+                        },
+                        {
+                          "id": "fB6Lb",
+                          "type": "ref",
+                          "ref": "c1sRZT",
+                          "name": "只读选项 D",
+                          "width": "fill_container",
+                          "height": 28,
+                          "padding": 0,
+                          "gap": "$pc-space-8",
+                          "fill": "$surface",
+                          "strokeWidth": 0,
+                          "cornerRadius": 0,
+                          "alignItems": "center",
+                          "descendants": {
+                            "XdZtG": {
+                              "width": 22,
+                              "height": 28,
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "justifyContent": "start"
+                            },
+                            "bQulY": {
+                              "content": "D.",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal",
+                              "fill": "$ink-2"
+                            },
+                            "dx2Gu": {
+                              "padding": 0,
+                              "gap": 0
+                            },
+                            "MpCgw": {
+                              "content": "T/JSDL 001",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "lineHeight": 1.6,
+                              "fill": "$ink"
+                            },
+                            "q0eNtM": {
+                              "enabled": false
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "D4TfD",
+                      "name": "答案与解析 · 无卡片",
+                      "width": "fill_container",
+                      "stroke": "$line",
+                      "strokeWidth": {
+                        "top": 1
+                      },
+                      "layout": "vertical",
+                      "gap": "$pc-space-16",
+                      "padding": [
+                        16,
+                        0,
+                        0,
+                        0
+                      ],
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "baXfL",
+                          "name": "正确答案",
+                          "width": "fill_container",
+                          "gap": "$pc-space-16",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "S5Ci0u",
+                              "name": "正确答案标签",
+                              "fill": "$ink-2",
+                              "content": "正确答案",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-content",
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "glrIY",
+                              "name": "正确答案内容",
+                              "fill": "$qp-correct",
+                              "content": "B",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "RNpAW",
+                          "name": "答案解析",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": "$pc-space-8",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "u5KsQE",
+                              "name": "答案解析标题",
+                              "fill": "$ink-2",
+                              "content": "答案解析",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-content",
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "bZV0X",
+                              "name": "答案解析正文",
+                              "fill": "$ink",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "参考文献[44]列出：DBJ 15-31《建筑地基基础设计规范》。",
+                              "lineHeight": 1.75,
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Ws9ez",
+                  "name": "弹窗底栏",
+                  "width": "fill_container",
+                  "height": 60,
+                  "stroke": "$pc-border",
+                  "strokeWidth": {
+                    "top": 1
+                  },
+                  "gap": 10,
+                  "padding": [
+                    0,
+                    24
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "tzM0U",
+                      "name": "间隔",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "id": "LvumW",
+                      "type": "ref",
+                      "ref": "R03Vs",
+                      "name": "关闭",
+                      "height": 32,
+                      "padding": [
+                        0,
+                        16
+                      ],
+                      "descendants": {
+                        "NsYze": {
+                          "content": "关闭",
+                          "fontSize": "$pc-font-body",
+                          "fontWeight": "normal"
+                        }
+                      }
+                    },
+                    {
+                      "id": "c0Mvd",
+                      "type": "ref",
+                      "ref": "Z0NkmV",
+                      "name": "编辑题目",
+                      "height": 32,
+                      "padding": [
+                        0,
+                        20
+                      ],
+                      "descendants": {
+                        "Z5G9X": {
+                          "content": "编辑题目",
+                          "fontSize": "$pc-font-body",
+                          "fontWeight": "normal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "irBlA",
+          "name": "A 方案说明 · 非产品界面",
+          "width": "fill_container",
+          "height": 156,
+          "layout": "vertical",
+          "gap": "$pc-space-12",
+          "padding": "$pc-space-32",
+          "children": [
+            {
+              "type": "text",
+              "id": "M0z6m",
+              "name": "A 选择理由",
+              "fill": "$ink",
+              "content": "最接近一张干净的题目纸。",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-heading",
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "MQ3Xn",
+              "name": "A 交互路径",
+              "fill": "$ink-2",
+              "content": "题目、单列选项、正确答案、答案解析，顺着读完；不出现选择控件。",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-body",
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "V5d3N",
+              "name": "A 使用边界",
+              "fill": "$pc-muted",
+              "content": "复用 t2Stxx 弹窗外壳与 Tiptap 渲染；不显示题型、难度、培训类别和来源。",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-content",
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "vN7hq",
+      "x": 17044,
+      "y": 1060,
+      "name": "25 题目预览 · 新 B 紧凑速览",
+      "context": "第二轮重做。严格复用用户指定 t2Stxx 下 ovvFq 的760宽弹窗、52高标题栏、60高底栏与8圆角。仅题目、选项、正确答案、答案解析，全部只读；无题型、培训类别、难度、来源、版本历史及属性输入框。共用Tiptap文档渲染样式，保留加粗图片列表。编辑按钮同窗切到现有ManualQuestionEditor，保存后回预览。",
+      "clip": true,
+      "width": 1440,
+      "height": 1080,
+      "fill": "$board",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "gIiLT",
+          "name": "方案标题 · 画板说明",
+          "width": "fill_container",
+          "height": 104,
+          "gap": "$pc-space-16",
+          "padding": [
+            0,
+            "$pc-space-32"
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "vhyxg",
+              "name": "方案名称",
+              "fill": "$ink",
+              "content": "B / 紧凑速览",
+              "fontFamily": "$sans",
+              "fontSize": "$qp-font-hero",
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "ahkfP",
+              "name": "弹性间隔",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "text",
+              "id": "fVI5s",
+              "name": "方案定位",
+              "fill": "$ink-2",
+              "content": "双列短选项，答案与解析集中在底部",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-body",
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "J8y1G4",
+          "name": "B · 双列轻量弹窗",
+          "clip": true,
+          "width": "fill_container",
+          "height": 820,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "id": "U5ONp",
+              "type": "ref",
+              "ref": "HLC4P",
+              "name": "题库背景",
+              "layoutPosition": "absolute",
+              "x": 0,
+              "y": 0,
+              "width": 1440,
+              "height": 820
+            },
+            {
+              "type": "rectangle",
+              "id": "P3KyU",
+              "layoutPosition": "absolute",
+              "x": 0,
+              "y": 0,
+              "name": "弹窗遮罩",
+              "fill": "#0F172A73",
+              "width": 1440,
+              "height": 820
+            },
+            {
+              "type": "frame",
+              "id": "xlWYY",
+              "name": "B / 紧凑速览 · 题目预览弹窗",
+              "clip": true,
+              "width": 760,
+              "fill": "$surface",
+              "cornerRadius": "$qp-modal-radius",
+              "effect": {
+                "type": "shadow",
+                "shadowType": "outer",
+                "color": "#0F172A33",
+                "offset": {
+                  "x": 0,
+                  "y": 16
+                },
+                "blur": 48
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "I8lrF",
+                  "name": "弹窗标题栏",
+                  "width": "fill_container",
+                  "height": 52,
+                  "stroke": "$pc-border",
+                  "strokeWidth": {
+                    "bottom": 1
+                  },
+                  "padding": [
+                    0,
+                    16,
+                    0,
+                    24
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "oWKiE",
+                      "name": "标题",
+                      "fill": "$ink",
+                      "content": "题目预览",
+                      "fontFamily": "$sans",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "e6B5oD",
+                      "name": "间隔",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "frame",
+                      "id": "PXYDw",
+                      "name": "关闭弹窗",
+                      "width": 28,
+                      "height": 28,
+                      "cornerRadius": 4,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "XCdcL",
+                          "name": "关闭弹窗图标",
+                          "width": 15,
+                          "height": 15,
+                          "icon": "x",
+                          "library": "lucide",
+                          "fill": "$ink-2"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "OEOlw",
+                  "name": "仅题目选项答案解析",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": "$pc-space-16",
+                  "padding": [
+                    20,
+                    24
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "syspA",
+                      "name": "题目 · Tiptap 只读题干",
+                      "fill": "$ink",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "参考文献[44]《建筑地基基础设计规范》对应的标准编号是？",
+                      "lineHeight": 1.75,
+                      "fontFamily": "$sans",
+                      "fontSize": "$qp-font-stem",
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "S6zG7p",
+                      "name": "短选项双列 · 富内容回退单列",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": "$pc-space-8",
+                      "padding": 4,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "hkWFP",
+                          "name": "选项 A / B",
+                          "width": "fill_container",
+                          "gap": "$pc-space-32",
+                          "children": [
+                            {
+                              "id": "iACwO",
+                              "type": "ref",
+                              "ref": "c1sRZT",
+                              "name": "只读选项 A",
+                              "width": "fill_container",
+                              "height": 28,
+                              "padding": 0,
+                              "gap": "$pc-space-8",
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "alignItems": "center",
+                              "descendants": {
+                                "XdZtG": {
+                                  "width": 22,
+                                  "height": 28,
+                                  "fill": "$surface",
+                                  "strokeWidth": 0,
+                                  "cornerRadius": 0,
+                                  "justifyContent": "start"
+                                },
+                                "bQulY": {
+                                  "content": "A.",
+                                  "fontFamily": "$sans",
+                                  "fontSize": "$pc-font-body",
+                                  "fontWeight": "normal",
+                                  "fill": "$ink-2"
+                                },
+                                "dx2Gu": {
+                                  "padding": 0,
+                                  "gap": 0
+                                },
+                                "MpCgw": {
+                                  "content": "DBJ 440100/T 277",
+                                  "fontFamily": "$sans",
+                                  "fontSize": "$pc-font-body",
+                                  "lineHeight": 1.6,
+                                  "fill": "$ink"
+                                },
+                                "q0eNtM": {
+                                  "enabled": false
+                                }
+                              }
+                            },
+                            {
+                              "id": "krfei",
+                              "type": "ref",
+                              "ref": "c1sRZT",
+                              "name": "只读选项 B",
+                              "width": "fill_container",
+                              "height": 28,
+                              "padding": 0,
+                              "gap": "$pc-space-8",
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "alignItems": "center",
+                              "descendants": {
+                                "XdZtG": {
+                                  "width": 22,
+                                  "height": 28,
+                                  "fill": "$surface",
+                                  "strokeWidth": 0,
+                                  "cornerRadius": 0,
+                                  "justifyContent": "start"
+                                },
+                                "bQulY": {
+                                  "content": "B.",
+                                  "fontFamily": "$sans",
+                                  "fontSize": "$pc-font-body",
+                                  "fontWeight": "normal",
+                                  "fill": "$ink-2"
+                                },
+                                "dx2Gu": {
+                                  "padding": 0,
+                                  "gap": 0
+                                },
+                                "MpCgw": {
+                                  "content": "DBJ 15-31",
+                                  "fontFamily": "$sans",
+                                  "fontSize": "$pc-font-body",
+                                  "lineHeight": 1.6,
+                                  "fill": "$ink"
+                                },
+                                "q0eNtM": {
+                                  "enabled": false
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "EvAdc",
+                          "name": "选项 C / D",
+                          "width": "fill_container",
+                          "gap": "$pc-space-32",
+                          "children": [
+                            {
+                              "id": "cRqNt",
+                              "type": "ref",
+                              "ref": "c1sRZT",
+                              "name": "只读选项 C",
+                              "width": "fill_container",
+                              "height": 28,
+                              "padding": 0,
+                              "gap": "$pc-space-8",
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "alignItems": "center",
+                              "descendants": {
+                                "XdZtG": {
+                                  "width": 22,
+                                  "height": 28,
+                                  "fill": "$surface",
+                                  "strokeWidth": 0,
+                                  "cornerRadius": 0,
+                                  "justifyContent": "start"
+                                },
+                                "bQulY": {
+                                  "content": "C.",
+                                  "fontFamily": "$sans",
+                                  "fontSize": "$pc-font-body",
+                                  "fontWeight": "normal",
+                                  "fill": "$ink-2"
+                                },
+                                "dx2Gu": {
+                                  "padding": 0,
+                                  "gap": 0
+                                },
+                                "MpCgw": {
+                                  "content": "DBJ/T 15-140",
+                                  "fontFamily": "$sans",
+                                  "fontSize": "$pc-font-body",
+                                  "lineHeight": 1.6,
+                                  "fill": "$ink"
+                                },
+                                "q0eNtM": {
+                                  "enabled": false
+                                }
+                              }
+                            },
+                            {
+                              "id": "hWoSj",
+                              "type": "ref",
+                              "ref": "c1sRZT",
+                              "name": "只读选项 D",
+                              "width": "fill_container",
+                              "height": 28,
+                              "padding": 0,
+                              "gap": "$pc-space-8",
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "alignItems": "center",
+                              "descendants": {
+                                "XdZtG": {
+                                  "width": 22,
+                                  "height": 28,
+                                  "fill": "$surface",
+                                  "strokeWidth": 0,
+                                  "cornerRadius": 0,
+                                  "justifyContent": "start"
+                                },
+                                "bQulY": {
+                                  "content": "D.",
+                                  "fontFamily": "$sans",
+                                  "fontSize": "$pc-font-body",
+                                  "fontWeight": "normal",
+                                  "fill": "$ink-2"
+                                },
+                                "dx2Gu": {
+                                  "padding": 0,
+                                  "gap": 0
+                                },
+                                "MpCgw": {
+                                  "content": "T/JSDL 001",
+                                  "fontFamily": "$sans",
+                                  "fontSize": "$pc-font-body",
+                                  "lineHeight": 1.6,
+                                  "fill": "$ink"
+                                },
+                                "q0eNtM": {
+                                  "enabled": false
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "afsuc",
+                      "name": "答案解析合并区 · 轻灰底",
+                      "width": "fill_container",
+                      "fill": "$pc-group",
+                      "cornerRadius": "$r-sm",
+                      "layout": "vertical",
+                      "gap": "$pc-space-12",
+                      "padding": "$pc-space-16",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "GVzJW",
+                          "name": "正确答案",
+                          "width": "fill_container",
+                          "gap": "$pc-space-16",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "kymi0",
+                              "name": "正确答案标签",
+                              "fill": "$ink-2",
+                              "content": "正确答案",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-content",
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "b3Xeu",
+                              "name": "正确答案内容",
+                              "fill": "$qp-correct",
+                              "content": "B · DBJ 15-31",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "q3J1z",
+                          "name": "答案解析",
+                          "width": "fill_container",
+                          "gap": "$pc-space-16",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "pciA2",
+                              "name": "答案解析标题",
+                              "fill": "$ink-2",
+                              "content": "答案解析",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-content",
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "O8Olp7",
+                              "name": "答案解析正文",
+                              "fill": "$ink",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "参考文献[44]列出：DBJ 15-31《建筑地基基础设计规范》。",
+                              "lineHeight": 1.75,
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "bnLlJ",
+                  "name": "弹窗底栏",
+                  "width": "fill_container",
+                  "height": 60,
+                  "stroke": "$pc-border",
+                  "strokeWidth": {
+                    "top": 1
+                  },
+                  "gap": 10,
+                  "padding": [
+                    0,
+                    24
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "w6wWG",
+                      "name": "间隔",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "id": "WlfR6",
+                      "type": "ref",
+                      "ref": "R03Vs",
+                      "name": "关闭",
+                      "height": 32,
+                      "padding": [
+                        0,
+                        16
+                      ],
+                      "descendants": {
+                        "NsYze": {
+                          "content": "关闭",
+                          "fontSize": "$pc-font-body",
+                          "fontWeight": "normal"
+                        }
+                      }
+                    },
+                    {
+                      "id": "y0dlPN",
+                      "type": "ref",
+                      "ref": "Z0NkmV",
+                      "name": "编辑题目",
+                      "height": 32,
+                      "padding": [
+                        0,
+                        20
+                      ],
+                      "descendants": {
+                        "Z5G9X": {
+                          "content": "编辑题目",
+                          "fontSize": "$pc-font-body",
+                          "fontWeight": "normal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "BqxN6",
+          "name": "B 方案说明 · 非产品界面",
+          "width": "fill_container",
+          "height": 156,
+          "layout": "vertical",
+          "gap": "$pc-space-12",
+          "padding": "$pc-space-32",
+          "children": [
+            {
+              "type": "text",
+              "id": "PpkB3",
+              "name": "B 选择理由",
+              "fill": "$ink",
+              "content": "短题目快速看完，答案解析集中在一起。",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-heading",
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "b8xdU",
+              "name": "B 交互路径",
+              "fill": "$ink-2",
+              "content": "选项为无边框双列文字；正确答案和解析收在一块浅灰区域，层次更明确。",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-body",
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "ZVXPW",
+              "name": "B 使用边界",
+              "fill": "$pc-muted",
+              "content": "长选项、图片和列表回到单列；只读预览不展示任何属性输入框。",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-content",
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "FFITx",
+      "x": 18604,
+      "y": 1060,
+      "name": "26 题目预览 · 新 C 答案注解",
+      "context": "第二轮重做。严格复用用户指定 t2Stxx 下 ovvFq 的760宽弹窗、52高标题栏、60高底栏与8圆角。仅题目、选项、正确答案、答案解析，全部只读；无题型、培训类别、难度、来源、版本历史及属性输入框。共用Tiptap文档渲染样式，保留加粗图片列表。编辑按钮同窗切到现有ManualQuestionEditor，保存后回预览。",
+      "clip": true,
+      "width": 1440,
+      "height": 1080,
+      "fill": "$board",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "QvBbT",
+          "name": "方案标题 · 画板说明",
+          "width": "fill_container",
+          "height": 104,
+          "gap": "$pc-space-16",
+          "padding": [
+            0,
+            "$pc-space-32"
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "L4nWd",
+              "name": "方案名称",
+              "fill": "$ink",
+              "content": "C / 答案注解",
+              "fontFamily": "$sans",
+              "fontSize": "$qp-font-hero",
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "Lf88d",
+              "name": "弹性间隔",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "text",
+              "id": "qVQCn",
+              "name": "方案定位",
+              "fill": "$ink-2",
+              "content": "单列选项，答案与解析并排注解",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-body",
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "qPfxw",
+          "name": "C · 答案注解轻量弹窗",
+          "clip": true,
+          "width": "fill_container",
+          "height": 820,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "id": "m4mIao",
+              "type": "ref",
+              "ref": "HLC4P",
+              "name": "题库背景 · 保持上下文",
+              "layoutPosition": "absolute",
+              "x": 0,
+              "y": 0,
+              "width": 1440,
+              "height": 820
+            },
+            {
+              "type": "rectangle",
+              "id": "eoYSa",
+              "layoutPosition": "absolute",
+              "x": 0,
+              "y": 0,
+              "name": "与 t2Stxx 一致的弹窗遮罩",
+              "fill": "#0F172A73",
+              "width": 1440,
+              "height": 820
+            },
+            {
+              "type": "frame",
+              "id": "GYdbd",
+              "name": "C / 答案注解 · 题目预览弹窗",
+              "clip": true,
+              "width": 760,
+              "fill": "$surface",
+              "cornerRadius": "$qp-modal-radius",
+              "stroke": "$pc-border",
+              "effect": {
+                "type": "shadow",
+                "shadowType": "outer",
+                "color": "#0F172A33",
+                "offset": {
+                  "x": 0,
+                  "y": 16
+                },
+                "blur": 48
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "rjcDB",
+                  "name": "弹窗标题栏",
+                  "width": "fill_container",
+                  "height": 52,
+                  "stroke": "$pc-border",
+                  "strokeWidth": {
+                    "bottom": 1
+                  },
+                  "padding": [
+                    0,
+                    16,
+                    0,
+                    24
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "U8QdCN",
+                      "name": "标题",
+                      "fill": "$ink",
+                      "content": "题目预览",
+                      "fontFamily": "$sans",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "eSq14",
+                      "name": "间隔",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "frame",
+                      "id": "QkzXG",
+                      "name": "关闭弹窗",
+                      "width": 28,
+                      "height": 28,
+                      "cornerRadius": 4,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "tc8rk",
+                          "name": "关闭弹窗图标",
+                          "width": 15,
+                          "height": 15,
+                          "icon": "x",
+                          "library": "lucide",
+                          "fill": "$ink-2"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ByMKo",
+                  "name": "仅题目选项答案解析",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": "$pc-space-16",
+                  "padding": [
+                    20,
+                    24
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ATuw2",
+                      "name": "题目 · Tiptap 只读题干",
+                      "fill": "$ink",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "参考文献[44]《建筑地基基础设计规范》对应的标准编号是？",
+                      "lineHeight": 1.75,
+                      "fontFamily": "$sans",
+                      "fontSize": "$qp-font-stem",
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "WpZrs",
+                      "name": "单列纯文本选项",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": "$pc-space-8",
+                      "padding": [
+                        0,
+                        4
+                      ],
+                      "children": [
+                        {
+                          "id": "V7YtqL",
+                          "type": "ref",
+                          "ref": "c1sRZT",
+                          "name": "只读选项 A",
+                          "width": "fill_container",
+                          "height": 28,
+                          "padding": 0,
+                          "gap": "$pc-space-8",
+                          "fill": "$surface",
+                          "strokeWidth": 0,
+                          "cornerRadius": 0,
+                          "alignItems": "center",
+                          "descendants": {
+                            "XdZtG": {
+                              "width": 22,
+                              "height": 28,
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "justifyContent": "start"
+                            },
+                            "bQulY": {
+                              "content": "A.",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal",
+                              "fill": "$ink-2"
+                            },
+                            "dx2Gu": {
+                              "padding": 0,
+                              "gap": 0
+                            },
+                            "MpCgw": {
+                              "content": "DBJ 440100/T 277",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "lineHeight": 1.6,
+                              "fill": "$ink"
+                            },
+                            "q0eNtM": {
+                              "enabled": false
+                            }
+                          }
+                        },
+                        {
+                          "id": "NdRhk",
+                          "type": "ref",
+                          "ref": "c1sRZT",
+                          "name": "只读选项 B",
+                          "width": "fill_container",
+                          "height": 28,
+                          "padding": 0,
+                          "gap": "$pc-space-8",
+                          "fill": "$surface",
+                          "strokeWidth": 0,
+                          "cornerRadius": 0,
+                          "alignItems": "center",
+                          "descendants": {
+                            "XdZtG": {
+                              "width": 22,
+                              "height": 28,
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "justifyContent": "start"
+                            },
+                            "bQulY": {
+                              "content": "B.",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal",
+                              "fill": "$ink-2"
+                            },
+                            "dx2Gu": {
+                              "padding": 0,
+                              "gap": 0
+                            },
+                            "MpCgw": {
+                              "content": "DBJ 15-31",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "lineHeight": 1.6,
+                              "fill": "$ink"
+                            },
+                            "q0eNtM": {
+                              "enabled": false
+                            }
+                          }
+                        },
+                        {
+                          "id": "Kyl0j",
+                          "type": "ref",
+                          "ref": "c1sRZT",
+                          "name": "只读选项 C",
+                          "width": "fill_container",
+                          "height": 28,
+                          "padding": 0,
+                          "gap": "$pc-space-8",
+                          "fill": "$surface",
+                          "strokeWidth": 0,
+                          "cornerRadius": 0,
+                          "alignItems": "center",
+                          "descendants": {
+                            "XdZtG": {
+                              "width": 22,
+                              "height": 28,
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "justifyContent": "start"
+                            },
+                            "bQulY": {
+                              "content": "C.",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal",
+                              "fill": "$ink-2"
+                            },
+                            "dx2Gu": {
+                              "padding": 0,
+                              "gap": 0
+                            },
+                            "MpCgw": {
+                              "content": "DBJ/T 15-140",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "lineHeight": 1.6,
+                              "fill": "$ink"
+                            },
+                            "q0eNtM": {
+                              "enabled": false
+                            }
+                          }
+                        },
+                        {
+                          "id": "gd39c",
+                          "type": "ref",
+                          "ref": "c1sRZT",
+                          "name": "只读选项 D",
+                          "width": "fill_container",
+                          "height": 28,
+                          "padding": 0,
+                          "gap": "$pc-space-8",
+                          "fill": "$surface",
+                          "strokeWidth": 0,
+                          "cornerRadius": 0,
+                          "alignItems": "center",
+                          "descendants": {
+                            "XdZtG": {
+                              "width": 22,
+                              "height": 28,
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "justifyContent": "start"
+                            },
+                            "bQulY": {
+                              "content": "D.",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal",
+                              "fill": "$ink-2"
+                            },
+                            "dx2Gu": {
+                              "padding": 0,
+                              "gap": 0
+                            },
+                            "MpCgw": {
+                              "content": "T/JSDL 001",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "lineHeight": 1.6,
+                              "fill": "$ink"
+                            },
+                            "q0eNtM": {
+                              "enabled": false
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "A9pmFn",
+                      "name": "答案与解析并排注解",
+                      "width": "fill_container",
+                      "stroke": "$line",
+                      "strokeWidth": {
+                        "top": 1
+                      },
+                      "gap": "$pc-space-24",
+                      "padding": [
+                        20,
+                        0,
+                        0,
+                        0
+                      ],
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "KyDse",
+                          "name": "正确答案",
+                          "width": 100,
+                          "layout": "vertical",
+                          "gap": "$pc-space-8",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Cdtrl",
+                              "name": "正确答案标签",
+                              "fill": "$ink-2",
+                              "content": "正确答案",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-content",
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "a5F0E",
+                              "name": "正确答案内容",
+                              "fill": "$qp-correct",
+                              "content": "B",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-title",
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "d5UZXD",
+                          "name": "答案解析",
+                          "width": "fill_container",
+                          "stroke": "$line",
+                          "strokeWidth": {
+                            "left": 1
+                          },
+                          "layout": "vertical",
+                          "gap": "$pc-space-8",
+                          "padding": [
+                            0,
+                            0,
+                            0,
+                            24
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "w1qcy",
+                              "name": "答案解析标题",
+                              "fill": "$ink-2",
+                              "content": "答案解析",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-content",
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "KTR04",
+                              "name": "答案解析正文",
+                              "fill": "$ink",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "参考文献[44]列出：DBJ 15-31《建筑地基基础设计规范》。",
+                              "lineHeight": 1.75,
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "cjAxa",
+                  "name": "弹窗底栏",
+                  "width": "fill_container",
+                  "height": 60,
+                  "stroke": "$pc-border",
+                  "strokeWidth": {
+                    "top": 1
+                  },
+                  "gap": 10,
+                  "padding": [
+                    0,
+                    24
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Aj0aU",
+                      "name": "间隔",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "id": "g9qCd",
+                      "type": "ref",
+                      "ref": "R03Vs",
+                      "name": "关闭",
+                      "height": 32,
+                      "padding": [
+                        0,
+                        16
+                      ],
+                      "descendants": {
+                        "NsYze": {
+                          "content": "关闭",
+                          "fontSize": "$pc-font-body",
+                          "fontWeight": "normal"
+                        }
+                      }
+                    },
+                    {
+                      "id": "YBY0s",
+                      "type": "ref",
+                      "ref": "Z0NkmV",
+                      "name": "编辑题目",
+                      "height": 32,
+                      "padding": [
+                        0,
+                        20
+                      ],
+                      "descendants": {
+                        "Z5G9X": {
+                          "content": "编辑题目",
+                          "fontSize": "$pc-font-body",
+                          "fontWeight": "normal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "xhuvt",
+          "name": "C 方案说明 · 非产品界面",
+          "width": "fill_container",
+          "height": 156,
+          "layout": "vertical",
+          "gap": "$pc-space-12",
+          "padding": "$pc-space-32",
+          "children": [
+            {
+              "type": "text",
+              "id": "f7pGLD",
+              "name": "C 选择理由",
+              "fill": "$ink",
+              "content": "上面读题，下面对照答案与解释。",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-heading",
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "YDPrX",
+              "name": "C 交互路径",
+              "fill": "$ink-2",
+              "content": "选项保持单列；正确答案与解析并排，减少纵向高度，同时保留清晰分区。",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-body",
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "uQX0U",
+              "name": "C 使用边界",
+              "fill": "$pc-muted",
+              "content": "三版均只有关闭与编辑题目两个底部动作；编辑在同一个弹窗内切换。",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-content",
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "HLC4P",
+      "x": 14340,
+      "y": -1520,
+      "name": "PC/题目预览 · 列表背景",
+      "reusable": true,
+      "clip": true,
+      "width": 1440,
+      "height": 820,
+      "fill": "$pc-canvas",
+      "children": [
+        {
+          "id": "fotYI",
+          "type": "ref",
+          "ref": "myozY",
+          "name": "后台侧栏 · 复用",
+          "width": 200,
+          "height": "fill_container",
+          "descendants": {
+            "LAtgR": {
+              "fill": "$pc-nav-active"
+            },
+            "BiNby": {
+              "fill": "$white"
+            },
+            "KGlp9": {
+              "fill": "$white",
+              "fontWeight": "600"
+            },
+            "hPe0l": {
+              "fill": "$pc-nav"
+            },
+            "C9MWI": {
+              "fill": "$pc-nav-label"
+            },
+            "ddQPT": {
+              "fill": "$pc-nav-label",
+              "fontWeight": "normal"
+            }
+          }
+        },
+        {
+          "type": "frame",
+          "id": "xnFMT",
+          "name": "后台主内容",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "children": [
+            {
+              "id": "o6zh4",
+              "type": "ref",
+              "ref": "AGaoZ",
+              "name": "后台顶部栏 · 复用",
+              "width": "fill_container",
+              "height": 64,
+              "descendants": {
+                "vKgHC": {
+                  "content": "试题管理"
+                }
+              }
+            },
+            {
+              "type": "frame",
+              "id": "C9pA6Q",
+              "name": "题库列表页面",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "gap": "$pc-space-16",
+              "padding": "$pc-space-24",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "n1URH",
+                  "name": "筛选区",
+                  "width": "fill_container",
+                  "height": 92,
+                  "fill": "$surface",
+                  "cornerRadius": "$r-sm",
+                  "gap": "$pc-space-16",
+                  "padding": "$pc-space-24",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "JGNhO",
+                      "name": "培训类别标签",
+                      "fill": "$ink",
+                      "content": "培训类别",
+                      "fontFamily": "$sans",
+                      "fontSize": "$pc-font-body",
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "id": "f2Ytr",
+                      "type": "ref",
+                      "ref": "pjU38",
+                      "name": "培训类别选择",
+                      "width": 180,
+                      "height": 36,
+                      "descendants": {
+                        "Z4kxG3": {
+                          "content": "全部培训类别"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "Lac9f",
+                      "name": "题干标签",
+                      "fill": "$ink",
+                      "content": "题干",
+                      "fontFamily": "$sans",
+                      "fontSize": "$pc-font-body",
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Lfo9v",
+                      "name": "搜索题干",
+                      "width": 260,
+                      "height": 36,
+                      "cornerRadius": "$pc-radius-sm",
+                      "stroke": "$pc-input-border",
+                      "strokeWidth": 1,
+                      "padding": [
+                        0,
+                        "$pc-space-12"
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Lhwdo",
+                          "name": "搜索占位",
+                          "fill": "$ink-3",
+                          "content": "搜索题干",
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-body",
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "id": "MDrvq",
+                      "type": "ref",
+                      "ref": "Z0NkmV",
+                      "name": "查询",
+                      "height": 36,
+                      "cornerRadius": "$pc-radius-sm",
+                      "fill": "$pc-primary",
+                      "padding": [
+                        0,
+                        "$pc-space-24"
+                      ],
+                      "descendants": {
+                        "Z5G9X": {
+                          "content": "查询",
+                          "fontSize": "$pc-font-body",
+                          "fontWeight": "normal"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "qSODW",
+                  "name": "题目列表",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": "$r-sm",
+                  "layout": "vertical",
+                  "padding": "$pc-space-24",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "i5Yln",
+                      "name": "列表标题与操作",
+                      "width": "fill_container",
+                      "height": 56,
+                      "gap": "$pc-space-16",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "sZVij",
+                          "name": "列表标题",
+                          "fill": "$ink",
+                          "content": "试题库",
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-heading",
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "L2ncvx",
+                          "name": "题目数量",
+                          "fill": "$pc-muted",
+                          "content": "共 24 道题目",
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-sm",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "X0wKNx",
+                          "name": "空白间隔",
+                          "width": "fill_container",
+                          "height": 1
+                        },
+                        {
+                          "id": "V12sM3",
+                          "type": "ref",
+                          "ref": "R03Vs",
+                          "name": "导入试题",
+                          "height": 34,
+                          "cornerRadius": "$pc-radius-sm",
+                          "padding": [
+                            0,
+                            "$pc-space-16"
+                          ],
+                          "descendants": {
+                            "NsYze": {
+                              "content": "导入试题",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "IGsxE",
+                      "name": "表头",
+                      "width": "fill_container",
+                      "height": 44,
+                      "fill": "$pc-group",
+                      "gap": "$pc-space-16",
+                      "padding": [
+                        0,
+                        "$pc-space-16"
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "N9pGSB",
+                          "name": "题干表头",
+                          "fill": "$ink-2",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "题干",
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "xgwPF",
+                          "name": "题型表头",
+                          "fill": "$ink-2",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "题型",
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "W2ncT",
+                          "name": "状态表头",
+                          "fill": "$ink-2",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "状态",
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "A8ECwI",
+                          "name": "操作表头",
+                          "fill": "$ink-2",
+                          "textGrowth": "fixed-width",
+                          "width": 176,
+                          "content": "操作",
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "tFDzQ",
+                      "name": "题目列表第 1 行",
+                      "width": "fill_container",
+                      "height": 60,
+                      "fill": "$pc-soft",
+                      "stroke": "$line",
+                      "strokeWidth": {
+                        "bottom": 1
+                      },
+                      "gap": "$pc-space-16",
+                      "padding": [
+                        0,
+                        "$pc-space-16"
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "gZw88",
+                          "name": "参考文献[44]《建筑地基基础设计规范》对应的标准编号是？",
+                          "fill": "$ink",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "参考文献[44]《建筑地基基础设计规范》对应的标准编号是？",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "q6GF8A",
+                          "name": "单选题",
+                          "fill": "$ink-2",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "单选题",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "envyo",
+                          "name": "启用",
+                          "fill": "$qp-correct",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "启用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "K4L1p",
+                          "name": "预览    编辑    停用",
+                          "fill": "$pc-primary",
+                          "textGrowth": "fixed-width",
+                          "width": 176,
+                          "content": "预览    编辑    停用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "OLGh5",
+                      "name": "题目列表第 2 行",
+                      "width": "fill_container",
+                      "height": 60,
+                      "fill": "$surface",
+                      "stroke": "$line",
+                      "strokeWidth": {
+                        "bottom": 1
+                      },
+                      "gap": "$pc-space-16",
+                      "padding": [
+                        0,
+                        "$pc-space-16"
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "YxRPk",
+                          "name": "施工现场的临时用电应符合哪些基本要求？",
+                          "fill": "$ink",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "施工现场的临时用电应符合哪些基本要求？",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "trwHN",
+                          "name": "单选题",
+                          "fill": "$ink-2",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "单选题",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "T0DRa",
+                          "name": "启用",
+                          "fill": "$qp-correct",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "启用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "DWtHd",
+                          "name": "预览    编辑    停用",
+                          "fill": "$pc-primary",
+                          "textGrowth": "fixed-width",
+                          "width": 176,
+                          "content": "预览    编辑    停用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "aUwsl",
+                      "name": "题目列表第 3 行",
+                      "width": "fill_container",
+                      "height": 60,
+                      "fill": "$surface",
+                      "stroke": "$line",
+                      "strokeWidth": {
+                        "bottom": 1
+                      },
+                      "gap": "$pc-space-16",
+                      "padding": [
+                        0,
+                        "$pc-space-16"
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "eazuh",
+                          "name": "发现安全带破损时应如何处理？",
+                          "fill": "$ink",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "发现安全带破损时应如何处理？",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "HT1C6",
+                          "name": "单选题",
+                          "fill": "$ink-2",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "单选题",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "j8ciOJ",
+                          "name": "启用",
+                          "fill": "$qp-correct",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "启用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "C1WNEE",
+                          "name": "预览    编辑    停用",
+                          "fill": "$pc-primary",
+                          "textGrowth": "fixed-width",
+                          "width": 176,
+                          "content": "预览    编辑    停用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "srW0z",
+                      "name": "题目列表第 4 行",
+                      "width": "fill_container",
+                      "height": 60,
+                      "fill": "$surface",
+                      "stroke": "$line",
+                      "strokeWidth": {
+                        "bottom": 1
+                      },
+                      "gap": "$pc-space-16",
+                      "padding": [
+                        0,
+                        "$pc-space-16"
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "M5I1Ka",
+                          "name": "高处作业人员应当正确使用哪类防护用品？",
+                          "fill": "$ink",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "高处作业人员应当正确使用哪类防护用品？",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "yupEk",
+                          "name": "单选题",
+                          "fill": "$ink-2",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "单选题",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "r2g9mj",
+                          "name": "启用",
+                          "fill": "$qp-correct",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "启用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "ey55S",
+                          "name": "预览    编辑    停用",
+                          "fill": "$pc-primary",
+                          "textGrowth": "fixed-width",
+                          "width": 176,
+                          "content": "预览    编辑    停用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "JHdbV",
+                      "name": "题目列表第 5 行",
+                      "width": "fill_container",
+                      "height": 60,
+                      "fill": "$surface",
+                      "stroke": "$line",
+                      "strokeWidth": {
+                        "bottom": 1
+                      },
+                      "gap": "$pc-space-16",
+                      "padding": [
+                        0,
+                        "$pc-space-16"
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "y8eJ2",
+                          "name": "发生火灾时，应当优先采取哪项措施？",
+                          "fill": "$ink",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "发生火灾时，应当优先采取哪项措施？",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "aoj3s",
+                          "name": "单选题",
+                          "fill": "$ink-2",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "单选题",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "it9fC",
+                          "name": "启用",
+                          "fill": "$qp-correct",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "启用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "RJoz3",
+                          "name": "预览    编辑    停用",
+                          "fill": "$pc-primary",
+                          "textGrowth": "fixed-width",
+                          "width": 176,
+                          "content": "预览    编辑    停用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "fpcED",
+                      "name": "题目列表第 6 行",
+                      "width": "fill_container",
+                      "height": 60,
+                      "fill": "$surface",
+                      "stroke": "$line",
+                      "strokeWidth": {
+                        "bottom": 1
+                      },
+                      "gap": "$pc-space-16",
+                      "padding": [
+                        0,
+                        "$pc-space-16"
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "dybIf",
+                          "name": "起重设备使用前应检查哪些安全装置？",
+                          "fill": "$ink",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "起重设备使用前应检查哪些安全装置？",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "LxFjT",
+                          "name": "单选题",
+                          "fill": "$ink-2",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "单选题",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "Z4DFZk",
+                          "name": "启用",
+                          "fill": "$qp-correct",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "启用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "w2viGD",
+                          "name": "预览    编辑    停用",
+                          "fill": "$pc-primary",
+                          "textGrowth": "fixed-width",
+                          "width": 176,
+                          "content": "预览    编辑    停用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "CDg5U",
+                      "name": "题目列表第 7 行",
+                      "width": "fill_container",
+                      "height": 60,
+                      "fill": "$surface",
+                      "stroke": "$line",
+                      "strokeWidth": {
+                        "bottom": 1
+                      },
+                      "gap": "$pc-space-16",
+                      "padding": [
+                        0,
+                        "$pc-space-16"
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "cZEZk",
+                          "name": "现场安全检查记录应由谁确认？",
+                          "fill": "$ink",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "现场安全检查记录应由谁确认？",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "rIsar",
+                          "name": "单选题",
+                          "fill": "$ink-2",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "单选题",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "JNccP",
+                          "name": "启用",
+                          "fill": "$qp-correct",
+                          "textGrowth": "fixed-width",
+                          "width": 80,
+                          "content": "启用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "ZcZdV",
+                          "name": "预览    编辑    停用",
+                          "fill": "$pc-primary",
+                          "textGrowth": "fixed-width",
+                          "width": 176,
+                          "content": "预览    编辑    停用",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "QQ0Ur",
+                      "name": "分页",
+                      "width": "fill_container",
+                      "height": 56,
+                      "justifyContent": "end",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "x1m581",
+                          "name": "页码",
+                          "fill": "$pc-muted",
+                          "content": "共 24 条        ‹       1       2       ›",
+                          "fontFamily": "$sans",
+                          "fontSize": "$pc-font-content",
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "sV1bg",
+      "x": 17044,
+      "y": 2260,
+      "name": "27 题目预览 · 单列选项 + 浅灰答案解析",
+      "context": "按用户选择合成：24 的单列题目与无边框文字选项，加25的浅灰结果区，正确答案以绿色显示字母和选项内容，解析在其下一行。严格沿用 t2Stxx 弹窗外壳、标题和底栏。默认只读，无标签、属性选择框、版本历史；编辑题目同窗切到现有编辑器。Tiptap 题干选项解析同源渲染，保留富文本格式。",
+      "clip": true,
+      "width": 1440,
+      "height": 1080,
+      "fill": "$board",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "Uw8g3",
+          "name": "方案标题 · 画板说明",
+          "width": "fill_container",
+          "height": 104,
+          "gap": "$pc-space-16",
+          "padding": [
+            0,
+            "$pc-space-32"
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "I4FOZ",
+              "name": "方案名称",
+              "fill": "$ink",
+              "content": "题目预览 / 合并方案",
+              "fontFamily": "$sans",
+              "fontSize": "$qp-font-hero",
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "t3Xpzm",
+              "name": "弹性间隔",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "text",
+              "id": "a35c9z",
+              "name": "方案定位",
+              "fill": "$ink-2",
+              "content": "24 的单列排版 + 25 的答案解析区",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-body",
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Z6QOE",
+          "name": "A · 纯文字轻量弹窗",
+          "clip": true,
+          "width": "fill_container",
+          "height": 820,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "id": "HuMTh",
+              "type": "ref",
+              "ref": "HLC4P",
+              "name": "题库背景",
+              "layoutPosition": "absolute",
+              "x": 0,
+              "y": 0,
+              "width": 1440,
+              "height": 820
+            },
+            {
+              "type": "rectangle",
+              "id": "kb2o3",
+              "layoutPosition": "absolute",
+              "x": 0,
+              "y": 0,
+              "name": "弹窗遮罩",
+              "fill": "#0F172A73",
+              "width": 1440,
+              "height": 820
+            },
+            {
+              "type": "frame",
+              "id": "T3dwV",
+              "name": "合并方案 · 题目预览弹窗",
+              "clip": true,
+              "width": 760,
+              "fill": "$surface",
+              "cornerRadius": "$qp-modal-radius",
+              "effect": {
+                "type": "shadow",
+                "shadowType": "outer",
+                "color": "#0F172A33",
+                "offset": {
+                  "x": 0,
+                  "y": 16
+                },
+                "blur": 48
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "yoQqQ",
+                  "name": "弹窗标题栏",
+                  "width": "fill_container",
+                  "height": 52,
+                  "stroke": "$pc-border",
+                  "strokeWidth": {
+                    "bottom": 1
+                  },
+                  "padding": [
+                    0,
+                    16,
+                    0,
+                    24
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "jP48C",
+                      "name": "标题",
+                      "fill": "$ink",
+                      "content": "题目预览",
+                      "fontFamily": "$sans",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "i2i59k",
+                      "name": "间隔",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "frame",
+                      "id": "HD9vo",
+                      "name": "关闭弹窗",
+                      "width": 28,
+                      "height": 28,
+                      "cornerRadius": 4,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "PxwWe",
+                          "name": "关闭弹窗图标",
+                          "width": 15,
+                          "height": 15,
+                          "icon": "x",
+                          "library": "lucide",
+                          "fill": "$ink-2"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "opsVy",
+                  "name": "仅题目选项答案解析",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": "$pc-space-16",
+                  "padding": [
+                    20,
+                    24
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "DF23r",
+                      "name": "题目 · Tiptap 只读题干",
+                      "fill": "$ink",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "参考文献[44]《建筑地基基础设计规范》对应的标准编号是？",
+                      "lineHeight": 1.75,
+                      "fontFamily": "$sans",
+                      "fontSize": "$qp-font-stem",
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "A5kYWB",
+                      "name": "单列纯文本选项",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": "$pc-space-8",
+                      "padding": [
+                        0,
+                        4
+                      ],
+                      "children": [
+                        {
+                          "id": "mDYrg",
+                          "type": "ref",
+                          "ref": "c1sRZT",
+                          "name": "只读选项 A",
+                          "width": "fill_container",
+                          "height": 28,
+                          "padding": 0,
+                          "gap": "$pc-space-8",
+                          "fill": "$surface",
+                          "strokeWidth": 0,
+                          "cornerRadius": 0,
+                          "alignItems": "center",
+                          "descendants": {
+                            "XdZtG": {
+                              "width": 22,
+                              "height": 28,
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "justifyContent": "start"
+                            },
+                            "bQulY": {
+                              "content": "A.",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal",
+                              "fill": "$ink-2"
+                            },
+                            "dx2Gu": {
+                              "padding": 0,
+                              "gap": 0
+                            },
+                            "MpCgw": {
+                              "content": "DBJ 440100/T 277",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "lineHeight": 1.6,
+                              "fill": "$ink"
+                            },
+                            "q0eNtM": {
+                              "enabled": false
+                            }
+                          }
+                        },
+                        {
+                          "id": "RtAkw",
+                          "type": "ref",
+                          "ref": "c1sRZT",
+                          "name": "只读选项 B",
+                          "width": "fill_container",
+                          "height": 28,
+                          "padding": 0,
+                          "gap": "$pc-space-8",
+                          "fill": "$surface",
+                          "strokeWidth": 0,
+                          "cornerRadius": 0,
+                          "alignItems": "center",
+                          "descendants": {
+                            "XdZtG": {
+                              "width": 22,
+                              "height": 28,
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "justifyContent": "start"
+                            },
+                            "bQulY": {
+                              "content": "B.",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal",
+                              "fill": "$ink-2"
+                            },
+                            "dx2Gu": {
+                              "padding": 0,
+                              "gap": 0
+                            },
+                            "MpCgw": {
+                              "content": "DBJ 15-31",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "lineHeight": 1.6,
+                              "fill": "$ink"
+                            },
+                            "q0eNtM": {
+                              "enabled": false
+                            }
+                          }
+                        },
+                        {
+                          "id": "r1mtrA",
+                          "type": "ref",
+                          "ref": "c1sRZT",
+                          "name": "只读选项 C",
+                          "width": "fill_container",
+                          "height": 28,
+                          "padding": 0,
+                          "gap": "$pc-space-8",
+                          "fill": "$surface",
+                          "strokeWidth": 0,
+                          "cornerRadius": 0,
+                          "alignItems": "center",
+                          "descendants": {
+                            "XdZtG": {
+                              "width": 22,
+                              "height": 28,
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "justifyContent": "start"
+                            },
+                            "bQulY": {
+                              "content": "C.",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal",
+                              "fill": "$ink-2"
+                            },
+                            "dx2Gu": {
+                              "padding": 0,
+                              "gap": 0
+                            },
+                            "MpCgw": {
+                              "content": "DBJ/T 15-140",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "lineHeight": 1.6,
+                              "fill": "$ink"
+                            },
+                            "q0eNtM": {
+                              "enabled": false
+                            }
+                          }
+                        },
+                        {
+                          "id": "U5oUQ",
+                          "type": "ref",
+                          "ref": "c1sRZT",
+                          "name": "只读选项 D",
+                          "width": "fill_container",
+                          "height": 28,
+                          "padding": 0,
+                          "gap": "$pc-space-8",
+                          "fill": "$surface",
+                          "strokeWidth": 0,
+                          "cornerRadius": 0,
+                          "alignItems": "center",
+                          "descendants": {
+                            "XdZtG": {
+                              "width": 22,
+                              "height": 28,
+                              "fill": "$surface",
+                              "strokeWidth": 0,
+                              "cornerRadius": 0,
+                              "justifyContent": "start"
+                            },
+                            "bQulY": {
+                              "content": "D.",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal",
+                              "fill": "$ink-2"
+                            },
+                            "dx2Gu": {
+                              "padding": 0,
+                              "gap": 0
+                            },
+                            "MpCgw": {
+                              "content": "T/JSDL 001",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "lineHeight": 1.6,
+                              "fill": "$ink"
+                            },
+                            "q0eNtM": {
+                              "enabled": false
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "C4PEa7",
+                      "name": "正确答案与答案解析 · 复用25浅灰结果区",
+                      "width": "fill_container",
+                      "fill": "$pc-group",
+                      "cornerRadius": "$r-sm",
+                      "layout": "vertical",
+                      "gap": "$pc-space-12",
+                      "padding": "$pc-space-16",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "PZb2q",
+                          "name": "正确答案",
+                          "width": "fill_container",
+                          "gap": "$pc-space-16",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "AS7EZ",
+                              "name": "正确答案标签",
+                              "fill": "$ink-2",
+                              "content": "正确答案",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-content",
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "nGojn",
+                              "name": "正确答案内容",
+                              "fill": "$qp-correct",
+                              "content": "B · DBJ 15-31",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "e9osO",
+                          "name": "答案解析",
+                          "width": "fill_container",
+                          "gap": "$pc-space-16",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "wEoYf",
+                              "name": "答案解析标题",
+                              "fill": "$ink-2",
+                              "content": "答案解析",
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-content",
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "qEuXn",
+                              "name": "答案解析正文",
+                              "fill": "$ink",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "参考文献[44]列出：DBJ 15-31《建筑地基基础设计规范》。",
+                              "lineHeight": 1.75,
+                              "fontFamily": "$sans",
+                              "fontSize": "$pc-font-body",
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "dqN2w",
+                  "name": "弹窗底栏",
+                  "width": "fill_container",
+                  "height": 60,
+                  "stroke": "$pc-border",
+                  "strokeWidth": {
+                    "top": 1
+                  },
+                  "gap": 10,
+                  "padding": [
+                    0,
+                    24
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "K4hkYY",
+                      "name": "间隔",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "id": "e8tvX2",
+                      "type": "ref",
+                      "ref": "R03Vs",
+                      "name": "关闭",
+                      "height": 32,
+                      "padding": [
+                        0,
+                        16
+                      ],
+                      "descendants": {
+                        "NsYze": {
+                          "content": "关闭",
+                          "fontSize": "$pc-font-body",
+                          "fontWeight": "normal"
+                        }
+                      }
+                    },
+                    {
+                      "id": "qzmFP",
+                      "type": "ref",
+                      "ref": "Z0NkmV",
+                      "name": "编辑题目",
+                      "height": 32,
+                      "padding": [
+                        0,
+                        20
+                      ],
+                      "descendants": {
+                        "Z5G9X": {
+                          "content": "编辑题目",
+                          "fontSize": "$pc-font-body",
+                          "fontWeight": "normal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "z8TjU8",
+          "name": "A 方案说明 · 非产品界面",
+          "width": "fill_container",
+          "height": 156,
+          "layout": "vertical",
+          "gap": "$pc-space-12",
+          "padding": "$pc-space-32",
+          "children": [
+            {
+              "type": "text",
+              "id": "ETx9s",
+              "name": "A 选择理由",
+              "fill": "$ink",
+              "content": "先看题，再核对答案与解析。",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-heading",
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "sXgqp",
+              "name": "A 交互路径",
+              "fill": "$ink-2",
+              "content": "题目与选项采用 24 的纯文字单列；下方完整复用 25 的浅灰结果区。",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-body",
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "h91Xq",
+              "name": "A 使用边界",
+              "fill": "$pc-muted",
+              "content": "保留 t2Stxx 弹窗外壳与关闭 / 编辑题目按钮；正文复用 Tiptap 渲染。",
+              "fontFamily": "$sans",
+              "fontSize": "$pc-font-content",
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
     }
   ],
   "variables": {
@@ -73541,6 +76702,38 @@
     "pc-control-height": {
       "type": "number",
       "value": 40
+    },
+    "qp-overlay": {
+      "type": "color",
+      "value": "#17233D66"
+    },
+    "qp-shadow": {
+      "type": "color",
+      "value": "#17233D24"
+    },
+    "qp-correct": {
+      "type": "color",
+      "value": "#16804A"
+    },
+    "qp-font-stem": {
+      "type": "number",
+      "value": 16
+    },
+    "qp-font-hero": {
+      "type": "number",
+      "value": 28
+    },
+    "qp-radius": {
+      "type": "number",
+      "value": 10
+    },
+    "qp-space-4": {
+      "type": "number",
+      "value": 4
+    },
+    "qp-modal-radius": {
+      "type": "number",
+      "value": 8
     }
   },
   "fileToken": "7bb821fd-b0cc-46e4-bd56-ac36b2943b8b"
