@@ -19,6 +19,8 @@
 - Node `paper-management-state`：21项通过。
 - 前端回归包含 `toAuthoringBundle` 去除题库文档 `score_cents`，卷题关联保存12000，避免将卷内分值混入题库兼容字段。
 
+- 独立审查发现并修复固定草稿预览仍执行发布校验的问题；新增0分/110of120草稿可预览、发布被拒绝且不写release的回归。修复后48项针对测试和server build通过，独立复查通过。
+
 ## 本地浏览器证据
 
 通过 Kimi WebBridge 使用新开的本地 `127.0.0.1:5173` 标签验证：

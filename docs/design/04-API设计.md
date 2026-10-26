@@ -553,7 +553,7 @@ interface IdentitySessionView {
 
 **现行状态边界（2026-10-26）**：新写入流程仅 `draft → published`，发布后调整沿用复制新草稿。培训和 legacy 试卷的撤回/归档写入口均不再注册；旧状态的列表、详情、快照读取和开考限制仍保留，读取接口可继续按历史状态筛选，PC 日常筛选只提供草稿、已发布。不迁移或重写历史状态。
 
-**创建/修改 DTO**：`title/mode/category_id` 为核心字段；`regulation_ids/course_ids` 是去重字符串 ID 数组，其中 regulation_ids 表示题库资料的内部来源 ID；`requires_learning` 默认 false；`sort_order` 可选且必须为0—2147483647整数，创建默认0、更新未传保持原值；`total_score` 创建默认100、更新未传保持原值，范围0.01～999.99且最多两位小数；及格分数大于0且不超过目标总分；及格分数/限时/次数/漏选比例默认 60/30/3/0.5。随机卷 `rules=[{type,count,score_cents}]` 最多三项且题型唯一，发布时满足 `Σ(count×score_cents)=round(total_score×100)`；固定题单发布时每题score_cents为正整数且合计等于目标总分币。固定草稿题单允许score_cents=0和未配齐，保存仍校验题目完整性及合法引用。来源选项允许“当前类别题目实际关联该 regulation”或“旧资料自身 category 直接匹配”；新资料不预绑类别，跨类别创建、更新或发布返回业务冲突。
+**创建/修改 DTO**：`title/mode/category_id` 为核心字段；`regulation_ids/course_ids` 是去重字符串 ID 数组，其中 regulation_ids 表示题库资料的内部来源 ID；`requires_learning` 默认 false；`sort_order` 可选且必须为0—2147483647整数，创建默认0、更新未传保持原值；`total_score` 创建默认100、更新未传保持原值，范围0.01～999.99且最多两位小数；及格分数大于0且不超过目标总分；及格分数/限时/次数/漏选比例默认 60/30/3/0.5。随机卷 `rules=[{type,count,score_cents}]` 最多三项且题型唯一，发布时满足 `Σ(count×score_cents)=round(total_score×100)`；固定题单发布时每题score_cents为正整数且合计等于目标总分币。固定草稿题单允许score_cents=0和未配齐，保存仍校验题目完整性及合法引用。固定草稿普通/答案预览同样允许0分和未配齐，返回目标总分及实际题目分值；只有发布执行正分与合计检查，已发布预览仍读冻结快照。来源选项允许“当前类别题目实际关联该 regulation”或“旧资料自身 category 直接匹配”；新资料不预绑类别，跨类别创建、更新或发布返回业务冲突。
 
 **排序字段（2026-10-26 / 031）**：training列表项、创建回包、详情与更新回包均返回`sort_order:number`；复制新草稿继承源卷排序值。该字段仅为管理列表元数据，不进入`paper_release`，不影响题单顺序、学员开考、成绩统计或legacy `/ai/papers`的响应及排序。
 

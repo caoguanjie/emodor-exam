@@ -452,6 +452,24 @@ function paperAdminFixture(paperOverride: Record<string, unknown> = {}) {
 }
 
 describe('training paper draft configuration', () => {
+  it.each([0, 11000])('previews a fixed 120-point draft totaling %i cents while publication remains blocked', async (scoreCents) => {
+    const f = paperAdminFixture({ totalScore: '120.00' });
+    await f.service.setTrainingQuestions('11', [{ question_version_id: '501', score_cents: scoreCents }], { id: '9', name: 'admin' }, null);
+    const releaseRepo = { findOne: vi.fn(async () => null), create: vi.fn(), save: vi.fn() };
+    const manager = { getRepository(entity: unknown) {
+      if (entity === PaperRelease || entity === PaperReleaseQuestion) return releaseRepo;
+      return f.manager.getRepository(entity);
+    } };
+    const releases = Object.create(PaperReleaseService.prototype) as PaperReleaseService;
+    Object.assign(releases, { paperRepo: f.paperRepo, releaseRepo, categories: { lockActive: vi.fn(async () => ({ id: '7', status: 1 })) }, dataSource: { transaction: (work: any) => work(manager) } });
+    const preview = await releases.preview('11');
+    expect(preview).toMatchObject({ release_id: null, mode: 'fixed', rule: { totalCents: 12000 } });
+    expect(preview.questions.map(item => item.scoreCents)).toEqual([scoreCents]);
+    expect(preview.rule.rules[0].scoreCents).toBe(scoreCents);
+    await expect(releases.publish('11', '9')).rejects.toMatchObject({ code: 40972 });
+    expect(releaseRepo.save).not.toHaveBeenCalled();
+  });
+
   it('rejects selecting a deleted fixed question even if its enabled compatibility fact is stale', async () => {
     const f = paperAdminFixture();
     (f.questions[0] as any).deletedAt = new Date();
