@@ -1,12 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "562b46de7beb69a49d0d42c683fd431ffb5d42bb",
-    "indexed_at": "2026-10-23T01:22:39Z",
+    "commit": "75cdc5b27ac781f545a8641f4a80a01c9b393db0",
+    "indexed_at": "2026-10-26T06:50:33Z",
     "project": "ruleexam",
-    "nodes": 6447,
-    "edges": 20871,
-    "original_size": 14876672,
-    "compressed_size": 3234899,
-    "compression_level": 9,
-    "reconcile_basis": "git-clean-head"
+    "nodes": 8158,
+    "edges": 27850,
+    "original_size": 18415616,
+    "compressed_size": 3914463,
+    "compression_level": 9
 }
