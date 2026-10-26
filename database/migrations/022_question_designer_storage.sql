@@ -24,3 +24,4 @@ CREATE TABLE IF NOT EXISTS question_authoring_commit (
   PRIMARY KEY (id),
   UNIQUE KEY uk_question_authoring_commit_owner_request (owner_id,request_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='作者原稿提交的持久幂等回执';
+
