@@ -56,7 +56,8 @@ interface MobileSessionUser {
 
 - PC 保持 `ruleexam_refresh`，Path `/api/v1/auth`。
 - mobile 使用 `ruleexam_mobile_refresh`，Path `/api/v1/mobile/auth`，`HttpOnly`、`SameSite=Strict`，生产环境 `Secure`。
-- access token 只保存在 Pinia 内存，不写 `uni` storage、localStorage、sessionStorage、URL 或 Cookie；refresh token 只存在 HttpOnly Cookie。
+- access token 只保存在 Pinia 内存，不写 `uni` storage、localStorage、sessionStorage、URL 或 Cookie；H5 refresh token 只存在浏览器 HttpOnly Cookie。
+- **MP-WEIXIN 增量（2026-10-27）**：小程序没有浏览器自动 Cookie 管理。原生传输层只在模块内存维护服务端签发的 `ruleexam_mobile_refresh`，限精确 HTTPS API origin、`/api/v1/mobile/auth` Path 与 refresh/logout 请求；不接收PC Cookie，不进入Pinia、持久存储、日志、URL或请求body。服务端HttpOnly/SameSite/Secure属性与JWT轮换/吊销协议不变，但原生内存容器不等价于浏览器HttpOnly隔离。账号切换、过期、退出时清除并隔离迟到响应；小程序冷启动重新短信登录，不恢复持久refresh。H5路径不读取Set-Cookie或手工设置Cookie。
 - `auth_session.client` 为 `pc | mobile`，`auth_method` 为 `password | sms | debug`。
 - mobile access/refresh JWT 必须绑定 durable `sid`；守卫继续校验用户启用状态、`auth_version`、JTI 黑名单、用户封禁和 session 撤销。
 - mobile SMS/debug 登录只允许启用的普通 `employee`，并要求数据库中的有效管理权限集合为空；不能只看 `role`。PC 强制改密规则不阻断短信登录，但不被移动登录清除。
@@ -126,7 +127,7 @@ interface LearnerProfile {
   status: number
 }
 interface SelfProfilePatch {
-  real_name?: string // 保留 PC 兼容；mobile 页面不编辑该字段
+  real_name?: string // 未实名可填写/修改；trim 后 1—64 字，已实名姓名锁定
   email?: string | null
   avatar_id?: string | null
   occupation?: string | null
@@ -148,7 +149,7 @@ interface SelfProfilePatch {
 - occupation 可空，非空去首尾空白后长度 1—64；gender 仅 `male/female/null`；birthday 仅 `YYYY-MM-DD/null`，必须是真实日期且不晚于服务端业务当前日期。
 - `phone/source/category_id/role/status/identity_status/username` 不在 `SelfProfilePatch` 白名单，篡改返回 40001。手机号继续只走 Auth Contract 的受控流程。
 - **2026-10-23 已批准增量**：移动端「培训工种」与 PC「培训类别」统一读取 `category_id/category_name`，不再编辑 occupation 充当工种，不迁移/猜测回填旧文本。普通资料白名单保持原样；新增 GET `/me/training-categories?page/page_size` 返回启用类别窄分页 `{id,name}`，PUT `/me/training-category` 仅接受 `{category_id:string}`，只允许启用且无业务角色链接的 mobile employee。事务内 NULL→启用类别首次确认，同值重放幂等，已有不同类别返回 40001 / `TRAINING_CATEGORY_LOCKED`；后续仅由有 `students:write` 的 PC 人员调整，并审计前后值。返回完整本人资料；不影响来源、实名、历史考试或课程门槛。个人资料与实名认证仍为两个菜单；未设置者二次确认后锁定，写结果未知先 GET 读回，页面返回刷新 PC 改动。详细契约见 `docs/superpowers/specs/2026-10-23-learner-training-category.md`。
-- mobile 页面将 `real_name` 和手机号作为只读权威字段；本阶段不把静态 fixture 覆盖回服务端。Task 10 接入实名权威状态后，再禁止已实名姓名经 PC 兼容字段修改。
+- **2026-10-27 用户批准修订**：mobile 姓名在未实名时可填写/修改，手机号继续只读；姓名与培训工种必填，头像选填。登录入口发现缺项进入个人资料补全，保存后引导实名。实名通过后姓名由供应商结果覆盖并锁定，PC/mobile 普通资料不得修改；静态 fixture 不写服务端。新建实名会话须姓名/工种齐全，既有会话重放、查询与成功绑定恢复保持可用。
 - 头像仍遵守现有私有媒体绑定：上传成功不等于资料已保存；只有 PATCH 成功才更新 `avatar_id` 关联，失败保留本地输入并允许重试。
 
 ## Identity/Media Contract v1：Task 10 / Task 11
@@ -217,6 +218,7 @@ Provider 暂不可用、存储失败、票据无效/过期等基础设施错误�
 ### 三图上传与私有媒体
 
 - 实名图片只能走本人专用上传接口，不能复用 `/media/upload` 的管理端用途。服务端从 access token 取得 user id；客户端不能传 owner、source、category、实名状态或 scan status。
+- **2026-10-27 客户端压缩增量**：头像与实名三图在 H5/微信统一接受至多 25 MiB、6400 万像素的选图，先等比缩小并验证输出最长边≤1600、字节≤2.1 MiB，再上传。下述 10 MiB/20M/60M 是服务端接收文件的独立限制，未随客户端输入上限放宽；不允许压缩失败后上传超限原图，人脸仍现场拍摄。
 - 新增三个不可混用的媒体 purpose：`identity_id_portrait`、`identity_id_emblem`、`identity_face`。图片仅接受 JPEG/PNG，原文件最大 10 MiB、最小 320×320；普通图片源像素最多 20M，正脸源图最多 60M 且解码后降采样，最终长边不超过 1600、JPEG Base64 不超过约 2.8M。所有图片修正 EXIF 方向、重新编码并清除元数据；声明 MIME、扩展名和客户端预览都不作为安全结论。
 - 身份证面上传阶段执行 OCR、裁剪和清洗，只保存处理后的受控图；正脸保存经图片探测后的私有图。上传成功只代表材料可用于核验，不代表实名通过。
 - 每个上传资产绑定当前 user 和对应 purpose。创建会话时再次检查三项资产均为 ready、本人所有、purpose 匹配、未删除且未被其他实名会话替换；三图不能跨用户拼接。

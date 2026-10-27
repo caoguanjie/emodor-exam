@@ -151,7 +151,7 @@
 | /statistics/training、/admin/dashboard | 培训统计 | 现行 | 场次汇总、排名、同筛选导出与权限裁剪首页 |
 | /learning、/exams、/statistics | 共享兼容 | 保留 | 旧制度学习、固定卷自动评分和原统计；原统计菜单隐藏 |
 | /regulations/{id}/content、/regulations/{id}/content/file | 旧制度内容 | 保留只读 | 旧发布范围内内容和文件读取；无制度 CRUD |
-| /site-config | 公共配置 | 现行 | Logo/轮播白名单与当前品牌图片流 |
+| /site-config | 公共配置 | 现行 | Logo/轮播/关于我们白名单与当前品牌图片流 |
 | /health | 基础设施 | 现行 | Compose 内部探活，nginx 不对外代理 |
 
 ---
@@ -188,6 +188,8 @@
 
 以下路径均带 `/api/v1` 前缀，成功统一返回 HTTP 200 与 `{code,message,data}` 信封。公开入口不要求 Bearer；刷新与退出只读取 `ruleexam_mobile_refresh`，不读取 PC Cookie。
 
+MP-WEIXIN通过公开 `VITE_API_ORIGIN` 将相同接口转为HTTPS完整URL；不新增微信登录或在body返回refresh。原生传输层仅内存保存mobile auth响应的限定Cookie并用于refresh/logout，冷启动重新短信登录；H5仍由浏览器管理HttpOnly Cookie。作用域、迟到响应和清理规则见07册及移动端冻结契约的2026-10-27增量。
+
 | 方法 | 路径 | 认证与请求 body | 成功 data |
 |---|---|---|---|
 | POST | /mobile/auth/sms/send | 公开；`{phone:string}` | `{challenge_id:string,expires_in:number,retry_after:number,masked_phone:string}` |
@@ -214,6 +216,8 @@ interface MobileSessionResult {
 ```
 
 此移动认证响应当前沿用 number 用户/类别 ID；不要据此改变课程、考试等接口的字符串 ID 契约。Gate G 契约将 `identity_status` 与已实名姓名接入 `IdentityService` 权威查询，不能根据普通姓名、头像或手机号推断通过；新建调试/短信学员没有实名事实时仍为 `unverified`。Gate G 验收状态独立于既有认证验收。
+
+**首次资料补全（2026-10-27）**：短信登录或恢复登录入口后，姓名去空白为空或培训类别为空时进入个人资料补全页。姓名与培训工种必填、头像选填；姓名保存复用 POST `/me/profile`，工种仍经独立二次确认接口锁定。保存成功后未实名者进入实名认证；完整资料账号按原路径进入首页。填资料不构成实名事实，学员仍可返回浏览，学习和考试保留实名门禁。
 
 手机号先去除空白及连字符，结果必须是匹配 `^1[3-9][0-9]{9}$` 的中国大陆 11 位手机号。`challenge_id` 是 48 位小写十六进制随机串，验证码为 6 位数字。默认挑战有效期 300 秒、重发间隔 60 秒、每挑战最多 5 次验码，手机号/IP 的 86400 秒计数窗口上限分别为 10/100 次；配置项见 07 册 §2.2.5。新发码使该手机号旧挑战失效，验码成功一次性消费挑战；响应和日志均不返回验证码或完整手机号。
 
@@ -276,6 +280,8 @@ A3 学员管理边界：列表、详情、资料更新和启停仅作用于 `sys
 | 3 | PATCH | /me/profile | PC/既有兼容；请求与 POST 相同 | 更新后的资料 |
 
 手机号已是认证标识，不能经普通本人资料接口修改；携带 `phone` 返回 40001。手机号关联由短信认证完成，后台新建/导入或受控学员管理入口统一做规范化与唯一性校验；管理入口改号时递增认证世代并吊销旧会话。本期不另提供未经短信校验的自助换绑接口。POST 与 PATCH 共用同一严格 DTO 和服务；POST 用于微信原生 request 不支持 PATCH 的跨端兼容，不得放宽字段白名单。
+
+`real_name` 未实名时可填写和修改，必须为字符串，去首尾空白后长度 1—64；null、空白、超长拒绝。实名成功后以供应商核验姓名覆盖并锁定，普通资料改名不能覆盖实名事实。
 
 `occupation` 去首尾空白后为 1—64 字符或 null，且不修改培训类别；`gender` 仅 `male/female/null`；`birthday` 仅真实 `YYYY-MM-DD/null` 且不得晚于服务端 Asia/Shanghai 业务当前日期。普通保存继续禁止 `source/category_id/role/status/identity_status/username` 等权威字段；Gate G 实名契约规定已实名姓名不得由兼容的 `real_name` 字段修改，PC/mobile 共用事务内检查，非法修改返回 40001。
 
@@ -373,10 +379,10 @@ PC「培训类别」与移动端「培训工种」共同引用 `sys_user.categor
 | POST | `/admin/dictionaries` | `system_settings:write` | 新建自定义显示字典项 |
 | PUT | `/admin/dictionaries/{id}` | `system_settings:write` | 更新自定义字典项；固定业务枚举拒绝 |
 | DELETE | `/admin/dictionaries/{id}` | `system_settings:write` | 删除自定义项；`is_system=1` 或固定 type 返回 40920 |
-| GET | `/admin/site-settings` | `system_settings:read` | 返回与公开端同形的 Logo/轮播配置 |
-| PUT | `/admin/site-settings` | `system_settings:write` | 校验 ready branding image 后原子更新配置与媒体引用 |
+| GET | `/admin/site-settings` | `system_settings:read` | 返回与公开端同形的 Logo/轮播/关于我们配置 |
+| PUT | `/admin/site-settings` | `system_settings:write` | 校验品牌图与关于我们字段后原子更新配置与媒体引用 |
 | GET | `/admin/audit-logs` | `system_settings:read` | 按 `date_from/date_to/actor/action/scope/result/page/page_size` 只读查询结构化审计文件；`scope=management\|security\|exam\|learner\|system\|all`，`result=success\|failure`；无清空端点 |
-| GET | `/site-config` | 公开 | 严格返回 `{logo_asset_id,banners}` 两个键 |
+| GET | `/site-config` | 公开 | 严格返回 `{logo_asset_id,banners,about}` 三个键 |
 | GET | `/site-config/assets/{id}/content` | 公开 | 仅当 ID 仍在当前 Logo/轮播白名单、有 `site_config` 引用且资源为 ready branding image 时返回原始流；其他 ID 统一 40401，支持单 Range |
 
 菜单写入 DTO 固定为 `parent_id? / name / type / route_path? / permission_code? / icon? / sort / status`。`type=directory` 不得带路由或权限；`type=menu` 的 `route_path` 必须在前端及服务端菜单白名单注册，包含独立 `/admin/questions/import`；`type=button` 不得带路由且必须使用服务端注册权限。新增、修改、删除先锁定初始化保证且业务不可删除的 `site_setting.logo_asset_id` 实存行，再在同一事务重读菜单树关系；因此空树双创建可依次成功，互挂父级、建子与删父、建子与父节点改按钮只会提交合法一侧。互斥行缺失时返回 50004/HTTP 503，不自动修复、不把数据库死锁当业务冲突。默认试题管理导航不在数据库层先限制 `questions:read`，前端注册路由精确以 `questions:read OR questions:write` 判定；试题导入菜单和路由要求 `questions:write`。只缓存试题导入页，试题管理返回时重新加载列表，API 仍按各端点权限裁决。
@@ -389,7 +395,7 @@ PC「培训类别」与移动端「培训工种」共同引用 `sys_user.categor
 
 PC 左侧使用 `el-tree` 展示一级分类名称，不显示英文类型标识；搜索框旁提供新增入口，节点菜单提供编辑/删除；分类弹窗仅维护名称和描述。内置分类元数据可编辑，内置和非空分类禁删。切换分类回到第一页并清空右侧筛选，重置查询保留当前分类；删除最后一个字典项后分类仍存在。右侧新增/编辑字典项从已有自定义分类选择，底层仍提交稳定 `type`。
 
-站点配置请求与公开响应均是：
+站点配置的完整公开响应如下；PUT允许只提交其中需要更新的字段：
 
 ```json
 {
@@ -397,11 +403,22 @@ PC 左侧使用 `el-tree` 展示一级分类名称，不显示英文类型标识
   "banners": [
     { "asset_id": "42", "sort": 10 },
     { "asset_id": "43", "sort": 20 }
-  ]
+  ],
+  "about": {
+    "institution_name": "海珠区安全教育培训中心",
+    "platform_subtitle": "安全教育培训与考试平台",
+    "version": "1.2.0",
+    "contact_email": "",
+    "wechat_account": "",
+    "contact_phone": "",
+    "service_terms": null
+  }
 }
 ```
 
-`logo_asset_id` 可为 null，`banners` 必须为数组、最多 3 项、`asset_id` 不得重复，服务端按 `sort + asset_id` 稳定排序。`GET /site-config` 不会序列化整张设置表，任何 AI 配置、密钥或未白名单 setting 都不得进入响应。
+PUT允许只提交品牌字段或about（不接受空对象），省略字段保留原值；`logo_asset_id` 显式提供时可为 null，`banners` 提供时必须为数组、最多 3 项、`asset_id` 不得重复，服务端按 `sort + asset_id` 稳定排序。`GET /site-config` 不会序列化整张设置表，任何 AI 配置、密钥或未白名单 setting 都不得进入响应。
+
+`about` 为 `{institution_name,platform_subtitle,version,contact_email,wechat_account,contact_phone,service_terms}`。GET始终返回该白名单对象；PUT可省略 `about` 以兼容旧版品牌配置调用，也支持仅提交 `{about}`；提供about时须提交完整对象。两页签分别保存，仅变更显式提供的字段，about-only不校验/重绑品牌媒体。前三项必填，其余联系方式允许空；字符串上限依次为128/200/32/254/128/32，邮箱格式校验，联系电话支持手机、座机及常见分隔符。`service_terms` 为 schema 3 Tiptap JSON或null，限制100000字节并拒绝媒体、HTML、任意URL属性及未知结构。空联系方式/条款由H5隐藏对应行或入口，不展示“待配置”。about不增加公开媒体授权，额外字段不能通过保存接口进入公开响应。
 
 审计查询只打开 `LOG_DIR/audit/audit-YYYY-MM-DD.log` 普通文件，拒绝路径越界与符号链接；忽略损坏旧行而不返回原文。审计目录尚未产生时可返回空页；目录存在但类型非法、不可读、读取中变化或目标日志文件发生 EACCES/其他 I/O 错误时返回 50004/HTTP 503，不用空页或部分页伪装成功。写入、文件失败后的 stderr 降级、查询输出三条路径都对 password/token/authorization/cookie/api_key/credential 等敏感字段递归脱敏；字符串若是 JSON 则解析后递归清洗，非 JSON 的 `key=value`/`key:value` 会清除完整值（含空格），同时保留 action/result/reason 等非敏感诊断信息。
 
@@ -456,6 +473,8 @@ interface IdentitySessionView {
 ```
 
 图片只允许 JPEG/PNG，原文件 ≤10 MiB、至少 320×320，普通源图 ≤20M 像素、正脸源图 ≤60M 像素。服务端修正 EXIF、重编码去元数据，长边 ≤1600，JPEG Base64 ≤约 2.8M；身份证面先 OCR 裁剪清洗，预览返回处理图票据，face 用本地临时预览。客户端不得传 owner、学员 ID、来源、scan status 或实名通过状态。三资产必须不同、本人所有、ready、未删除且分别匹配 `identity_face/identity_id_portrait/identity_id_emblem` purpose；通用 `/media/upload` 不接受实名三种 purpose。
+
+新建实名会话前在用户行锁内检查姓名和培训类别是否已填写，缺项返回 40001（“请先填写姓名并确认培训工种”），不调用供应商；既有会话重放、查询和已持久成功结果恢复保持可用，不被此新增条件阻断。
 
 `POST sessions` 成功只返回 `IdentitySessionView`。同用户相同三资产且未过期时复用原会话（包括 rejected）；不同材料遇到现有非终态返回 40906，客户端查询当前权威状态，不并行创建。已实名返回 **40960/HTTP 409**，错误 `data={status:'verified',reason_code:null,clear_materials:[]}`，客户端随后 GET 本人实名视图，不能假造 session 或仅凭冲突文案显示成功。`provider_pending/provider_unknown/provider_verified` 对外均为 pending；无结果过期映射 rejected + SESSION_EXPIRED，已持久成功结果优先恢复绑定，不受普通 TTL 丢弃。
 
@@ -1377,7 +1396,7 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | /admin 权限/会话 | — | — | 按 `roles/administrators/sessions:*` | 按各接口注册权限 |
 | /admin 系统配置 | — | — | `system_settings:read/write` | 同左；导航树为登录用户自身权限视图 |
 | /admin/exam-records/* | — | — | `exam_records:read` | 列表、详情和结果均只读；无阅卷或监控权限 |
-| /site-config | 配置两键与当前品牌内容 | 同左 | 同左 | 同左；不提供任意 media id 公开读取 |
+| /site-config | 配置三键与当前品牌内容 | 同左 | 同左 | 同左；不提供任意 media id 公开读取 |
 | /regulations/{id}/content、/regulations/{id}/content/file | — | 旧范围内本人只读 | 仅共享兼容读取 | 无管理写接口 |
 | /admin/courses | — | — | 由业务角色显式授予 courses:read/write/publish | super_admin 天然拥有；类别 options 只需 courses:write |
 | /admin/papers | — | — | `papers:read/write/publish/export`；答案版需额外导出或题库读权限 | super_admin 天然拥有；学员来源不参与管理权限判定 |
