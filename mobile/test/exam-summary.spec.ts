@@ -67,4 +67,16 @@ describe('learner exam summaries', () => {
     expect(calls.filter(call => call.url.endsWith('/start'))).toHaveLength(1)
     expect(calls.some(call => call.url.endsWith('/exams/901'))).toBe(true)
   })
+  it('rejects malformed learning amounts instead of treating them as satisfied', async () => {
+    const store = useExamStore() as any
+    install(() => ok({ ...summary, learning: { ...summary.learning, remaining_seconds: -1 } }))
+    await expect(store.loadSummary('901')).rejects.toMatchObject({ code: -2 })
+    expect(store.summary).toBeNull()
+  })
+  it('does not replace the requested paper with another summary', async () => {
+    const store = useExamStore() as any
+    install(() => ok({ ...summary, paper_id: '902' }))
+    await expect(store.loadSummary('901')).rejects.toMatchObject({ code: -2 })
+    expect(store.summary).toBeNull()
+  })
 })
