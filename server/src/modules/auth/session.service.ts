@@ -7,6 +7,16 @@ import { AppConfig } from '../../config/configuration';
 import { Errors } from '../../common/errors';
 import { RedisService } from '../../common/redis.service';
 import { AuditService } from '../../common/audit.service';
+import type { SessionListStatus } from './session-query.dto';
+
+export interface SessionListFilters { keyword?: string; status?: SessionListStatus }
+type SessionAuditActor = string | number | { id: string | number; name: string; sourceIp?: string | null };
+
+interface SessionListRow {
+  id: string; sid: string; user_id: string; username: string | null; real_name: string | null;
+  client: 'pc' | 'mobile' | null; user_agent: string | null; ip_address: string | null;
+  created_at: Date; last_seen_at: Date; revoked_at: Date | null; expires_at: Date | null;
+}
 
 @Injectable()
 export class SessionService {
@@ -19,6 +29,11 @@ export class SessionService {
     config?: AppConfig,
   ) {
     this.refreshTtlSeconds = (config?.jwt.refreshExpiresDays || 7) * 86400;
+  }
+
+  private auditActor(actor: SessionAuditActor) {
+    if (typeof actor === 'object') return { id: actor.id, name: actor.name, sourceIp: actor.sourceIp || null };
+    return { id: Number(actor), name: `user:${String(actor)}`, sourceIp: null };
   }
 
   async create(userId: string | number, ip: string | null, userAgent: string | null, manager?: EntityManager, identity: { client: 'pc' | 'mobile'; authMethod: 'password' | 'sms' | 'debug' } = { client: 'pc', authMethod: 'password' }): Promise<AuthSession> {
@@ -70,7 +85,7 @@ export class SessionService {
       && (session.client || 'pc') === client && (!authMethod || (session.authMethod || 'password') === authMethod));
   }
 
-  async revoke(sessionId: string, actorId: string | number): Promise<void> {
+  async revoke(sessionId: string, actorInput: SessionAuditActor): Promise<void> {
     const session = await this.repo.findOne({ where: { id: String(sessionId) } });
     if (!session) throw Errors.notFound('会话不存在');
     if (!session.revokedAt) {
@@ -78,13 +93,15 @@ export class SessionService {
       await this.repo.save(session);
     }
     await this.redis.revokeSession(session.sid, this.refreshTtlSeconds);
-    this.audit?.log({ actor_id: Number(actorId), actor_name: 'system', action: 'auth.session.revoke', object_type: 'auth_session', object_id: session.id, detail: { user_id: session.userId }, result: 'success', source_ip: null });
+    const actor = this.auditActor(actorInput);
+    const action = typeof actorInput === 'object' ? 'auth.session.force_revoke' : 'auth.session.revoke';
+    this.audit?.log({ actor_id: actor.id, actor_name: actor.name, action, object_type: 'auth_session', object_id: session.id, detail: { user_id: session.userId }, result: 'success', source_ip: actor.sourceIp });
   }
 
-  async revokeBySid(sid: string, actorId: string | number): Promise<void> {
+  async revokeBySid(sid: string, actorInput: SessionAuditActor): Promise<void> {
     const session = await this.repo.findOne({ where: { sid } });
     if (!session) return;
-    await this.revoke(String(session.id), actorId);
+    await this.revoke(String(session.id), actorInput);
   }
 
   /**
@@ -108,25 +125,51 @@ export class SessionService {
     await Promise.all(sids.map((sid) => this.redis.revokeSession(sid, this.refreshTtlSeconds)));
   }
 
-  async list(page = 1, pageSize = 20) {
-    const safePage = Math.max(1, Number(page) || 1);
+  async list(page = 1, pageSize = 20, filters: SessionListFilters = {}, currentSid?: string) {
+    const safePage = Math.min(1_000_000, Math.max(1, Number(page) || 1));
     const safePageSize = Math.min(100, Math.max(1, Number(pageSize) || 20));
-    const qb = this.repo.createQueryBuilder('s');
+    const now = new Date();
+    const qb = this.repo.createQueryBuilder('s')
+      .leftJoin('sys_user', 'u', 'u.id = s.user_id')
+      .select('s.id', 'id').addSelect('s.sid', 'sid').addSelect('s.user_id', 'user_id')
+      .addSelect('u.username', 'username').addSelect('u.real_name', 'real_name')
+      .addSelect('s.client', 'client').addSelect('s.user_agent', 'user_agent').addSelect('s.ip_address', 'ip_address')
+      .addSelect('s.created_at', 'created_at').addSelect('s.last_seen_at', 'last_seen_at')
+      .addSelect('s.revoked_at', 'revoked_at').addSelect('s.expires_at', 'expires_at');
+    const keyword = filters.keyword?.trim();
+    if (keyword) {
+      // Use an explicit escape character so SQL wildcards in a name stay literal,
+      // independent of the server's NO_BACKSLASH_ESCAPES mode.
+      const pattern = `%${keyword.replace(/[!%_]/g, '!$&')}%`;
+      qb.andWhere("(u.username LIKE :keyword ESCAPE '!' OR u.real_name LIKE :keyword ESCAPE '!')", { keyword: pattern });
+    }
+    const status = filters.status ?? 'active';
+    const expiry = 'COALESCE(s.expires_at, DATE_ADD(s.created_at, INTERVAL :refreshTtlSeconds SECOND))';
+    if (status === 'active' || status === 'expired') {
+      qb.andWhere(`s.revoked_at IS NULL AND ${expiry} ${status === 'active' ? '>' : '<='} :now`,
+        { refreshTtlSeconds: this.refreshTtlSeconds, now });
+    } else if (status === 'revoked') {
+      qb.andWhere('s.revoked_at IS NOT NULL');
+    }
     const total = await qb.getCount();
-    const rows = await qb.orderBy('s.created_at', 'DESC').skip((safePage - 1) * safePageSize).take(safePageSize).getMany();
-    const now = Date.now();
+    // Raw projection queries with a join require limit/offset; skip/take is
+    // reserved for TypeORM's entity pagination and can be ignored here.
+    const rows = await qb.orderBy('s.created_at', 'DESC').addOrderBy('s.id', 'DESC')
+      .offset((safePage - 1) * safePageSize).limit(safePageSize).getRawMany<SessionListRow>();
     return {
       items: rows.map((row) => {
         // Legacy rows from a rolling deployment may not expose the new field
         // until 002_access has completed; retain the old derived fallback only
         // for that compatibility window.
-        const expiresAt = row.expiresAt || new Date(row.createdAt.getTime() + this.refreshTtlSeconds * 1000);
+        const expiresAt = row.expires_at || new Date(row.created_at.getTime() + this.refreshTtlSeconds * 1000);
         return {
-        id: String(row.id), sid: row.sid, user_id: String(row.userId),
-        user_agent: row.userAgent, ip_address: row.ipAddress,
-        created_at: row.createdAt, last_seen_at: row.lastSeenAt, revoked_at: row.revokedAt,
-        expires_at: expiresAt,
-        status: row.revokedAt ? 'revoked' : (expiresAt.getTime() <= now ? 'expired' : 'active'),
+          id: String(row.id), sid: row.sid, user_id: String(row.user_id),
+          username: row.username ?? null, real_name: row.real_name ?? null,
+          client: row.client === 'mobile' ? 'mobile' : 'pc', is_current: Boolean(currentSid && row.sid === currentSid),
+          user_agent: row.user_agent, ip_address: row.ip_address,
+          created_at: row.created_at, last_seen_at: row.last_seen_at, revoked_at: row.revoked_at,
+          expires_at: expiresAt,
+          status: row.revoked_at ? 'revoked' : (expiresAt.getTime() <= now.getTime() ? 'expired' : 'active'),
         };
       }),
       total, page: safePage, page_size: safePageSize,

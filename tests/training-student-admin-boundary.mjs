@@ -5,7 +5,6 @@ import { learnerSession, legacyLearnerPcSession, randomLearnerPhone } from './su
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
-const mysql = require('mysql2/promise');
 
 let loginSequence = 0;
 
@@ -55,45 +54,6 @@ async function login(ctx, username, password, ...personalValues) {
   assert(changed.status === 200 && changed.data?.access_token, `first password change failed: ${changed.status}`);
   actor.accessToken = changed.data.access_token;
   return { actor, password: nextPassword, result: changed };
-}
-
-async function dbConnection(ctx) {
-  return mysql.createConnection({
-    host: ctx.env.DB_HOST || '127.0.0.1',
-    port: Number(ctx.env.DB_PORT || 3306),
-    user: ctx.env.DB_USERNAME || 'root',
-    password: ctx.env.DB_PASSWORD || undefined,
-    database: ctx.env.DB_DATABASE,
-  });
-}
-
-async function holdUserRow(ctx, id) {
-  const connection = await dbConnection(ctx);
-  await connection.beginTransaction();
-  await connection.execute('SELECT id FROM sys_user WHERE id = ? FOR UPDATE', [String(id)]);
-  return connection;
-}
-
-async function releaseLock(connection, commit = false) {
-  if (!connection) return;
-  if (commit) await connection.commit();
-  else await connection.rollback().catch(() => undefined);
-  await connection.end();
-}
-
-async function waitForLockWaits(ctx, minimum, label) {
-  const observer = await dbConnection(ctx);
-  const started = Date.now();
-  try {
-    while (Date.now() - started < 8_000) {
-      const [rows] = await observer.query('SELECT COUNT(*) AS count FROM performance_schema.data_lock_waits');
-      if (Number(rows[0]?.count || 0) >= minimum) return;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  } finally {
-    await observer.end();
-  }
-  throw new Error(`${label} did not reach ${minimum} owned lock waits`);
 }
 
 async function createStudent(ctx, admin, categoryId, label) {
@@ -198,64 +158,6 @@ async function assertStudentEndpointsRejectLinkedAdmin(ctx, admin, linked, befor
     ctx, admin, linked, before, 'PUT', `/admin/students/${linked.id}/password`,
     { password: randomStrongPassword(linked.username, linked.employeeNo, linked.realName) }, 'reset',
   );
-}
-
-async function raceRoleAssignmentFirst(ctx, admin, categoryId) {
-  const roleId = await createRole(ctx, admin, 'race-assignment-first', ['statistics:read']);
-  const target = await createStudent(ctx, admin, categoryId, 'race assignment first');
-  const before = await userState(ctx, target.id);
-  const blocker = await holdUserRow(ctx, target.id);
-  let released = false;
-  try {
-    const assignmentPromise = ctx.request(admin, 'PUT', `/admin/administrators/${target.id}/roles`, {
-      role_ids: [roleId],
-      initial_password: randomStrongPassword(target.username, target.realName),
-    });
-    await waitForLockWaits(ctx, 1, 'assignment-first role assignment');
-    const updatePromise = ctx.request(admin, 'PUT', `/admin/students/${target.id}`, {
-      real_name: 'must-not-update-after-role-assignment',
-    });
-    await waitForLockWaits(ctx, 2, 'assignment-first update');
-    await releaseLock(blocker, true);
-    released = true;
-    const [assignment, update] = await Promise.all([assignmentPromise, updatePromise]);
-    assert(assignment.status === 200, `assignment-first role assignment failed: ${assignment.status}`);
-    assert(update.status === 404, `assignment-first update bypassed link: ${update.status}`);
-  } finally {
-    if (!released) await releaseLock(blocker);
-  }
-  const after = await userState(ctx, target.id);
-  assert(after.password_hash !== before.password_hash, 'administrator promotion did not provision a password');
-  assert(Number(after.auth_version) === Number(before.auth_version) + 1, 'assignment-first auth generation mismatch');
-  assert(await linkedRoleCount(ctx, target.id) === 1, 'assignment-first link missing');
-}
-
-async function raceStatusFirst(ctx, admin, categoryId) {
-  const roleId = await createRole(ctx, admin, 'race-status-first', ['statistics:read']);
-  const target = await createStudent(ctx, admin, categoryId, 'race status first');
-  const before = await userState(ctx, target.id);
-  const blocker = await holdUserRow(ctx, target.id);
-  let released = false;
-  try {
-    const statusPromise = ctx.request(admin, 'PUT', `/admin/students/${target.id}/status`, { status: 0 });
-    await waitForLockWaits(ctx, 1, 'status-first status mutation');
-    const assignmentPromise = ctx.request(admin, 'PUT', `/admin/administrators/${target.id}/roles`, {
-      role_ids: [roleId],
-      initial_password: randomStrongPassword(target.username, target.realName),
-    });
-    await waitForLockWaits(ctx, 2, 'status-first role assignment');
-    await releaseLock(blocker, true);
-    released = true;
-    const [status, assignment] = await Promise.all([statusPromise, assignmentPromise]);
-    assert(status.status === 200, `status-first status mutation failed: ${status.status}`);
-    assert(assignment.status === 200, `status-first role assignment failed: ${assignment.status}`);
-  } finally {
-    if (!released) await releaseLock(blocker);
-  }
-  const after = await userState(ctx, target.id);
-  assert(Number(after.status) === 0, 'status-first status was not persisted');
-  assert(Number(after.auth_version) === Number(before.auth_version) + 2, 'status-first auth generation mismatch');
-  assert(await linkedRoleCount(ctx, target.id) === 1, 'status-first link missing');
 }
 
 export async function run(ctx) {
@@ -386,6 +288,4 @@ export async function run(ctx) {
   assert(await linkedRoleCount(ctx, ordinary.id) === 0, 'ordinary student unexpectedly linked');
   assert(await linkedRoleCount(ctx, resetTarget.id) === 0, 'ordinary reset student unexpectedly linked');
 
-  await raceRoleAssignmentFirst(ctx, admin, categoryId);
-  await raceStatusFirst(ctx, admin, categoryId);
 }

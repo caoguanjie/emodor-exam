@@ -499,7 +499,10 @@ export async function run(ctx) {
   const narrowLogin = await login(ctx, narrow.username, admin.password);
   const dashboard = await ctx.request(narrowLogin.actor, 'GET', '/admin/dashboard');
   assert.equal(dashboard.status, 200);
-  assert.deepEqual(dashboard.data.metrics, {});
+  assert.deepEqual(Object.keys(dashboard.data.metrics).sort(), [
+    'today_participant_count', 'today_attempt_count', 'last_7_days_participant_count', 'last_7_days_attempt_count',
+  ].sort(), 'statistics-only actors receive participation metrics and no business-list metrics');
+  for (const value of Object.values(dashboard.data.metrics)) assert.ok(Number.isInteger(value) && value >= 0);
   assert.equal(dashboard.data.timezone, 'Asia/Shanghai');
   assert.equal(Array.isArray(dashboard.data.exam_trend), true);
   const narrowOptions = await ctx.request(narrowLogin.actor, 'GET', '/statistics/training/options');
@@ -514,7 +517,14 @@ export async function run(ctx) {
   assert.equal(Object.hasOwn(adminDashboard.data.metrics, 'pending_grading_count'), false);
   assert.equal(typeof adminDashboard.data.metrics.question_count, 'number');
   assert.equal(typeof adminDashboard.data.metrics.paper_count, 'number');
-  assert.ok(adminDashboard.data.exam_trend.reduce((sum, item) => sum + item.count, 0) >= 9);
+  assert.equal(adminDashboard.data.exam_trend.length, 7);
+  for (const point of adminDashboard.data.exam_trend) {
+    const dayStart = Date.parse(`${point.date}T00:00:00+08:00`);
+    const sqlTime = value => new Date(value).toISOString().replace('T', ' ').replace('Z', '');
+    const [raw] = await ctx.queryTestDb('SELECT COUNT(*) AS attempts FROM exam_record WHERE started_at >= ? AND started_at < ?',
+      [sqlTime(dayStart), sqlTime(dayStart + 86400000)]);
+    assert.equal(point.count, Number(raw.attempts), `legacy dashboard counts every raw record on ${point.date}`);
+  }
 
   const unknownQuery = await ctx.request(admin.actor, 'GET', `/statistics/training/summary?paper_id=${paper.id}&unknown=1`);
   assert.equal(unknownQuery.status, 400, 'unknown statistics query key must be rejected');

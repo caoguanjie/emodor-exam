@@ -5,8 +5,8 @@ import { Page, TRAINING_DEFAULTS } from '../../common/training-contracts';
 import { Errors } from '../../common/errors';
 import { ExamPaper } from '../../entities/exam-paper.entity';
 import { ExamRecord } from '../../entities/exam-record.entity';
-import { SysUser } from '../../entities/sys-user.entity';
 import { TrainingCategory } from '../../entities/training-category.entity';
+import { applyVisibleExamRecordScope } from './exam-record-visibility';
 
 interface RecordProjectionRow {
   record_id: string;
@@ -111,9 +111,7 @@ export class ExamRecordsService {
   ) {}
 
   private projection(): SelectQueryBuilder<ExamRecord> {
-    return this.recordRepo.createQueryBuilder('record')
-      .innerJoin(SysUser, 'learner', 'learner.id = record.user_id')
-      .innerJoin(ExamPaper, 'paper', 'paper.id = record.paper_id')
+    return applyVisibleExamRecordScope(this.recordRepo.createQueryBuilder('record'))
       .leftJoin(TrainingCategory, 'category', 'category.id = record.category_id')
       .select('record.id', 'record_id')
       .addSelect('record.paper_id', 'paper_id')
@@ -138,9 +136,7 @@ export class ExamRecordsService {
       .addSelect('(SELECT COUNT(*) FROM exam_record_question record_item WHERE record_item.record_id = record.id)', 'total_count')
       .addSelect(`(SELECT COUNT(*) FROM exam_answer record_answer
         WHERE record_answer.exam_record_id = record.id
-          AND COALESCE(JSON_LENGTH(record_answer.selected), 0) > 0)`, 'answered_count')
-      .andWhere("record.status IN ('in_progress', 'passed', 'failed', 'timeout')")
-      .andWhere("NOT (record.status = 'timeout' AND record.grading_state = 'finalized' AND record.score IS NOT NULL AND record.submitted_at IS NOT NULL)");
+          AND COALESCE(JSON_LENGTH(record_answer.selected), 0) > 0)`, 'answered_count');
   }
 
   async list(actorId: string, filters: ExamRecordListFilters): Promise<Page<ExamRecordSummary>> {

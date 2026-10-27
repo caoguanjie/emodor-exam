@@ -58,6 +58,10 @@ const permissions = [
   ['exam_records:read', '查看考试记录'],
   ['statistics:read', '查看统计'], ['statistics:export', '导出统计'],
   ['roles:read', '查看角色'], ['roles:write', '维护角色'], ['administrators:read', '查看管理员'], ['administrators:write', '维护管理员角色'],
+  ['roles:create', '新增角色'], ['roles:update', '修改角色'], ['roles:delete', '删除角色'], ['roles:permissions', '设置角色权限'],
+  ['administrators:create', '新增管理员'], ['administrators:update', '修改管理员'], ['administrators:delete', '删除管理员'],
+  ['administrators:reset_password', '重置管理员密码'],
+  ['menus:read', '查看菜单'], ['menus:create', '新增菜单'], ['menus:update', '修改菜单'], ['menus:delete', '删除菜单'],
   ['sessions:read', '查看在线会话'], ['sessions:write', '强制下线会话'], ['media:read', '读取媒体'], ['media:write', '上传媒体'],
   ['courses:read', '查看课程'], ['courses:write', '维护课程'], ['courses:publish', '发布课程'],
   ['system_settings:read', '查看系统配置'], ['system_settings:write', '维护系统配置'],
@@ -73,7 +77,7 @@ const legacyRegulation = [
   'ai:read', 'ai:write', 'ai:review', 'questions:read', 'questions:write',
   'papers:read', 'papers:write', 'papers:publish', 'statistics:read', 'statistics:export',
 ];
-const allPermissionCodes = permissions.map(([code]) => code);
+const allPermissionCodes = permissions.map(([code]) => code).filter((code) => !['administrators:write', 'roles:write'].includes(code));
 const roleDefinitions = [
   ['super_admin', '超级管理员', 1, allPermissionCodes],
   ['regulation_admin', '业务管理员', 1, legacyRegulation],

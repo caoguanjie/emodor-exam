@@ -68,6 +68,7 @@ http.interceptors.response.use(
     return body;
   },
   async (err: AxiosError) => {
+    if (axios.isCancel(err)) return Promise.reject(err);
     const config = err.config as InternalAxiosRequestConfig & { _retried?: boolean };
     const status = err.response?.status;
     const body: any = err.response?.data;

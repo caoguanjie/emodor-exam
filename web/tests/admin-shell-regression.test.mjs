@@ -28,6 +28,7 @@ const clientIds = {
   courseCover: '\0a5-course-cover-client-test',
   trainingCategories: '\0a5-training-categories-client-test',
   administrators: '\0a5-administrators-client-test',
+  roleSelect: '\0a5-role-select-client-test',
   roles: '\0a5-roles-client-test',
   aiConfig: '\0a5-ai-config-client-test',
   businessTabs: '\0a5-business-tabs-client-test',
@@ -46,6 +47,7 @@ const clientCode = new Map();
 const testContext = {
   calls: [],
   navigation: [],
+  navigationGet: null,
   isAdmin: true,
   confirmDecisions: [],
   confirmCalls: [],
@@ -76,6 +78,9 @@ const testContext = {
 
 const elementStubCode = `
   const context = globalThis.__a5ShellTest;
+  export const ElSelect = 'el-select';
+  export const ElOption = 'el-option';
+  export const ElButton = 'el-button';
   export const ElMessage = {
     success(message) { context.messages.push({ type: 'success', message }); },
     warning(message) { context.messages.push({ type: 'warning', message }); },
@@ -110,16 +115,19 @@ const httpStubCode = `
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const copy = (value) => value === undefined ? undefined : clone(value);
   const http = {
-    async get(path) {
-      context.calls.push({ method: 'GET', path });
-      if (path === '/admin/menus/navigation') return clone(context.navigation);
+    async get(path, options) {
+      context.calls.push({ method: 'GET', path, ...(path.startsWith('/admin/administrators') && options?.params ? { params: copy(options.params) } : {}), ...(path === '/admin/roles' && options?.params ? { params: copy(options.params) } : {}) });
+      if (path === '/admin/menus/navigation') {
+        if (context.navigationGet) return context.navigationGet();
+        return clone(context.navigation);
+      }
       if (path === '/site-config') return clone(context.siteConfig);
       if (path === '/admin/site-settings') {
         context.settingsReads += 1;
         return clone(context.siteConfig);
       }
       if (path === '/me/profile') return clone(context.profile);
-      if (path === '/admin/menus') return [];
+      if (path === '/admin/menus') return clone(context.menus);
       if (path === '/admin/dictionaries') return { items: [], total: 0 };
       if (path === '/admin/students') return { items: clone(context.students), total: context.students.length };
       if (/^\\/admin\\/students\\/[^/]+$/.test(path)) {
@@ -129,19 +137,42 @@ const httpStubCode = `
       if (path === '/admin/training-categories') return { items: clone(context.trainingCategories), total: context.trainingCategories.length };
       if (path === '/admin/courses/category-options') return { items: [], total: 0 };
       if (path === '/admin/courses') return { items: [], total: 0 };
-      if (path === '/admin/administrators') return clone(context.administrators);
-      if (path === '/admin/administrators/assignable-roles') return [
-        { id: 'role-1', code: 'role_one', name: '角色一', status: 1, is_system: false },
-        { id: 'role-2', code: 'role_two', name: '角色二', status: 1, is_system: false },
-      ];
-      if (path === '/admin/roles') return clone(context.roles);
+      if (path === '/admin/administrators') {
+        const params = copy(options?.params || { page: 1, page_size: 10, keyword: '' });
+        if (context.administratorsGet) return context.administratorsGet(params);
+        const keyword = (params.keyword || '').toLowerCase();
+        const filtered = context.administrators.filter((row) => [row.username, row.real_name, row.phone].some((value) => String(value || '').toLowerCase().includes(keyword)));
+        return { items: clone(filtered.slice((params.page - 1) * params.page_size, params.page * params.page_size)), total: filtered.length, page: params.page, page_size: params.page_size };
+      }
+      if (path === '/admin/administrators/assignable-roles') return clone(context.assignableRoles);
+      if (/^\\/admin\\/administrators\\/[^/]+$/.test(path)) {
+        const id = decodeURIComponent(path.split('/').at(-1));
+        if (context.administratorDetailGet) return context.administratorDetailGet(id);
+        return clone(context.administrators.find((row) => String(row.id) === id));
+      }
+      if (path === '/admin/roles') {
+        if (!options?.params) return clone(context.roles);
+        const params = copy(options.params);
+        if (context.rolesGet) return context.rolesGet(params);
+        const filtered = context.roles.filter((row) => row.name.includes(params.keyword || ''));
+        return { items: clone(filtered.slice((params.page - 1) * params.page_size, params.page * params.page_size)), total: filtered.length, page: params.page, page_size: params.page_size };
+      }
+      if (path === '/admin/roles/permission-tree') return clone(context.rolePermissionTree);
+      if (/^\\/admin\\/roles\\/[^/]+$/.test(path)) {
+        const id = decodeURIComponent(path.split('/').at(-1));
+        if (context.roleDetailGet) return context.roleDetailGet(id);
+        return clone(context.roles.find((row) => String(row.id) === id));
+      }
       if (path === '/ai/config') {
         context.aiConfigReads += 1;
         if (context.aiConfigGet) return context.aiConfigGet();
         return { base_url: 'https://ai.example.test/v1', model: 'model-baseline', api_key_masked: '****base' };
       }
       if (path === '/admin/menus/permission-options') {
-        return [{ code: 'system_settings:write', name: '系统配置维护' }];
+        return [{ code: 'menus:update', name: '修改菜单' }];
+      }
+      if (/^\\/admin\\/menus\\/[^/]+$/.test(path)) {
+        return clone(context.menus.find((row) => String(row.id) === decodeURIComponent(path.split('/').at(-1))));
       }
       if (path === '/admin/permissions') return [{ code: 'students:read', name: '查看学员' }];
       if (/^\\/regulations\\/[^/]+\\/content$/.test(path)) {
@@ -167,17 +198,28 @@ const httpStubCode = `
         return { exam_record_id: 'exam-record-1', paper: { title: '考试', pass_score: 60 }, attempt_no: 1, questions: clone(context.examQuestions), remaining_seconds: 1800, saved_answers: {} };
       }
       if (path === '/admin/administrators') {
+        if (context.administratorPost) return context.administratorPost(path, copy(body));
         const created = {
           id: 'admin-created', username: body.username, real_name: body.real_name, system_role: 'employee',
-          status: 1, last_login_at: null, role_ids: [...body.role_ids], permissions: [],
+          phone: body.phone, email: '', status: body.status ?? 1, last_login_at: null,
+          login_count: 0, last_login_ip: null, created_at: '2026-10-27T00:00:00.000Z',
+          role_ids: [...body.role_ids], permissions: [],
         };
         context.administrators.push(created);
         return clone(created);
       }
+      if (/^\\/admin\\/administrators\\/[^/]+\\/reset-password$/.test(path) && context.administratorPost) return context.administratorPost(path, copy(body));
       return {};
     },
     async put(path, body) {
       context.calls.push({ method: 'PUT', path, body: copy(body) });
+      if (/^\\/admin\\/administrators\\/[^/]+$/.test(path)) {
+        if (context.administratorPut) return context.administratorPut(path, copy(body));
+        const id = path.split('/')[3];
+        const row = context.administrators.find((item) => String(item.id) === id);
+        if (row) Object.assign(row, copy(body));
+        return clone(row || {});
+      }
       if (path === '/admin/site-settings') {
         context.siteConfig = clone(body);
         return clone(body);
@@ -190,7 +232,14 @@ const httpStubCode = `
       if (path === '/me/profile') context.profile = { ...context.profile, ...clone(body) };
       return {};
     },
-    async delete(path) { context.calls.push({ method: 'DELETE', path }); return {}; },
+    async delete(path) {
+      context.calls.push({ method: 'DELETE', path });
+      if (/^\\/admin\\/administrators\\/[^/]+$/.test(path)) {
+        if (context.administratorDelete) return context.administratorDelete(path);
+        context.administrators = context.administrators.filter((row) => String(row.id) !== path.split('/').at(-1));
+      }
+      return {};
+    },
   };
   export default http;
   export function publicSiteAssetUrl(assetId) { return '/public/' + assetId; }
@@ -204,7 +253,7 @@ const authStubCode = `
     accessToken: 'test-token',
     user: { id: 7, real_name: '测试管理员', role: 'regulation_admin', permissions: [] },
     get isAdmin() { return context.isAdmin; },
-    get isSuperAdmin() { return false; },
+    get isSuperAdmin() { return context.isSuperAdmin === true; },
     can(code) { return context.permissions.has(code); },
     async logout() { context.logoutCalls += 1; },
     async fetchProfile() {},
@@ -253,10 +302,11 @@ function testPlugin() {
   return {
     name: 'a5-shell-regression-stubs',
     enforce: 'pre',
-    resolveId(source) {
+    resolveId(source, _importer, options) {
       if (Object.values(clientIds).includes(source)) return source;
-      if (source.includes('/node_modules/.vite/deps/vue-router') || source.includes('/node_modules/vue-router/')) return { id: 'vue-router', external: true };
-      if (/\/node_modules\/(?:\.vite\/deps\/vue\.js|vue\/dist\/vue\.runtime\.esm-bundler\.js)/.test(source)) return { id: 'vue', external: true };
+      if (options?.ssr && (source === 'vue' || source === 'vue-router')) return { id: source, external: true };
+      if (options?.ssr && (source.includes('/node_modules/.vite/deps/vue-router') || source.includes('/node_modules/vue-router/'))) return { id: 'vue-router', external: true };
+      if (options?.ssr && /\/node_modules\/(?:\.vite\/deps\/vue\.js|vue\/dist\/vue\.runtime\.esm-bundler\.js)/.test(source)) return { id: 'vue', external: true };
       if (source === 'element-plus' || source.includes('/node_modules/.vite/deps/element-plus') || source.includes('/node_modules/element-plus/')) return elementStubId;
       if (source === '@element-plus/icons-vue' || source.includes('/node_modules/.vite/deps/@element-plus_icons-vue') || source.includes('/node_modules/@element-plus/icons-vue/')) return iconsStubId;
       if (source === '/@id/__x00__a5-element-test') return elementStubId;
@@ -269,6 +319,7 @@ function testPlugin() {
       if ((source === '../components/BusinessTabs.vue' || source === '/src/components/BusinessTabs.vue') && clientCode.has(clientIds.businessTabs)) return clientIds.businessTabs;
       if (source === '../components/MediaUpload.vue' || source === '../../components/MediaUpload.vue' || source === '/src/components/MediaUpload.vue') return mediaStubId;
       if ((source === '../../components/CourseCover.vue' || source === '/src/components/CourseCover.vue') && clientCode.has(clientIds.courseCover)) return clientIds.courseCover;
+      if ((source === '../../components/RoleSelect.vue' || source === '/src/components/RoleSelect.vue') && clientCode.has(clientIds.roleSelect)) return clientIds.roleSelect;
       if (source === '../../components/ImportPreview.vue' || source === '/src/components/ImportPreview.vue') return importPreviewStubId;
       if ((source === '../composables/useUnsavedChanges' || source === '/src/composables/useUnsavedChanges.ts') && clientCode.has(clientIds.unsaved)) return clientIds.unsaved;
       return undefined;
@@ -549,8 +600,8 @@ function stripClientHmr(code) {
     .replace(/typeof __VUE_HMR_RUNTIME__[\s\S]*?(?=import _export_sfc)/, '')
     .replace(/from "\/node_modules\/\.vite\/deps\/vue\.js[^"]*"/g, 'from "vue"')
     .replace(/from "\/node_modules\/\.vite\/deps\/vue-router\.js[^"]*"/g, 'from "vue-router"')
-    .replace(/from "\/node_modules\/vue\/dist\/vue\.runtime\.esm-bundler\.js"/g, 'from "vue"')
-    .replace(/from "\/node_modules\/vue-router\/dist\/vue-router\.mjs"/g, 'from "vue-router"');
+    .replace(/from "\/node_modules\/vue\/dist\/vue\.runtime\.esm-bundler\.js(?:\?[^"]*)?"/g, 'from "vue"')
+    .replace(/from "\/node_modules\/vue-router\/dist\/vue-router\.mjs(?:\?[^"]*)?"/g, 'from "vue-router"');
 }
 
 async function loadClientModule(path, id) {
@@ -639,6 +690,7 @@ before(async () => {
     server: { middlewareMode: true, hmr: false, ws: false },
     appType: 'custom',
     optimizeDeps: { noDiscovery: true },
+    ssr: { external: ['vue', 'vue-router'] },
     plugins: [testPlugin()],
   });
   ({ useUnsavedChanges } = await loadClientModule('/src/composables/useUnsavedChanges.ts', clientIds.unsaved));
@@ -653,6 +705,7 @@ before(async () => {
   await loadClientSfc('/src/components/CourseCover.vue', clientIds.courseCover);
   Courses = await loadClientSfc('/src/views/admin/Courses.vue', clientIds.courses);
   TrainingCategories = await loadClientSfc('/src/views/admin/TrainingCategories.vue', clientIds.trainingCategories);
+  await loadClientSfc('/src/components/RoleSelect.vue', clientIds.roleSelect);
   Administrators = await loadClientSfc('/src/views/admin/Administrators.vue', clientIds.administrators);
   Roles = await loadClientSfc('/src/views/admin/Roles.vue', clientIds.roles);
   AiConfig = await loadClientSfc('/src/views/admin/AiConfig.vue', clientIds.aiConfig);
@@ -667,7 +720,9 @@ after(async () => {
 beforeEach(() => {
   testContext.calls = [];
   testContext.navigation = demoNavigation();
+  testContext.navigationGet = null;
   testContext.isAdmin = true;
+  testContext.isSuperAdmin = false;
   testContext.confirmDecisions = [];
   testContext.confirmCalls = [];
   testContext.messages = [];
@@ -683,13 +738,32 @@ beforeEach(() => {
   if (testContext.tabsStore) testContext.tabsStore.tabs = [];
   testContext.permissions = new Set([
     'system_settings:read', 'system_settings:write', 'students:write',
-    'training_categories:write', 'administrators:write', 'roles:write',
+    'training_categories:write', 'administrators:read', 'administrators:create', 'administrators:update',
+    'administrators:delete', 'administrators:reset_password',
+    'menus:read', 'menus:create', 'menus:update', 'menus:delete',
+    'roles:read', 'roles:create', 'roles:update', 'roles:delete', 'roles:permissions',
     'ai_config:read', 'ai_config:write',
   ]);
   testContext.students = [{ id: 'student-1', username: 'student', real_name: '学员基线', employee_no: '', source: 'institution', category_id: 'category-1', phone: '', email: '', status: 1, avatar_id: 'avatar-old' }];
+  testContext.menus = [{ id: 'menu-1', parent_id: null, name: '菜单基线', type: 'menu', route_path: '/admin/system/menus', permission_code: 'menus:read', icon: null, sort: 10, status: 1, children: [] }];
   testContext.trainingCategories = [{ id: 'category-1', name: '类别基线', description: '类别说明', status: 1 }];
-  testContext.administrators = [{ id: 'admin-1', username: 'manager', real_name: '管理员', system_role: 'employee', status: 1, last_login_at: null, role_ids: ['role-1'], permissions: [] }];
-  testContext.roles = [{ id: 'business-role-1', code: 'business_role', name: '角色基线', permissions: ['students:read'], status: 1, is_system: false }];
+  testContext.administrators = [{ id: 'admin-1', username: 'manager', real_name: '管理员', phone: '13800000001', email: '', system_role: 'employee', status: 1, last_login_at: null, login_count: 3, last_login_ip: null, created_at: '2026-10-27T00:01:02.000Z', role_ids: ['role-1'], permissions: [] }];
+  testContext.assignableRoles = [
+    { id: 'role-1', code: 'role_one', name: '角色一', status: 1, is_system: false },
+    { id: 'role-2', code: 'role_two', name: '角色二', status: 1, is_system: false },
+  ];
+  testContext.administratorsGet = null;
+  testContext.administratorDetailGet = null;
+  testContext.administratorPost = null;
+  testContext.administratorPut = null;
+  testContext.administratorDelete = null;
+  testContext.roles = [{ id: 'business-role-1', code: 'business_role', name: '角色基线', remark: '备注基线', created_at: '2026-10-27T01:02:03Z', updated_at: '2026-10-27T01:02:03Z', permissions: ['students:read'], status: 1, is_system: false }];
+  testContext.rolesGet = null;
+  testContext.roleDetailGet = null;
+  testContext.rolePermissionTree = {
+    menus: [{ id: 'students', parent_id: null, name: '学员管理', type: 'menu', permission_code: 'students:read', sort: 10, status: 1 }],
+    permissions: [{ code: 'students:read', name: '查看学员' }, { code: 'roles:read', name: '查看角色' }],
+  };
   testContext.siteConfig = { logo_asset_id: '1001', banners: [{ asset_id: 'banner-saved', sort: 10 }] };
   testContext.profile = { real_name: '原姓名', phone: '13800000000', email: 'old@example.test', avatar_id: 'avatar-saved', source: 'institution', category_id: 'category-1' };
   fakeWindow.activeIntervals.clear();
@@ -806,6 +880,79 @@ test('asynchronous navigation initializes the real menu with learning and exam e
   assert.equal(opened.includes('system'), false);
   mounted.unmount();
 });
+
+for (const olderResult of ['success', 'failure']) {
+  test(`navigation keeps the newer event refresh when an older request completes with ${olderResult}`, async () => {
+    const older = deferred();
+    const newer = deferred();
+    const requests = [older.promise, newer.promise];
+    testContext.navigationGet = () => requests.shift();
+    const mounted = await mountShell('/other');
+    const shell = findInstance(mounted.app, 'adminGroups');
+    fakeWindow.dispatch('re:admin-menus-changed');
+    await flushUpdates();
+    assert.equal(testContext.calls.filter((call) => call.path === '/admin/menus/navigation').length, 2);
+    newer.resolve([{ ...demoNavigation()[0], name: '当前导航' }]);
+    await flushUpdates();
+    assert.deepEqual(shell.setupState.adminGroups.map((group) => group.name), ['当前导航']);
+    if (olderResult === 'success') older.resolve([{ ...demoNavigation()[0], name: '迟到导航' }]);
+    else older.reject(new Error('older navigation failed'));
+    await flushUpdates();
+    assert.deepEqual(shell.setupState.adminGroups.map((group) => group.name), ['当前导航']);
+    const menu = findHostNode(mounted.rootNode, (node) => node.type === 'el-menu');
+    assert.equal(hostText(menu).includes('当前导航'), true);
+    assert.equal(hostText(menu).includes('迟到导航'), false);
+    mounted.unmount();
+  });
+}
+
+test('navigation ignores an admin response after admin access is removed', async () => {
+  const pending = deferred();
+  testContext.navigationGet = () => pending.promise;
+  const mounted = await mountShell('/other');
+  const shell = findInstance(mounted.app, 'adminGroups');
+  testContext.isAdmin = false;
+  pending.resolve(demoNavigation());
+  await flushUpdates();
+  assert.deepEqual([...shell.setupState.adminGroups], []);
+  mounted.unmount();
+});
+
+test('navigation invalidates an older admin request when loading as a learner', async () => {
+  const pending = deferred();
+  testContext.navigationGet = () => pending.promise;
+  const mounted = await mountShell('/other');
+  const shell = findInstance(mounted.app, 'adminGroups');
+  testContext.isAdmin = false;
+  await shell.setupState.loadNavigation();
+  testContext.isAdmin = true;
+  pending.resolve(demoNavigation());
+  await flushUpdates();
+  assert.deepEqual([...shell.setupState.adminGroups], []);
+  assert.equal(testContext.calls.filter((call) => call.path === '/admin/menus/navigation').length, 1);
+  mounted.unmount();
+});
+
+for (const result of ['success', 'failure']) {
+  test(`navigation ignores a ${result} response and menu events after shell unmount`, async () => {
+    const mounted = await mountShell('/other');
+    const shell = findInstance(mounted.app, 'adminGroups');
+    const baseline = JSON.parse(JSON.stringify(shell.setupState.adminGroups));
+    const pending = deferred();
+    testContext.navigationGet = () => pending.promise;
+    const refreshing = shell.setupState.loadNavigation();
+    const reads = testContext.calls.filter((call) => call.path === '/admin/menus/navigation').length;
+    mounted.unmount();
+    fakeWindow.dispatch('re:admin-menus-changed');
+    if (result === 'success') pending.resolve([{ ...demoNavigation()[0], name: '卸载后导航' }]);
+    else pending.reject(new Error('navigation failed after unmount'));
+    await refreshing;
+    await flushUpdates();
+    assert.deepEqual(JSON.parse(JSON.stringify(shell.setupState.adminGroups)), baseline);
+    assert.equal(testContext.calls.filter((call) => call.path === '/admin/menus/navigation').length, reads);
+    assert.equal(fakeWindow.listeners.get('re:admin-menus-changed')?.size || 0, 0);
+  });
+}
 
 test('the shell toggle collapses the sidebar while keeping the current page title beside it', async () => {
   const mounted = await mountShell('/admin/courses');
@@ -997,12 +1144,12 @@ test('banners retain selection order after out-of-order upload completion and ap
 for (const [path, name, actions] of [
   ['/admin/training-categories', '培训类别', ['查询', '新增类别']],
   ['/admin/students', '学员管理', ['查询', '新增学员', '下载导入模板']],
-  ['/admin/administrators', '管理员', ['新建管理员', '刷新']],
-  ['/admin/roles', '角色权限', ['新建业务角色', '刷新']],
+  ['/admin/administrators', '管理员', ['新增管理员', '查询']],
+  ['/admin/roles', '角色权限', ['新增角色', '查询']],
   ['/admin/ai-config', 'AI 服务配置', ['保存配置', '连通性测试']],
   ['/settings', '网站配置', ['撤销修改', '保存并发布']],
   ['/dictionaries', '字典配置', ['新增字典项', '查询', '重置']],
-  ['/menus', '菜单配置', ['新增节点', '刷新']],
+  ['/menus', '菜单配置', ['新增菜单']],
 ]) {
   test(`administration content omits redundant introductions but keeps actions: ${name}`, async () => {
     const mounted = await mountShell(path);
@@ -1023,10 +1170,10 @@ for (const [path, dialogTitle] of [
   ['/admin/training-categories', '新增类别'],
   ['/admin/students', '新增学员'],
   ['/admin/courses', '新建课程'],
-  ['/admin/administrators', '新建管理员'],
-  ['/admin/roles', '新建业务角色'],
+  ['/admin/administrators', '新增管理员'],
+  ['/admin/roles', '新增角色'],
   ['/dictionaries', '新增字典项'],
-  ['/menus', '新增菜单节点'],
+  ['/menus', '新增菜单'],
 ]) {
   test(`form dialogs use the shared FitsAdmin shell: ${dialogTitle}`, async () => {
     const mounted = await mountShell(path);
@@ -1083,13 +1230,16 @@ for (const [path, actionLabel, requestPath] of [
   });
 }
 
-test('unfiltered role lists expose operations without a blank search area', async () => {
+test('role lists expose a name query, create action, and server pagination', async () => {
   const mounted = await mountShell('/admin/roles');
   const main = findHostNode(mounted.rootNode, (node) => node.type === 'el-main');
-  assert.equal(findHostNode(main, (node) => node.props['aria-label'] === '查询条件'), null);
+  const search = findHostNode(main, (node) => node.props['aria-label'] === '查询条件');
+  assert.ok(findHostNode(search, (node) => node.type === 'el-form-item' && node.props.label === '角色名称'));
+  assert.ok(findHostNode(search, (node) => node.type === 'el-button' && hostText(node) === '查询'));
   const actions = findHostNode(main, (node) => node.props['aria-label'] === '列表操作');
-  assert.ok(actions, 'unfiltered list still uses the shared operation region');
-  assert.ok(findHostNode(actions, (node) => node.type === 'el-button' && hostText(node) === '新建业务角色'));
+  assert.ok(findHostNode(actions, (node) => node.type === 'el-button' && hostText(node) === '新增角色'));
+  assert.ok(findHostNode(main, (node) => node.type === 'el-pagination'));
+  assert.ok(testContext.calls.some((call) => call.path === '/admin/roles' && call.params?.page === 1 && call.params?.page_size === 10));
   mounted.unmount();
 });
 
@@ -1267,24 +1417,25 @@ test('self profile keeps the verified phone read-only and never submits it back 
   mounted.unmount();
 });
 
-test('menu write users load the narrow permission options endpoint without roles read', async () => {
-  testContext.permissions = new Set(['system_settings:read', 'system_settings:write']);
+test('menu create users load the narrow permission options endpoint without roles read', async () => {
+  testContext.permissions = new Set(['menus:read', 'menus:create']);
   const mounted = await mountShell('/menus');
+  const menus = findInstance(mounted.app, 'permissionOptions');
+  await menus.setupState.openCreate();
   await waitFor(
     () => testContext.calls.some((call) => call.method === 'GET' && call.path === '/admin/menus/permission-options'),
     'menu permission options',
   );
   assert.equal(testContext.calls.some((call) => call.path === '/admin/permissions'), false);
-  const menus = findInstance(mounted.app, 'permissionOptions');
   assert.deepEqual(
     [...menus.setupState.permissionOptions],
-    [{ code: 'system_settings:write', name: '系统配置维护' }],
+    [{ code: 'menus:update', name: '修改菜单' }],
   );
   mounted.unmount();
 });
 
 test('menu read-only users do not request permission options', async () => {
-  testContext.permissions = new Set(['system_settings:read']);
+  testContext.permissions = new Set(['menus:read']);
   const mounted = await mountShell('/menus');
   await waitFor(() => testContext.calls.some((call) => call.path === '/admin/menus'), 'menu tree');
   assert.equal(testContext.calls.some((call) => call.path === '/admin/menus/permission-options'), false);
@@ -1295,7 +1446,7 @@ test('menu read-only users do not request permission options', async () => {
 test('menu configuration offers the independent question import route', async () => {
   const mounted = await mountShell('/menus');
   const menus = findInstance(mounted.app, 'permissionOptions');
-  menus.setupState.openCreate();
+  await menus.setupState.openCreate();
   await nextTick();
   const options = findHostNodes(mounted.rootNode, (node) => node.type === 'el-option');
   assert.equal(options.some((node) => node.props.value === '/admin/questions/import'), true);
@@ -1305,7 +1456,7 @@ test('menu configuration offers the independent question import route', async ()
 test('menu dialog keeps a cancelled draft and restores its edit baseline after discard', async () => {
   const mounted = await mountShell('/menus');
   const firstMenus = findInstance(mounted.app, 'permissionOptions');
-  firstMenus.setupState.openEdit({ id: 'menu-1', parent_id: null, name: '菜单基线', type: 'menu', route_path: '/menus', permission_code: 'system_settings:read', icon: null, sort: 10, status: 1, children: [] });
+  await firstMenus.setupState.openEdit(testContext.menus[0]);
   await nextTick();
   assert.equal(firstMenus.setupState.dirty, false, 'opening a baseline must not create a false dirty state');
   firstMenus.setupState.form.name = '未保存菜单';
@@ -1448,52 +1599,16 @@ test('training category edit protects dialog and route exits, restores baseline,
   mounted.unmount();
 });
 
-test('administrator role draft protects dialog and route exits, restores baseline, and clears dirty after save', async () => {
-  const mounted = await mountShell('/admin/administrators');
-  const first = findInstance(mounted.app, 'candidateDialog');
-  await waitFor(() => first.setupState.rows.length === 1, 'administrator list');
-  await first.setupState.openRoles(first.setupState.rows[0]);
-  first.setupState.selectedRoleIds.push('role-2');
-  await nextTick();
-  assert.equal(first.setupState.dirty, true);
-
-  testContext.confirmDecisions.push(false);
-  await first.setupState.closeRoleDialog();
-  assert.equal(first.setupState.dialog, true);
-  assert.deepEqual([...first.setupState.selectedRoleIds], ['role-1', 'role-2']);
-
-  testContext.confirmDecisions.push(false);
-  await mounted.router.push('/other');
-  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/administrators');
-
-  testContext.confirmDecisions.push(true);
-  await mounted.router.push('/other');
-  await mounted.router.push('/admin/administrators');
-  const restored = findInstance(mounted.app, 'candidateDialog');
-  assert.equal(restored.uid, first.uid);
-  assert.deepEqual([...restored.setupState.selectedRoleIds], ['role-1']);
-  assert.equal(restored.setupState.selected.id, 'admin-1');
-  assert.equal(restored.setupState.dialog, false);
-  assert.equal(restored.setupState.dirty, false);
-
-  await restored.setupState.openRoles(restored.setupState.rows[0]);
-  restored.setupState.selectedRoleIds.push('role-2');
-  await restored.setupState.saveRoles();
-  assert.equal(restored.setupState.dirty, false);
-  assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/admin/administrators/admin-1/roles' && call.body.role_ids.join(',') === 'role-1,role-2'));
-  mounted.unmount();
-});
-
 test('administrator creation posts the account and business roles atomically', async () => {
   const mounted = await mountShell('/admin/administrators');
   await waitFor(() => testContext.calls.some((call) => call.method === 'GET' && call.path === '/admin/administrators'), 'administrator list');
-  const open = findHostNode(mounted.rootNode, (node) => node.type === 'el-button' && hostText(node).trim() === '新建管理员');
+  const open = findHostNode(mounted.rootNode, (node) => node.type === 'el-button' && hostText(node).trim() === '新增管理员');
   assert.ok(open);
   await clickHost(open);
   const administrator = findInstance(mounted.app, 'createForm');
   Object.assign(administrator.setupState.createForm, {
-    username: 'new.manager', password: 'Secure123', real_name: '新管理员',
-    phone: '13800000000', email: 'manager@example.test', role_ids: ['role-1'],
+    username: 'new.manager', password: 'Secure123', confirm_password: 'Secure123', real_name: '新管理员',
+    phone: '13800000000', role_ids: ['role-1'], status: 0,
   });
   const save = findHostNode(mounted.rootNode, (node) => node.type === 'el-button' && hostText(node).trim() === '创建管理员');
   assert.ok(save);
@@ -1501,18 +1616,340 @@ test('administrator creation posts the account and business roles atomically', a
   const write = testContext.calls.find((call) => call.method === 'POST' && call.path === '/admin/administrators');
   assert.deepEqual(write.body, {
     username: 'new.manager', password: 'Secure123', real_name: '新管理员',
-    phone: '13800000000', email: 'manager@example.test', role_ids: ['role-1'],
+    phone: '13800000000', role_ids: ['role-1'], status: 0,
   });
   mounted.unmount();
 });
 
+test('administrator list queries reset the page and consume server pagination in the shared table', async () => {
+  testContext.administrators = Array.from({ length: 12 }, (_, index) => ({ ...testContext.administrators[0], id: `admin-${index + 1}`, username: `manager-${index + 1}` }));
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createDialog');
+  const main = findHostNode(mounted.rootNode, (node) => node.type === 'el-main');
+  const search = findHostNode(main, (node) => node.props['aria-label'] === '查询条件');
+  assert.ok(search, 'administrators use the public labelled query region');
+  assert.ok(findHostNode(search, (node) => node.type === 'el-input' && node.props.placeholder.includes('手机号')));
+  await waitFor(() => administrator.setupState.rows.length === 10, 'first administrator page');
+  assert.equal(administrator.setupState.total, 12);
+  administrator.setupState.query.page = 2;
+  await administrator.setupState.load();
+  assert.equal(administrator.setupState.rows[0].username, 'manager-11');
+  administrator.setupState.query.keyword = ' manager-1 ';
+  await clickHost(findHostNode(search, (node) => node.type === 'el-button' && hostText(node) === '查询'));
+  const read = testContext.calls.filter((call) => call.path === '/admin/administrators').at(-1);
+  assert.deepEqual(read.params, { page: 1, page_size: 10, keyword: 'manager-1' });
+  assert.equal(administrator.setupState.total, 4);
+  assert.equal(findHostNode(main, (node) => node.type === 'el-button' && hostText(node) === '刷新'), null);
+  const columns = findHostNodes(main, (node) => node.type === 'el-table-column');
+  assert.deepEqual(columns.slice(0, 9).map((node) => node.props.label), ['账号', '姓名', '手机号', '登录次数', '登录IP', '状态', '最后登录时间', '创建时间', '操作']);
+  assert.equal(columns[8].props.align, 'center');
+  assert.equal(Number(columns[8].props.width), 210);
+  const operations = findHostNodes(columns[8], (node) => node.type === 'el-button');
+  assert.deepEqual(operations.map(hostText), ['重置密码', '修改', '删除']);
+  assert.equal(administrator.setupState.formatTime('2026-10-26T20:34:59.000Z'), '2026-10-27 04:34');
+  assert.equal(administrator.setupState.formatTime(null), '—');
+  assert.equal(administrator.setupState.formatTime('invalid'), '—');
+});
+
+test('administrator queries ignore earlier responses and responses after leaving the cached page', async () => {
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createDialog');
+  await flushUpdates();
+  assert.ok(administrator.setupState.query, 'administrator query state is available');
+  const earlier = deferred();
+  const later = deferred();
+  testContext.administratorsGet = ({ keyword }) => keyword === 'earlier' ? earlier.promise : later.promise;
+  administrator.setupState.query.keyword = 'earlier';
+  const oldRead = administrator.setupState.searchAdministrators();
+  administrator.setupState.query.keyword = 'later';
+  const newRead = administrator.setupState.searchAdministrators();
+  later.resolve({ items: [{ ...testContext.administrators[0], username: 'latest' }], total: 1, page: 1, page_size: 10 });
+  await newRead;
+  earlier.resolve({ items: [], total: 0, page: 1, page_size: 10 });
+  await oldRead;
+  assert.equal(administrator.setupState.rows[0].username, 'latest');
+  const inactiveRead = deferred();
+  testContext.administratorsGet = () => inactiveRead.promise;
+  const pending = administrator.setupState.load();
+  await mounted.router.push('/other');
+  inactiveRead.resolve({ items: [], total: 0, page: 1, page_size: 10 });
+  await pending;
+  assert.equal(administrator.setupState.rows[0].username, 'latest');
+});
+
+for (const pendingAt of ['initial load', 'keyword query']) {
+  test('administrator cached page restarts a pending ' + pendingAt + ' when returning', async () => {
+    const departed = deferred();
+    if (pendingAt === 'initial load') testContext.administratorsGet = () => departed.promise;
+    const mounted = await mountShell('/admin/administrators');
+    const administrator = findInstance(mounted.app, 'createDialog');
+    assert.ok(administrator.setupState.query, 'administrator query state is available');
+    let pending;
+    if (pendingAt === 'keyword query') {
+      administrator.setupState.query.keyword = 'new-filter';
+      testContext.administratorsGet = () => departed.promise;
+      pending = administrator.setupState.searchAdministrators();
+    }
+    const beforeReturn = testContext.calls.filter((call) => call.path === '/admin/administrators').length;
+    await mounted.router.push('/other');
+    const refreshed = deferred();
+    testContext.administratorsGet = () => refreshed.promise;
+    await mounted.router.push('/admin/administrators');
+    await flushUpdates();
+    assert.equal(testContext.calls.filter((call) => call.path === '/admin/administrators').length, beforeReturn + 1, 'returning must replace the invalidated request');
+    assert.equal(testContext.calls.filter((call) => call.path === '/admin/administrators').at(-1).params.keyword, pendingAt === 'keyword query' ? 'new-filter' : '');
+    refreshed.resolve({ items: [{ ...testContext.administrators[0], username: 'fresh-after-return' }], total: 1, page: 1, page_size: 10 });
+    await flushUpdates();
+    departed.resolve({ items: [], total: 0, page: 1, page_size: 10 });
+    await pending;
+    await flushUpdates();
+    assert.equal(administrator.setupState.rows[0].username, 'fresh-after-return');
+    assert.equal(administrator.setupState.loading, false);
+  });
+}
+
+test('administrator creation rejects mismatched or weak passwords without sending them', async () => {
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createForm');
+  await administrator.setupState.openCreate();
+  Object.assign(administrator.setupState.createForm, { username: 'new.manager', real_name: '新管理员', role_ids: ['role-1'], password: 'Secure123', confirm_password: 'Different123' });
+  await administrator.setupState.createAdministrator();
+  assert.equal(testContext.calls.filter((call) => call.method === 'POST' && call.path === '/admin/administrators').length, 0, 'a confirmation mismatch must never reach the API');
+  for (const password of ['12345678', 'abcdefgh', 'Abc1234', 'Abc 12345', 'A1'.repeat(65)]) {
+    Object.assign(administrator.setupState.createForm, { password, confirm_password: password });
+    await administrator.setupState.createAdministrator();
+  }
+  assert.equal(testContext.calls.filter((call) => call.method === 'POST' && call.path === '/admin/administrators').length, 0);
+  Object.assign(administrator.setupState.createForm, { username: ' optional.manager ', real_name: '', phone: '', password: 'Secure123', confirm_password: 'Secure123', status: 1 });
+  await administrator.setupState.createAdministrator();
+  assert.deepEqual(testContext.calls.find((call) => call.method === 'POST' && call.path === '/admin/administrators').body, {
+    username: 'optional.manager', password: 'Secure123', real_name: '', phone: '', role_ids: ['role-1'], status: 1,
+  });
+});
+
+test('administrator edit loads the latest detail and preserves an inactive historical role', async () => {
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createForm');
+  assert.equal(typeof administrator.setupState.openEdit, 'function', 'administrator edit is available');
+  testContext.administratorDetailGet = () => ({ ...testContext.administrators[0], real_name: '最新姓名', phone: '13800000002', role_ids: ['role-1', 'inactive-role'] });
+  await administrator.setupState.openEdit(testContext.administrators[0]);
+  assert.equal(administrator.setupState.createForm.real_name, '最新姓名');
+  assert.equal(administrator.setupState.createForm.phone, '13800000002');
+  assert.deepEqual([...administrator.setupState.createForm.role_ids], ['role-1', 'inactive-role']);
+  const dialog = findHostNode(mounted.rootNode, (node) => node.type === 'el-dialog' && node.props.title === '修改管理员');
+  assert.ok(dialog);
+  assert.ok(findHostNode(dialog, (node) => node.type === 'el-input' && node.props.readonly === true && node.props.modelValue === 'manager'));
+  assert.match(hostText(dialog), /已停用角色/);
+  assert.doesNotMatch(hostText(dialog), /role_one|role_two/);
+  administrator.setupState.createForm.real_name = ' 保存姓名 ';
+  administrator.setupState.createForm.status = 0;
+  await administrator.setupState.createAdministrator();
+  const write = testContext.calls.find((call) => call.method === 'PUT' && call.path === '/admin/administrators/admin-1');
+  assert.deepEqual(write.body, { real_name: '保存姓名', phone: '13800000002', role_ids: ['role-1', 'inactive-role'], status: 0 });
+});
+
+test('administrator dialogs discard unsaved create, edit and reset drafts only after confirmation', async () => {
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createForm');
+  await administrator.setupState.openCreate();
+  administrator.setupState.createForm.username = 'unsaved';
+  assert.equal(typeof administrator.setupState.closeCreateDialog, 'function', 'create dialog has a guarded exit');
+  testContext.confirmDecisions.push(false);
+  await administrator.setupState.closeCreateDialog();
+  assert.equal(administrator.setupState.createDialog, true);
+  testContext.confirmDecisions.push(true);
+  await administrator.setupState.closeCreateDialog();
+  assert.equal(administrator.setupState.createDialog, false);
+  assert.equal(administrator.setupState.createForm.username, '');
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  await flushUpdates();
+  await administrator.setupState.openEdit(testContext.administrators[0]);
+  administrator.setupState.createForm.real_name = '未保存修改';
+  testContext.confirmDecisions.push(false);
+  await mounted.router.push('/other');
+  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/administrators');
+  testContext.confirmDecisions.push(true);
+  await mounted.router.push('/other');
+  assert.equal(administrator.setupState.createDialog, false);
+  assert.equal(administrator.setupState.createForm.real_name, '管理员');
+  await mounted.router.push('/admin/administrators');
+  await administrator.setupState.openResetPassword(testContext.administrators[0]);
+  administrator.setupState.resetForm.password = 'Unsaved123';
+  testContext.confirmDecisions.push(false);
+  await administrator.setupState.closeResetDialog();
+  assert.equal(administrator.setupState.resetDialog, true);
+  testContext.confirmDecisions.push(true);
+  await administrator.setupState.closeResetDialog();
+  assert.equal(administrator.setupState.resetDialog, false);
+  assert.equal(administrator.setupState.resetForm.password, '');
+});
+
+test('administrator reset validates confirmation and submits only a new password once', async () => {
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createForm');
+  assert.equal(typeof administrator.setupState.openResetPassword, 'function', 'password reset is available');
+  await administrator.setupState.openResetPassword(testContext.administrators[0]);
+  const dialog = findHostNode(mounted.rootNode, (node) => node.type === 'el-dialog' && node.props.title === '重置密码');
+  assert.match(hostText(dialog), /下次登录.*修改密码/);
+  Object.assign(administrator.setupState.resetForm, { password: 'Reset1234', confirm_password: 'Mismatch123' });
+  await administrator.setupState.saveResetPassword();
+  assert.equal(testContext.calls.some((call) => call.path.endsWith('/reset-password')), false);
+  const pending = deferred();
+  testContext.administratorPost = () => pending.promise;
+  administrator.setupState.resetForm.confirm_password = 'Reset1234';
+  const save = administrator.setupState.saveResetPassword();
+  await administrator.setupState.saveResetPassword();
+  const writes = testContext.calls.filter((call) => call.path === '/admin/administrators/admin-1/reset-password');
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].body, { password: 'Reset1234' });
+  await administrator.setupState.closeResetDialog();
+  assert.equal(administrator.setupState.resetDialog, true, 'a write awaiting a receipt cannot be abandoned');
+  pending.resolve({});
+  await save;
+  assert.equal(administrator.setupState.resetDialog, false);
+  assert.equal(administrator.setupState.resetForm.password, '');
+});
+
+test('administrator saves prevent duplicate writes and block route exit until the receipt arrives', async () => {
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createForm');
+  await administrator.setupState.openCreate();
+  Object.assign(administrator.setupState.createForm, { username: 'once.manager', real_name: '管理员', role_ids: ['role-1'], password: 'Secure123', confirm_password: 'Secure123' });
+  const pending = deferred();
+  testContext.administratorPost = () => pending.promise;
+  const save = administrator.setupState.createAdministrator();
+  await administrator.setupState.createAdministrator();
+  assert.equal(testContext.calls.filter((call) => call.method === 'POST' && call.path === '/admin/administrators').length, 1);
+  await mounted.router.push('/other');
+  assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/administrators');
+  pending.resolve({});
+  await save;
+  await mounted.router.push('/other');
+  assert.equal(mounted.router.currentRoute.value.fullPath, '/other');
+});
+
+test('administrator edit details arriving after cancel cannot replace a newer dialog', async () => {
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createForm');
+  assert.equal(typeof administrator.setupState.openEdit, 'function', 'administrator edit is available');
+  const earlier = deferred();
+  testContext.administratorDetailGet = (id) => id === 'admin-1' ? earlier.promise : { ...testContext.administrators[0], id: 'admin-2', username: 'second', real_name: '第二个管理员' };
+  const first = administrator.setupState.openEdit(testContext.administrators[0]);
+  await waitFor(() => testContext.calls.some((call) => call.path === '/admin/administrators/admin-1'), 'first administrator detail');
+  await administrator.setupState.closeCreateDialog();
+  await administrator.setupState.openEdit({ ...testContext.administrators[0], id: 'admin-2' });
+  earlier.resolve({ ...testContext.administrators[0], real_name: '过期资料' });
+  await first;
+  assert.equal(administrator.setupState.createForm.id, 'admin-2');
+  assert.equal(administrator.setupState.createForm.real_name, '第二个管理员');
+  administrator.setupState.createForm.real_name = '第二个已保存';
+  await administrator.setupState.createAdministrator();
+  assert.equal(testContext.calls.filter((call) => call.method === 'PUT').at(-1).path, '/admin/administrators/admin-2');
+});
+
+test('administrator read permission exposes no write actions and direct writes stay guarded', async () => {
+  for (const permission of [...testContext.permissions]) {
+    if (permission.startsWith('administrators:') && permission !== 'administrators:read') testContext.permissions.delete(permission);
+  }
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createForm');
+  const main = findHostNode(mounted.rootNode, (node) => node.type === 'el-main');
+  const actions = findHostNode(main, (node) => node.props['aria-label'] === '列表操作');
+  assert.equal(Boolean(actions), false);
+  const table = findHostNode(main, (node) => node.type === 'el-table');
+  const operationColumn = findHostNode(table, (node) => node.type === 'el-table-column' && node.props.label === '操作');
+  assert.equal(Boolean(operationColumn), false, 'read-only administrator cannot act on rows');
+  assert.equal(typeof administrator.setupState.openEdit, 'function');
+  await administrator.setupState.openCreate();
+  await administrator.setupState.openEdit(testContext.administrators[0]);
+  assert.equal(typeof administrator.setupState.openAssignment, 'undefined');
+  await administrator.setupState.openResetPassword(testContext.administrators[0]);
+  await administrator.setupState.deleteAdministrator(testContext.administrators[0]);
+  Object.assign(administrator.setupState.createForm, { username: 'blocked', real_name: '管理员', password: 'Secure123', confirm_password: 'Secure123', role_ids: ['role-1'] });
+  await administrator.setupState.createAdministrator();
+  assert.equal(testContext.calls.filter((call) => call.method !== 'GET').length, 0);
+  assert.equal(testContext.calls.some((call) => call.path === '/admin/administrators/assignable-roles'), false);
+});
+
+test('administrator guards protect the current account and super administrators', async () => {
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createForm');
+  assert.equal(typeof administrator.setupState.canResetAdministrator, 'function');
+  const self = { ...testContext.administrators[0], id: '7' };
+  const superAdmin = { ...testContext.administrators[0], id: 'super-1', system_role: 'super_admin' };
+  assert.equal(administrator.setupState.canResetAdministrator(self), false);
+  assert.equal(administrator.setupState.canDeleteAdministrator(self), false);
+  assert.equal(administrator.setupState.canDisableAdministrator(self), false);
+  assert.equal(administrator.setupState.canEditAdministrator(superAdmin), false);
+  assert.equal(administrator.setupState.canResetAdministrator(superAdmin), false);
+  assert.equal(administrator.setupState.canDeleteAdministrator(superAdmin), false);
+  assert.equal(administrator.setupState.canDisableAdministrator(superAdmin), false);
+  testContext.isSuperAdmin = true;
+  testContext.administratorDetailGet = () => superAdmin;
+  await administrator.setupState.openEdit(superAdmin);
+  const dialog = findHostNode(mounted.rootNode, (node) => node.type === 'el-dialog' && node.props.title === '修改管理员');
+  assert.equal(findHostNode(dialog, (node) => node.type === 'el-checkbox-group'), null, 'super administrators have no business role picker');
+  administrator.setupState.createForm.status = 0;
+  await administrator.setupState.createAdministrator();
+  assert.equal(testContext.calls.filter((call) => call.method === 'PUT').length, 0);
+  administrator.setupState.createForm.status = 1;
+  await administrator.setupState.createAdministrator();
+  assert.deepEqual(testContext.calls.find((call) => call.method === 'PUT').body, { real_name: '管理员', phone: '13800000001', status: 1 });
+});
+
+test('administrator delete requires confirmation, preserves history wording and falls back from an empty page', async () => {
+  testContext.administrators = Array.from({ length: 11 }, (_, index) => ({ ...testContext.administrators[0], id: `admin-${index + 1}`, username: `manager-${index + 1}` }));
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createForm');
+  assert.equal(typeof administrator.setupState.deleteAdministrator, 'function', 'administrator deletion is available');
+  administrator.setupState.query.page = 2;
+  await administrator.setupState.load();
+  const row = administrator.setupState.rows[0];
+  testContext.confirmDecisions.push(false);
+  await administrator.setupState.deleteAdministrator(row);
+  assert.equal(testContext.calls.filter((call) => call.method === 'DELETE').length, 0);
+  assert.match(testContext.confirmCalls[0][0], /历史/);
+  assert.match(testContext.confirmCalls[0][0], /禁用/);
+  testContext.confirmDecisions.push(true);
+  await administrator.setupState.deleteAdministrator(row);
+  assert.equal(testContext.calls.filter((call) => call.method === 'DELETE').length, 1);
+  assert.equal(administrator.setupState.query.page, 1);
+  assert.equal(administrator.setupState.rows.length, 10);
+});
+
+test('administrator delete confirmation expires after leaving its owner', async () => {
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createDialog');
+  assert.equal(typeof administrator.setupState.deleteAdministrator, 'function');
+  const confirmation = deferred();
+  testContext.confirmDecisions.push(() => confirmation.promise);
+  const deletion = administrator.setupState.deleteAdministrator(testContext.administrators[0]);
+  await mounted.router.push('/other');
+  confirmation.resolve(true);
+  await deletion;
+  assert.equal(testContext.calls.some((call) => call.method === 'DELETE'), false, 'expired confirmation cannot delete an account');
+  mounted.unmount();
+});
+
+test('administrator edit keeps inactive historical roles until explicitly changed', async () => {
+  testContext.administrators[0].role_ids.push('inactive-role');
+  const mounted = await mountShell('/admin/administrators');
+  const administrator = findInstance(mounted.app, 'createDialog');
+  await administrator.setupState.openEdit(testContext.administrators[0]);
+  assert.deepEqual([...administrator.setupState.createForm.role_ids], ['role-1', 'inactive-role']);
+  await administrator.setupState.createAdministrator();
+  assert.deepEqual(testContext.calls.find((call) => call.method === 'PUT').body, {
+    real_name: '管理员', phone: '13800000001', status: 1, role_ids: ['role-1', 'inactive-role'],
+  });
+});
+
 test('role edit protects dialog and route exits, restores baseline, and clears dirty after save', async () => {
   const mounted = await mountShell('/admin/roles');
-  const first = findInstance(mounted.app, 'catalog');
+  const first = findInstance(mounted.app, 'permissionTree');
   await waitFor(() => first.setupState.roles.length === 1, 'role list');
-  first.setupState.openEdit(first.setupState.roles[0]);
+  await first.setupState.openEdit(first.setupState.roles[0]);
   first.setupState.form.name = '未保存角色';
-  first.setupState.form.permissions.push('roles:read');
+  first.setupState.form.remark = '未保存备注';
   await nextTick();
   assert.equal(first.setupState.dirty, true);
 
@@ -1528,18 +1965,19 @@ test('role edit protects dialog and route exits, restores baseline, and clears d
   testContext.confirmDecisions.push(true);
   await mounted.router.push('/other');
   await mounted.router.push('/admin/roles');
-  const restored = findInstance(mounted.app, 'catalog');
+  const restored = findInstance(mounted.app, 'permissionTree');
   assert.equal(restored.uid, first.uid);
   assert.equal(restored.setupState.form.name, '角色基线');
-  assert.deepEqual([...restored.setupState.form.permissions], ['students:read']);
+  assert.equal(restored.setupState.form.remark, '备注基线');
   assert.equal(restored.setupState.dialog, false);
   assert.equal(restored.setupState.dirty, false);
 
-  restored.setupState.openEdit(restored.setupState.roles[0]);
+  await restored.setupState.openEdit(restored.setupState.roles[0]);
   restored.setupState.form.name = '已保存角色';
   await restored.setupState.save();
   assert.equal(restored.setupState.dirty, false);
-  assert.ok(testContext.calls.some((call) => call.method === 'PUT' && call.path === '/admin/roles/business-role-1' && call.body.name === '已保存角色'));
+  const saved = testContext.calls.find((call) => call.method === 'PUT' && call.path === '/admin/roles/business-role-1');
+  assert.deepEqual(saved.body, { name: '已保存角色', remark: '备注基线', status: 1 });
   mounted.unmount();
 });
 

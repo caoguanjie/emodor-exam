@@ -13,21 +13,18 @@
         </div>
       </section>
       <section class="exam-overview" aria-label="本次考试">
-        <h3>{{ record.paper_title }}</h3>
-        <div class="exam-outcome">
-          <strong class="exam-score">{{ examRecordScoreLabel(record) }}</strong>
-          <el-tag :type="examRecordResultType(record)">{{ examRecordResultLabel(record) }}</el-tag>
-          <span>第 {{ record.attempt_no }} 次考试</span>
-        </div>
-        <div class="exam-times">
-          <div><span>开考时间</span><b>{{ formatExamRecordTime(record.started_at) }}</b></div>
-          <div><span>交卷时间</span><b>{{ formatExamRecordTime(record.submitted_at) }}</b></div>
-          <div><span>考试用时</span><b>{{ examDuration }}</b></div>
-        </div>
-        <div class="exam-extra">
-          <details><summary>更多考试信息</summary><p>截止时间：{{ formatExamRecordTime(record.deadline_at) }}</p><p>提交方式：{{ submissionLabel(record.submission_method) }}</p></details>
-          <span>时间均为北京时间</span>
-        </div>
+        <el-descriptions :column="2" border label-width="110px" class="exam-description">
+          <el-descriptions-item label="试卷名称" :span="2">{{ record.paper_title }}</el-descriptions-item>
+          <el-descriptions-item label="考试成绩">{{ examRecordScoreLabel(record) }}</el-descriptions-item>
+          <el-descriptions-item label="考试状态"><el-tag :type="examRecordResultType(record)">{{ examRecordResultLabel(record) }}</el-tag></el-descriptions-item>
+          <el-descriptions-item label="考试次数">第 {{ record.attempt_no }} 次</el-descriptions-item>
+          <el-descriptions-item label="考试用时">{{ examDuration }}</el-descriptions-item>
+          <el-descriptions-item label="开考时间">{{ formatExamRecordTime(record.started_at) }}</el-descriptions-item>
+          <el-descriptions-item label="交卷时间">{{ formatExamRecordTime(record.submitted_at) }}</el-descriptions-item>
+          <el-descriptions-item label="截止时间">{{ formatExamRecordTime(record.deadline_at) }}</el-descriptions-item>
+          <el-descriptions-item label="提交方式">{{ submissionLabel(record.submission_method) }}</el-descriptions-item>
+        </el-descriptions>
+        <p class="time-note">时间均为北京时间</p>
       </section>
       <el-alert v-if="!canReadExamRecordResult(record)" class="readonly-note" type="info" :closable="false" show-icon :title="businessNote" />
       <template v-if="canReadExamRecordResult(record)">
@@ -44,20 +41,12 @@
           <article v-for="(item, index) in result.items" :key="item.item_id" class="question-card">
             <header>
               <strong>第 {{ index + 1 }} 题</strong>
-              <el-tag size="small" type="info">{{ questionTypeLabels[item.type] }}</el-tag>
-              <el-tag size="small" type="info">{{ record.grading_state !== 'finalized' || item.gained_score === null ? '—' : `${item.gained_score} / ${item.score} 分` }}</el-tag>
+              <el-tag size="small" type="info" effect="plain" class="question-type-tag">{{ questionTypeLabels[item.type] }}</el-tag>
+              <el-tag size="small" :type="feedbackTagType(item)" effect="light" class="question-feedback-status">{{ itemFeedback(item).status }}</el-tag>
+              <span class="question-points">{{ record.grading_state !== 'finalized' || item.gained_score === null ? '—' : `${item.gained_score} / ${item.score} 分` }}</span>
             </header>
-            <QuestionPreview :question="previewQuestion(item)" variant="library" :reveal-answer="true" />
-            <div class="answer-panel">
-              <h4>学员作答</h4>
-              <div v-if="selectedOptionLabels(item).length" class="selected-options">
-                <el-tag v-for="selected in selectedOptionLabels(item)" :key="selected" type="primary">
-                  {{ selected }}
-                </el-tag>
-              </div>
-              <span v-else class="muted">未作答</span>
-              <div class="score-meta">得分：{{ record.grading_state !== 'finalized' || item.gained_score === null ? '—' : `${item.gained_score} 分` }}</div>
-            </div>
+            <QuestionPreview :question="previewQuestion(item)" variant="paper" :reveal-answer="true"
+              show-answer-feedback :selected-option-ids="selectedIds(item)" />
           </article>
         </section>
       </template>
@@ -76,6 +65,7 @@ import http from '../../api/http';
 import type { ExamRecordDetail, FinalResult, FinalResultItem, FinalResultItemCanonical, QuestionType, SubmissionMethod } from '../../api/training-types';
 import { UserFilled } from '@element-plus/icons-vue';
 import { usePcMediaUrl } from '../../composables/usePcMediaUrl';
+import { answerFeedback } from '../../utils/answer-feedback';
 import QuestionPreview from '../../components/QuestionPreview.vue';
 import { createLatestRequestScope } from '../../utils/latest-request-scope';
 import {
@@ -138,12 +128,18 @@ function previewQuestion(item: FinalResultItem) {
     answer: item.correct_answer || [], analysis: item.analysis,
   };
 }
-function selectedOptionLabels(item: FinalResultItem): string[] {
-  if (isCanonicalItem(item)) return item.selected_option_ids.map((id) => {
-    const index = item.options.findIndex((option) => option.id === id);
-    return index >= 0 ? String.fromCharCode(65 + index) : '未知选项';
-  });
-  return (item.answer?.selected || []).map((selected) => String.fromCharCode(65 + selected));
+function selectedIds(item: FinalResultItem): string[] {
+  if (isCanonicalItem(item)) return item.selected_option_ids;
+  return (item.answer?.selected || []).flatMap(index => item.options[index] ? [item.options[index].key] : []);
+}
+function itemFeedback(item: FinalResultItem) {
+  const correct = isCanonicalItem(item) ? item.correct_option_ids
+    : (item.correct_answer || []).flatMap(index => item.options[index] ? [item.options[index].key] : []);
+  return answerFeedback(selectedIds(item), correct);
+}
+function feedbackTagType(item: FinalResultItem): 'success' | 'danger' | 'info' {
+  const status = itemFeedback(item).status;
+  return status === '答对' ? 'success' : status === '答错' || status === '漏选' ? 'danger' : 'info';
 }
 async function load() {
   const ticket = requestScope.begin();
@@ -181,19 +177,11 @@ onBeforeUnmount(requestScope.stop);
 .profile-info h2 { margin: 0 0 8px; font-size: 22px; color: var(--el-text-color-primary); }
 .profile-info p { margin: 0 0 6px; color: var(--el-text-color-regular); }
 .profile-info > span { color: var(--el-text-color-secondary); font-size: 13px; }
-.exam-overview { padding: 22px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
-.exam-overview h3 { margin: 0 0 16px; font-size: 17px; line-height: 1.6; overflow-wrap: anywhere; }
-.exam-outcome { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; color: var(--el-text-color-secondary); }
-.exam-score { font-size: 25px; color: var(--el-text-color-primary); }
-.exam-times { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 22px; }
-.exam-times > div { display: flex; flex-direction: column; gap: 8px; }
-.exam-times span, .exam-extra { color: var(--el-text-color-secondary); font-size: 13px; }
-.exam-times b { font-weight: 400; font-variant-numeric: tabular-nums; }
-.exam-extra { display: flex; justify-content: space-between; gap: 16px; margin-top: 18px; }
-.exam-extra summary { cursor: pointer; }
-.exam-extra p { margin: 10px 0 0; }
-@media (max-width: 640px) { .exam-times { grid-template-columns: 1fr; }.exam-times > div { flex-direction: row; flex-wrap: wrap; }.exam-extra { flex-wrap: wrap; } }
-
+.exam-overview { padding-top: 20px; }
+.exam-description :deep(.el-descriptions__table) { table-layout: fixed; }
+.exam-description :deep(.el-descriptions__content) { overflow-wrap: anywhere; }
+.exam-description :deep(.el-descriptions__label) { white-space: nowrap; }
+.time-note { margin: 10px 0 0; color: var(--el-text-color-secondary); font-size: 12px; text-align: right; }
 .readonly-note { margin-top: 18px; }
 .result-section { margin-top: 20px; }
 .result-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 14px; }
@@ -201,12 +189,9 @@ onBeforeUnmount(requestScope.stop);
 .result-head p { margin: 5px 0 0; color: var(--el-text-color-secondary); }
 .result-metrics { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 16px; color: var(--el-text-color-secondary); }
 .result-metrics b { margin-left: 4px; color: var(--el-text-color-primary); }
-.question-card { margin-top: 14px; padding: 18px; border: 1px solid var(--el-border-color); border-radius: 8px; }
+.question-card { padding: 22px 0; border-top: 1px solid var(--el-border-color-lighter); }
 .question-card > header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-.answer-panel { margin-top: 16px; padding: 14px; border-radius: 8px; background: var(--el-fill-color-light); }
-.answer-panel h4 { margin: 0 0 10px; }
-.selected-options { display: flex; flex-wrap: wrap; gap: 8px; }
-.score-meta { margin-top: 12px; color: var(--el-text-color-secondary); font-size: 13px; }
-.muted { color: var(--el-text-color-secondary); }
+.question-points { margin-left: auto; color: var(--el-text-color-secondary); }
+.question-type-tag { color: var(--el-text-color-regular); background: transparent; border: 1px solid var(--el-border-color); }
 @media (max-width: 900px) { .result-head { display: block; }.result-metrics { justify-content: flex-start; margin-top: 10px; } }
 </style>

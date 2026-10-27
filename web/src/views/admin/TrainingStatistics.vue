@@ -1,6 +1,6 @@
 <template>
   <div class="page-card">
-    <FitsTable v-if="!filters.paper_id">
+    <FitsTable>
       <template #search>
         <FitsListSearch @submit.prevent="searchOverview">
           <el-form-item label="考试名称">
@@ -40,153 +40,106 @@
       </template>
     </FitsTable>
 
-    <template v-else>
-    <div class="analysis-navigation"><el-button @click="backToOverview">返回考试列表</el-button></div>
-    <div v-if="summary" class="exam-facts">
-      <strong>{{ summary.exam.title }}</strong>
-      <span>总分：{{ summary.exam.total_score ?? '—' }}</span>
-      <span>考试时长：{{ summary.exam.duration_minutes ?? '—' }} 分钟</span>
-      <span>及格分：{{ summary.exam.pass_score ?? '—' }}</span>
-      <span>优秀分：{{ summary.exam.excellent_score ?? '未设置' }}</span>
-    </div>
-    <el-alert v-if="summary" type="info" :closable="false" show-icon class="scope-note">
-      <template #title>
-        成绩与排名只比较当前发布版本（{{ summary?.release_id || '未发布' }}）、相同冻结评分规则和所选难度；参与与提交人数属于该试卷历史范围。
-      </template>
-    </el-alert>
+    <el-dialog :model-value="analysisVisible" :title="summary ? `成绩分析 · ${summary.exam.title}` : '成绩分析'"
+      width="min(1200px, calc(100vw - 32px))" align-center :append-to="contentDialogTarget || 'body'"
+      class="re-form-dialog training-score-analysis-dialog" @close="onAnalysisClosed">
+      <el-alert v-if="detailError" :title="detailError" type="error" show-icon :closable="false" class="scope-note">
+        <el-button link @click="reload">重试</el-button>
+      </el-alert>
+      <el-skeleton v-if="loading && !summary" :rows="8" animated />
+      <template v-else-if="summary">
+        <el-descriptions :column="4" border label-width="104px" class="score-descriptions">
+          <el-descriptions-item label="考试名称" :span="2">{{ summary.exam.title }}</el-descriptions-item>
+          <el-descriptions-item label="培训类别" :span="2">{{ summaryCategoryName }}</el-descriptions-item>
+          <el-descriptions-item label="试卷总分">{{ scoreMetric(summary.exam.total_score) }}</el-descriptions-item>
+          <el-descriptions-item label="考试时长">{{ minuteMetric(summary.exam.duration_minutes) }}</el-descriptions-item>
+          <el-descriptions-item label="及格分">{{ scoreMetric(summary.exam.pass_score) }}</el-descriptions-item>
+          <el-descriptions-item label="优秀分">{{ summary.exam.excellent_score === null ? '未设置' : scoreMetric(summary.exam.excellent_score) }}</el-descriptions-item>
+          <el-descriptions-item label="当前应考">{{ summary.eligible_count }} 人</el-descriptions-item>
+          <el-descriptions-item label="参考人数">{{ summary.historical_started_count }} 人</el-descriptions-item>
+          <el-descriptions-item label="已交卷人数">{{ summary.submitted_users }} 人</el-descriptions-item>
+          <el-descriptions-item label="参考率">{{ rate(summary.participation_rate) }}</el-descriptions-item>
+          <el-descriptions-item label="平均分">{{ scoreMetric(selectedScoreGroup?.average_score) }}</el-descriptions-item>
+          <el-descriptions-item label="最高分">{{ scoreMetric(selectedScoreGroup?.highest_score) }}</el-descriptions-item>
+          <el-descriptions-item label="最低分">{{ scoreMetric(selectedScoreGroup?.lowest_score) }}</el-descriptions-item>
+          <el-descriptions-item label="平均用时">{{ duration(selectedScoreGroup?.average_duration_seconds ?? null) }}</el-descriptions-item>
+          <el-descriptions-item label="及格人数">{{ countMetric(selectedScoreGroup?.passed_users) }}</el-descriptions-item>
+          <el-descriptions-item label="及格率">{{ rate(selectedScoreGroup?.pass_rate ?? null) }}</el-descriptions-item>
+          <el-descriptions-item label="优秀人数" :span="2">{{ selectedScoreGroup?.excellent_users ?? '—' }}</el-descriptions-item>
+        </el-descriptions>
 
-    <div class="toolbar filters">
-      <el-select v-model="filters.paper_id" placeholder="选择考试场次" filterable style="width:260px" @change="onPaperChange">
-        <el-option v-for="paper in options.papers" :key="paper.id" :label="paper.title" :value="paper.id" />
-      </el-select>
-      <el-select v-model="filters.category_id" placeholder="全部类别" clearable style="width:170px" @change="reload">
-        <el-option v-for="category in options.categories" :key="category.id" :label="category.name" :value="category.id" />
-      </el-select>
-      <el-select v-model="filters.source" placeholder="全部来源" clearable style="width:150px" @change="reload">
-        <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
-      </el-select>
-      <el-select v-model="filters.difficulty" placeholder="选择难度查看排名" clearable style="width:190px" @change="reload">
-        <el-option v-for="item in difficultyOptions" :key="item.value" :label="item.label" :value="item.value" />
-      </el-select>
-      <div style="flex:1" />
-      <el-button v-if="auth.can('statistics:export')" :disabled="!filters.difficulty || loading || rankingLoading || !ranking.items.length" @click="exportRanking">
-        导出当前页排名
-      </el-button>
-    </div>
+        <el-alert type="info" :closable="false" show-icon class="scope-note analysis-scope-note" :title="analysisScopeNote" />
 
-    <el-alert v-if="detailError || optionsError" :title="detailError || optionsError" type="error" show-icon :closable="false" class="scope-note">
-      <el-button link @click="initialize">重试</el-button>
-    </el-alert>
-    <div v-loading="loading">
-      <template v-if="summary">
-        <div class="kpi-grid">
-          <div class="kpi"><span>当前应考</span><strong class="re-mono">{{ summary.eligible_count }}</strong><small>当前启用学员</small></div>
-          <div class="kpi"><span>当前范围已开考</span><strong class="re-mono">{{ summary.eligible_started_count }}</strong><small>与历史成功开考取交集</small></div>
-          <div class="kpi"><span>参考率</span><strong class="re-mono">{{ rate(summary.participation_rate) }}</strong><small>零分母显示空值</small></div>
-          <div class="kpi"><span>历史已开考</span><strong class="re-mono">{{ summary.historical_started_count }}</strong><small>其中当前范围外 {{ summary.historical_only_started_count }}</small></div>
-          <div class="kpi"><span>已交卷</span><strong class="re-mono">{{ summary.submitted_attempts }}</strong><small>{{ summary.submitted_users }} 人</small></div>
-        </div>
-
-        <el-collapse class="supplementary-statistics">
-          <el-collapse-item title="课程完成与未完成原因" name="course">
-        <el-row :gutter="14" class="detail-row">
-          <el-col :span="10">
-            <div class="panel">
-              <div class="panel-title">课程完成 <span>当前必学视频版本 · 仅本机构</span></div>
-              <div class="course-value">{{ rate(summary.course_completion.completion_rate) }}</div>
-              <p>{{ summary.course_completion.completed_users }}/{{ summary.course_completion.eligible_users }} 人 · {{ summary.course_completion.required_lessons }} 个必学课时</p>
-              <el-progress v-if="summary.course_completion.completion_rate !== null" :percentage="Math.round(summary.course_completion.completion_rate * 100)" />
-              <el-empty v-else :image-size="44" description="无本机构应学分母或零必学课时" />
+        <section class="ranking-section">
+          <div class="ranking-heading">
+            <div><h3>成绩排名</h3><p>每位学员取当前发布版本、相同冻结评分规则下的最高最终成绩。</p></div>
+            <div class="ranking-filters">
+              <el-select v-model="filters.source" placeholder="全部来源" clearable style="width:140px" @change="onSourceChange">
+                <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
+              </el-select>
+              <el-select v-if="summary.exam.mode === 'random'" v-model="filters.difficulty" placeholder="选择卷面难度"
+                style="width:160px" @change="onDifficultyChange">
+                <el-option v-for="item in availableDifficultyOptions" :key="item.value" :label="item.label" :value="item.value" />
+              </el-select>
+              <el-button v-if="auth.can('statistics:export')" :disabled="!canLoadRanking || loading || rankingLoading || !ranking.items.length" @click="exportRanking">
+                导出当前排名
+              </el-button>
             </div>
-          </el-col>
-          <el-col :span="14">
-            <div class="panel">
-              <div class="panel-title">未完成原因 <span>各原因独立统计</span></div>
-              <div class="reason-grid">
-                <div v-for="item in summary.uncompleted_reasons" :key="item.reason">
-                  <span>{{ reasonLabel(item.reason) }}</span><b class="re-mono">{{ item.users }}</b>
-                </div>
-              </div>
-            </div>
-          </el-col>
-        </el-row>
-          </el-collapse-item>
-        </el-collapse>
-
-        <div class="panel score-panel">
-          <div class="panel-title">按难度成绩分析 <span>每人已出分记录的最高分</span></div>
-          <div class="composition" aria-label="历史开考难度构成">
-            <span class="composition-label">历史开考难度构成</span>
-            <el-tag v-for="item in summary.difficulty_composition" :key="item.difficulty" effect="plain">
-              {{ difficultyLabel(item.difficulty) }} {{ item.users }} 人
-            </el-tag>
-            <span v-if="!summary.difficulty_composition.length" class="composition-empty">暂无开考记录</span>
           </div>
-          <el-table :data="summary.score_groups">
-            <template #empty><el-empty v-if="!loading" description="暂无最终成绩" /></template>
-            <el-table-column label="难度" width="90"><template #default="{ row }">{{ difficultyLabel(row.difficulty) }}</template></el-table-column>
-            <el-table-column prop="finalized_users" label="最终人数" width="90" />
-            <el-table-column label="平均分" width="90"><template #default="{ row }">{{ row.average_score ?? '—' }}</template></el-table-column>
-            <el-table-column label="最高分" width="90"><template #default="{ row }">{{ row.highest_score ?? '—' }}</template></el-table-column>
-            <el-table-column label="最低分" width="90"><template #default="{ row }">{{ row.lowest_score ?? '—' }}</template></el-table-column>
-            <el-table-column prop="passed_users" label="及格人数" width="100" />
-            <el-table-column label="及格率" width="90"><template #default="{ row }">{{ rate(row.pass_rate) }}</template></el-table-column>
-            <el-table-column label="平均用时" width="120"><template #default="{ row }">{{ duration(row.average_duration_seconds) }}</template></el-table-column>
-            <el-table-column label="优秀人数" width="100"><template #default="{ row }">{{ row.excellent_users ?? '--' }}</template></el-table-column>
-            <el-table-column label="分布" min-width="320">
-              <template #default="{ row }">
-                <span v-for="bucket in row.distribution" :key="bucket.lower" class="bucket re-mono">[{{ bucket.lower }},{{ bucket.upper }}{{ bucket.upper === 100 ? ']' : ')' }} {{ bucket.count }}</span>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-
-        <div class="panel ranking-panel">
-          <div class="panel-title">难度排名 <span>同分并列 1/1/3；切换展示排序不改变分数名次</span></div>
           <el-alert v-if="rankingError" :title="rankingError" type="error" show-icon :closable="false" class="scope-note">
             <el-button link @click="onRankingPageChange">重试</el-button>
           </el-alert>
-          <el-empty v-if="!filters.difficulty" :image-size="54" description="请先明确选择一个难度" />
-          <FitsTable v-else>
+          <FitsTable v-if="canLoadRanking">
             <el-table v-loading="rankingLoading" :data="ranking.items"
               :default-sort="filters.sort_by ? { prop: filters.sort_by === 'duration' ? 'duration_seconds' : 'score', order: filters.sort_order === 'asc' ? 'ascending' : 'descending' } : undefined"
               @sort-change="onRankingSortChange">
-              <template #empty><el-empty v-if="!rankingLoading && !rankingError" description="该难度暂无最终成绩" /></template>
-              <el-table-column prop="rank" label="名次" width="72" />
-              <el-table-column prop="name" label="姓名" min-width="120" />
+              <template #empty><el-empty v-if="!rankingLoading && !rankingError" description="暂无最终成绩" /></template>
+              <el-table-column prop="rank" label="排名" width="72" />
+              <el-table-column prop="name" label="姓名" min-width="140" />
               <el-table-column label="性别" width="90"><template #default="{ row }">{{ genderLabel(row.gender) }}</template></el-table-column>
               <el-table-column label="来源" width="100"><template #default="{ row }">{{ sourceLabel(row.source) }}</template></el-table-column>
-              <el-table-column label="难度" width="90"><template #default="{ row }">{{ difficultyLabel(row.difficulty) }}</template></el-table-column>
-              <el-table-column prop="score" label="分数" sortable="custom" width="110" />
+              <el-table-column prop="score" label="成绩" sortable="custom" width="110"><template #default="{ row }">{{ scoreMetric(row.score) }}</template></el-table-column>
               <el-table-column prop="duration_seconds" label="用时" sortable="custom" width="120"><template #default="{ row }">{{ duration(row.duration_seconds) }}</template></el-table-column>
-              <el-table-column prop="record_id" label="答卷 ID" width="120" />
+              <el-table-column v-if="canReadExamRecords" label="操作" fixed="right" width="100"><template #default="{ row }"><FitsTableActions><FitsTableAction type="primary" @click="openRecord(row.record_id)">查看答卷</FitsTableAction></FitsTableActions></template></el-table-column>
             </el-table>
             <template v-if="ranking.total" #pagination>
-              <el-pagination v-if="ranking.total" v-model:current-page="filters.page" v-model:page-size="filters.page_size"
+              <el-pagination v-model:current-page="filters.page" v-model:page-size="filters.page_size"
                 :total="ranking.total" layout="total, prev, pager, next" @current-change="onRankingPageChange" />
             </template>
           </FitsTable>
-        </div>
-        <p class="as-of">统计时点：{{ formatTime(summary.as_of) }}</p>
+          <el-empty v-else :image-size="54" description="暂无可排名的最终成绩" />
+        </section>
       </template>
       <el-empty v-else-if="!loading && !detailError" description="该场次暂无统计数据" />
-    </div>
-    </template>
+      <template #footer>
+        <span v-if="summary" class="dialog-as-of">统计时间：{{ formatTime(summary.as_of) }}</span>
+        <el-button type="primary" @click="backToOverview">关闭</el-button>
+      </template>
+    </el-dialog>
+    <ExamRecordDetail v-if="viewActive && detailRecordId" :key="detailRecordId" :record-id="detailRecordId" @close="detailRecordId = ''" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onActivated, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, inject, onActivated, onBeforeUnmount, onDeactivated, reactive, ref, type Ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
+import { useDashboardListNavigation } from '../../utils/admin-dashboard-navigation';
 import { FitsListSearch, FitsTable, FitsTableAction, FitsTableActions } from '../../components/FitsTable';
 import http, { download } from '../../api/http';
 import type {
-  ExamDifficulty, LearnerSource, Page, RankRow, TrainingExamOverviewRow, TrainingExamSummary, TrainingStatisticsOptions,
-  TrainingUncompletedReason,
+  ExamDifficulty, LearnerSource, Page, RankRow, ScoreGroup, TrainingExamOverviewRow, TrainingExamSummary, TrainingStatisticsOptions,
 } from '../../api/training-types';
 import { QuestionFilled } from '@element-plus/icons-vue';
 import { useAuthStore } from '../../stores/auth';
+import ExamRecordDetail from './ExamRecordDetail.vue';
 
 const auth = useAuthStore();
+const route = useRoute();
+const router = useRouter();
+const contentDialogTarget = inject<Ref<HTMLElement | undefined>>('contentDialogTarget', ref());
+const viewActive = ref(true);
+const detailRecordId = ref('');
 const loading = ref(false);
 const rankingLoading = ref(false);
 const overviewLoading = ref(false);
@@ -208,6 +161,51 @@ const difficultyOptions: Array<{ value: ExamDifficulty; label: string }> = [
   { value: 'easy', label: '简单' }, { value: 'medium', label: '中级' }, { value: 'hard', label: '困难' },
   { value: 'mixed', label: '固定混档' }, { value: 'unknown', label: '遗留未知' },
 ];
+const availableDifficultyOptions = computed(() => {
+  const values = new Set([
+    ...(summary.value?.score_groups.map((item) => item.difficulty) || []),
+    ...(summary.value?.difficulty_composition.map((item) => item.difficulty) || []),
+  ]);
+  return difficultyOptions.filter((item) => values.has(item.value));
+});
+function combineScoreGroups(groups: ScoreGroup[]): ScoreGroup | null {
+  if (!groups.length) return null;
+  const finalized = groups.reduce((sum, item) => sum + item.finalized_users, 0);
+  const passed = groups.reduce((sum, item) => sum + item.passed_users, 0);
+  const weighted = (key: 'average_score' | 'average_duration_seconds') => finalized
+    ? groups.reduce((sum, item) => sum + Number(item[key] || 0) * item.finalized_users, 0) / finalized
+    : null;
+  const scores = groups.flatMap((item) => [item.highest_score, item.lowest_score]).filter((value): value is number => value !== null);
+  return {
+    difficulty: groups[0].difficulty,
+    finalized_users: finalized,
+    average_score: weighted('average_score'),
+    highest_score: scores.length ? Math.max(...scores) : null,
+    lowest_score: scores.length ? Math.min(...scores) : null,
+    passed_users: passed,
+    average_duration_seconds: weighted('average_duration_seconds'),
+    excellent_users: null,
+    pass_rate: finalized ? passed / finalized : null,
+    distribution: [],
+  };
+}
+const selectedScoreGroup = computed(() => {
+  const data = summary.value;
+  if (!data) return null;
+  if (data.exam.mode === 'random') return data.score_groups.find((item) => item.difficulty === filters.difficulty) || null;
+  return combineScoreGroups(data.score_groups);
+});
+const summaryCategoryName = computed(() => {
+  const id = summary.value?.exam.category_id;
+  if (!id) return '未分类';
+  return options.categories.find((item) => item.id === id)?.name || '—';
+});
+const analysisVisible = computed(() => viewActive.value && Boolean(filters.paper_id));
+const canReadExamRecords = computed(() => auth.can('exam_records:read'));
+const canLoadRanking = computed(() => Boolean(summary.value && (summary.value.exam.mode === 'fixed' || filters.difficulty)));
+const analysisScopeNote = computed(() => summary.value?.exam.mode === 'random'
+  ? '该历史随机卷按所选卷面难度比较当前发布版本、相同冻结评分规则下每位学员的最高最终成绩。'
+  : '固定卷比较当前发布版本、相同冻结评分规则下每位学员的最高最终成绩；参与人数保留该考试历史范围。');
 
 let requestEpoch = 0;
 let rankingEpoch = 0;
@@ -225,13 +223,22 @@ function params() {
     sort_order: filters.sort_order || undefined,
   };
 }
+function summaryParams() {
+  return {
+    paper_id: filters.paper_id,
+    category_id: filters.category_id || undefined,
+    source: filters.source || undefined,
+    page: 1,
+    page_size: filters.page_size,
+  };
+}
 function rate(value: number | null) { return value === null ? '—' : `${(value * 100).toFixed(1)}%`; }
 function difficultyLabel(value: ExamDifficulty) { return difficultyOptions.find((item) => item.value === value)?.label || value; }
 function sourceLabel(value: LearnerSource | null) { return value === 'institution' ? '本机构' : value === 'external' ? '外来' : '未知'; }
 function genderLabel(value: RankRow['gender']) { return value === 'male' ? '男' : value === 'female' ? '女' : '未填写'; }
-function reasonLabel(value: TrainingUncompletedReason) {
-  return ({ learning_incomplete: '未完成学习', not_started: '未参加考试', not_passed: '考试未通过' })[value];
-}
+function scoreMetric(value: number | null | undefined) { return value === null || value === undefined ? '—' : `${value} 分`; }
+function minuteMetric(value: number | null | undefined) { return value === null || value === undefined ? '—' : `${value} 分钟`; }
+function countMetric(value: number | null | undefined) { return value === null || value === undefined ? '—' : `${value} 人`; }
 function duration(seconds: number | null) {
   if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return '—';
   const rounded = Math.round(seconds);
@@ -246,7 +253,7 @@ async function loadRanking(parentEpoch = requestEpoch, query = params()) {
   const epoch = ++rankingEpoch;
   clearRanking();
   rankingError.value = '';
-  if (!query.paper_id || !query.difficulty) {
+  if (!query.paper_id || !canLoadRanking.value) {
     rankingLoading.value = false;
     return;
   }
@@ -271,12 +278,22 @@ async function onRankingSortChange({ prop, order }: { prop?: string; order?: str
   filters.page = 1;
   await loadRanking();
 }
+async function onDifficultyChange() {
+  filters.page = 1;
+  await loadRanking();
+}
+async function onSourceChange() {
+  filters.difficulty = '';
+  await reload();
+}
 async function reload() {
-  if (!filters.paper_id) return;
+  if (!filters.paper_id || !viewActive.value) return;
+  await navigation.syncQuery({ paper_id: filters.paper_id });
+  if (!filters.paper_id || !viewActive.value) return;
   const epoch = ++requestEpoch;
   rankingEpoch += 1;
   filters.page = 1;
-  const query = params();
+  const query = summaryParams();
   summary.value = null;
   clearRanking();
   detailError.value = '';
@@ -288,23 +305,25 @@ async function reload() {
     if (epoch !== requestEpoch) return;
     if (!data || data.exam?.paper_id !== query.paper_id) throw new Error('统计响应与当前场次不一致，请重试');
     summary.value = data;
-    await loadRanking(epoch, query);
+    if (data.exam.mode === 'fixed') filters.difficulty = '';
+    else {
+      const scored = new Set(data.score_groups.map((item) => item.difficulty));
+      const available = new Set([...scored, ...data.difficulty_composition.map((item) => item.difficulty)]);
+      if (scored.size && (!filters.difficulty || !scored.has(filters.difficulty))) filters.difficulty = data.score_groups[0]?.difficulty || '';
+      else if (!filters.difficulty || !available.has(filters.difficulty)) filters.difficulty = availableDifficultyOptions.value[0]?.value || '';
+    }
+    await loadRanking(epoch, params());
   } catch (error) {
     if (epoch === requestEpoch) detailError.value = error instanceof Error ? error.message : '成绩分析加载失败';
   } finally {
     if (epoch === requestEpoch) loading.value = false;
   }
 }
-function onPaperChange() {
-  // The narrow options endpoint describes the editable paper, not its frozen release category.
-  filters.category_id = '';
-  void reload();
-}
 async function exportRanking() {
-  if (!auth.can('statistics:export') || !filters.paper_id || !filters.difficulty || loading.value || rankingLoading.value || !ranking.items.length) return;
+  if (!auth.can('statistics:export') || !filters.paper_id || !canLoadRanking.value || loading.value || rankingLoading.value || !ranking.items.length) return;
   const epoch = requestEpoch;
   try {
-    await download('/statistics/training/export', '培训考试难度排名.xlsx', params());
+    await download('/statistics/training/export', '培训考试成绩排名.xlsx', params());
   } catch (error) {
     if (epoch === requestEpoch) rankingError.value = error instanceof Error ? error.message : '排名导出失败';
   }
@@ -339,13 +358,18 @@ function onOverviewSizeChange() { overviewFilters.page = 1; void loadOverview();
 async function openAnalysis(row: TrainingExamOverviewRow) {
   overviewEpoch += 1;
   overviewLoading.value = false;
-  filters.paper_id = row.paper_id;
-  filters.category_id = row.category_id || '';
+  detailRecordId.value = '';
+  Object.assign(filters, {
+    paper_id: row.paper_id, category_id: row.category_id || '', source: '', difficulty: '',
+    page: 1, sort_by: '', sort_order: '',
+  });
   await reload();
 }
 async function backToOverview() {
+  if (!filters.paper_id) return;
   requestEpoch += 1;
   rankingEpoch += 1;
+  detailRecordId.value = '';
   filters.paper_id = '';
   summary.value = null;
   clearRanking();
@@ -353,7 +377,11 @@ async function backToOverview() {
   rankingError.value = '';
   loading.value = false;
   rankingLoading.value = false;
-  await loadOverview();
+  await navigation.syncQuery({ paper_id: undefined });
+}
+function onAnalysisClosed() { if (viewActive.value) void backToOverview(); }
+function openRecord(recordId: string) {
+  if (viewActive.value && canReadExamRecords.value) detailRecordId.value = String(recordId);
 }
 async function loadOptions() {
   const epoch = ++optionsEpoch;
@@ -366,22 +394,76 @@ async function loadOptions() {
   }
 }
 async function initialize() {
-  await Promise.all([loadOptions(), filters.paper_id ? reload() : loadOverview()]);
+  if (!route.query.paper_id && filters.paper_id) {
+    requestEpoch += 1;
+    rankingEpoch += 1;
+    detailRecordId.value = '';
+    filters.paper_id = '';
+    summary.value = null;
+    clearRanking();
+    detailError.value = '';
+    rankingError.value = '';
+    loading.value = false;
+    rankingLoading.value = false;
+  }
+  await Promise.all([loadOptions(), loadOverview(), filters.paper_id ? reload() : Promise.resolve()]);
 }
 
-let initialActivationSeen = false;
-onMounted(initialize);
-onBeforeUnmount(() => { requestEpoch += 1; rankingEpoch += 1; overviewEpoch += 1; optionsEpoch += 1; });
-onActivated(() => {
-  if (!initialActivationSeen) {
-    initialActivationSeen = true;
-    return;
-  }
-  void initialize();
+const navigation = useDashboardListNavigation(route, router, {
+  path: '/admin/training-statistics',
+  apply(entry, explicit) {
+    if (entry.kind !== 'statistics') return;
+    if (!explicit && (entry.paperId || '') === filters.paper_id) return;
+    requestEpoch += 1;
+    rankingEpoch += 1;
+    overviewEpoch += 1;
+    detailRecordId.value = '';
+    summary.value = null;
+    Object.assign(filters, { paper_id: entry.paperId || '', category_id: '', source: '', difficulty: '', page: 1, sort_by: '', sort_order: '' });
+    clearRanking();
+    detailError.value = '';
+    rankingError.value = '';
+    loading.value = false;
+    rankingLoading.value = false;
+    overviewLoading.value = false;
+    if (explicit) Object.assign(overviewFilters, { keyword: '', category_id: '', page: 1 });
+  },
+  load: initialize,
+  onInvalid: () => { ElMessage.warning('已清除无效的统计入口参数'); },
 });
+function activateView() { viewActive.value = true; }
+function deactivateView() {
+  viewActive.value = false;
+  detailRecordId.value = '';
+  requestEpoch += 1;
+  rankingEpoch += 1;
+  overviewEpoch += 1;
+  optionsEpoch += 1;
+  loading.value = false;
+  rankingLoading.value = false;
+  overviewLoading.value = false;
+}
+onActivated(activateView);
+onDeactivated(deactivateView);
+onBeforeUnmount(deactivateView);
 </script>
 
 <style scoped>
-.overview-name-heading{display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px}.overview-help{display:inline-flex;align-items:center;gap:5px;cursor:help}.overview-note{margin:0 0 16px;font-size:12px;line-height:1.7;color:var(--re-text-3)}.analysis-navigation{margin-bottom:16px}.exam-facts{display:flex;flex-wrap:wrap;align-items:center;gap:12px 24px;margin-bottom:16px;padding:14px 16px;border:1px solid var(--re-border);border-radius:var(--re-radius)}.exam-facts strong{font-size:15px}.exam-facts span{font-size:13px;color:var(--re-text-2)}.supplementary-statistics{margin-top:14px}
-.scope-note{margin-bottom:16px}.filters{flex-wrap:wrap}.kpi-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.kpi{display:flex;flex-direction:column;gap:5px;padding:16px;border:1px solid var(--re-border);border-radius:var(--re-radius);background:#fff}.kpi span{font-size:12px;color:var(--re-text-2)}.kpi strong{font-size:26px;color:var(--re-text)}.kpi small,.panel-title span,.panel p,.as-of{font-size:11px;color:var(--re-text-3)}.detail-row{margin-top:14px}.panel{height:100%;padding:18px;border:1px solid var(--re-border);border-radius:var(--re-radius);background:#fff}.panel-title{font-weight:600;margin-bottom:14px}.panel-title span{font-weight:400;margin-left:8px}.course-value{font-size:34px;font-weight:700;color:var(--re-primary)}.reason-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.reason-grid>div{display:flex;justify-content:space-between;padding:14px;border-radius:8px;background:#f7f8fb}.reason-grid b{font-size:20px}.score-panel,.ranking-panel{margin-top:14px;height:auto}.composition{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:-2px 0 14px}.composition-label,.composition-empty{font-size:12px;color:var(--re-text-3);margin-right:2px}.bucket{display:inline-block;margin:3px 8px 3px 0;padding:3px 7px;border-radius:5px;background:#f1f3f8;font-size:11px}.as-of{text-align:right;margin:14px 0 0}@media(max-width:1280px){.kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.overview-name-heading { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.overview-help { display: inline-flex; align-items: center; gap: 5px; cursor: help; }
+.scope-note { margin-bottom: 16px; }
+.score-descriptions :deep(.el-descriptions__table) { table-layout: fixed; }
+.score-descriptions :deep(.el-descriptions__content) { overflow-wrap: anywhere; }
+.score-descriptions :deep(.el-descriptions__label) { white-space: nowrap; }
+.analysis-scope-note { margin: 16px 0 0; }
+.ranking-section { margin-top: 20px; }
+.ranking-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 14px; }
+.ranking-heading h3 { margin: 0; font-size: 16px; }
+.ranking-heading p { margin: 5px 0 0; color: var(--el-text-color-secondary); font-size: 12px; }
+.ranking-filters { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+.dialog-as-of { margin-right: auto; color: var(--el-text-color-secondary); font-size: 12px; }
+@media (max-width: 900px) {
+  .ranking-heading { display: block; }
+  .ranking-filters { justify-content: flex-start; margin-top: 12px; }
+}
 </style>

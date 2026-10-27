@@ -199,6 +199,31 @@ describe('AI import transaction boundary', () => {
 });
 
 describe('ephemeral AI references', () => {
+  it.each(['txt', 'xlsx'] as const)('applies the selected category to Chinese %s reference templates', async (format) => {
+    const f = await aiFixture();
+    let buffer = Buffer.from([
+      '[题干]进入作业区域前首先应做什么？',
+      '[类型]单选题',
+      '[选项]${完成风险确认},${直接开始作业}',
+      '[答案]A',
+      '[难度]简单',
+    ].join('\n'));
+    if (format === 'xlsx') {
+      const book = new ExcelJS.Workbook();
+      const sheet = book.addWorksheet('试题导入模板');
+      sheet.addRow(['试题内容', '试题类型', '选项内容', '答案', '难度']);
+      sheet.addRow(['进入作业区域前首先应做什么？', '单选题', '${完成风险确认},${直接开始作业}', 'A', '简单']);
+      buffer = Buffer.from(await book.xlsx.writeBuffer());
+    }
+
+    const task = await f.ai.start('1', buffer, format, '10');
+    const done = await finished(f.ai, task.task_id);
+
+    expect(done).toMatchObject({ status: 'completed', total_count: 1, generated_count: 2 });
+    const prompt = JSON.parse(f.prompts[0][1].content);
+    expect(prompt.reference).toMatchObject({ category: '10', type: 'single' });
+  });
+
   it.each(['txt', 'xlsx'] as const)('uses strict %s references and overrides every model-controlled trusted field', async (format) => {
     const f = await aiFixture();
     let buffer = file();
@@ -460,8 +485,14 @@ describe('AI import HTTP boundary', () => {
     const task = await controller.start(uploaded, { format: 'txt' }, { id: 1 } as any);
     expect(uploaded.buffer.every((byte: number) => byte === 0)).toBe(true);
     await finished(f.ai, task.task_id);
+
+    const selected: any = { buffer: file() };
+    const selectedTask = await controller.start(selected, { format: 'txt', category_id: '10' }, { id: 1 } as any);
+    expect(selected.buffer.every((byte: number) => byte === 0)).toBe(true);
+    await finished(f.ai, selectedTask.task_id);
+
     const rejected: any = { buffer: file() };
-    await expect(controller.start(rejected, { format: 'txt', category_id: '10' }, { id: 1 } as any)).rejects.toMatchObject({ code: 40001 });
+    await expect(controller.start(rejected, { format: 'txt', category_id: 'bad' }, { id: 1 } as any)).rejects.toMatchObject({ code: 40001 });
     expect(rejected.buffer.every((byte: number) => byte === 0)).toBe(true);
   });
 });

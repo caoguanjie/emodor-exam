@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
-import { KeepAlive, createRenderer, h, nextTick, ref as vueRef } from '@vue/runtime-core';
+import { KeepAlive, createRenderer, h, nextTick, reactive, ref as vueRef } from '@vue/runtime-core';
 
 const webRoot = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const papersClientId = '\0paper-management-papers-client-test';
@@ -35,13 +35,17 @@ const context = {
   media: async () => ({content_url:'/api/v1/media/preview-tickets/test.sig/content',expires_at:'2099-01-01T00:00:00Z'}),
   mediaInvalidations: [],
   mediaCalls: [],
+  confirmDecisions: [],
 };
 
 const routeStubCode = `
   const context = globalThis.__paperManagementStateTest;
   export function useRoute() { return context.route; }
   export function useRouter() {
-    return { async push(value) { context.routerPushes.push(JSON.parse(JSON.stringify(value))); } };
+    return {
+      async push(value) { context.routerPushes.push(JSON.parse(JSON.stringify(value))); },
+      async replace(value) { context.route.query = value.query; context.route.fullPath = context.route.path + '?' + new URLSearchParams(value.query); },
+    };
   }
 `;
 const elementStubCode = `
@@ -67,6 +71,7 @@ const unsavedStubCode = `
       options,
       markClean() { dirty.value = false; },
       async confirmDiscard() {
+        if (dirty.value && context.confirmDecisions.length && !context.confirmDecisions.shift()) return false;
         if (dirty.value) await options.onDiscard?.();
         return true;
       },
@@ -431,7 +436,8 @@ after(async () => {
 });
 
 beforeEach(() => {
-  context.route = { params: { id: 'paper-1' }, query: { scope: 'training' } };
+  context.route = reactive({ path: '/admin/papers', fullPath: '/admin/papers?scope=training', params: { id: 'paper-1' }, query: { scope: 'training' } });
+  context.confirmDecisions = [];
   context.calls = [];
   context.messages = [];
   context.routerPushes = [];
@@ -445,6 +451,44 @@ beforeEach(() => {
   context.mediaInvalidations = [];
   context.mediaCalls = [];
   setResponder();
+});
+
+test('dashboard paper filters clear stale state and consume new-create exactly once across activation', async () => {
+  const mounted = await mountCached(Papers);
+  try {
+    await waitFor(() => context.calls.some(call => call.path === '/admin/papers'), 'initial paper list');
+    Object.assign(mounted.state.trainingQuery, { keyword: '旧试卷', category_id: 'old-category', status: 'published', page: 3 });
+    context.calls = [];
+    context.route.query = { entry: 'dashboard', status: 'all', create: '1' };
+    await nextTick();
+    await new Promise(resolvePromise => setImmediate(resolvePromise));
+    assert.equal(mounted.state.trainingCreateVisible, true);
+    assert.deepEqual(context.route.query, { status: 'all' });
+    const requests = context.calls.filter(call => call.path === '/admin/papers');
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].config.params, { page: 1, page_size: 20 });
+    await mounted.state.closeTrainingCreate();
+    await mounted.deactivate();
+    await mounted.activate();
+    await new Promise(resolvePromise => setImmediate(resolvePromise));
+    assert.equal(mounted.state.trainingCreateVisible, false);
+  } finally { mounted.unmount(); }
+});
+
+test('declining a repeated dashboard create entry preserves the existing unsaved paper', async () => {
+  const mounted = await mountPapers();
+  try {
+    mounted.state.openTrainingCreate();
+    mounted.state.trainingCreate.title = '尚未保存的试卷';
+    await nextTick();
+    context.confirmDecisions = [false];
+    context.route.query = { entry: 'dashboard', create: '1' };
+    await nextTick();
+    await new Promise(resolvePromise => setImmediate(resolvePromise));
+    assert.equal(mounted.state.trainingCreate.title, '尚未保存的试卷');
+    assert.equal(mounted.state.trainingCreateVisible, true);
+    assert.equal(context.route.query.create, '1');
+  } finally { mounted.unmount(); }
 });
 
 async function mountPapers() {

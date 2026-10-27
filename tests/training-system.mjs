@@ -99,10 +99,6 @@ export async function run(ctx) {
     role_ids: [String(writerRole.data.id)],
   });
   assert(writerUser.status === 200 && writerUser.data?.id, `menu writer user create failed: ${writerUser.status}`);
-  const writerAssigned = await ctx.request(admin, 'PUT', `/admin/administrators/${writerUser.data.id}/roles`, {
-    role_ids: [String(writerRole.data.id)],
-  });
-  assert(writerAssigned.status === 200, `menu writer role assignment failed: ${writerAssigned.status}`);
   const writer = await loginUser(ctx, writerUsername, writerPassword, 'A5 menu writer', writerRealName);
   const rolesCatalogDenied = await ctx.request(writer, 'GET', '/admin/permissions');
   assert(rolesCatalogDenied.status === 403, `menu writer unexpectedly received roles catalog: ${rolesCatalogDenied.status}`);

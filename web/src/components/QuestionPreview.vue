@@ -2,6 +2,7 @@
   <div class="question-preview" :class="{
     'question-preview--library': variant === 'library',
     'question-preview--paper': variant === 'paper',
+    'question-preview--feedback': showAnswerFeedback && revealAnswer,
   }">
     <div v-if="variant === 'default'" class="question-preview__meta">
       <el-tag size="small">{{ typeLabel }}</el-tag>
@@ -14,10 +15,13 @@
     </div>
     <div v-else class="question-preview__stem rich-content" v-html="rendered.stem" />
     <div class="question-preview__options">
-      <div v-for="(option, index) in rendered.options" :key="option.key" class="question-preview__option">
+      <div v-for="(option, index) in rendered.options" :key="option.key" class="question-preview__option"
+        :class="optionFeedback(option.key) ? `is-${optionFeedback(option.key)}` : undefined"
+        :aria-label="optionFeedbackLabel(option.key, index)">
         <span class="question-preview__key">{{ String.fromCharCode(65 + index) }}{{ variant === 'paper' ? '、' : variant === 'library' ? '.' : '' }}</span>
         <div class="rich-content" v-html="option.text" />
         <el-tag v-if="variant === 'default' && revealAnswer && rendered.correctIds.includes(option.key)" size="small" type="success">正确答案</el-tag>
+        <span v-if="optionFeedback(option.key) === 'missed'" class="question-preview__missed">漏选</span>
       </div>
     </div>
     <section v-if="variant === 'library' && revealAnswer" class="question-preview__result">
@@ -37,7 +41,7 @@
       </div>
     </section>
     <section v-else-if="variant === 'paper' && revealAnswer" class="question-preview__paper-result">
-      <div class="question-preview__paper-result-row">
+      <div v-if="!showAnswerFeedback" class="question-preview__paper-result-row">
         <span class="question-preview__paper-result-label">正确答案：</span>
         <span>{{ paperCorrectAnswer || '—' }}</span>
       </div>
@@ -61,6 +65,7 @@ import { onMediaContextChange } from '../services/media-context';
 import { normalizeQuestionContentV2, readonlyQuestionDocToHtml, sanitizeQuestionHtmlForPreview, type QuestionContentFields, type QuestionOption, type QuestionType } from '../api/training-types';
 import { questionRichDocToFormHtml, toQuestionFormValue } from '../utils/question-form-content';
 import type { QuestionContentV3 } from '../api/question-document-types';
+import { answerFeedback } from '../utils/answer-feedback';
 
 const props = withDefaults(defineProps<{
   question: QuestionContentFields & {
@@ -76,6 +81,8 @@ const props = withDefaults(defineProps<{
   showScore?: boolean;
   variant?: 'default' | 'library' | 'paper';
   questionNumber?: number;
+  showAnswerFeedback?: boolean;
+  selectedOptionIds?: string[];
 }>(), { revealAnswer: true, showScore: false, variant: 'default' });
 const emit = defineEmits<{ ready: [result: { ok: boolean }] }>();
 
@@ -92,6 +99,15 @@ const correctOptions = computed(() => rendered.options.flatMap((option, index) =
     : []
 )));
 const paperCorrectAnswer = computed(() => correctOptions.value.map((option) => option.letter).join('、'));
+const feedback = computed(() => answerFeedback(props.selectedOptionIds || [], rendered.correctIds));
+function optionFeedback(id: string) {
+  return props.showAnswerFeedback && props.revealAnswer ? feedback.value.option(id) : '';
+}
+function optionFeedbackLabel(id: string, index: number) {
+  const state = optionFeedback(id);
+  if (!state) return undefined;
+  return `${String.fromCharCode(65 + index)}：${state === 'wrong' ? '学员错选' : state === 'missed' ? '漏选的正确答案' : '正确答案'}`;
+}
 
 async function decodeMediaUrl(url: string): Promise<void> {
   if (typeof Image === 'undefined') return;
@@ -343,6 +359,13 @@ onBeforeUnmount(() => {
 }
 .question-preview__paper-result-label { flex: 0 0 auto; }
 .question-preview__paper-analysis { flex: 1; min-width: 0; }
+
+.question-preview--feedback .question-preview__option { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.question-preview--feedback .question-preview__option.is-correct { background: var(--el-color-success-light-9); color: var(--el-color-success-dark-2); }
+.question-preview--feedback .question-preview__option.is-wrong,
+.question-preview--feedback .question-preview__option.is-missed { background: var(--el-color-danger-light-9); color: var(--el-color-danger-dark-2); }
+.question-preview--feedback .question-preview__key { color: inherit; }
+.question-preview__missed { flex: none; font-family: inherit; font-size: 13px; }
 
 @media print {
   .question-preview--paper,

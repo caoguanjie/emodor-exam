@@ -164,9 +164,10 @@ describe('enabled difficulty at question write boundaries', () => {
       .rejects.toMatchObject({ code: 40001, message: 'category_id 必填' });
   });
 
-  it.each(['txt', 'xlsx'] as const)('keeps AI reference templates on importable enabled difficulties in %s', async (format) => {
-    const rows = await parseQuestionImportFile(await buildQuestionImportTemplate(format, 'ai'), format);
-    expect(rows.map((row) => row.difficulty)).toEqual(['easy', 'hard', 'hard']);
+  it('keeps AI Chinese TXT reference examples on importable enabled difficulties', async () => {
+    const rows = await parseQuestionImportFile(await buildQuestionImportTemplate('txt', 'ai'), 'txt');
+    expect(rows.map((row) => row.difficulty)).toEqual(['easy', 'hard', 'easy']);
+    expect(rows.every((row) => activeDifficulties().includes(row.difficulty as 'easy' | 'hard'))).toBe(true);
   });
 
   it('returns a row error for medium without reclassifying or writing a question', async () => {

@@ -139,3 +139,29 @@ describe('paper question preview', () => {
     expect(wrapper.findAll('.question-preview__option .el-tag')).toHaveLength(0);
   });
 });
+
+describe('saved answer feedback', () => {
+  it.each([
+    { name: 'all correct', selected: ['stable-a', 'stable-c'], states: ['correct', '', 'correct'], missed: false },
+    { name: 'wrong selection', selected: ['stable-b'], states: ['correct', 'wrong', 'correct'], missed: false },
+    { name: 'partial correct selection', selected: ['stable-a'], states: ['correct', '', 'missed'], missed: true },
+    { name: 'unanswered', selected: [], states: ['', '', ''], missed: false },
+  ])('$name uses only the agreed option colors', async ({ selected, states, missed }) => {
+    const wrapper = await render({ variant: 'paper', showAnswerFeedback: true, selectedOptionIds: selected });
+    const options = wrapper.findAll('.question-preview__option');
+    expect(options.map(option => ['correct','wrong','missed'].find(state => option.classes().includes(`is-${state}`)) || '')).toEqual(states);
+    expect(wrapper.find('.question-preview__missed').exists()).toBe(missed);
+    expect(wrapper.text()).not.toContain('正确答案：');
+    expect(wrapper.text()).not.toContain('学员答案：');
+    expect(wrapper.text()).toContain('解析：');
+  });
+  it('updates feedback when moving to an unanswered question and respects hidden answers', async () => {
+    const wrapper = await render({ variant: 'paper', showAnswerFeedback: true, selectedOptionIds: ['stable-b'] });
+    expect(wrapper.find('.is-wrong').exists()).toBe(true);
+    await wrapper.setProps({ selectedOptionIds: [] });
+    expect(wrapper.find('.is-wrong, .is-correct, .is-missed').exists()).toBe(false);
+    await wrapper.setProps({ selectedOptionIds: ['stable-b'], revealAnswer: false });
+    await flushPromises();
+    expect(wrapper.find('.is-wrong, .is-correct, .is-missed').exists()).toBe(false);
+  });
+});

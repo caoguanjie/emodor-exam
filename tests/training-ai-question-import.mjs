@@ -59,22 +59,15 @@ function multipart(fields, bytes, filename, contentType) {
   return { body: Buffer.concat(parts), headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` } };
 }
 
-function referenceFile(categoryId, count = 20) {
-  const options = JSON.stringify([{ key: 'A', text: '先辨识风险' }, { key: 'B', text: '直接作业' }]);
-  const rows = Array.from({ length: count }, (_unused, index) => ({
-    category: categoryId,
-    type: 'single',
-    difficulty: 'easy',
-    concept: '',
-    stem: `一次性参考题-${index + 1}-${randomBytes(3).toString('hex')}`,
-    options,
-    answer: '[0]',
-    analysis: `一次性参考解析-${index + 1}`,
-  }));
-  return Buffer.from(`\uFEFF${[
-    HEADERS.join('\t'),
-    ...rows.map((row) => HEADERS.map((header) => row[header] ?? '').join('\t')),
-  ].join('\r\n')}\r\n`, 'utf8');
+function referenceFile(count = 20) {
+  const rows = Array.from({ length: count }, (_unused, index) => [
+    `[题干]一次性参考题-${index + 1}-${randomBytes(3).toString('hex')}`,
+    '[类型]单选题',
+    '[选项]${先辨识风险},${直接作业}',
+    '[答案]A',
+    '[难度]简单',
+  ].join('\r\n'));
+  return Buffer.from(`\uFEFF# AI 中文参考题集成测试\r\n${rows.join('\r\n\r\n')}\r\n`, 'utf8');
 }
 
 export function startMockAi() {
@@ -185,8 +178,8 @@ async function runBody(ctx, mockPort) {
   const beforeQuestions = await ctx.queryTestDb('SELECT COUNT(*) AS total FROM question');
   const beforeVersions = await ctx.queryTestDb('SELECT COUNT(*) AS total FROM question_version');
   const beforeUploads = await filesUnder(ctx.env.UPLOAD_DIR);
-  const referenceBytes = referenceFile(categoryId);
-  const upload = multipart({ format: 'txt' }, referenceBytes, 'references.txt', 'text/plain; charset=utf-8');
+  const referenceBytes = referenceFile();
+  const upload = multipart({ format: 'txt', category_id: categoryId }, referenceBytes, 'references.txt', 'text/plain; charset=utf-8');
   const started = await ctx.request(
     admin.actor,
     'POST',
@@ -219,7 +212,7 @@ async function runBody(ctx, mockPort) {
   try {
     const taskState = await redis.get(`${ctx.env.REDIS_KEY_PREFIX}ai:question-import:task:${started.data.task_id}`);
     assert.equal(String(taskState).includes('一次性参考题'), false, 'Redis 任务不得包含参考题正文');
-    assert.equal(String(taskState).includes('一次性参考解析'), false, 'Redis 任务不得包含参考题解析');
+    assert.equal(String(taskState).includes('先辨识风险'), false, 'Redis 任务不得包含参考题选项');
   } finally { await redis.quit(); }
   const batch = await ctx.request(admin.actor, 'GET', `/admin/questions/ai-import-batches/${task.batch_id}`);
   assert.equal(batch.status, 200, JSON.stringify(batch));
@@ -229,7 +222,7 @@ async function runBody(ctx, mockPort) {
   assert.ok(batch.data.rows.every((row) => row.category === categoryId && row.type === 'single'));
   assert.ok(batch.data.rows.every((row) => !Object.hasOwn(row, 'concept') && !Object.hasOwn(row, 'score')));
   assert.equal(JSON.stringify(batch.data).includes('一次性参考题'), false, '预览批次不得包含参考题正文');
-  assert.equal(JSON.stringify(batch.data).includes('一次性参考解析'), false, '预览批次不得包含参考题解析');
+  assert.equal(JSON.stringify(batch.data).includes('先辨识风险'), false, '预览批次不得包含参考题选项');
 
   const crossBatch = await ctx.request(other.actor, 'GET', `/admin/questions/ai-import-batches/${task.batch_id}`);
   assert.equal(crossBatch.status, 403, '其他管理员不得读取生成批次');

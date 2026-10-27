@@ -152,6 +152,40 @@ function withStoredTabs(initial, run) {
   }
 }
 
+test('dashboard filter entries reuse four list tabs while paper detail queries remain independent', () => {
+  withStoredTabs([], (tabs, persisted) => {
+    for (const path of ['students', 'questions', 'papers', 'training-statistics']) {
+      tabs.visit(`/admin/${path}?entry=dashboard`, path);
+      tabs.visit(`/admin/${path}?source=external&paper_id=8`, path);
+    }
+    tabs.visit('/admin/papers/8?designer=1', '编辑试卷');
+    tabs.visit('/admin/papers/8?designer=0', '预览试卷');
+    assert.equal(tabs.tabs.length, 6);
+    assert.equal(tabs.tabs[0].path, '/admin/students?source=external&paper_id=8');
+    assert.deepEqual(persisted(), tabs.tabs);
+  });
+});
+
+test('restoring dashboard lists merges old filter tabs and retains the most recent URL', () => {
+  withStoredTabs([
+    { path: '/admin/students?source=institution', title: '学员管理', closable: true },
+    { path: '/admin/students?source=external', title: '学员管理', closable: true },
+    { path: '/admin/papers/8?designer=1', title: '编辑试卷', closable: true },
+  ], (tabs, persisted) => {
+    assert.deepEqual(tabs.tabs.map(tab => tab.path), ['/admin/students?source=external', '/admin/papers/8?designer=1']);
+    assert.deepEqual(persisted(), tabs.tabs);
+  });
+});
+
+test('list cache invalidation uses the same identity once and leaves details untouched', async () => {
+  const { tabCacheKey, invalidateTabCache } = await vite.ssrLoadModule('/src/stores/tab-cache.ts');
+  const versions = {};
+  assert.equal(tabCacheKey('/admin/students?source=external', versions), '/admin/students:0');
+  invalidateTabCache(versions, ['/admin/students?source=external', '/admin/students?source=institution']);
+  assert.equal(tabCacheKey('/admin/students?status=1', versions), '/admin/students:1');
+  assert.equal(tabCacheKey('/admin/papers/8?designer=1', versions), '/admin/papers/8?designer=1:0');
+});
+
 test('exam record filter and page changes reuse one list tab and persist its latest full URL', () => {
   unsavedContext.calls = [];
   withStoredTabs([{ path: '/admin/dashboard', title: '业务首页', closable: false }], (tabs, persisted) => {

@@ -87,10 +87,11 @@
 </template>
 
 <script setup lang="ts">
-import { onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
+import { onActivated, onBeforeUnmount, onDeactivated, reactive, ref, watch } from 'vue';
 import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import { useDashboardListNavigation } from '../../utils/admin-dashboard-navigation';
 import http from '../../api/http';
 import PaperPreviewDialog from '../../components/PaperPreviewDialog.vue';
 import PaperEditDialog from '../../components/PaperEditDialog.vue';
@@ -108,13 +109,14 @@ interface TrainingCreateDraft {
 type TrainingCreatePayload = Omit<TrainingCreateDraft, 'remark'> & { mode: 'fixed'; remark: string | null };
 
 const router = useRouter();
+const route = useRoute();
+const formRouteKey = ref(route.fullPath);
 const auth = useAuthStore();
 const loading = ref(false);
 const previewOpen = ref(false);
 const previewDialog = ref<InstanceType<typeof PaperPreviewDialog> | null>(null);
 const editDialog = ref<InstanceType<typeof PaperEditDialog> | null>(null);
 const busyActions = reactive(new Set<string>());
-let listInitialized = false;
 function canEdit(row: TrainingPaperSummary) { return row.mode === 'fixed' && row.status === 'draft' && auth.can('papers:write') && auth.can('questions:read'); }
 function canModify(row: TrainingPaperSummary) { return row.mode === 'fixed' && row.status === 'draft' && auth.can('papers:write'); }
 function isRowBusy(row: TrainingPaperSummary) { return ['copy', 'publish', 'delete'].some(action => busyActions.has(`${action}:${row.id}`)); }
@@ -188,9 +190,10 @@ let createOperation = 0;
 let viewActive = true;
 let viewDestroyed = false;
 const completedCreateScopes = new Set<'training'>();
-const createUnsaved = useUnsavedChanges(trainingCreateDirty, { onDiscard: discardTrainingCreate });
+const createUnsaved = useUnsavedChanges(trainingCreateDirty, { routeKey: formRouteKey, onDiscard: discardTrainingCreate });
 const trainingStatuses = [
   { value: 'draft', label: '草稿' }, { value: 'published', label: '已发布' },
+  { value: 'withdrawn', label: '已撤回' }, { value: 'archived', label: '已归档' },
 ];
 
 function emptyTrainingCreate(): TrainingCreateDraft { return { title: '', category_id: '', course_ids: [], requires_learning: false, required_learning_minutes: null, remark: '', total_score: 100, pass_score: 60, duration_minutes: 30 }; }
@@ -221,14 +224,16 @@ function statusLabel(status: TrainingPaperStatus | string) { return ({ draft: '�
 function statusType(status: TrainingPaperStatus | string) { return status === 'published' ? 'success' : status === 'draft' ? 'info' : 'warning'; }
 function categoryName(categoryId: Id) { return categories.value.find((item) => item.id === categoryId)?.name || `类别 ${categoryId}`; }
 function openDetail(id: Id | number, designer = false) { void router.push({ path: `/admin/papers/${id}`, query: { scope: 'training', ...(designer ? { designer: '1' } : {}) } }); }
-function searchTraining() { trainingQuery.page = 1; void loadTraining(); }
-function resetTrainingQuery() { Object.assign(trainingQuery, { page: 1, keyword: '', category_id: '', status: '' }); void loadTraining(); }
+async function searchTraining() { trainingQuery.page = 1; await navigation.syncQuery({ status: trainingQuery.status || 'all' }); await loadTraining(); }
+function resetTrainingQuery() { Object.assign(trainingQuery, { page: 1, keyword: '', category_id: '', status: '' }); void searchTraining(); }
 function nonBlankParams(source: Record<string, unknown>) { return Object.fromEntries(Object.entries(source).filter(([, value]) => value !== '')); }
 async function loadTraining() {
   const context = viewContext; const operation = ++loadOperation;
   loading.value = true;
   try {
-    const data = await http.get('/admin/papers', { params: nonBlankParams(trainingQuery) }) as Page<TrainingPaperSummary>;
+    const data = await http.get('/admin/papers', { params: nonBlankParams({ page: trainingQuery.page, page_size: trainingQuery.page_size,
+      keyword: trainingQuery.keyword, category_id: trainingQuery.category_id, status: trainingStatuses.some(item => item.value === trainingQuery.status) ? trainingQuery.status : '',
+    }) }) as Page<TrainingPaperSummary>;
     if (context !== viewContext || operation !== loadOperation) return;
     trainingItems.value = data.items; trainingTotal.value = data.total;
     const lastPage = Math.max(1, Math.ceil(data.total / trainingQuery.page_size));
@@ -248,7 +253,7 @@ async function loadCreateRelations() {
   createCourses.value = coursesPage.items;
 }
 function onCreateCategoryChange() { trainingCreate.course_ids = []; void loadCreateRelations(); }
-function openTrainingCreate() { createContext += 1; relationToken += 1; creating.value = false; trainingCreateVisible.value = false; createCourses.value = []; Object.assign(trainingCreate, emptyTrainingCreate(), { category_id: categories.value[0]?.id || '' }); createBaseline = snapshotCreate(); createUnsaved.markClean(); trainingCreateVisible.value = true; }
+function openTrainingCreate() { if (!auth.can('papers:read') || !auth.can('papers:write')) return false; createContext += 1; relationToken += 1; creating.value = false; trainingCreateVisible.value = false; createCourses.value = []; Object.assign(trainingCreate, emptyTrainingCreate(), { category_id: categories.value[0]?.id || '' }); createBaseline = snapshotCreate(); createUnsaved.markClean(); trainingCreateVisible.value = true; return true; }
 function closeTrainingCreateContext() { createContext += 1; relationToken += 1; creating.value = false; trainingCreateVisible.value = false; }
 async function closeTrainingCreate() { if (await createUnsaved.confirmDiscard()) closeTrainingCreateContext(); }
 async function beforeTrainingCreateClose(done: () => void) { if (await createUnsaved.confirmDiscard()) { closeTrainingCreateContext(); done(); } }
@@ -287,9 +292,19 @@ async function createTraining(action: 'save' | 'design' = 'design') {
     else await loadTraining();
   } finally { if (context === viewContext && dialogContext === createContext && operation === createOperation) creating.value = false; }
 }
-onMounted(async () => { await loadOptions(); await loadTraining(); listInitialized = true; });
+const navigation = useDashboardListNavigation(route, router, {
+  path: '/admin/papers', routeKey: formRouteKey,
+  beforeEntry: () => createUnsaved.confirmDiscard(),
+  apply(entry, explicit) {
+    if (entry.kind !== 'papers') return;
+    if (explicit) Object.assign(trainingQuery, { page: 1, keyword: '', category_id: '' });
+    trainingQuery.status = entry.status || '';
+  },
+  prepare: loadOptions, load: loadTraining, openCreate: openTrainingCreate,
+  onInvalid: () => { ElMessage.warning('已清除无效的试卷入口参数'); },
+});
 function invalidateView() { previewDialog.value?.close(); editDialog.value?.close(); viewContext += 1; loadOperation += 1; createContext += 1; relationToken += 1; creating.value = false; trainingCreateVisible.value = false; }
-onActivated(() => { viewActive = true; if (listInitialized) void loadTraining(); flushCompletedCreates(); });
+onActivated(() => { viewActive = true; flushCompletedCreates(); });
 onDeactivated(() => { viewActive = false; invalidateView(); });
 onBeforeUnmount(() => { viewDestroyed = true; viewActive = false; invalidateView(); });
 </script>

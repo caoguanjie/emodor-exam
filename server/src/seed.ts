@@ -5,7 +5,7 @@ import { SysUser } from './entities/sys-user.entity';
 import { SysRole } from './entities/sys-role.entity';
 import { SysPermission } from './entities/sys-permission.entity';
 import { SysRolePermission } from './entities/sys-role-permission.entity';
-import { LEGACY_REGULATION_ADMIN_PERMISSIONS, PERMISSION_CATALOG, PERMISSION_NAMES } from './modules/access/permission-catalog';
+import { CONFIGURABLE_PERMISSION_CATALOG, LEGACY_REGULATION_ADMIN_PERMISSIONS, PERMISSION_CATALOG, PERMISSION_NAMES } from './modules/access/permission-catalog';
 
 /**
  * 首次部署种子（03 册第 7 章初始化口径）：
@@ -63,7 +63,7 @@ export async function ensureSeedData(ds: DataSource): Promise<void> {
     permissions.set(code, permission);
   }
   const roleDefinitions = [
-    { code: 'super_admin', name: '超级管理员', isSystem: 1, permissions: [...PERMISSION_CATALOG] },
+    { code: 'super_admin', name: '超级管理员', isSystem: 1, permissions: [...CONFIGURABLE_PERMISSION_CATALOG] },
     { code: 'regulation_admin', name: '业务管理员', isSystem: 1, permissions: LEGACY_REGULATION_ADMIN_PERMISSIONS },
     { code: 'employee', name: '学员', isSystem: 1, permissions: [] as string[] },
   ];

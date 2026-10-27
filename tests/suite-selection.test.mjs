@@ -9,10 +9,23 @@ import {
   resolveSuitePaths,
   runSelectedSuites,
   runSuiteInRuntime,
+  suiteRuntimeApi,
+  suiteRuntimeEnvOverrides,
 } from './run-e2e.mjs';
 
 const SUITE_A = '/owned/suite-a.mjs';
 const SUITE_B = '/owned/suite-b.mjs';
+
+for (const name of ['admin-dashboard']) {
+  test(`${name} is isolated and uses the test-only learner identity entry`, () => {
+    const expected = fileURLToPath(new URL(`./${name}.mjs`, import.meta.url));
+    assert.deepEqual(resolveSuitePaths(name), [expected]);
+    assert.equal(resolveSuitePaths('all').filter(path => path === expected).length, 1);
+    assert.equal(suiteRuntimeEnvOverrides(expected).NODE_ENV, 'test');
+    assert.equal(suiteRuntimeEnvOverrides(expected).IDENTITY_PROVIDER, 'disabled');
+    assert.ok(suiteRuntimeApi(expected).apiArgs[0].endsWith('identity-e2e-main.ts'));
+  });
+}
 
 for (const name of ['main-question-designers', 'main-question-designers-compatibility']) {
   test(`${name} suite is registered once in aggregate selection`, () => {

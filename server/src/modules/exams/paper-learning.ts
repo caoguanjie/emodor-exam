@@ -42,6 +42,21 @@ export async function assertPaperLearningCourses(manager: EntityManager, categor
   }
 }
 
+/** Read the same current effective video set for admission and reporting. */
+export async function getEffectiveLearningVersionIds(manager: EntityManager, courseIds: readonly string[]): Promise<string[]> {
+  const ids = [...new Set(courseIds.map(String))];
+  if (!ids.length) return [];
+  const rows: Array<{ version_id: string }> = await manager.query(`
+    SELECT DISTINCT lesson.current_version_id AS version_id
+    FROM course_lesson lesson
+    INNER JOIN training_course course ON course.id = lesson.course_id
+    INNER JOIN lesson_version version ON version.id = lesson.current_version_id AND version.lesson_id = lesson.id
+    WHERE course.id IN (${ids.map(() => '?').join(',')}) AND course.status = 'published'
+      AND lesson.deleted_at IS NULL AND lesson.lesson_type = 'video' AND version.duration_ms > 0
+  `, ids);
+  return [...new Set(rows.map(row => String(row.version_id)))];
+}
+
 /** Use the existing effective-play clock, once per current video version. */
 export async function assertPaperLearningEligible(
   manager: EntityManager,
@@ -51,18 +66,12 @@ export async function assertPaperLearningEligible(
   // NULL identifies an old release: never invent or backfill a new requirement.
   if (release.businessScope !== 'training' || !release.requiresLearning || release.requiredLearningMinutes == null) return;
   const requirement = normalizePaperLearning(release);
-  const row = await manager.getRepository(VideoLearningRecord).createQueryBuilder('record')
+  const versionIds = await getEffectiveLearningVersionIds(manager, requirement.courseIds);
+  const row = versionIds.length ? await manager.getRepository(VideoLearningRecord).createQueryBuilder('record')
     .select('COALESCE(SUM(record.credited_ms), 0)', 'creditedMs')
     .where('record.user_id = :userId', { userId: String(userId) })
-    .andWhere(`record.lesson_version_id IN (
-      SELECT DISTINCT lesson.current_version_id
-      FROM course_lesson lesson
-      INNER JOIN training_course course ON course.id = lesson.course_id
-      INNER JOIN lesson_version version ON version.id = lesson.current_version_id AND version.lesson_id = lesson.id
-      WHERE course.id IN (:...courseIds) AND course.status = :courseStatus
-        AND lesson.deleted_at IS NULL AND lesson.lesson_type = :lessonType AND version.duration_ms > 0
-    )`, { courseIds: requirement.courseIds, courseStatus: 'published', lessonType: 'video' })
-    .getRawOne<{ creditedMs: string }>();
+    .andWhere('record.lesson_version_id IN (:...versionIds)', { versionIds })
+    .getRawOne<{ creditedMs: string }>() : undefined;
   // BIGINT sums remain exact even when old learning histories exceed JS integers.
   const creditedMs = BigInt(row?.creditedMs || '0');
   const remainingMs = BigInt(requirement.requiredLearningMinutes!) * 60000n - creditedMs;

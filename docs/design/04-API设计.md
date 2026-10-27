@@ -140,7 +140,7 @@
 | /admin/students | 学习管理 | 现行 | 无部门学员增改查、头像、启停、无密码 xlsx 模板/预检/确认；手机号必填，不提供密码设置/重置或删除 |
 | /admin/administrators、/admin/roles 等 | 系统设置 | 现行 | 管理员创建必须提交非空 `role_ids`；另含权限、会话与公共配置治理 |
 | /admin/question-materials | 题库资料 | 现行 | 资料创建、列表/详情、版本上传、解析状态和重试；版本 `id` 为字符串 |
-| /admin/questions | 题库导入 | 现行 | 7 列Excel/TXT模板、旧9列及两种8列兼容、逐题预览、warnings和直接启用的幂等确认 |
+| /admin/questions | 题库导入 | 现行 | 普通导入与 AI 参考题统一使用中文五列模板并由页面选择整批类别；兼容旧中文四列及英文七／八／九列，支持逐题预览、warnings和直接启用的幂等确认 |
 | /ai | AI 与题库 | 现行 | AI配置／旧任务读取、类别选项、三类客观题版本、人工录入与启停 |
 | /admin/papers | 试卷发布 | 现行 | 固定/随机卷配置、来源选项、候选、预览、发布、复制、草稿删除；撤回/归档写入口退场 |
 | /me | 本人/考试 | Gate H2已自动验证 | 本人资料/首页、考试列表、开考/状态恢复、主动整卷交卷、结果、历史和错题；无考试draft/heartbeat |
@@ -322,43 +322,72 @@ PC「培训类别」与移动端「培训工种」共同引用 `sys_user.categor
 
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
-| GET | /admin/permissions | roles:read | 服务端注册权限目录 |
-| GET | /admin/roles | roles:read | 角色与权限关系 |
-| POST / PUT | /admin/roles[/{id}] | roles:write | 新建/修改业务角色；只接受白名单权限 |
-| GET | /admin/administrators | administrators:read | 管理员及当前有效权限 |
-| POST | /admin/administrators | administrators:write | 创建管理员；body 必须包含非空 `role_ids:string[]` |
-| GET | /admin/administrators/candidates | administrators:write | 分页搜索可配置账号；仅返回 `id/username/real_name/status/system_role/requires_initial_password`，排除超级管理员 |
-| GET | /admin/administrators/assignable-roles | administrators:write | 仅返回启用的非系统角色 `id/code/name/status/is_system`，不返回权限矩阵 |
-| PUT | /admin/administrators/{id}/roles | administrators:write | `role_ids` 多选业务角色；学员取得有效管理权限时必填 `initial_password`，最高管理员保护 |
-| GET | /admin/sessions | sessions:read | 分页查看在线/已吊销会话（返回 `created_at`、`last_seen_at`、持久化 `expires_at` 与 `status`；新会话的创建/更新时间与最后活动时间由同一服务端时刻写入） |
+| GET | /admin/permissions | roles:read | 当前可配置的服务端注册权限目录，不展示两个旧聚合项 |
+| GET | /admin/roles | roles:read | 带page/page_size/keyword返回Page；无query保留旧数组 |
+| POST | /admin/roles | roles:create | 名称、备注；自动code。附带非空permissions另需roles:permissions |
+| GET | /admin/roles/permission-tree | roles:read 或 roles:permissions | sys_menu安全扁平投影与注册权限目录，无URL/icon |
+| GET | /admin/roles/{id} | roles:update 或 roles:permissions | 最新角色资料与授权 |
+| PUT | /admin/roles/{id} | 按字段：roles:update / roles:permissions | 资料与旧授权兼容写入分别检查，混合请求必须同时有两项 |
+| PUT | /admin/roles/{id}/permissions | roles:permissions | 新独立授权，只接受permissions，严格细项不隐式展开菜单权限 |
+| DELETE | /admin/roles/{id} | roles:delete | 系统或任何账号使用中的角色拒绝删除 |
+| GET | /admin/administrators | administrators:read | 关键字查询、分页管理员列表（排除已删除）；返回 Page |
+| POST | /admin/administrators | administrators:create | 原子创建账号及角色；非空 `role_ids:string[]`，姓名选填、status 默认1 |
+| GET | /admin/administrators/assignable-roles | administrators:create / update 任一 | 仅返回启用的非系统角色 `id/code/name/status/is_system`，不返回权限矩阵 |
+| GET | /admin/administrators/{id} | administrators:update | 修改弹框的最新资料与角色；纯学员和已删除账号404 |
+| PUT | /admin/administrators/{id} | administrators:update | 原子修改姓名、手机号、角色、状态；账号不可改，超级管理员不提交业务角色 |
+| POST | /admin/administrators/{id}/reset-password | administrators:reset_password | `password` 复用强度策略；强制下次改密并吊销旧会话，保留真实登录统计 |
+| DELETE | /admin/administrators/{id} | administrators:delete | 逻辑删除并禁用、吊销会话，保留账号与角色及业务引用 |
+| GET | /admin/sessions | sessions:read | 按账号／姓名关键字及状态分页查询会话；默认仅有效，返回账号显示字段、客户端和精确当前会话标记，参数与状态口径见下文 |
 | POST | /admin/sessions/{id}/revoke | sessions:write | 强制下线并立即吊销该 sid 的双令牌 |
 
-管理员列表和可配置账号列表返回 `requires_initial_password`，前端据此在提升账号时显示管理员初始密码输入。服务端在角色→用户行锁事务中重新判定：employee 当前无启用角色的有效注册管理权限、且本次授予有效权限时，必须提交符合管理员密码策略的 `initial_password`，写 bcrypt 哈希并置 `force_password_change=1`，同时沿用认证世代递增和会话吊销。纯学员不得仅赋零权限角色；已有有效管理角色的管理员（包括停用账号）改角色不重设密码，携带该字段时拒绝。状态停用不作为需要新密码的依据。密码不进入响应或审计；角色清空不设置新密码。
+**会话列表契约（2026-10-27）**：`GET /admin/sessions` 返回统一信封中的 `{items,total,page,page_size}`。查询参数为 `keyword`（账号或姓名，去首尾空白后最长 128 字符）、`status=active|expired|revoked|all`（默认 `active`）、`page`（默认 1，范围 1—1000000）、`page_size`（默认 20，范围 1—100）。未知、重复、数组或非法枚举／数字参数返回 40001。关键字按普通文本匹配，`%`、`_`、`!` 不作为用户通配符；总数与列表使用同一筛选，按 `created_at DESC,id DESC` 排序。
+
+条目保留 `id/sid/user_id/user_agent/ip_address/created_at/last_seen_at/revoked_at/expires_at/status`，新增 `username:string|null`、`real_name:string|null`、`client:pc|mobile`、`is_current:boolean`。账号字段仅从 `sys_user` 左连接投影，关联缺失不丢会话，不返回口令或身份材料；ID 保持字符串。`is_current` 只比较本次认证用户的精确 `sid`，历史无 sid 令牌均为 false，不按 user_id 猜测。
+
+状态以同一服务端时刻判断：有 `revoked_at` 为 `revoked`（已下线），否则 `expires_at <= now` 为 `expired`（已过期），其余为 `active`（有效）。`active` 仅表示会话有效，不等同用户正在操作；历史缺失 expires_at 时继续按既有创建时间加 refresh TTL 的兼容规则处理。时间返回 ISO UTC，由页面按北京时间展示。单会话下线仍使用已有 `POST /admin/sessions/{id}/revoke` 和 `sessions:write`，不扩大到同账号其他设备。
+
+不提供把既有学员账号提升为管理员的候选或专用角色写入接口。管理员必须通过 `POST /admin/administrators` 新建并设置独立密码与非空业务角色；后续角色调整统一走管理员修改接口。纯学员 ID 访问管理员详情或修改接口返回 404，不能借角色写入把学员转成管理账号。
+
+管理员列表 query 为 `page`（默认1）、`page_size`（默认10，1—100）、`keyword`（最多128字符，匹配账号/姓名/手机号）；分页只接受正整数。`items` 为 `{id,username,real_name,phone,email,system_role,status,login_count,last_login_ip,last_login_at,created_at,role_ids,permissions}`；密码与哈希不出参。创建接受 `{username,password,real_name?,phone?,email?,role_ids,status?}`，`status` 仅数字0/1，姓名为空存空字符串。修改接受 `{real_name?,phone?,role_ids?,status?}`，普通管理员必须提交非空业务角色；只允许保留原有停用角色，不可新增授予停用/系统角色。前端密码确认只在本地比较，不发送确认字段。
+
+本人不能被禁用、删除或通过管理入口重置密码，使用本人改密接口；任何超级管理员不能被禁用或删除，只有超级管理员可以修改或重置其他超级管理员。已删除账号不可详情、修改或重置；用户名和手机号继续保留唯一占用，不提供恢复。普通维护在用户行锁内复核管理员分类（legacy 管理员或具有业务角色链接），不能通过伪造 ID 修改纯学员。资料/角色/状态更新、重置与删除均保持认证世代、会话和缓存收口；角色→用户加锁顺序与角色权限编辑一致。
+
+角色返回新增remark、created_at、updated_at；查询page默认1/page_size默认10，名称关键字最多128字符。新建{name,remark?}可先无授权；旧code/permissions调用仍兼容。新权限端点不接受administrators:write/roles:write聚合码，不把system_settings:read/write隐含映射为menus:*。036只在升级时复制旧授权，已验证progress后再次迁移不会重授被撤销细项；038前向清理已退役的账号提升权限、菜单按钮与角色授权。PC profile新增permission_schema_version=2；旧浏览器缓存仅作显示过渡，API仍按当前数据库细项授权。
 
 ### 3.2.7 菜单、字典、站点配置与审计（A5）
 
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
 | GET | `/admin/menus/navigation` | 登录 | 返回当前账号有效权限过滤后的启用导航树；不下发任意组件或脚本 |
-| GET | `/admin/menus` | `system_settings:read` | 完整目录/菜单/按钮树（含停用项） |
-| GET | `/admin/menus/permission-options` | `system_settings:write` | 菜单编辑专用已注册权限选项 `{code,name}[]`；不因此授予 `/admin/permissions` 或 `roles:*` |
-| GET | `/admin/menus/{id}` | `system_settings:read` | 菜单节点详情 |
-| POST | `/admin/menus` | `system_settings:write` | 新建节点 |
-| PUT | `/admin/menus/{id}` | `system_settings:write` | 更新节点；父链循环校验与写入同一事务 |
-| DELETE | `/admin/menus/{id}` | `system_settings:write` | 删除节点；有子项或其权限仍被角色引用时返回 40920 |
+| GET | `/admin/menus` | `menus:read` | 完整目录/菜单/按钮树（含停用项） |
+| GET | `/admin/menus/permission-options` | `menus:create` 或 `menus:update` | 菜单编辑专用已注册权限选项 `{code,name}[]`；不因此授予 `/admin/permissions` 或 `roles:*` |
+| GET | `/admin/menus/{id}` | `menus:read` | 菜单节点详情 |
+| POST | `/admin/menus` | `menus:create` | 新建节点 |
+| PUT | `/admin/menus/{id}` | `menus:update` | 更新节点；父链循环校验与写入同一事务 |
+| DELETE | `/admin/menus/{id}` | `menus:delete` | 删除节点；有子项或其权限仍被角色引用时返回 40920 |
+| GET | `/admin/dictionaries/types` | `system_settings:read` | 全部字典分类（含空分类）与项数，返回 `{items,total}`；不接受查询参数 |
+| POST | `/admin/dictionaries/types` | `system_settings:write` | 新增一级分类，接收名称/描述，服务端生成稳定类型标识 |
+| PUT | `/admin/dictionaries/types/{type}` | `system_settings:write` | 编辑分类名称/描述，内置分类也可编辑；类型标识不可变 |
+| DELETE | `/admin/dictionaries/types/{type}` | `system_settings:write` | 删除空的自定义分类；内置或非空分类返回 40920 |
 | GET | `/admin/dictionaries` | `system_settings:read` | 按 `page/page_size/type/keyword/status` 分页，返回 `{items,total,page,page_size}` |
 | POST | `/admin/dictionaries` | `system_settings:write` | 新建自定义显示字典项 |
 | PUT | `/admin/dictionaries/{id}` | `system_settings:write` | 更新自定义字典项；固定业务枚举拒绝 |
 | DELETE | `/admin/dictionaries/{id}` | `system_settings:write` | 删除自定义项；`is_system=1` 或固定 type 返回 40920 |
 | GET | `/admin/site-settings` | `system_settings:read` | 返回与公开端同形的 Logo/轮播配置 |
 | PUT | `/admin/site-settings` | `system_settings:write` | 校验 ready branding image 后原子更新配置与媒体引用 |
-| GET | `/admin/audit-logs` | `system_settings:read` | 按 `date_from/date_to/actor/action/page/page_size` 只读查询结构化审计文件；无清空端点 |
+| GET | `/admin/audit-logs` | `system_settings:read` | 按 `date_from/date_to/actor/action/scope/result/page/page_size` 只读查询结构化审计文件；`scope=management\|security\|exam\|learner\|system\|all`，`result=success\|failure`；无清空端点 |
 | GET | `/site-config` | 公开 | 严格返回 `{logo_asset_id,banners}` 两个键 |
 | GET | `/site-config/assets/{id}/content` | 公开 | 仅当 ID 仍在当前 Logo/轮播白名单、有 `site_config` 引用且资源为 ready branding image 时返回原始流；其他 ID 统一 40401，支持单 Range |
 
 菜单写入 DTO 固定为 `parent_id? / name / type / route_path? / permission_code? / icon? / sort / status`。`type=directory` 不得带路由或权限；`type=menu` 的 `route_path` 必须在前端及服务端菜单白名单注册，包含独立 `/admin/questions/import`；`type=button` 不得带路由且必须使用服务端注册权限。新增、修改、删除先锁定初始化保证且业务不可删除的 `site_setting.logo_asset_id` 实存行，再在同一事务重读菜单树关系；因此空树双创建可依次成功，互挂父级、建子与删父、建子与父节点改按钮只会提交合法一侧。互斥行缺失时返回 50004/HTTP 503，不自动修复、不把数据库死锁当业务冲突。默认试题管理导航不在数据库层先限制 `questions:read`，前端注册路由精确以 `questions:read OR questions:write` 判定；试题导入菜单和路由要求 `questions:write`。只缓存试题导入页，试题管理返回时重新加载列表，API 仍按各端点权限裁决。
 
-字典写入 DTO 固定为 `type/code/label/sort/status/remark?`，`(type,code)` 唯一。服务端固定 type 是 `learner_source/difficulty/question_type/regulation_status/paper_status/question_status/exam_status`；这些项只是显示镜像，不能借 CRUD 改变来源映射、题型、状态或考试规则。
+字典写入 DTO 固定为 `type/code/label/sort/status/remark?`，`(type,code)` 唯一，`type` 必须引用已有分类，缺失时提示先创建分类，不隐式创建。服务端固定 type 是 `learner_source/difficulty/question_type/regulation_status/paper_status/question_status/exam_status`；这些项只是显示镜像，不能借 CRUD 改变来源映射、题型、状态或考试规则。
+
+字典列表在分页前依次按试题类型、题目难度、学员来源、试卷状态、考试状态、题目状态、制度状态排列，自定义类型随后按 `type ASC` 排列；同一类型内按 `sort ASC, id ASC` 排列。此顺序仅影响列表展示，不修改字典字段值。
+
+分类项为 `{type,label,description,sort,is_system,count}`：`count` 是该分类全部字典项数量（含停用项），空分类为 0；`total` 是分类数量。名称及描述来自 `sys_dictionary_type`，分类按 `sort ASC,type ASC` 排序，不受右侧分页、关键词或状态筛选影响。分类 POST/PUT DTO 严格为 `{label,description?}`：名称去首尾空白后 1—128 字符且唯一，描述最多 255 字符、空文本转 NULL；服务端创建 `custom_` 前缀标识。分类写入返回单个上述分类对象，删除返回 NULL。所有分类/字典项写入在同一事务先锁定不可删除的 `question_type` 分类行，再检查引用或保存；缺失锁行返回 50004/HTTP 503。成功与失败均记录相应配置审计。
+
+PC 左侧使用 `el-tree` 展示一级分类名称，不显示英文类型标识；搜索框旁提供新增入口，节点菜单提供编辑/删除；分类弹窗仅维护名称和描述。内置分类元数据可编辑，内置和非空分类禁删。切换分类回到第一页并清空右侧筛选，重置查询保留当前分类；删除最后一个字典项后分类仍存在。右侧新增/编辑字典项从已有自定义分类选择，底层仍提交稳定 `type`。
 
 站点配置请求与公开响应均是：
 
@@ -375,6 +404,8 @@ PC「培训类别」与移动端「培训工种」共同引用 `sys_user.categor
 `logo_asset_id` 可为 null，`banners` 必须为数组、最多 3 项、`asset_id` 不得重复，服务端按 `sort + asset_id` 稳定排序。`GET /site-config` 不会序列化整张设置表，任何 AI 配置、密钥或未白名单 setting 都不得进入响应。
 
 审计查询只打开 `LOG_DIR/audit/audit-YYYY-MM-DD.log` 普通文件，拒绝路径越界与符号链接；忽略损坏旧行而不返回原文。审计目录尚未产生时可返回空页；目录存在但类型非法、不可读、读取中变化或目标日志文件发生 EACCES/其他 I/O 错误时返回 50004/HTTP 503，不用空页或部分页伪装成功。写入、文件失败后的 stderr 降级、查询输出三条路径都对 password/token/authorization/cookie/api_key/credential 等敏感字段递归脱敏；字符串若是 JSON 则解析后递归清洗，非 JSON 的 `key=value`/`key:value` 会清除完整值（含空格），同时保留 action/result/reason 等非敏感诊断信息。
+
+`scope` 在分页前分类：`auth.*` / `identity.*` 为 `security`，`exam.*` 为 `exam`，学员首次自助确认培训类别为 `learner`；已登记的权限、系统配置、后台学员维护、课程、题库、试卷、统计和制度业务动作归入 `management`，即使旧记录曾把有 actor_id 的操作者名称误写为 `system` 也不隐藏；其余无操作人或明确标记 `system` 的记录为 `system`，`all` 不限制范围。省略 `scope` 时 API 为兼容旧调用返回全部记录，管理端“操作记录”页面显式传 `management` 作为默认范围。页面主表只展示业务化的模块、操作和对象说明，来源 IP、原始 actor/action/object 标识及 JSON detail 收进单条详情，不把机器字段直接铺在列表中。
 
 ### 3.2.8 学员实名与短期媒体票据（Task 10/11，Gate G 自动化与独立代码审查已通过）
 
@@ -584,7 +615,7 @@ schema3题目的普通预览额外返回`content_schema_version:3`与`content_js
 
 | 方法 | 路径 | 输入 | 输出 |
 |---|---|---|---|
-| GET | `/admin/questions/import-template?format=xlsx\|txt` | 严格格式枚举；可选 `purpose=ai` | 默认中文五列 XLSX / 标签分块 TXT；AI 返回原七列参考模板 |
+| GET | `/admin/questions/import-template?format=xlsx\|txt` | 严格格式枚举；兼容可选 `purpose=ai` | 普通导入与AI参考题均返回中文五列 XLSX / 标签分块 TXT |
 | POST | `/admin/questions/import-preview` | multipart `file`、`format`、必填 `category_id`，对整批生效 | `ImportPreview` |
 | GET | `/admin/questions/import-batches/{id}` | 仅 questions 批次 owner | 未提交返回 `ImportPreview`；已提交返回 `ImportResult` |
 | POST | `/admin/questions/import-batches/{id}/commit` | `{row_numbers:number[]}`，只能选预检合法行 | `ImportResult` |
@@ -597,7 +628,7 @@ schema3题目的普通预览额外返回`content_schema_version:3`与`content_js
 
 | 方法 | 路径 | 输入与成功结果 |
 |---|---|---|
-| POST | `/admin/questions/ai-import-tasks` | `ai:write`；multipart 仅 `file + format=xlsx\|txt`，返回任务状态 |
+| POST | `/admin/questions/ai-import-tasks` | `ai:write`；multipart `file + format=xlsx\|txt + category_id`；现行中文模板页面必传类别，旧英文兼容文件可缺省并沿用文件类别；返回任务状态 |
 | GET | `/admin/questions/ai-import-tasks/{id}` | `ai:read`；读取本人任务状态 |
 | GET | `/admin/questions/ai-import-batches/{id}` | `ai:read`；读取本人 `questions_ai` 预览批次或已确认回执 |
 | PATCH | `/admin/questions/ai-import-batches/{id}/rows/{row}` | `ai:write`；修改生成行的可编辑题面并重新校验，返回完整批次 |
@@ -605,7 +636,7 @@ schema3题目的普通预览额外返回`content_schema_version:3`与`content_js
 | GET | `/admin/questions/ai-import-batches/{id}/download?format=xlsx\|txt` | `ai:read`；导出生成题的标准七列文件；二进制流，不包业务信封 |
 | POST | `/admin/questions/ai-import-batches/{id}/commit` | `questions:write`；`{row_numbers:number[]}` 只接受合法生成行，返回 `ImportResult` |
 
-AI通过模板接口purpose=ai下载七列参考格式；输入保留§3.5.2的旧英文七列及九列／两种八列映射，5MB、最多50参考行；旧concept非空固定报错，旧score仅warnings。每道参考题最多生成一对easy／hard，参考行difficulty不作为生成目标。服务端固定类别、题型与目标难度，不让模型／客户端指定来源、状态、审核人、考点、分值或资料版本。
+AI通过模板接口下载与普通导入一致的中文五列参考格式，页面先选`category_id`并由服务端覆盖整批参考题类别；`purpose=ai`作为兼容查询参数保留，不再切换为旧英文模板。输入继续兼容§3.5.2的旧英文七列及九列／两种八列映射，旧客户端未传`category_id`时仍读取文件内类别；5MB、最多50参考行，旧concept非空固定报错，旧score仅warnings。每道参考题最多生成一对easy／hard，参考行difficulty不作为生成目标。服务端固定类别、题型与目标难度，不让模型／客户端指定来源、状态、审核人、考点、分值或资料版本。生成结果下载仍使用标准七列格式，供系统交换与兼容使用。
 
 任务状态固定为 `{task_id,status,total_count,completed_count,generated_count,failed_count,batch_id?,message?,warnings?}`。参考文件与参考正文只存在于任务内存；完成、失败、超时后释放，禁止写入磁盘、MySQL、Redis、资料/媒体表、审计详情或日志。Redis 仅保存无参考正文的任务状态，TTL 24 小时；服务重启后仍未完成的任务读取为 failed，要求重新上传。
 
@@ -738,34 +769,94 @@ PC 筛选平铺关键字、试卷名称、培训类别、难度、考试状态�
 | GET | `/statistics/training/options` | `statistics:read` | 统计专用窄选项 `{papers:[{id,title,category_id,status}],categories:[{id,name}]}`，不要求额外题库/试卷/类别读取权限 |
 | GET | `/statistics/training/overview` | `statistics:read` | `keyword/category_id/page/page_size` 可选；返回 `Page<TrainingExamOverviewRow>`，默认 1/20，每页最多 100 |
 | GET | `/statistics/training/summary` | `statistics:read` | `paper_id` 必填；`category_id/source/difficulty/page/page_size` 可选；返回 `TrainingExamSummary` |
-| GET | `/statistics/training/ranking` | `statistics:read` | 同查询，但 `difficulty` 必须明确；返回 `Page<RankRow>`，缺失难度返回 40001 |
-| GET | `/statistics/training/export` | `statistics:export` | 与 ranking 完全相同的筛选和分页；下载当前页 xlsx，并附独立“口径说明”Sheet |
-| GET | `/admin/dashboard` | 登录 | 返回 `{as_of,timezone:'Asia/Shanghai',metrics,exam_trend?}`；无权模块的指标键直接省略 |
+| GET | `/statistics/training/ranking` | `statistics:read` | 同查询；当前固定卷可省略 `difficulty` 并按整场排名，历史随机卷必须明确 `difficulty`，否则返回 40001；返回 `Page<RankRow>` |
+| GET | `/statistics/training/export` | `statistics:export` | 与 ranking 完全相同的筛选和分页；下载当前页“培训考试成绩排名.xlsx”，主 Sheet 为“成绩排名”并附独立“口径说明”Sheet |
+| GET | `/admin/dashboard` | 登录 | 返回 `{as_of,timezone:'Asia/Shanghai',periods,metrics,exam_trend?}`；无权模块的指标键直接省略，完整契约见 3.8.2 |
 
 `TrainingExamOverviewRow={paper_id,title,category_id,category_name,status,release_id,total_score,duration_minutes,pass_score,participant_count,finalized_users,average_score}`。总览仅列状态为published且存在发布版本的培训试卷，筛选在数据库分页计数前执行；名称取当前试卷标题，类别和总分/时限/及格线使用最新发布版本及其冻结规则。未发布草稿不进入考试分析列表；已发布但无人参考时人数为0、均分为null，总分仍展示冻结满分。总览参考人数按最新发布版本成功开考的学员去重；均分只取该版本、相同规则的 finalized 个人最高分，跨难度仅作描述汇总，不生成混合排名。
 
-`TrainingExamSummary` 固定包含：`exam`、`release_id:string|null`、`eligible_count/eligible_started_count/historical_started_count/historical_only_started_count/submitted_attempts/submitted_users/finalized_users`、`participation_rate:number|null`、`score_groups`、`difficulty_composition`、`course_completion`、`uncompleted_reasons`、`as_of`。`exam={paper_id,title,category_id,total_score,duration_minutes,pass_score,excellent_score:null}`；规则字段取发布快照，名称不声称冻结。分数分布按该组冻结总分的0%、60%、70%、80%、90%、100%划分五段，返回实际分数边界，最后一段包含满分；120分卷为[0,72)、[72,84)、[84,96)、[96,108)、[108,120]，历史100分卷保持原分段。`score_groups` 每项为 `{difficulty,finalized_users,average_score,highest_score,lowest_score,passed_users,average_duration_seconds,excellent_users:null,pass_rate,distribution:[{lower,upper,count}]}`。成绩指标统一使用同组个人最高分代表答卷，平均用时使用这些答卷的实际用时；无成绩时平均/最高/最低/平均用时为 null。当前没有优秀分规则，优秀分与人数均为 null，界面显示未设置/—，不将其当作 0。`RankRow={rank,user_id,name,gender,source,difficulty,score,duration_seconds,record_id}`，`gender='male'|'female'|null`，全部 ID 为字符串。
+`TrainingExamSummary` 固定包含：`exam`、`release_id:string|null`、`eligible_count/eligible_started_count/historical_started_count/historical_only_started_count/submitted_attempts/submitted_users/finalized_users`、`participation_rate:number|null`、`score_groups`、`difficulty_composition`、`course_completion`、`uncompleted_reasons`、`as_of`。`exam={paper_id,title,category_id,mode:'fixed'|'random',total_score,duration_minutes,pass_score,excellent_score:null}`；`mode`优先取冻结发布版本，规则字段取发布快照，名称不声称冻结。分数分布按该组冻结总分的0%、60%、70%、80%、90%、100%划分五段，返回实际分数边界，最后一段包含满分；120分卷为[0,72)、[72,84)、[84,96)、[96,108)、[108,120]，历史100分卷保持原分段。`score_groups` 每项为 `{difficulty,finalized_users,average_score,highest_score,lowest_score,passed_users,average_duration_seconds,excellent_users:null,pass_rate,distribution:[{lower,upper,count}]}`。成绩指标统一使用同组个人最高分代表答卷，平均用时使用这些答卷的实际用时；无成绩时平均/最高/最低/平均用时为 null。当前没有优秀分规则，优秀分与人数均为 null，界面显示未设置/—，不将其当作 0。`RankRow={rank,user_id,name,gender,source,difficulty,score,duration_seconds,record_id}`，`gender='male'|'female'|null`，全部 ID 为字符串；固定卷的响应仍保留行内真实难度，但页面与导出不把它作为排名维度或展示列。
 
 排名与导出新增可选 `sort_by=score|duration`、`sort_order=asc|desc`。先计算标准分数名次，再按指定字段排序，最后分页；用时排序不重编名次，同值保持稳定次序。导出沿用相同排序、筛选和页码，不扩大为全量导出。
 
 人数与成绩采用两个显式口径，页面和导出不得混称：
 
 - 当前应考按查询时点的启用账号、当前类别/来源及当前发布模式的难度映射计算；业务管理权限不改变学习身份。`eligible_started_count` 只取当前应考 ID 与历史成功开考 ID 的交集；`historical_started_count` 保留该 paper 全历史，当前范围外人数由 `historical_only_started_count` 单列，零分母参与率为 null。
-- 历史筛选只读 `exam_record` 冻结的 `category_id/source/difficulty`，未知难度保持 `unknown`。成绩组和排名只使用 `release_id` 指向的最新 release、与其 `rule_snapshot` 完全一致、同 difficulty 且 `grading_state=finalized` 的记录，再取个人最高分；不跨 release/规则合榜。
+- 历史筛选只读 `exam_record` 冻结的 `category_id/source/difficulty`，未知难度保持 `unknown`。成绩组只使用 `release_id` 指向的最新 release、与其 `rule_snapshot` 完全一致且 `grading_state=finalized` 的记录，再取个人最高分；固定卷在同 release/规则内直接整场排名，历史随机卷仍按明确 difficulty 分榜，不跨 release/规则或随机难度合榜。
 - 同分使用标准竞争排名（1/1/3）。个人同分答卷在两个 `graded_at` 都已知时选较早者；任一历史时间未知时按最小 `record_id` 稳定兜底。用时取 `started_at → submitted_at`，旧已评分timeout按历史交卷方式取started_at→deadline_at；新纯timeout不进入排名。
 - 课程完成率只统计当前应学的 institution 学员，按 published 课程必学课时的当前 `lesson_version` 与 B2 `video_learning_record.is_completed` 核算；external 不进入分母，零必学课时返回 null。未完成原因固定为 `learning_incomplete/not_started/not_passed`。
 
-首页指标逐项授权：`students:read` 才返回正常学员数，`questions:read` 才返回题目数，`papers:read` 才返回试卷数，`statistics:read` 才返回近 7 日考试记录趋势。不存在待阅卷指标。趋势以服务端 `started_at` 转换到 Asia/Shanghai 自然日；无权限不返回 0 占位。
+首页指标逐项授权：`students:read` 才返回正常学员数，`questions:read` 才返回题目数，`papers:read` 才返回试卷数，`statistics:read` 才返回今日/近7日参与人数、人次及兼容趋势。不存在待阅卷指标。趋势以服务端 `started_at` 转换到 Asia/Shanghai 自然日；无权限不返回 0 占位。
 
 <a id="admin-dashboard-planned-aggregation"></a>
 
-#### 3.8.2 运营看板聚合增量（2026-10-27 已确认设计，待实现）
+#### 3.8.2 运营看板只读聚合（2026-10-27 已实现并完成本地验收）
 
-功能模块以 [05 册 7.4.6「管理端运营看板」](05-模块设计.md#admin-operations-dashboard) 为准。上节仍描述当前接口：`metrics` 只有学员、题目、试卷三个总量；`exam_trend` 是近 7 日成功开考记录数，不是去重参考人数。
+服务端由 `AdminDashboardController` / `AdminDashboardService` 提供，统一响应信封不变。五接口如下；路径均有 `/api/v1` 全局前缀。行为与证据见[验收记录](../../review/2026-10-27-admin-operations-dashboard-acceptance.md)。
 
-实施时需要补充学员来源拆分、今日/近 7 日去重参考人数及开考人次、已启用题目数、已发布试卷数、按来源分组的 7/30 日去重趋势，以及按发布学习要求汇总的必修学时达标数据。最近考试可复用 `TrainingExamOverviewRow` 的人数/成绩口径，但首页的最近发布排序与条数还需对齐。不得把旧 `exam_trend.count` 直接改名为参考人数，也不得把 `course_completion.completion_rate` 直接改名为学时达标率。
+| 方法 | 路径 | query 白名单 | 权限 |
+|---|---|---|---|
+| GET | `/admin/dashboard` | 无 | 登录；按字段组裁剪，不整体要求统计权限 |
+| GET | `/admin/dashboard/exam-trend` | `days=7\|30`，默认7 | `statistics:read` |
+| GET | `/admin/dashboard/learning-options` | `keyword`（最多128字符）、`page`、`page_size`，默认1/20、每页最多100 | `statistics:read` |
+| GET | `/admin/dashboard/learning-summary` | `paper_id`、`release_id`，必填正整数字符串 | `statistics:read` |
+| GET | `/admin/dashboard/recent-exams` | 无，最多4条 | `statistics:read` |
 
-本节只登记所需聚合能力，不声明已存在新的请求参数、字段或接口。进入实现时，再同步具体 DTO、响应契约、逐项权限与验证证据；继续保持只读聚合、无权字段省略和空分母返回空值的边界。
+`StrictDtoValidationPipe` 及原始 query 白名单共同校验，数组/重复键、未知参数、非法天数/ID/分页返回 `40001`。未登录沿用401；独立统计接口无权为 `40301`。摘要的试卷不存在或版本不属于试卷为 `40401`，版本不再最新、撤回或要求失效为 `40970`，提示「培训要求已更新，请重新选择」。均为只读，不创建学习、开考或评分事实。
+
+以下类型展开成功响应 `data`，ID始终是字符串，`as_of/released_at` 是服务端 ISO 时间，业务日期是上海 `YYYY-MM-DD`：
+
+```ts
+type DashboardDateRange = { date_from: string; date_to: string };
+interface AdminDashboard {
+  as_of: string; timezone: 'Asia/Shanghai';
+  periods: { today: DashboardDateRange; last_7_days: DashboardDateRange };
+  metrics: {
+    learner_count?: number; learner_institution_count?: number;
+    learner_external_count?: number; learner_unknown_source_count?: number;
+    today_participant_count?: number; today_attempt_count?: number;
+    last_7_days_participant_count?: number; last_7_days_attempt_count?: number;
+    question_count?: number; enabled_question_count?: number;
+    paper_count?: number; published_paper_count?: number;
+  };
+  exam_trend?: Array<{ date: string; count: number }>;
+}
+interface DashboardExamTrend extends DashboardDateRange {
+  as_of: string; timezone: 'Asia/Shanghai'; days: 7 | 30;
+  points: Array<{ date: string; participant_count: number;
+    institution_count: number; external_count: number; unknown_source_count: number }>;
+}
+interface DashboardLearningOptions {
+  as_of: string; total: number; page: number; page_size: number;
+  items: Array<{ paper_id: string; title: string; release_id: string;
+    released_at: string; required_learning_minutes: number }>;
+}
+interface DashboardLearningSummary {
+  as_of: string; state: 'ready' | 'no_audience';
+  paper_id: string; title: string; release_id: string; released_at: string;
+  required_learning_minutes: number; eligible_count: number;
+  achieved_count: number; pending_count: number; achievement_rate: number | null;
+}
+interface DashboardRecentExams {
+  as_of: string; limit: 4;
+  items: Array<TrainingExamOverviewRow & { released_at: string }>;
+}
+```
+
+| 概览权限 | 同组返回字段 |
+|---|---|
+| `students:read` | 学员总数及 institution/external/unknown 三个来源分项 |
+| `questions:read` | 题目总数、启用题数 |
+| `papers:read` | 培训试卷总数、已发布卷数 |
+| `statistics:read` | 今日/近7日去重人数与人次、旧 `exam_trend` |
+
+无权字段整组省略，真实零值为0；`metrics={}` 表示无可见指标。学员范围为启用 employee 且没有任何 `sys_user_role` 关联；题目排除 `deleted_at` 非空记录；试卷限定 training 且总数包含各管理状态。旧 `exam_trend` 仍为原7日原始开考记录数，不改名或改成新去重口径，新页面只读独立趋势接口。
+
+新参与指标与记录列表共用可见范围：进行中、通过、未通过、纯 timeout；排除历史 submitted 和旧已评分 timeout。今日/近7日分别在同一UTC半开区间计去重 user_id 和记录条数，不因学员后来停用删除历史参与事实。趋势按上海日期+学员取 `started_at,id` 最早记录的冻结来源，日期升序补齐7/30天；每日人数等于三来源之和，周期人数不由日人数累加。
+
+学习候选仅当前 published training 试卷最高 `version_no`，开启学习要求、正整数分钟和合法非空且不重复的冻结课程ID；按发布时间及发布ID倒序分页。课程后来下架不删除已冻结的要求。摘要在 REPEATABLE READ 一致性读取内汇总当前有效视频版本的 `credited_ms`，以分钟×60000整数阈值比较；无学习记录按0计入。应学人员为启用 employee、无业务角色、当前类别匹配且来源为 institution/external，不以实名、考试通过/次数或是否已有记录缩小分母。零分母为 `no_audience`、三个人数0、比例null；否则比例0..1保留四位小数。原 `course_completion` 与 C6 分母保持不变。
+
+最近考试先取每份培训试卷最新发布，再按发布时间及发布ID倒序取4份，可含已撤回/归档，不含从未发布的草稿。参考人数、最终出分与平均分复用同版本/同规则个人最高分摘要；无成绩均分null。现有 `/statistics/training/overview` 继续仅列 published；归档详情可通过既有 summary 的 paper_id 直达，无需先出现在已发布选项中。
 
 ### 3.9 B1 课程内容 /admin/courses、/me/courses、/me/home
 
@@ -1341,7 +1432,7 @@ local/实名内容保留 `/media/tickets/:ticket/content`（learner）及 `/medi
 | 校验项 | 结果 |
 |---|---|
 | 当前路由前缀与 README 3.4 模块映射 | 一致；现行新增 `/admin/question-materials`、`/admin/questions`、`/admin/papers`、`/me/exams*` 与 `/admin/exam-records`，旧学习/考试/统计只读兼容 |
-| 当前表名/字段名（snake_case）与 03 册 | 一致：40 张业务表 + 1 张迁移元数据表（共 41 张物理表）、三类客观题、客观答案列和无监控采集字段；Gate G 实名/票据自动化与独立代码审查已通过 |
+| 当前表名/字段名（snake_case）与 03 册 | 一致：41 张业务表 + 1 张迁移元数据表（共 42 张物理表，含 037 字典分类）、三类客观题、客观答案列和无监控采集字段；Gate G 实名/票据自动化与独立代码审查已通过 |
 | 枚举值与 README 3.4 | 一致（角色、各 status 枚举逐字对齐） |
 | 心跳/失焦/乱序/草稿/超时行为与05册 | 新/me无考试draft/heartbeat，仅本地草稿/主动整卷；到期纯timeout；旧/exams心跳只为legacy协议兼容，不采集监考数据 |
 | 统计口径与 05 册 7.4.1 | 一致（七项指标逐字对齐） |

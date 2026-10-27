@@ -1,10 +1,12 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
+import { randomUUID } from 'node:crypto';
 import { AuditService } from '../../common/audit.service';
 import { Errors } from '../../common/errors';
 import { SiteSetting } from '../../entities/site-setting.entity';
 import { SysDictionary } from '../../entities/sys-dictionary.entity';
+import { SysDictionaryType } from '../../entities/sys-dictionary-type.entity';
 import { SysMenu } from '../../entities/sys-menu.entity';
 import { SysPermission } from '../../entities/sys-permission.entity';
 import { SysRolePermission } from '../../entities/sys-role-permission.entity';
@@ -24,9 +26,11 @@ export const REGISTERED_ADMIN_ROUTES = new Set([
 ]);
 
 const FIXED_DICTIONARY_TYPES = new Set([
-  'learner_source', 'difficulty', 'question_type', 'regulation_status',
-  'paper_status', 'question_status', 'exam_status',
+  'question_type', 'difficulty', 'learner_source', 'paper_status',
+  'exam_status', 'question_status', 'regulation_status',
 ]);
+const DICTIONARY_TYPE_ORDER = `CASE dictionary.type ${[...FIXED_DICTIONARY_TYPES.keys()]
+  .map((type, index) => `WHEN '${type}' THEN ${index}`).join(' ')} ELSE ${FIXED_DICTIONARY_TYPES.size} END`;
 const SITE_KEYS = ['logo_asset_id', 'banners'] as const;
 const SITE_OWNER_TYPE = 'site_config';
 
@@ -49,6 +53,11 @@ export interface DictionaryInput {
   sort: number;
   status: number;
   remark?: string | null;
+}
+
+export interface DictionaryTypeInput {
+  label: string;
+  description?: string | null;
 }
 
 export interface PublicSiteConfig {
@@ -107,11 +116,43 @@ function menuView(menu: SysMenu) {
   };
 }
 
+function menuAuditSnapshot(menu: SysMenu) {
+  return {
+    parent_id: menu.parentId === null ? null : String(menu.parentId),
+    name: menu.name,
+    type: menu.type,
+    route_path: menu.routePath,
+    permission_code: menu.permissionCode,
+    icon: menu.icon,
+    sort: Number(menu.sort),
+    status: Number(menu.status),
+  };
+}
+
+function changedAuditFields(before: Record<string, unknown>, after: Record<string, unknown>) {
+  const changes: Record<string, { before: unknown; after: unknown }> = {};
+  for (const key of Object.keys(after)) {
+    if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) changes[key] = { before: before[key], after: after[key] };
+  }
+  return changes;
+}
+
 function dictionaryView(item: SysDictionary) {
   return {
     id: String(item.id), type: item.type, code: item.code, label: item.label,
     sort: Number(item.sort), status: Number(item.status), is_system: Boolean(item.isSystem),
     remark: item.remark, created_at: item.createdAt, updated_at: item.updatedAt,
+  };
+}
+
+function dictionaryTypeMetadata(item: SysDictionaryType) {
+  return { label: item.label, description: item.description };
+}
+
+function dictionaryTypeView(item: SysDictionaryType, count: number) {
+  return {
+    type: item.type, ...dictionaryTypeMetadata(item), sort: Number(item.sort),
+    is_system: Boolean(item.isSystem), count: Number(count),
   };
 }
 
@@ -232,7 +273,7 @@ export class SystemService {
         await this.assertParent(repo, null, normalized.parentId);
         return repo.save(repo.create(normalized));
       });
-      this.auditLog(actor, sourceIp, 'system.menu.create', 'sys_menu', String(saved.id), { route_path: saved.routePath, permission_code: saved.permissionCode }, 'success');
+      this.auditLog(actor, sourceIp, 'system.menu.create', 'sys_menu', String(saved.id), { name: saved.name, after: menuAuditSnapshot(saved) }, 'success');
       return menuView(saved);
     } catch (error: any) {
       this.auditLog(actor, sourceIp, 'system.menu.create', 'sys_menu', null, { reason: error?.message || 'failed' }, 'failure');
@@ -243,11 +284,13 @@ export class SystemService {
   async updateMenu(id: string, input: MenuInput, actor: Actor, sourceIp: string | null) {
     const menuId = decimalId(id)!;
     const normalized = this.normalizeMenu(input);
+    let before: ReturnType<typeof menuAuditSnapshot> | null = null;
     try {
       const saved = await this.dataSource.transaction(async (manager) => {
         const repo = await this.lockMenuStructure(manager);
         const row = await repo.findOne({ where: { id: menuId }, lock: { mode: 'pessimistic_write' } });
         if (!row) throw Errors.notFound('菜单不存在');
+        before = menuAuditSnapshot(row);
         await this.assertParent(repo, menuId, normalized.parentId);
         if (normalized.type === 'button' && await repo.count({ where: { parentId: menuId } })) {
           throw Errors.systemReferenced('菜单仍有子项，不能改为按钮');
@@ -255,7 +298,8 @@ export class SystemService {
         Object.assign(row, normalized);
         return repo.save(row);
       });
-      this.auditLog(actor, sourceIp, 'system.menu.update', 'sys_menu', menuId, { route_path: saved.routePath, permission_code: saved.permissionCode }, 'success');
+      const after = menuAuditSnapshot(saved);
+      this.auditLog(actor, sourceIp, 'system.menu.update', 'sys_menu', menuId, { name: saved.name, changes: changedAuditFields(before || {}, after) }, 'success');
       return menuView(saved);
     } catch (error: any) {
       this.auditLog(actor, sourceIp, 'system.menu.update', 'sys_menu', menuId, { reason: error?.message || 'failed' }, 'failure');
@@ -266,10 +310,11 @@ export class SystemService {
   async removeMenu(id: string, actor: Actor, sourceIp: string | null) {
     const menuId = decimalId(id)!;
     try {
-      await this.dataSource.transaction(async (manager) => {
+      const deleted = await this.dataSource.transaction(async (manager) => {
         const repo = await this.lockMenuStructure(manager);
         const row = await repo.findOne({ where: { id: menuId }, lock: { mode: 'pessimistic_write' } });
         if (!row) throw Errors.notFound('菜单不存在');
+        const snapshot = menuAuditSnapshot(row);
         if (await repo.count({ where: { parentId: menuId } })) throw Errors.systemReferenced('菜单仍有子项，不能删除');
         if (row.permissionCode) {
           const permission = await manager.getRepository(SysPermission).findOne({ where: { code: row.permissionCode } });
@@ -278,11 +323,118 @@ export class SystemService {
           }
         }
         await repo.delete({ id: menuId });
+        return snapshot;
       });
-      this.auditLog(actor, sourceIp, 'system.menu.delete', 'sys_menu', menuId, {}, 'success');
+      this.auditLog(actor, sourceIp, 'system.menu.delete', 'sys_menu', menuId, { name: deleted.name, before: deleted }, 'success');
       return null;
     } catch (error: any) {
       this.auditLog(actor, sourceIp, 'system.menu.delete', 'sys_menu', menuId, { reason: error?.message || 'failed' }, 'failure');
+      throw error;
+    }
+  }
+
+  async dictionaryTypes() {
+    const [types, counts] = await Promise.all([
+      this.dataSource.getRepository(SysDictionaryType).find({ order: { sort: 'ASC', type: 'ASC' } }),
+      this.dictionaryRepo.createQueryBuilder('dictionary')
+        .select('dictionary.type', 'type').addSelect('COUNT(*)', 'count')
+        .groupBy('dictionary.type').getRawMany<{ type: string; count: string | number }>(),
+    ]);
+    const countByType = new Map(counts.map((row) => [row.type, Number(row.count)]));
+    const items = types.map((row) => dictionaryTypeView(row, countByType.get(row.type) || 0));
+    return { items, total: items.length };
+  }
+
+  private async lockDictionaryStructure(manager: EntityManager) {
+    const repo = manager.getRepository(SysDictionaryType);
+    const mutex = await repo.findOne({ where: { type: 'question_type' }, lock: { mode: 'pessimistic_write' } });
+    if (!mutex) throw Errors.serviceUnavailable('字典分类结构锁不可用');
+    return repo;
+  }
+
+  private normalizeDictionaryType(input: DictionaryTypeInput) {
+    if (typeof input?.label !== 'string' || !input.label.trim() || input.label.trim().length > 128) throw Errors.param('字典分类名称非法');
+    if (input.description !== null && input.description !== undefined && typeof input.description !== 'string') throw Errors.param('字典分类描述非法');
+    const description = input.description?.trim() || null;
+    if (description && description.length > 255) throw Errors.param('字典分类描述最多 255 字符');
+    return { label: input.label.trim(), description };
+  }
+
+  private assertDictionaryTypeKey(type: string) {
+    if (typeof type !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/.test(type)) throw Errors.param('字典分类标识非法');
+  }
+
+  private async assertDictionaryTypeName(repo: Repository<SysDictionaryType>, label: string, currentType?: string) {
+    const duplicate = await repo.findOne({ where: { label } });
+    if (duplicate && duplicate.type !== currentType) throw Errors.param('字典分类名称已存在');
+  }
+
+  async createDictionaryType(input: DictionaryTypeInput, actor: Actor, sourceIp: string | null) {
+    const normalized = this.normalizeDictionaryType(input);
+    const type = `custom_${randomUUID().replace(/-/g, '')}`;
+    try {
+      const saved = await this.dataSource.transaction(async (manager) => {
+        const repo = await this.lockDictionaryStructure(manager);
+        await this.assertDictionaryTypeName(repo, normalized.label);
+        const row = repo.create({ type, ...normalized, sort: 1000, isSystem: 0 });
+        await repo.insert(row);
+        return row;
+      });
+      this.auditLog(actor, sourceIp, 'system.dictionary_type.create', 'sys_dictionary_type', saved.type,
+        { name: saved.label, after: dictionaryTypeMetadata(saved) }, 'success');
+      return dictionaryTypeView(saved, 0);
+    } catch (error: any) {
+      this.auditLog(actor, sourceIp, 'system.dictionary_type.create', 'sys_dictionary_type', null,
+        { name: normalized.label, reason: error?.message || 'failed' }, 'failure');
+      if (String(error?.code) === 'ER_DUP_ENTRY') throw Errors.param('字典分类名称已存在');
+      throw error;
+    }
+  }
+
+  async updateDictionaryType(type: string, input: DictionaryTypeInput, actor: Actor, sourceIp: string | null) {
+    this.assertDictionaryTypeKey(type);
+    const normalized = this.normalizeDictionaryType(input);
+    try {
+      const { saved, before, count } = await this.dataSource.transaction(async (manager) => {
+        const repo = await this.lockDictionaryStructure(manager);
+        const row = await repo.findOne({ where: { type }, lock: { mode: 'pessimistic_write' } });
+        if (!row) throw Errors.notFound('字典分类不存在');
+        await this.assertDictionaryTypeName(repo, normalized.label, type);
+        const before = dictionaryTypeMetadata(row);
+        Object.assign(row, normalized);
+        const saved = await repo.save(row);
+        const count = await manager.getRepository(SysDictionary).count({ where: { type } });
+        return { saved, before, count };
+      });
+      this.auditLog(actor, sourceIp, 'system.dictionary_type.update', 'sys_dictionary_type', type,
+        { name: saved.label, changes: changedAuditFields(before, dictionaryTypeMetadata(saved)) }, 'success');
+      return dictionaryTypeView(saved, count);
+    } catch (error: any) {
+      this.auditLog(actor, sourceIp, 'system.dictionary_type.update', 'sys_dictionary_type', type,
+        { name: normalized.label, reason: error?.message || 'failed' }, 'failure');
+      if (String(error?.code) === 'ER_DUP_ENTRY') throw Errors.param('字典分类名称已存在');
+      throw error;
+    }
+  }
+
+  async removeDictionaryType(type: string, actor: Actor, sourceIp: string | null) {
+    this.assertDictionaryTypeKey(type);
+    try {
+      const deleted = await this.dataSource.transaction(async (manager) => {
+        const repo = await this.lockDictionaryStructure(manager);
+        const row = await repo.findOne({ where: { type }, lock: { mode: 'pessimistic_write' } });
+        if (!row) throw Errors.notFound('字典分类不存在');
+        if (row.isSystem || FIXED_DICTIONARY_TYPES.has(type)) throw Errors.systemReferenced('内置字典分类不能删除');
+        if (await manager.getRepository(SysDictionary).count({ where: { type } })) throw Errors.systemReferenced('字典分类仍有字典项，不能删除');
+        await repo.delete({ type });
+        return row;
+      });
+      this.auditLog(actor, sourceIp, 'system.dictionary_type.delete', 'sys_dictionary_type', type,
+        { name: deleted.label, before: dictionaryTypeMetadata(deleted) }, 'success');
+      return null;
+    } catch (error: any) {
+      this.auditLog(actor, sourceIp, 'system.dictionary_type.delete', 'sys_dictionary_type', type,
+        { reason: error?.message || 'failed' }, 'failure');
       throw error;
     }
   }
@@ -294,7 +446,7 @@ export class SystemService {
     if (query.type) qb.andWhere('dictionary.type = :type', { type: query.type });
     if (query.status !== undefined) qb.andWhere('dictionary.status = :status', { status: query.status });
     if (query.keyword?.trim()) qb.andWhere('(dictionary.type LIKE :keyword OR dictionary.code LIKE :keyword OR dictionary.label LIKE :keyword)', { keyword: `%${query.keyword.trim()}%` });
-    const [rows, total] = await qb.orderBy('dictionary.type', 'ASC').addOrderBy('dictionary.sort', 'ASC').addOrderBy('dictionary.id', 'ASC')
+    const [rows, total] = await qb.orderBy(DICTIONARY_TYPE_ORDER, 'ASC').addOrderBy('dictionary.type', 'ASC').addOrderBy('dictionary.sort', 'ASC').addOrderBy('dictionary.id', 'ASC')
       .skip((page - 1) * pageSize).take(pageSize).getManyAndCount();
     return { items: rows.map(dictionaryView), total, page, page_size: pageSize };
   }
@@ -308,9 +460,14 @@ export class SystemService {
   }
 
   async createDictionary(input: DictionaryInput, actor: Actor, sourceIp: string | null) {
-    const normalized = this.normalizeDictionary(input);
     try {
-      const saved = await this.dictionaryRepo.save(this.dictionaryRepo.create({ ...normalized, isSystem: 0 }));
+      const saved = await this.dataSource.transaction(async (manager) => {
+        const types = await this.lockDictionaryStructure(manager);
+        const normalized = this.normalizeDictionary(input);
+        if (!await types.findOne({ where: { type: normalized.type } })) throw Errors.param('字典分类不存在，请先创建分类');
+        const repo = manager.getRepository(SysDictionary);
+        return repo.save(repo.create({ ...normalized, isSystem: 0 }));
+      });
       this.auditLog(actor, sourceIp, 'system.dictionary.create', 'sys_dictionary', String(saved.id), { type: saved.type, code: saved.code }, 'success');
       return dictionaryView(saved);
     } catch (error: any) {
@@ -323,11 +480,17 @@ export class SystemService {
   async updateDictionary(id: string, input: DictionaryInput, actor: Actor, sourceIp: string | null) {
     const dictionaryId = decimalId(id)!;
     try {
-      const row = await this.dictionaryRepo.findOne({ where: { id: dictionaryId } });
-      if (!row) throw Errors.notFound('字典项不存在');
-      if (row.isSystem || FIXED_DICTIONARY_TYPES.has(row.type)) throw Errors.systemReferenced('业务固定枚举只读');
-      Object.assign(row, this.normalizeDictionary(input));
-      const saved = await this.dictionaryRepo.save(row);
+      const saved = await this.dataSource.transaction(async (manager) => {
+        const types = await this.lockDictionaryStructure(manager);
+        const repo = manager.getRepository(SysDictionary);
+        const row = await repo.findOne({ where: { id: dictionaryId }, lock: { mode: 'pessimistic_write' } });
+        if (!row) throw Errors.notFound('字典项不存在');
+        if (row.isSystem || FIXED_DICTIONARY_TYPES.has(row.type)) throw Errors.systemReferenced('业务固定枚举只读');
+        const normalized = this.normalizeDictionary(input);
+        if (!await types.findOne({ where: { type: normalized.type } })) throw Errors.param('字典分类不存在，请先创建分类');
+        Object.assign(row, normalized);
+        return repo.save(row);
+      });
       this.auditLog(actor, sourceIp, 'system.dictionary.update', 'sys_dictionary', dictionaryId, { type: saved.type, code: saved.code }, 'success');
       return dictionaryView(saved);
     } catch (error: any) {
@@ -340,10 +503,15 @@ export class SystemService {
   async removeDictionary(id: string, actor: Actor, sourceIp: string | null) {
     const dictionaryId = decimalId(id)!;
     try {
-      const row = await this.dictionaryRepo.findOne({ where: { id: dictionaryId } });
-      if (!row) throw Errors.notFound('字典项不存在');
-      if (row.isSystem || FIXED_DICTIONARY_TYPES.has(row.type)) throw Errors.systemReferenced('业务固定枚举只读，不能删除');
-      await this.dictionaryRepo.delete({ id: dictionaryId });
+      const row = await this.dataSource.transaction(async (manager) => {
+        await this.lockDictionaryStructure(manager);
+        const repo = manager.getRepository(SysDictionary);
+        const item = await repo.findOne({ where: { id: dictionaryId }, lock: { mode: 'pessimistic_write' } });
+        if (!item) throw Errors.notFound('字典项不存在');
+        if (item.isSystem || FIXED_DICTIONARY_TYPES.has(item.type)) throw Errors.systemReferenced('业务固定枚举只读，不能删除');
+        await repo.delete({ id: dictionaryId });
+        return item;
+      });
       this.auditLog(actor, sourceIp, 'system.dictionary.delete', 'sys_dictionary', dictionaryId, { type: row.type, code: row.code }, 'success');
       return null;
     } catch (error: any) {

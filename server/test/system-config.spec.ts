@@ -175,6 +175,31 @@ describe('A5 audit redaction and bounded query', () => {
     });
   });
 
+  it('separates management, security, exam and system records before pagination', async () => {
+    const auditDir = join(root, 'audit');
+    await mkdir(auditDir);
+    const entries = [
+      { ts: '2026-10-27T10:05:00.000Z', actor_id: null, actor_name: 'unknown-user', action: 'auth.login', object_type: 'sys_user', object_id: null, detail: {}, result: 'failure', source_ip: '127.0.0.1' },
+      { ts: '2026-10-27T10:04:00.000Z', actor_id: 1, actor_name: 'admin', action: 'system.menu.update', object_type: 'sys_menu', object_id: '49', detail: {}, result: 'success', source_ip: '127.0.0.1' },
+      { ts: '2026-10-27T10:03:00.000Z', actor_id: 9, actor_name: 'learner:9', action: 'exam.submit', object_type: 'exam_record', object_id: '88', detail: {}, result: 'success', source_ip: null },
+      { ts: '2026-10-27T10:02:00.000Z', actor_id: 5, actor_name: 'system', action: 'access.role.update', object_type: 'sys_role', object_id: '5', detail: {}, result: 'success', source_ip: null },
+      { ts: '2026-10-27T10:01:00.000Z', actor_id: 9, actor_name: 'learner9', action: 'student.training_category.confirm', object_type: 'sys_user', object_id: '9', detail: {}, result: 'success', source_ip: null },
+      { ts: '2026-10-27T10:00:00.000Z', actor_id: null, actor_name: 'system', action: 'maintenance.cleanup', object_type: 'job', object_id: null, detail: {}, result: 'success', source_ip: null },
+    ] as const;
+    await writeFile(join(auditDir, 'audit-2026-10-27.log'), entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n', 'utf8');
+
+    const service = new AuditQueryService(config(root));
+    const page = (scope: string, page = 1, page_size = 20, result?: string) => service.list({ scope, result, page, page_size } as any);
+
+    await expect(page('management', 1, 1)).resolves.toMatchObject({ total: 2, items: [{ action: 'system.menu.update' }] });
+    await expect(page('management', 2, 1)).resolves.toMatchObject({ total: 2, items: [{ action: 'access.role.update' }] });
+    await expect(page('security')).resolves.toMatchObject({ total: 1, items: [{ action: 'auth.login' }] });
+    await expect(page('exam')).resolves.toMatchObject({ total: 1, items: [{ action: 'exam.submit' }] });
+    await expect(page('learner')).resolves.toMatchObject({ total: 1, items: [{ action: 'student.training_category.confirm' }] });
+    await expect(page('system')).resolves.toMatchObject({ total: 1, items: [{ action: 'maintenance.cleanup' }] });
+    await expect(page('all', 1, 20, 'failure')).resolves.toMatchObject({ total: 1, items: [{ action: 'auth.login' }] });
+  });
+
   it('returns an empty first page only when the audit directory does not exist yet', async () => {
     const page = await new AuditQueryService(config(join(root, 'fresh-install'))).list({ page: 1, page_size: 20 });
     expect(page).toEqual({ items: [], total: 0, page: 1, page_size: 20 });
@@ -335,6 +360,45 @@ describe('A5 system configuration safety contracts', () => {
     expect(writable[0].children).toEqual([expect.objectContaining({ id: '91', name: '试题导入', route_path: '/admin/questions/import' })]);
     const readable = await service.menuTree({ permissions: ['questions:read'], activeOnly: true });
     expect(readable[0].children).toEqual([]);
+  });
+
+  it('records a readable menu target and before-after changes', async () => {
+    const row: any = {
+      id: '49', parentId: null, name: '审计日志', type: 'menu',
+      routePath: '/admin/system/audit-logs', permissionCode: 'system_settings:read',
+      icon: 'DocumentChecked', sort: 80, status: 1,
+    };
+    const menuRepo = {
+      findOne: vi.fn(async ({ where }: any) => String(where.id) === '49' ? row : null),
+      count: vi.fn(async () => 0),
+      save: vi.fn(async (value: any) => value),
+    };
+    const manager = {
+      getRepository(entity: any) {
+        if (entity === SiteSetting) return { async findOne() { return { id: '1' }; } };
+        if (entity === SysMenu) return menuRepo;
+        throw new Error('Unexpected repository');
+      },
+    };
+    const audit = { log: vi.fn() };
+    const service = new SystemService(
+      menuRepo as any, {} as any, {} as any, {} as any, {} as any,
+      { async transaction(work: any) { return work(manager); } } as any,
+      { registerOwnerPolicy() {} } as any, {} as any, audit as any,
+    );
+
+    await service.updateMenu('49', {
+      parent_id: null, name: '操作记录', type: 'menu', route_path: '/admin/system/audit-logs',
+      permission_code: 'system_settings:read', icon: 'DocumentChecked', sort: 80, status: 1,
+    }, { id: '1', name: 'admin' }, '127.0.0.1');
+
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      actor_name: 'admin',
+      detail: {
+        name: '操作记录',
+        changes: { name: { before: '审计日志', after: '操作记录' } },
+      },
+    }));
   });
 
   it('does not allow canceled management and monitoring routes to be recreated as menus', () => {

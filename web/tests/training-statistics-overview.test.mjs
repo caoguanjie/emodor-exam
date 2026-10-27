@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
-import { createRenderer, h, inject, nextTick, provide } from '@vue/runtime-core';
+import { createRenderer, h, inject, nextTick, provide, reactive } from '@vue/runtime-core';
 import ElPagination from '../node_modules/element-plus/es/components/pagination/src/pagination.mjs';
 
 const webRoot = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const clientId = '\0training-statistics-overview-client';
 const httpId = '\0training-statistics-overview-http';
 const authId = '\0training-statistics-overview-auth';
-const context = { calls: [], downloads: [], canExport: true };
+const routeId = '\0training-statistics-overview-route';
+const recordDetailId = '\0training-statistics-overview-record-detail';
+const context = { calls: [], downloads: [], canExport: true, canReadExamRecords: true };
 let clientCode = '';
 let vite;
 let TrainingStatistics;
@@ -22,7 +24,7 @@ const paper = (id = 'paper-1') => ({
   participant_count: 12, finalized_users: 10, average_score: 72.5,
 });
 const summary = (id = 'paper-1') => ({
-  exam: { ...paper(id), excellent_score: null }, release_id: `release-${id}`,
+  exam: { ...paper(id), mode: 'random', excellent_score: null }, release_id: `release-${id}`,
   eligible_count: 12, eligible_started_count: 12, historical_started_count: 12,
   historical_only_started_count: 0, submitted_attempts: 10, submitted_users: 10, finalized_users: 10,
   participation_rate: 1,
@@ -63,14 +65,30 @@ function testPlugin() {
     name: 'training-statistics-overview-boundaries', enforce: 'pre',
     resolveId(source, importer) {
       if (importer?.includes('/src/views/admin/TrainingStatistics.vue')) {
+        if (source === 'vue-router') return routeId;
         if (source === '../../api/http') return httpId;
         if (source === '../../stores/auth') return authId;
+        if (source === './ExamRecordDetail.vue') return recordDetailId;
       }
       if (source === clientId) return clientId;
     },
     load(id) {
       if (id === clientId) return clientCode;
-      if (id === authId) return `export function useAuthStore() { return { can() { return globalThis.__trainingStatisticsOverviewTest.canExport; } }; }`;
+      if (id === routeId) return `
+        const context = globalThis.__trainingStatisticsOverviewTest;
+        export function useRoute() { return context.route; }
+        export function useRouter() { return { async replace(value) { context.route.query = value.query; context.route.fullPath = context.route.path + '?' + new URLSearchParams(value.query); } }; }
+      `;
+      if (id === authId) return `export function useAuthStore() { return { can(permission) {
+        const context = globalThis.__trainingStatisticsOverviewTest;
+        return permission === 'statistics:export' ? context.canExport
+          : permission === 'exam_records:read' ? context.canReadExamRecords
+          : true;
+      } }; }`;
+      if (id === recordDetailId) return `
+        import { h } from 'vue';
+        export default { props: ['recordId'], emits: ['close'], setup(props) { return () => h('exam-record-detail-stub', { recordId: props.recordId }, props.recordId); } };
+      `;
       if (id === httpId) return `
         const context = globalThis.__trainingStatisticsOverviewTest;
         export default { async get(path, config) {
@@ -134,13 +152,13 @@ async function mount({ realPagination = false } = {}) {
   const host = createHost();
   const root = { type: 'root', props: {}, children: [], parent: null, text: '' };
   const app = host.createApp(TrainingStatistics);
-  for (const name of ['el-tooltip', 'el-icon', 'el-alert', 'el-button', 'el-col', 'el-collapse', 'el-collapse-item', 'el-empty', 'el-form', 'el-form-item', 'el-input', 'el-option', 'el-pagination', 'el-progress', 'el-row', 'el-select', 'el-tag']) {
+  for (const name of ['el-tooltip', 'el-icon', 'el-alert', 'el-button', 'el-col', 'el-collapse', 'el-collapse-item', 'el-descriptions', 'el-descriptions-item', 'el-dialog', 'el-empty', 'el-form', 'el-form-item', 'el-input', 'el-option', 'el-pagination', 'el-progress', 'el-row', 'el-select', 'el-skeleton', 'el-tag']) {
     if (realPagination && name === 'el-pagination') {
       // Keep the real page-count watcher and pager; omit only the DOM-dependent size select.
       app.component(name, { inheritAttrs: false, setup(_props, { attrs }) { return () => h(ElPagination, { ...attrs, layout: 'total, prev, pager, next' }); } });
       continue;
     }
-    app.component(name, { inheritAttrs: false, setup(_props, { attrs, slots }) { return () => h(name, attrs, [typeof attrs.title === 'string' ? attrs.title : '', slots.default?.(), slots.title?.()]); } });
+    app.component(name, { inheritAttrs: false, setup(_props, { attrs, slots }) { return () => h(name, attrs, [typeof attrs.title === 'string' ? attrs.title : '', name === 'el-descriptions-item' ? attrs.label : '', slots.default?.(), slots.title?.(), slots.footer?.()]); } });
   }
   app.component('el-table', Table);
   app.component('el-table-column', Column);
@@ -159,8 +177,44 @@ before(async () => {
     .replace(/from "\/node_modules\/\.vite\/deps\/vue\.js[^"]*"/g, 'from "vue"');
   TrainingStatistics = (await vite.ssrLoadModule(clientId)).default;
 });
-beforeEach(() => { context.calls = []; context.downloads = []; context.get = defaultGet; context.canExport = true; });
+beforeEach(() => { context.route = reactive({ path: '/admin/training-statistics', fullPath: '/admin/training-statistics', query: {} }); context.calls = []; context.downloads = []; context.get = defaultGet; context.canExport = true; context.canReadExamRecords = true; });
 after(async () => { delete globalThis.__trainingStatisticsOverviewTest; await vite?.close(); });
+
+test('dashboard archived paper deep link bypasses current options and overview entry clears cached analysis', async (t) => {
+  context.route.query = { entry: 'dashboard', paper_id: '888' };
+  const { state, unmount } = await mount(); t.after(unmount);
+  assert.equal(state.filters.paper_id, '888');
+  assert.equal(state.summary.exam.paper_id, '888');
+  assert.equal(context.calls.filter(call => call.path.endsWith('/summary')).length, 1);
+  assert.equal(context.calls.filter(call => call.path.endsWith('/overview')).length, 1, 'deep links still populate the list behind the dialog');
+  assert.equal(state.overview.items.length, 1);
+  assert.deepEqual(context.route.query, { paper_id: '888' });
+  Object.assign(state.overviewFilters, { keyword: '旧关键词', category_id: '旧类别', page: 3 });
+  Object.assign(state.filters, { difficulty: 'hard', source: 'external', page: 4 });
+  context.calls = [];
+  context.route.query = { entry: 'dashboard' };
+  await settle();
+  assert.equal(state.filters.paper_id, '');
+  assert.equal(state.summary, null);
+  assert.equal(context.calls.some(call => call.path.endsWith('/summary')), false);
+  assert.deepEqual(context.calls.find(call => call.path.endsWith('/overview')).params, { page: 1, page_size: 20 });
+});
+
+test('a consumed paper link preserves local analysis filters when the same paper URL is updated', async (t) => {
+  context.get = (path, params) => path.endsWith('/summary') ? {
+    ...summary(params.paper_id),
+    score_groups: [summary(params.paper_id).score_groups[0], { ...summary(params.paper_id).score_groups[0], difficulty: 'hard' }],
+  } : defaultGet(path, params);
+  context.route.query = { paper_id: '888' };
+  const { state, unmount } = await mount(); t.after(unmount);
+  Object.assign(state.filters, { source: 'external', category_id: 'category-1', difficulty: 'hard' });
+  context.calls = [];
+  context.route.query = { paper_id: '888', view: 'analysis' };
+  await settle();
+  const request = context.calls.find(call => call.path.endsWith('/summary'));
+  assert.deepEqual(request.params, { paper_id: '888', category_id: 'category-1', source: 'external', page: 1, page_size: 20 });
+  assert.equal(context.calls.find(call => call.path.endsWith('/ranking')).params.difficulty, 'hard');
+});
 
 test('默认展示有筛选分页的考试总览，返回列表保留查询和页码', async (t) => {
   const { root, state, unmount } = await mount(); t.after(unmount);
@@ -187,6 +241,129 @@ test('默认展示有筛选分页的考试总览，返回列表保留查询和�
   assert.match(textContent(root), /安全培训考试/);
 });
 
+test('固定卷成绩分析在内容区弹窗展示描述列表并直接加载整场排名', async (t) => {
+  context.get = (path, params) => path.endsWith('/summary')
+    ? { ...summary(params.paper_id), exam: { ...summary(params.paper_id).exam, mode: 'fixed' } }
+    : defaultGet(path, params);
+  const { root, state, unmount } = await mount(); t.after(unmount);
+  await state.openAnalysis(paper()); await nextTick();
+
+  assert.match(textContent(root), /考试名称.*培训类别.*试卷总分.*参考人数/s, 'the overview list must remain mounted behind the dialog');
+  const dialog = findNodes(root, node => node.type === 'el-dialog')[0];
+  assert.ok(dialog); assert.equal(state.filters.paper_id, 'paper-1');
+  assert.match(String(dialog.props.class), /training-score-analysis-dialog/);
+  const descriptions = findNodes(dialog, node => node.type === 'el-descriptions')[0];
+  assert.ok(descriptions); assert.equal(descriptions.props.column, 4);
+  const descriptionItems = findNodes(descriptions, node => node.type === 'el-descriptions-item');
+  assert.deepEqual(descriptionItems.map(node => node.props.label), [
+    '考试名称', '培训类别',
+    '试卷总分', '考试时长', '及格分', '优秀分',
+    '当前应考', '参考人数', '已交卷人数', '参考率',
+    '平均分', '最高分', '最低分', '平均用时',
+    '及格人数', '及格率', '优秀人数',
+  ]);
+  assert.equal(descriptionItems[0].props.span, 2);
+  assert.equal(descriptionItems[1].props.span, 2);
+  assert.equal(descriptionItems.at(-1).props.span, 2);
+  const rankingRequest = context.calls.find(call => call.path.endsWith('/ranking'));
+  assert.ok(rankingRequest); assert.equal(rankingRequest.params.difficulty, undefined);
+  assert.equal(findNodes(dialog, node => node.type === 'el-select' && node.props.placeholder === '选择卷面难度').length, 0);
+  const rankingColumns = findNodes(dialog, node => node.type === 'el-table-column').map(node => node.props.label);
+  assert.equal(rankingColumns.includes('答卷 ID'), false); assert.ok(rankingColumns.includes('操作'));
+  assert.match(textContent(dialog), /查看答卷/);
+
+  await dialog.props.onClose(); await settle();
+  assert.equal(state.filters.paper_id, ''); assert.match(textContent(root), /安全培训考试/);
+});
+
+test('历史随机卷自动选择已有卷面难度并保留难度切换', async (t) => {
+  context.get = (path, params) => path.endsWith('/summary') ? {
+    ...summary(params.paper_id),
+    score_groups: [summary(params.paper_id).score_groups[0], { ...summary(params.paper_id).score_groups[0], difficulty: 'hard' }],
+  } : defaultGet(path, params);
+  const { root, state, unmount } = await mount(); t.after(unmount);
+  await state.openAnalysis(paper()); await nextTick();
+
+  assert.equal(state.filters.difficulty, 'easy');
+  assert.ok(findNodes(root, node => node.type === 'el-select' && node.props.placeholder === '选择卷面难度').length);
+  assert.equal(context.calls.find(call => call.path.endsWith('/ranking')).params.difficulty, 'easy');
+});
+
+test('历史随机卷优先选择已有最终成绩的难度，而不是只有开考记录的难度', async (t) => {
+  context.get = (path, params) => path.endsWith('/summary') ? {
+    ...summary(params.paper_id),
+    score_groups: [{ ...summary(params.paper_id).score_groups[0], difficulty: 'hard' }],
+    difficulty_composition: [{ difficulty: 'easy', users: 5 }, { difficulty: 'hard', users: 7 }],
+  } : defaultGet(path, params);
+  const { state, unmount } = await mount(); t.after(unmount);
+  await state.openAnalysis(paper()); await nextTick();
+
+  assert.equal(state.filters.difficulty, 'hard');
+  assert.equal(context.calls.find(call => call.path.endsWith('/ranking')).params.difficulty, 'hard');
+});
+
+test('查看答卷按独立权限展示并在处理函数再次守卫', async (t) => {
+  context.canReadExamRecords = false;
+  const { root, state, unmount } = await mount(); t.after(unmount);
+  await state.openAnalysis(paper()); await nextTick();
+
+  assert.doesNotMatch(textContent(root), /查看答卷/);
+  state.openRecord('record-forbidden'); await nextTick();
+  assert.equal(state.detailRecordId, '');
+  assert.equal(findNodes(root, node => node.type === 'exam-record-detail-stub').length, 0);
+});
+
+test('页面失活时隐藏内容区弹窗、关闭答卷并使迟到详情失效，激活后保留场次', async (t) => {
+  const { root, state, unmount } = await mount(); t.after(unmount);
+  await state.openAnalysis(paper()); state.openRecord('record-1'); await nextTick();
+  assert.equal(state.analysisVisible, true);
+  assert.equal(state.detailRecordId, 'record-1');
+
+  const pending = deferred();
+  context.get = (path, params) => path.endsWith('/summary') ? pending.promise : defaultGet(path, params);
+  const reload = state.reload(); await settle();
+  state.deactivateView(); await nextTick();
+  assert.equal(state.analysisVisible, false);
+  assert.equal(state.detailRecordId, '');
+  pending.resolve(summary('paper-1')); await reload; await nextTick();
+  assert.equal(state.summary, null, 'response completed after deactivation must be ignored');
+
+  state.activateView(); await nextTick();
+  assert.equal(state.filters.paper_id, 'paper-1');
+  assert.equal(state.analysisVisible, true);
+});
+
+test('深链切换场次或返回总览时关闭上一场答卷详情', async (t) => {
+  const { state, unmount } = await mount(); t.after(unmount);
+  await state.openAnalysis(paper('paper-1')); state.openRecord('paper-1-record'); await nextTick();
+  assert.equal(state.detailRecordId, 'paper-1-record');
+
+  context.route.query = { paper_id: '2' }; await settle();
+  assert.equal(state.filters.paper_id, '2');
+  assert.equal(state.detailRecordId, '');
+  state.openRecord('paper-2-record');
+  context.route.query = { entry: 'dashboard' }; await settle();
+  assert.equal(state.filters.paper_id, '');
+  assert.equal(state.detailRecordId, '');
+});
+
+test('缓存页从其他页面进入无 paper_id 的统计总览时不恢复旧弹窗', async (t) => {
+  const { state, unmount } = await mount(); t.after(unmount);
+  await state.openAnalysis(paper('888')); state.openRecord('record-888'); await nextTick();
+  state.deactivateView();
+  context.route.query = {};
+  context.route.fullPath = '/admin/training-statistics';
+  state.activateView();
+  context.calls = [];
+  await state.initialize(); await nextTick();
+
+  assert.equal(state.filters.paper_id, '');
+  assert.equal(state.detailRecordId, '');
+  assert.equal(state.analysisVisible, false);
+  assert.equal(context.calls.some(call => call.path.endsWith('/summary')), false);
+  assert.equal(context.route.query.paper_id, undefined);
+});
+
 test('详情使用发布规则并展示统计补充值，未配置优秀线不补造', async (t) => {
   const { root, state, unmount } = await mount(); t.after(unmount);
   await state.openAnalysis(paper()); await nextTick();
@@ -195,8 +372,8 @@ test('详情使用发布规则并展示统计补充值，未配置优秀线不�
   assert.match(text, /及格分.*60/); assert.match(text, /优秀分.*未设置/);
   for (const label of ['最高分', '最低分', '及格人数', '平均用时', '优秀人数']) assert.match(text, new RegExp(label));
   assert.match(text, /98/); assert.match(text, /35/); assert.match(text, /2分6秒/);
-  const excellent = findNodes(root, (node) => node.type === 'el-table-column' && node.props.label === '优秀人数')[0];
-  assert.match(textContent(excellent), /--/);
+  const excellent = findNodes(root, (node) => node.type === 'el-descriptions-item' && node.props.label === '优秀人数')[0];
+  assert.match(textContent(excellent), /—/);
 });
 
 test('排名交由服务端排序，分页与导出采用相同参数且保留原始分数名次', async (t) => {
@@ -286,7 +463,7 @@ test('统计空状态在表格内部展示插图提示，加载和失败不冒�
   await state.openAnalysis(paper()); state.filters.difficulty = 'easy'; await state.reload(); await nextTick();
   const tables = findNodes(root, (node) => node.type === 'el-table');
   assert.equal(tables.flatMap((node) => findNodes(node, (child) => child.type === 'el-empty' && child.props.description === '暂无最终成绩')).length, 1);
-  assert.equal(tables.flatMap((node) => findNodes(node, (child) => child.type === 'el-empty' && child.props.description === '该难度暂无最终成绩')).length, 1);
+  assert.equal(tables.flatMap((node) => findNodes(node, (child) => child.type === 'el-empty' && child.props.description === '该难度暂无最终成绩')).length, 0);
 });
 
 test('返回了其他场次的异常详情时显示错误并保持当前场次为空', async (t) => {
@@ -315,7 +492,7 @@ test('真实 ElPagination 在总览翻页加载及详情返回期间保持第三
   assert.equal(state.overviewFilters.page, 3, 'returning from analysis must keep the same overview page');
 });
 
-test('详情切换考试不会把草稿类别强加给已发布版本，仍可手动筛选类别', async (t) => {
+test('从列表切换考试使用总览冻结类别并清理上一场局部筛选', async (t) => {
   context.get = (path, params) => {
     if (path.endsWith('/options')) return {
       ...defaultGet(path, params),
@@ -330,13 +507,11 @@ test('详情切换考试不会把草稿类别强加给已发布版本，仍可�
   await state.openAnalysis(paper());
   state.filters.source = 'external';
   state.filters.difficulty = 'easy';
-  const selector = findNodes(root, (node) => node.type === 'el-select' && node.props.placeholder === '选择考试场次')[0];
-  selector.props['onUpdate:modelValue']('paper-2'); selector.props.onChange('paper-2');
-  await settle();
+  await state.openAnalysis(paper('paper-2')); await settle();
   const query = context.calls.filter(({ path }) => path.endsWith('/summary')).at(-1).params;
   assert.equal(query.paper_id, 'paper-2');
-  assert.equal(query.category_id, undefined, 'draft category must not exclude records frozen under the published category');
-  assert.equal(query.source, 'external'); assert.equal(query.difficulty, 'easy');
+  assert.equal(query.category_id, 'category-1', 'the overview row carries the latest frozen release category');
+  assert.equal(query.source, undefined); assert.equal(state.filters.difficulty, 'easy');
   state.filters.category_id = 'category-1'; await state.reload();
   assert.equal(context.calls.filter(({ path }) => path.endsWith('/summary')).at(-1).params.category_id, 'category-1');
 });

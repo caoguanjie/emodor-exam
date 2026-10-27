@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { confirmUnsavedChanges, confirmUnsavedRoutes } from '../composables/useUnsavedChanges';
 import { isRetiredAdminPath } from '../router/access';
+import { dashboardListIdentity } from '../utils/admin-dashboard-navigation';
 
 export interface BusinessTab {
   path: string;
@@ -20,11 +21,15 @@ function examRecordTabPath(path: string): string | null {
   return /^\/admin\/exam-records(?:\/[1-9]\d*)?$/.test(pathname) ? pathname : null;
 }
 
-function mergeExamRecordTabs(tabs: BusinessTab[]): BusinessTab[] {
+function businessTabIdentity(path: string): string {
+  return examRecordTabPath(path) || dashboardListIdentity(path);
+}
+
+function mergeBusinessTabs(tabs: BusinessTab[]): BusinessTab[] {
   const merged: BusinessTab[] = [];
   for (const tab of tabs) {
-    const key = examRecordTabPath(tab.path);
-    const index = key ? merged.findIndex((item) => examRecordTabPath(item.path) === key) : -1;
+    const key = businessTabIdentity(tab.path);
+    const index = merged.findIndex((item) => businessTabIdentity(item.path) === key);
     if (index < 0) merged.push(tab);
     else merged[index] = { ...merged[index], path: tab.path, title: tab.title || merged[index].title };
   }
@@ -38,7 +43,7 @@ function restoreTabs(): BusinessTab[] {
     const valid = parsed.filter((item): item is BusinessTab => (
       item && typeof item.path === 'string' && typeof item.title === 'string' && typeof item.closable === 'boolean'
     ));
-    const active = mergeExamRecordTabs(valid.filter((item) => !retiredTabPath(item.path)));
+    const active = mergeBusinessTabs(valid.filter((item) => !retiredTabPath(item.path)));
     if (active.length !== valid.length) sessionStorage.setItem(STORAGE_KEY, JSON.stringify(active));
     return active;
   } catch {
@@ -54,9 +59,9 @@ export const useTabsStore = defineStore('tabs', {
     },
     visit(path: string, title: string) {
       if (!path || path.startsWith('/login') || path === '/change-password' || retiredTabPath(path)) return;
-      const recordPath = examRecordTabPath(path);
-      if (recordPath) this.tabs = mergeExamRecordTabs(this.tabs);
-      const existing = this.tabs.find((tab) => recordPath ? examRecordTabPath(tab.path) === recordPath : tab.path === path);
+      this.tabs = mergeBusinessTabs(this.tabs);
+      const identity = businessTabIdentity(path);
+      const existing = this.tabs.find((tab) => businessTabIdentity(tab.path) === identity);
       if (existing) {
         existing.path = path;
         existing.title = title || existing.title;

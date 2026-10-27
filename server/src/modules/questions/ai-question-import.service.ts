@@ -63,12 +63,12 @@ export class AiQuestionImportService implements OnModuleDestroy {
     return result;
   }
 
-  async start(ownerId: string, file: Buffer, format: QuestionImportFormat) {
+  async start(ownerId: string, file: Buffer, format: QuestionImportFormat, categoryId?: string) {
     const rows = await parseQuestionImportFile(file, format, { maxBytes: 5 * 1024 * 1024, maxRows: 50 });
     const warnings = rows.some((row) => row.legacy_score) ? ['旧模板分值已忽略，请在组卷时设置'] : [];
     let references: QuestionDraft[];
     try {
-      references = await this.importer.normalizeAiReferences(ownerId, rows);
+      references = await this.importer.normalizeAiReferences(ownerId, rows, categoryId);
     } finally {
       rows.length = 0;
     }

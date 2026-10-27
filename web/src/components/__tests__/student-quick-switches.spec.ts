@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import ElementPlus, { ElSelect } from 'element-plus';
-import { createMemoryHistory, createRouter } from 'vue-router';
+import { defineComponent, h, KeepAlive } from 'vue';
+import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import Students from '../../views/admin/Users.vue';
+import { tabCacheKey } from '../../stores/tab-cache';
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(), put: vi.fn(), post: vi.fn(), canWrite: true,
@@ -48,8 +50,8 @@ beforeEach(() => {
 afterEach(() => wrappers.splice(0).forEach((wrapper) => wrapper.unmount()));
 
 async function render() {
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: Students }] });
-  await router.push('/'); await router.isReady();
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/admin/students', component: Students }] });
+  await router.push('/admin/students'); await router.isReady();
   const wrapper = mount(Students, { global: { plugins: [ElementPlus, router], stubs: { MediaUpload: true, ImportPreview: true } } });
   wrappers.push(wrapper);
   await flushPromises();
@@ -58,6 +60,99 @@ async function render() {
 function switches(wrapper: VueWrapper, rowIndex = 0) {
   return wrapper.findAll('.el-table__body-wrapper tbody tr')[rowIndex]!.findAll('[role="switch"]');
 }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+async function renderCachedStudents() {
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/admin/students', component: Students },
+    { path: '/admin/dashboard', component: { render: () => h('div', '首页') } },
+  ] });
+  await router.push('/admin/students'); await router.isReady();
+  const wrapper = mount(defineComponent({ setup: () => () => h(RouterView, null, {
+    default: ({ Component, route }: any) => h(KeepAlive, null, () => Component ? h(Component, { key: tabCacheKey(route.fullPath, {}) }) : null),
+  }) }), { global: { plugins: [ElementPlus, router], stubs: { MediaUpload: true, ImportPreview: true } } });
+  wrappers.push(wrapper);
+  await flushPromises();
+  const state = (wrapper.getComponent(Students).vm.$ as any).setupState;
+  return { wrapper, router, state };
+}
+
+describe('student list request ownership', () => {
+  it('retains the latest dashboard source when two list responses arrive in reverse order', async () => {
+    const { wrapper, router, state } = await renderCachedStudents();
+    const external = deferred<{ items: Student[]; total: number }>();
+    const institution = deferred<{ items: Student[]; total: number }>();
+    const normalGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation((url, config) => url === '/admin/students'
+      ? config.params.source === 'external' ? external.promise : institution.promise
+      : normalGet(url, config));
+
+    await router.push('/admin/students?entry=dashboard&source=external&status=1'); await flushPromises();
+    await router.push('/admin/students?entry=dashboard&source=institution&status=1'); await flushPromises();
+    expect(state.studentLoading).toBe(true);
+    institution.resolve({ items: [{ ...copy(serverRows[1]!), status: 1 }], total: 1 }); await flushPromises();
+    external.resolve({ items: [copy(serverRows[0]!)], total: 20 }); await flushPromises();
+
+    expect(state.studentQuery.source).toBe('institution');
+    expect(state.students.map((row: Student) => row.id)).toEqual(['12']);
+    expect(state.studentTotal).toBe(1);
+    expect(state.studentLoading).toBe(false);
+    expect(wrapper.find('.el-table__body-wrapper tbody').text()).toContain('学员乙');
+  });
+
+  it('invalidates a deactivated request and starts a new one when its cached list is activated again', async () => {
+    const { wrapper, router, state } = await renderCachedStudents();
+    const oldRequest = deferred<{ items: Student[]; total: number }>();
+    const newRequest = deferred<{ items: Student[]; total: number }>();
+    const normalGet = mocks.get.getMockImplementation()!;
+    let listRequests = 0;
+    mocks.get.mockImplementation((url, config) => url === '/admin/students'
+      ? (++listRequests === 1 ? oldRequest.promise : newRequest.promise)
+      : normalGet(url, config));
+
+    await router.push('/admin/students?entry=dashboard&source=external&status=1'); await flushPromises();
+    expect(state.studentLoading).toBe(true);
+    await router.push('/admin/dashboard'); await flushPromises();
+    expect(state.studentLoading).toBe(false);
+    await router.push('/admin/students?source=institution&status=1'); await flushPromises();
+    expect((wrapper.getComponent(Students).vm.$ as any).setupState).toBe(state);
+    expect(listRequests).toBe(2);
+    expect(state.studentLoading).toBe(true);
+
+    oldRequest.resolve({ items: [copy(serverRows[0]!)], total: 20 }); await flushPromises();
+    expect(state.studentLoading).toBe(true);
+    expect(state.students.map((row: Student) => row.id)).toEqual(['11', '12']);
+    newRequest.resolve({ items: [{ ...copy(serverRows[1]!), status: 1 }], total: 1 }); await flushPromises();
+    expect(state.students.map((row: Student) => row.id)).toEqual(['12']);
+    expect(state.studentLoading).toBe(false);
+  });
+
+  it('keeps the current list and releases loading when the current request fails', async () => {
+    const wrapper = await render();
+    const state = (wrapper.vm.$ as any).setupState;
+    mocks.get.mockRejectedValueOnce(new Error('list unavailable'));
+    await expect(state.loadStudents()).rejects.toThrow('list unavailable');
+    expect(state.students.map((row: Student) => row.id)).toEqual(['11', '12']);
+    expect(state.studentLoading).toBe(false);
+  });
+
+  it('ignores a list response after its page is unmounted', async () => {
+    const wrapper = await render();
+    const state = (wrapper.vm.$ as any).setupState;
+    const response = deferred<{ items: Student[]; total: number }>();
+    mocks.get.mockReturnValueOnce(response.promise);
+    const pending = state.loadStudents();
+    wrapper.unmount();
+    response.resolve({ items: [], total: 0 }); await pending;
+    expect(state.students.map((row: Student) => row.id)).toEqual(['11', '12']);
+    expect(state.studentTotal).toBe(2);
+    expect(state.studentLoading).toBe(false);
+  });
+});
 
 describe('student list quick switches', () => {
   it('shows learner profile columns instead of internal usernames and employee numbers', async () => {

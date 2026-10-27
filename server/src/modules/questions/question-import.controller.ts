@@ -71,7 +71,7 @@ export class QuestionImportController {
     const buffer = await this.importer.buildTemplate(format, purpose);
     res.setHeader('Content-Type', format === 'xlsx'
       ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      : purpose === 'ai' ? 'text/tab-separated-values; charset=utf-8' : 'text/plain; charset=utf-8');
+      : 'text/plain; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="question-import-template.${format}"`);
     res.end(buffer);
   }

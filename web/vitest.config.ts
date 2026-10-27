@@ -17,6 +17,8 @@ export default defineConfig({
       'src/components/question-designers/__tests__/**/*.spec.ts',
       'src/utils/__tests__/**/*.spec.ts',
       'src/components/__tests__/**/*.spec.ts',
+      'src/composables/__tests__/**/*.spec.ts',
+      'src/api/__tests__/**/*.spec.ts',
     ],
     setupFiles: ['./src/test/setup.ts'],
   },

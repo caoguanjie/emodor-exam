@@ -1,6 +1,7 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
 @Entity({ name: 'sys_role' })
+@Index('uk_sys_role_name', ['name'], { unique: true })
 export class SysRole {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id!: string;
@@ -10,6 +11,9 @@ export class SysRole {
 
   @Column({ type: 'varchar', length: 128 })
   name!: string;
+
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  remark!: string | null;
 
   @Column({ name: 'is_system', type: 'tinyint', default: 0 })
   isSystem!: number;

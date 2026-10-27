@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ExamPaper } from '../src/entities/exam-paper.entity';
 import { PaperQuestion } from '../src/entities/paper-question.entity';
 import { PaperRelease } from '../src/entities/paper-release.entity';
@@ -116,7 +116,7 @@ function attemptFixture(creditedMs = '0') {
     create: (value: any) => value, save: async (values: any[]) => { savedItems.push(...values); return values; },
     find: async () => [{ id: '51', snapshotJson: structuredClone(QUESTION), scoreCents: 10000 }],
   };
-  const manager = { getRepository(entity: unknown) {
+  const manager = { query: async () => [{ version_id: '51' }, { version_id: '52' }], getRepository(entity: unknown) {
     if (entity === SysUser) return { findOne: async () => ({ id: '5', username: 'learner', status: 1, role: 'employee', categoryId: '7', source: 'institution' }) };
     if (entity === TrainingCategory) return { findOne: async () => ({ id: '7', status: 1 }) };
     if (entity === ExamPaper) return { findOne: async () => paper };
@@ -143,6 +143,22 @@ function attemptFixture(creditedMs = '0') {
 }
 
 describe('training paper learning requirement', () => {
+  it('shares only distinct current published non-deleted video versions with valid duration', async () => {
+    const { getEffectiveLearningVersionIds } = await import('../src/modules/exams/paper-learning');
+    const query = vi.fn(async () => [{ version_id: '51' }, { version_id: '51' }, { version_id: '52' }]);
+    expect(await getEffectiveLearningVersionIds({ query } as any, ['31', '31', '32'])).toEqual(['51', '52']);
+    const [sql, parameters] = query.mock.calls[0] as unknown as [string, string[]];
+    expect(sql).toContain('lesson.deleted_at IS NULL');
+    expect(sql).toContain("course.status = 'published'");
+    expect(sql).toContain("lesson.lesson_type = 'video'");
+    expect(sql).toContain('version.lesson_id = lesson.id');
+    expect(sql).toContain('version.duration_ms > 0');
+    expect(parameters).toEqual(['31', '32']);
+    query.mockClear();
+    expect(await getEffectiveLearningVersionIds({ query } as any, [])).toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('accepts the new fields at the strict DTO boundary and bounds minutes and remarks', async () => {
     expect(await dto({ ...CREATE, requires_learning: true, course_ids: ['31'], required_learning_minutes: 2, remark: '保存说明' })).toMatchObject({ required_learning_minutes: 2, remark: '保存说明' });
     for (const minutes of [0, -1, 1.5, '2', 2147483648]) {

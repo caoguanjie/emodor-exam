@@ -1,10 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import ExcelJS from 'exceljs';
-import { In, MoreThanOrEqual, Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Errors } from '../../common/errors';
 import type {
-  AdminDashboard, ExamDifficulty, LearnerSource, Page, RankRow, RuleSnapshot, StatsFilter,
+  ExamDifficulty, LearnerSource, Page, RankRow, RuleSnapshot, StatsFilter,
   TrainingExamOverviewRow, TrainingExamSummary, TrainingStatisticsOptions, TrainingStatisticsOverviewFilter,
   TrainingUncompletedReason,
 } from '../../common/training-contracts';
@@ -13,16 +13,13 @@ import { ExamPaper } from '../../entities/exam-paper.entity';
 import { ExamRecord } from '../../entities/exam-record.entity';
 import { PaperReleaseQuestion } from '../../entities/paper-release-question.entity';
 import { PaperRelease } from '../../entities/paper-release.entity';
-import { Question } from '../../entities/question.entity';
-import { SysUserRole } from '../../entities/sys-user-role.entity';
 import { SysUser } from '../../entities/sys-user.entity';
 import { TrainingCategory } from '../../entities/training-category.entity';
 import { TrainingCourse } from '../../entities/training-course.entity';
 import { VideoLearningRecord } from '../../entities/video-learning-record.entity';
-import { AccessService } from '../access/access.service';
 import {
-  bestFinalizedRecords, buildDashboardTrend, buildExamSummary, buildRankingRows, computeCourseCompletion,
-  ruleKey, type StatisticsRecord,
+  buildExamSummary, buildRankingRows, computeCourseCompletion,
+  ruleKey, statisticsRecordView, summarizeReleaseRecords, type StatisticsRecord,
 } from './ranking';
 
 const DIFFICULTIES: ExamDifficulty[] = ['easy', 'medium', 'hard', 'mixed', 'unknown'];
@@ -38,42 +35,18 @@ function difficulty(value: unknown): ExamDifficulty {
   return DIFFICULTIES.includes(text) ? text : 'unknown';
 }
 
-function asDate(value: Date | string | null | undefined, fallback?: Date): Date {
-  if (!value) return fallback ? new Date(fallback) : new Date(0);
-  return value instanceof Date ? value : new Date(value);
-}
-
-function recordView(row: ExamRecord): StatisticsRecord {
-  return {
-    id: String(row.id), paperId: String(row.paperId), releaseId: row.releaseId ? String(row.releaseId) : null,
-    userId: String(row.userId), categoryId: row.categoryId ? String(row.categoryId) : null,
-    source: row.source || null, difficulty: difficulty(row.difficulty), ruleSnapshot: row.ruleSnapshot || null,
-    status: row.status, gradingState: row.gradingState, score: row.score === null ? null : Number(row.score),
-    startedAt: asDate(row.startedAt), submittedAt: row.submittedAt ? asDate(row.submittedAt) : null,
-    deadlineAt: asDate(row.deadlineAt, row.startedAt), submissionMethod: row.submissionMethod,
-    gradedAt: row.gradedAt ? asDate(row.gradedAt) : null,
-  };
-}
-
 function examInfo(paper: ExamPaper, release: PaperRelease | null): TrainingExamSummary['exam'] {
   const rule = release?.ruleSnapshot;
   const categoryId = release ? release.categoryId : paper.categoryId;
   return {
     paper_id: String(paper.id), title: paper.title,
     category_id: categoryId ? String(categoryId) : null,
+    mode: (release?.mode || paper.mode) === 'random' ? 'random' : 'fixed',
     total_score: rule ? Number(rule.totalCents) / 100 : null,
     duration_minutes: rule ? Number(rule.durationMinutes) : null,
     pass_score: rule ? Number(rule.passCents) / 100 : null,
     excellent_score: null,
   };
-}
-
-function shanghaiDate(value: Date): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(value);
-  const read = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || '';
-  return `${read('year')}-${read('month')}-${read('day')}`;
 }
 
 @Injectable()
@@ -84,13 +57,10 @@ export class TrainingStatisticsService {
     @InjectRepository(PaperReleaseQuestion) private readonly releaseQuestionRepo: Repository<PaperReleaseQuestion>,
     @InjectRepository(ExamRecord) private readonly recordRepo: Repository<ExamRecord>,
     @InjectRepository(SysUser) private readonly userRepo: Repository<SysUser>,
-    @InjectRepository(SysUserRole) private readonly userRoleRepo: Repository<SysUserRole>,
     @InjectRepository(TrainingCourse) private readonly courseRepo: Repository<TrainingCourse>,
     @InjectRepository(CourseLesson) private readonly lessonRepo: Repository<CourseLesson>,
     @InjectRepository(VideoLearningRecord) private readonly videoRepo: Repository<VideoLearningRecord>,
-    @InjectRepository(Question) private readonly questionRepo: Repository<Question>,
     @InjectRepository(TrainingCategory) private readonly categoryRepo: Repository<TrainingCategory>,
-    private readonly access: AccessService,
   ) {}
 
   async overview(filter: TrainingStatisticsOverviewFilter): Promise<Page<TrainingExamOverviewRow>> {
@@ -124,7 +94,7 @@ export class TrainingStatisticsService {
     ]);
     const recordsByRelease = new Map<string, StatisticsRecord[]>();
     for (const row of rawRecords) {
-      const record = recordView(row);
+      const record = statisticsRecordView(row);
       if (!record.releaseId || !releaseIds.includes(record.releaseId)) continue;
       if (filter.categoryId && record.categoryId !== String(filter.categoryId)) continue;
       const group = recordsByRelease.get(record.releaseId) || [];
@@ -138,17 +108,14 @@ export class TrainingStatisticsService {
       const releaseId = release ? String(release.id) : null;
       const records = release ? recordsByRelease.get(releaseId!) || [] : [];
       // This is descriptive across difficulties, never a combined ranking.
-      const best = release ? bestFinalizedRecords(records, undefined, releaseId, release.ruleSnapshot) : [];
+      const summary = release ? summarizeReleaseRecords(records, releaseId!, release.ruleSnapshot)
+        : { participant_count: 0, finalized_users: 0, average_score: null };
       return {
         paper_id: info.paper_id, title: info.title, category_id: info.category_id,
         category_name: info.category_id ? categoryNames.get(info.category_id) || null : null,
         status: paper.status, release_id: releaseId,
         total_score: info.total_score, duration_minutes: info.duration_minutes, pass_score: info.pass_score,
-        participant_count: new Set(records.map((record) => record.userId)).size,
-        finalized_users: best.length,
-        average_score: best.length
-          ? Math.round(best.reduce((sum, record) => sum + Number(record.score), 0) / best.length * 100) / 100
-          : null,
+        ...summary,
       };
     });
     return { items, total, page, page_size: pageSize };
@@ -196,7 +163,7 @@ export class TrainingStatisticsService {
       return !filter.difficulty
         || this.expectedDifficulty(paper, release, fixedDifficulty, user.source) === filter.difficulty;
     });
-    const records = rawRecords.map(recordView).filter((record) => {
+    const records = rawRecords.map(statisticsRecordView).filter((record) => {
       if (filter.categoryId && String(record.categoryId || '') !== String(filter.categoryId)) return false;
       if (filter.source && record.source !== filter.source) return false;
       if (filter.difficulty && difficulty(record.difficulty) !== filter.difficulty) return false;
@@ -286,8 +253,9 @@ export class TrainingStatisticsService {
   }
 
   async ranking(filter: StatsFilter): Promise<Page<RankRow>> {
-    if (!filter.difficulty) throw Errors.param('排名必须明确 difficulty');
     const context = await this.context(filter);
+    const mode = (context.release?.mode || context.paper.mode) === 'random' ? 'random' : 'fixed';
+    if (mode === 'random' && !filter.difficulty) throw Errors.param('历史随机卷排名必须明确 difficulty');
     const rows = buildRankingRows(
       context.records,
       new Map(context.users.map((user) => [String(user.id), user.realName])),
@@ -312,23 +280,25 @@ export class TrainingStatisticsService {
   async export(filter: StatsFilter): Promise<Buffer> {
     const result = await this.ranking(filter);
     const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('难度排名');
+    const sheet = workbook.addWorksheet('成绩排名');
     sheet.columns = [
       { header: '名次', key: 'rank', width: 10 },
       { header: '学员ID', key: 'user_id', width: 16 },
       { header: '姓名', key: 'name', width: 16 },
+      { header: '性别', key: 'gender', width: 12 },
       { header: '来源', key: 'source', width: 14 },
-      { header: '难度', key: 'difficulty', width: 12 },
       { header: '分数', key: 'score', width: 10 },
       { header: '用时(秒)', key: 'duration_seconds', width: 12 },
       { header: '答卷ID', key: 'record_id', width: 16 },
-      { header: '性别', key: 'gender', width: 12 },
     ];
     for (const row of result.items) sheet.addRow({ ...row,
       gender: row.gender === 'male' ? '男' : row.gender === 'female' ? '女' : '未填写',
+      source: row.source === 'institution' ? '本机构' : row.source === 'external' ? '外来' : '未知',
     });
     const note = workbook.addWorksheet('口径说明');
-    note.getCell('A1').value = '排名与成绩仅比较当前发布版本、相同冻结评分规则和所选难度；参与及提交人数属于该试卷历史范围。';
+    note.getCell('A1').value = filter.difficulty
+      ? `排名与成绩仅比较当前发布版本、相同冻结评分规则和卷面难度 ${filter.difficulty}；参与及提交人数属于该试卷历史范围。`
+      : '排名与成绩仅比较当前发布版本和相同冻结评分规则；参与及提交人数属于该试卷历史范围。';
     note.getColumn(1).width = 100;
     return Buffer.from(await workbook.xlsx.writeBuffer() as ArrayBuffer);
   }
@@ -347,26 +317,4 @@ export class TrainingStatisticsService {
     };
   }
 
-  async dashboard(userId: string, now = new Date()): Promise<AdminDashboard> {
-    const permissions = new Set(await this.access.permissions(String(userId)));
-    const metrics: AdminDashboard['metrics'] = {};
-    const [users, roleLinks] = permissions.has('students:read')
-      ? await Promise.all([this.userRepo.find(), this.userRoleRepo.find()])
-      : [[], []];
-    if (permissions.has('students:read')) {
-      const managerIds = new Set(roleLinks.map((link) => String(link.userId)));
-      metrics.learner_count = users.filter((user) => Number(user.status) === 1
-        && user.role === 'employee' && !managerIds.has(String(user.id))).length;
-    }
-    if (permissions.has('questions:read')) metrics.question_count = await this.questionRepo.count();
-    if (permissions.has('papers:read')) metrics.paper_count = await this.paperRepo.count();
-    const response: AdminDashboard = { as_of: now.toISOString(), timezone: 'Asia/Shanghai', metrics };
-    if (permissions.has('statistics:read')) {
-      const dates = Array.from({ length: 7 }, (_, index) => shanghaiDate(new Date(now.getTime() - (6 - index) * 86_400_000)));
-      const earliest = new Date(`${dates[0]}T00:00:00+08:00`);
-      const rows = await this.recordRepo.find({ where: { startedAt: MoreThanOrEqual(earliest) } });
-      response.exam_trend = buildDashboardTrend(rows.map((row) => asDate(row.startedAt)), dates);
-    }
-    return response;
-  }
 }

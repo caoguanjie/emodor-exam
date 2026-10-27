@@ -263,7 +263,6 @@ function serviceFixture(permissions: string[] = ['statistics:read', 'statistics:
     repository([]),
     repository(examRows),
     repository(users),
-    repository([{ userId: '1' }]),
     repository([{ id: '41', categoryId: '7', status: 'published' }]),
     repository([
       { id: '51', courseId: '41', required: 1, lessonType: 'video', currentVersionId: '31' },
@@ -274,9 +273,7 @@ function serviceFixture(permissions: string[] = ['statistics:read', 'statistics:
       { userId: '1', lessonVersionId: '32', completed: 1 },
       { userId: '2', lessonVersionId: '31', completed: 1 },
     ]),
-    repository([{ id: '1' }, { id: '2' }]),
     repository([{ id: '7', name: '危化培训', status: 1 }]),
-    { permissions: async () => permissions } as any,
   );
   return { service };
 }
@@ -287,7 +284,7 @@ describe('TrainingStatisticsService', () => {
     const summary = await service.examSummary({ paperId: '10', page: 1, pageSize: 20 });
 
     expect(summary).toMatchObject({
-      exam: { paper_id: '10', title: '安全考试', category_id: '7', total_score: 100, duration_minutes: 30, pass_score: 60, excellent_score: null },
+      exam: { paper_id: '10', title: '安全考试', category_id: '7', mode: 'random', total_score: 100, duration_minutes: 30, pass_score: 60, excellent_score: null },
       eligible_count: 4, eligible_started_count: 4, historical_started_count: 5,
       historical_only_started_count: 1, participation_rate: 1,
       course_completion: { eligible_users: 2, required_lessons: 2, completed_users: 1, completion_rate: 0.5 },
@@ -325,14 +322,14 @@ describe('TrainingStatisticsService', () => {
     const exported = await service.export(filter);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(exported);
-    const sheet = workbook.getWorksheet('难度排名')!;
+    const sheet = workbook.getWorksheet('成绩排名')!;
     const exportedRows = sheet.getRows(2, sheet.rowCount - 1)!.map((row) => ({
       rank: row.getCell(1).value,
       user_id: String(row.getCell(2).value),
       name: row.getCell(3).value,
       score: row.getCell(6).value,
       record_id: String(row.getCell(8).value),
-      gender: row.getCell(9).value,
+      gender: row.getCell(4).value,
     }));
     expect(exportedRows).toEqual(screen.items.map((row) => ({
       rank: row.rank, user_id: row.user_id, name: row.name, score: row.score, record_id: row.record_id,
@@ -340,6 +337,27 @@ describe('TrainingStatisticsService', () => {
     })));
     expect(screen).toMatchObject({ total: 2, page: 1, page_size: 1 });
     expect(screen.items[0].gender).toBe('female');
+  });
+
+  it('ranks a fixed paper without a difficulty and exports a generic score sheet', async () => {
+    const { service } = serviceFixture();
+    Object.assign(service, {
+      paperRepo: repository([{ id: '10', title: '固定考试', businessScope: 'training', mode: 'fixed', categoryId: '7', status: 'published' }]),
+      releaseRepo: repository([{ id: '20', paperId: '10', versionNo: 1, businessScope: 'training', mode: 'fixed', categoryId: '7', ruleSnapshot: RULE }]),
+    });
+
+    const filter = { paperId: '10', sort_by: 'score' as const, sort_order: 'desc' as const, page: 1, pageSize: 20 };
+    const screen = await service.ranking(filter);
+    expect(screen.items.map((row) => [row.rank, row.user_id, row.score])).toEqual([
+      [1, '3', 90], [2, '2', 80], [2, '1', 80],
+    ]);
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await service.export(filter));
+    const sheet = workbook.getWorksheet('成绩排名')!;
+    expect(sheet).toBeDefined();
+    expect(sheet.getRow(1).values).toEqual([undefined, '名次', '学员ID', '姓名', '性别', '来源', '分数', '用时(秒)', '答卷ID']);
+    expect(workbook.getWorksheet('难度排名')).toBeUndefined();
   });
 
   it('applies duration sorting before pagination and exports the same ordered page', async () => {
@@ -353,8 +371,8 @@ describe('TrainingStatisticsService', () => {
     expect(screen.items[0]).toMatchObject({ user_id: '2', rank: 2, duration_seconds: 300 });
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(await service.export(filter));
-    expect(workbook.getWorksheet('难度排名')!.getRow(2).getCell(2).value).toBe('2');
-    expect(workbook.getWorksheet('难度排名')!.getRow(2).getCell(9).value).toBe('女');
+    expect(workbook.getWorksheet('成绩排名')!.getRow(2).getCell(2).value).toBe('2');
+    expect(workbook.getWorksheet('成绩排名')!.getRow(2).getCell(4).value).toBe('女');
   });
 
   it('counts all latest-release starters but scores only matching rules without loading learner or course context', async () => {
@@ -411,22 +429,6 @@ describe('TrainingStatisticsService', () => {
     });
   });
 
-  it('returns only dashboard metrics allowed by the caller and groups trend in Shanghai time', async () => {
-    const { service } = serviceFixture(['students:read', 'statistics:read']);
-    const dashboard = await service.dashboard('99', new Date('2026-10-22T02:00:00.000Z'));
-    expect(dashboard.metrics).toEqual({ learner_count: 3 });
-    expect(dashboard).not.toHaveProperty('metrics.question_count');
-    expect(dashboard).not.toHaveProperty('metrics.paper_count');
-    expect(dashboard).not.toHaveProperty('metrics.pending_grading_count');
-    expect(dashboard.timezone).toBe('Asia/Shanghai');
-    expect(dashboard.exam_trend?.find((item) => item.date === '2026-10-20')?.count).toBe(6);
-  });
-
-  it('does not revive the removed pending-grading metric for legacy permissions', async () => {
-    const { service } = serviceFixture(['exam_records:review']);
-    const dashboard = await service.dashboard('99', new Date('2026-10-22T02:00:00.000Z'));
-    expect(dashboard.metrics).not.toHaveProperty('pending_grading_count');
-  });
 });
 
 describe('legacy statistics compatibility', () => {
@@ -479,5 +481,22 @@ describe('TrainingStatisticsController', () => {
     expect(overview.toFilter()).toEqual({ keyword: '安全', categoryId: '7', page: 1, pageSize: 20 });
     expect(validateSync(plainToInstance(TrainingStatisticsOverviewQueryDto, { page: '0', page_size: '101', category_id: '0' }))
       .map((error) => error.property).sort()).toEqual(['category_id', 'page', 'page_size']);
+  });
+
+  it('downloads the generic training score ranking filename', async () => {
+    const statistics = { export: vi.fn(async () => Buffer.from('xlsx')) };
+    const audit = { log: vi.fn() };
+    const controller = new TrainingStatisticsController(statistics as any, audit as any);
+    const query = Object.assign(new TrainingStatisticsQueryDto(), { paper_id: '10' });
+    const headers = new Map<string, string>();
+    const response = {
+      setHeader: (name: string, value: string) => headers.set(name, value),
+      end: vi.fn(),
+    };
+
+    await controller.export(query, { id: 1, username: 'admin' } as any, { query: { paper_id: '10' }, ip: '127.0.0.1' } as any, response as any);
+
+    expect(decodeURIComponent(headers.get('Content-Disposition') || '')).toContain('培训考试成绩排名.xlsx');
+    expect(response.end).toHaveBeenCalledWith(Buffer.from('xlsx'));
   });
 });

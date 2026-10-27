@@ -25,6 +25,7 @@
     "@vueuse/core": "14.4.0",
     "axios": "^1.7.5",
     "cos-js-sdk-v5": "1.10.1",
+    "echarts": "6.1.0",
     "element-plus": "^2.8.0",
     "fuse.js": "7.5.0",
     "moment": "2.31.0",

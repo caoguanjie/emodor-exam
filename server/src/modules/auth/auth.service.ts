@@ -227,6 +227,7 @@ export class AuthService {
   /** 接口返回用户信息一律排除 password_hash（03 册 3.1.2 设计说明 2） */
   sanitize(user: SysUser) {
     return {
+      permission_schema_version: 2,
       id: Number(user.id),
       username: user.username,
       real_name: user.realName,

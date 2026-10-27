@@ -126,20 +126,6 @@ async function humanXlsxBytes(rows, includeDifficulty = true) {
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
-async function templateRows(buffer, format) {
-  if (format === 'txt') {
-    const text = buffer.toString('utf8').replace(/^\uFEFF/, '').trimEnd();
-    return text.split(/\r\n|\n|\r/).slice(1).map((line) => line.split('\t'));
-  }
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
-  const rows = [];
-  workbook.worksheets[0].eachRow((row, number) => {
-    if (number > 1) rows.push(HEADERS.map((_header, index) => String(row.getCell(index + 1).value ?? '').trim()));
-  });
-  return rows;
-}
-
 function pngFixture() {
   return Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 }
@@ -255,9 +241,13 @@ async function runBody(ctx) {
   const aiXlsxTemplate = await ctx.request(admin.actor, 'GET', '/admin/questions/import-template?format=xlsx&purpose=ai');
   assert.equal(aiTxtTemplate.status, 200);
   assert.equal(aiXlsxTemplate.status, 200);
-  assert.match(aiTxtTemplate.headers['content-type'], /text\/tab-separated-values/);
-  assert.equal(aiTxtTemplate.data.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/)[0], HEADERS.join('\t'));
-  assert.deepEqual(await templateRows(aiXlsxTemplate.data, 'xlsx'), await templateRows(aiTxtTemplate.data, 'txt'));
+  assert.match(aiTxtTemplate.headers['content-type'], /text\/plain/);
+  assert.match(aiTxtTemplate.data.toString('utf8'), /\[题干\]/);
+  const aiHumanBook = new ExcelJS.Workbook();
+  await aiHumanBook.xlsx.load(aiXlsxTemplate.data);
+  assert.deepEqual(aiHumanBook.worksheets.map((sheet) => sheet.name), ['试题导入模板', '填写示例', '填写说明']);
+  assert.deepEqual(aiHumanBook.worksheets[0].getRow(1).values.slice(1), HUMAN_HEADERS);
+  assert.equal(aiHumanBook.worksheets[0].actualRowCount, 1, 'AI template first sheet must use the empty human input format');
 
   const missingCategoryUpload = multipart(
     { format: 'txt' }, txtBytes(baseRows()), 'questions.txt', 'text/plain; charset=utf-8',

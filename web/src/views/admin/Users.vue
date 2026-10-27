@@ -3,18 +3,19 @@
     <FitsTable>
       <template #search>
         <FitsListSearch @submit.prevent>
-          <el-form-item label="关键字"><el-input v-model="studentQuery.keyword" placeholder="姓名 / 手机号" clearable @keyup.enter="loadStudents" /></el-form-item>
+          <el-form-item label="关键字"><el-input v-model="studentQuery.keyword" placeholder="姓名 / 手机号" clearable @keyup.enter="searchStudents" /></el-form-item>
           <el-form-item label="培训类别">
-            <el-select v-model="studentQuery.category_id" clearable placeholder="全部类别" @change="loadStudents">
+            <el-select v-model="studentQuery.category_id" clearable placeholder="全部类别" @change="searchStudents">
               <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
             </el-select>
           </el-form-item>
           <el-form-item label="来源">
-            <el-select v-model="studentQuery.source" clearable placeholder="全部来源" @change="loadStudents">
+            <el-select v-model="studentQuery.source" clearable placeholder="全部来源" @change="searchStudents">
               <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
             </el-select>
           </el-form-item>
-          <template #actions><el-button type="primary" @click="loadStudents">查询</el-button></template>
+          <el-form-item label="状态"><el-select v-model="studentQuery.status" clearable placeholder="全部状态" @change="searchStudents"><el-option label="启用" :value="1" /><el-option label="停用" :value="0" /></el-select></el-form-item>
+          <template #actions><el-button type="primary" @click="searchStudents">查询</el-button></template>
         </FitsListSearch>
       </template>
       <template v-if="auth.can('students:write')" #actions>
@@ -131,10 +132,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onActivated, onBeforeUnmount, onDeactivated, reactive, ref, watch } from 'vue';
 import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { ElMessage } from 'element-plus';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import { useDashboardListNavigation } from '../../utils/admin-dashboard-navigation';
 import type { UploadFile } from 'element-plus';
 import http, { download, upload } from '../../api/http';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
@@ -155,12 +157,24 @@ import {
 
 const auth = useAuthStore();
 const router = useRouter();
+const route = useRoute();
+const formRouteKey = ref(route.fullPath);
 function openStudentRecords(row: { id: string; real_name?: string; username: string }) {
   if (auth.can('exam_records:read')) void router.push({ path: '/admin/exam-records', query: { user_id: String(row.id), learner_name: row.real_name || row.username } });
 }
 const students = ref<any[]>([]);
 const studentTotal = ref(0);
 const studentLoading = ref(false);
+let studentListRequest = 0;
+let studentListActive = true;
+function invalidateStudentList() {
+  studentListActive = false;
+  studentListRequest += 1;
+  studentLoading.value = false;
+}
+onActivated(() => { studentListActive = true; });
+onDeactivated(invalidateStudentList);
+onBeforeUnmount(invalidateStudentList);
 const studentRowBusy = reactive<Record<string, 'source' | 'status'>>({});
 const categories = ref<any[]>([]);
 const studentDialog = ref(false);
@@ -185,7 +199,7 @@ const studentAvatarSync = reactive<{ status: AvatarSyncStatus; message: string }
 const studentAvatarDialogVersion = ref(0);
 const studentSaveInFlightKey = ref<string | null>(null);
 const studentSaveBusy = computed(() => studentSaveInFlightKey.value !== null);
-const studentQuery = reactive<any>({ page: 1, page_size: 20, keyword: '', category_id: '', source: '' });
+const studentQuery = reactive({ page: 1, page_size: 20, keyword: '', category_id: '', source: '', status: '' as 0 | 1 | '' });
 const studentPreview = ref<ImportPreviewData | null>(null);
 const previewVisible = ref(false);
 const studentDirty = ref(false);
@@ -236,7 +250,7 @@ function rebaseStudentAvatar(confirmedId: string | null) {
   };
 }
 
-const studentUnsaved = useUnsavedChanges(studentDirty, { onDiscard: discardStudentDraft });
+const studentUnsaved = useUnsavedChanges(studentDirty, { routeKey: formRouteKey, onDiscard: discardStudentDraft });
 watch([() => JSON.stringify(studentForm), studentAvatarWritePending], () => {
   const baseline = studentBaseline.value;
   studentDirty.value = studentDialog.value && (
@@ -272,15 +286,26 @@ async function loadCategories() {
 }
 
 async function loadStudents() {
+  if (!studentListActive) return;
+  const request = ++studentListRequest;
   studentLoading.value = true;
   try {
     const params = Object.fromEntries(
-      Object.entries(studentQuery).filter(([, value]) => value !== '' && value !== null && value !== undefined),
+      Object.entries({ page: studentQuery.page, page_size: studentQuery.page_size, keyword: studentQuery.keyword,
+        category_id: studentQuery.category_id, source: studentQuery.source,
+        status: studentQuery.status === 0 || studentQuery.status === 1 ? studentQuery.status : undefined,
+      }).filter(([, value]) => value !== '' && value !== null && value !== undefined),
     );
     const data: any = await http.get('/admin/students', { params });
+    if (!studentListActive || request !== studentListRequest) return;
     students.value = data.items || [];
     studentTotal.value = data.total || 0;
-  } finally { studentLoading.value = false; }
+  } finally { if (studentListActive && request === studentListRequest) studentLoading.value = false; }
+}
+async function searchStudents() {
+  studentQuery.page = 1;
+  await navigation.syncQuery({ source: studentQuery.source || undefined, status: studentQuery.status === 0 || studentQuery.status === 1 ? String(studentQuery.status) : undefined });
+  await loadStudents();
 }
 
 function resetStudentAvatarState() {
@@ -507,9 +532,17 @@ async function commitStudentImport(rows: number[]) {
   previewVisible.value = false; studentPreview.value = null; await loadStudents();
 }
 
-onMounted(async () => {
-  await loadCategories();
-  await loadStudents();
+const navigation = useDashboardListNavigation(route, router, {
+  path: '/admin/students', routeKey: formRouteKey,
+  beforeEntry: () => studentUnsaved.confirmDiscard(),
+  apply(entry, explicit) {
+    if (entry.kind !== 'students') return;
+    if (explicit) Object.assign(studentQuery, { page: 1, keyword: '', category_id: '' });
+    studentQuery.source = entry.source || '';
+    studentQuery.status = entry.status ?? '';
+  },
+  prepare: loadCategories, load: loadStudents,
+  onInvalid: () => { ElMessage.warning('已清除无效的学员入口参数'); },
 });
 </script>
 

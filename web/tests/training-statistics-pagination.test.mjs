@@ -17,7 +17,7 @@ let vite;
 let TrainingStatistics;
 
 const summary = {
-  exam: { paper_id: 'paper-1', title: '考试', category_id: null, total_score: 100, duration_minutes: 45, pass_score: 60, excellent_score: null },
+  exam: { paper_id: 'paper-1', title: '考试', category_id: null, mode: 'random', total_score: 100, duration_minutes: 45, pass_score: 60, excellent_score: null },
   paper_id: 'paper-1',
   release_id: 'release-1',
   eligible_count: 2,
@@ -49,7 +49,9 @@ function rankRow(page) {
 }
 
 const routeStubCode = `
-  export function useRouter() { return { async push() {} }; }
+  const route = { path: '/admin/training-statistics', fullPath: '/admin/training-statistics', query: {} };
+  export function useRoute() { return route; }
+  export function useRouter() { return { async push() {}, async replace(value) { route.query = value.query; } }; }
 `;
 const authStubCode = `
   export function useAuthStore() { return { can() { return true; } }; }
@@ -197,6 +199,7 @@ test('uses the emitted pagination page only through v-model and applies the page
   for (const name of [
     'el-tooltip', 'el-icon', 'el-alert', 'el-button', 'el-col', 'el-empty', 'el-option', 'el-pagination', 'el-progress',
     'el-row', 'el-select', 'el-table', 'el-table-column', 'el-tag', 'el-form', 'el-form-item', 'el-input', 'el-collapse', 'el-collapse-item',
+    'el-dialog', 'el-descriptions', 'el-descriptions-item', 'el-skeleton',
   ]) {
     app.component(name, passthrough(name === 'el-pagination' ? 'pagination' : name, ['default', 'title']));
   }
@@ -217,7 +220,7 @@ test('uses the emitted pagination page only through v-model and applies the page
   assert.equal(state.ranking.items[0].record_id, 'record-1');
   assert.doesNotMatch(textContent(root), /待批改|旧制度报表/);
 
-  const pagination = findNodes(root, (node) => node.type === 'pagination')[0];
+  const pagination = findNodes(root, (node) => node.type === 'pagination' && node.props.total === 2)[0];
   assert.ok(pagination, 'ranking pagination should be rendered');
   assert.equal(typeof pagination.props['onUpdate:currentPage'], 'function');
   assert.equal(typeof pagination.props.onCurrentChange, 'function');

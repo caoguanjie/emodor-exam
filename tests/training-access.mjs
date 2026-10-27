@@ -2,6 +2,9 @@ import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import { randomStrongPassword } from './support/password-fixture.mjs';
 import { learnerSession, randomLearnerPhone } from './support/learner-session-fixture.mjs';
+import { verifyAdministratorManagement } from './support/administrator-management.mjs';
+import { verifyRoleMenuManagement } from './support/role-menu-management.mjs';
+import { verifyLegacyRoleMenuUpgrade } from './support/role-menu-migration.mjs';
 
 export { randomStrongPassword } from './support/password-fixture.mjs';
 
@@ -153,6 +156,9 @@ function signEqualIatAccessToken(ctx, user, authVersion, iat, sid) {
 }
 
 async function runBody(ctx, mockPort) {
+  // init.sql gives the latest schema; establish the first upgrade checkpoint
+  // before exercising explicit granular revocation and later migration replay.
+  await verifyLegacyRoleMenuUpgrade(ctx);
   const refreshIp = '198.51.100.240';
   const refreshHeaders = { 'X-Forwarded-For': refreshIp };
   const previousCaptcha = await ctx.request(null, 'POST', '/auth/captcha', undefined, refreshHeaders);
@@ -288,14 +294,9 @@ async function runBody(ctx, mockPort) {
   assert(adminReadRole.status === 200 && adminReadRole.data?.id, `administrator read role create failed: ${adminReadRole.status}`);
   const adminWriteRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
     code: `admin_write_${randomBytes(4).toString('hex')}`,
-    name: '管理员分配', permissions: ['administrators:read', 'administrators:write'],
+    name: '管理员维护', permissions: ['administrators:read', 'administrators:write'],
   });
   assert(adminWriteRole.status === 200 && adminWriteRole.data?.id, `administrator write role create failed: ${adminWriteRole.status}`);
-  const firstAssignmentRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
-    code: `first_assignment_${randomBytes(4).toString('hex')}`,
-    name: '首次分配验证角色', permissions: ['statistics:read'],
-  });
-  assert(firstAssignmentRole.status === 200 && firstAssignmentRole.data?.id, `first assignment role create failed: ${firstAssignmentRole.status}`);
 
   const ordinaryUsername = `ordinary_${randomBytes(4).toString('hex')}`;
   const ordinary = await ctx.request(admin.actor, 'POST', '/admin/students', {
@@ -320,9 +321,7 @@ async function runBody(ctx, mockPort) {
     readUsername, readPassword, 'AdministratorReadOnly',
   );
   const readAdministrators = await ctx.request(readLogin.actor, 'GET', '/admin/administrators');
-  assert(readAdministrators.status === 200 && Array.isArray(readAdministrators.data), `administrator read listing failed: ${readAdministrators.status}`);
-  const readCandidatesDenied = await ctx.request(readLogin.actor, 'GET', '/admin/administrators/candidates');
-  assert(readCandidatesDenied.status === 403, `administrator read candidate lookup unexpectedly allowed: ${readCandidatesDenied.status}`);
+  assert(readAdministrators.status === 200 && Array.isArray(readAdministrators.data?.items), `administrator read listing failed: ${readAdministrators.status}`);
   const readOptionsDenied = await ctx.request(readLogin.actor, 'GET', '/admin/administrators/assignable-roles');
   assert(readOptionsDenied.status === 403, `administrator read role options unexpectedly allowed: ${readOptionsDenied.status}`);
   const readTree = await ctx.request(readLogin.actor, 'GET', '/departments/tree');
@@ -342,7 +341,7 @@ async function runBody(ctx, mockPort) {
   const writeUsername = `admin_write_${randomBytes(4).toString('hex')}`;
   const writePassword = randomStrongPassword(writeUsername);
   const writeUser = await ctx.request(admin.actor, 'POST', '/admin/administrators', {
-    username: writeUsername, password: writePassword, real_name: '管理员分配账号',
+    username: writeUsername, password: writePassword, real_name: '管理员维护账号',
     role_ids: [String(adminWriteRole.data.id)],
   });
   assert(writeUser.status === 200 && writeUser.data?.id, `administrator write fixture create failed: ${writeUser.status}`);
@@ -354,33 +353,7 @@ async function runBody(ctx, mockPort) {
   const generalRolesDenied = await ctx.request(writeLogin.actor, 'GET', '/admin/roles');
   assert(generalRolesDenied.status === 403, `administrator write role unexpectedly has roles:read: ${generalRolesDenied.status}`);
   const writeAdministrators = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators');
-  assert(writeAdministrators.status === 200 && Array.isArray(writeAdministrators.data), `administrator write listing failed: ${writeAdministrators.status}`);
-  const candidatePage = await ctx.request(
-    writeLogin.actor, 'GET', `/admin/administrators/candidates?page=1&page_size=100&keyword=${encodeURIComponent(ordinaryUsername)}`,
-  );
-  assert(
-    candidatePage.status === 200 && candidatePage.data?.page === 1 && candidatePage.data?.page_size === 100
-      && Array.isArray(candidatePage.data?.items) && candidatePage.data.total >= 1,
-    `administrator write candidate page failed: ${candidatePage.status}`,
-  );
-  for (const candidate of candidatePage.data.items) {
-    assert(
-      Object.keys(candidate).sort().join(',') === 'id,real_name,requires_initial_password,status,system_role,username'
-        && typeof candidate.requires_initial_password === 'boolean'
-        && candidate.system_role !== 'super_admin'
-        && candidate.id !== '1',
-      `candidate leaked unsafe fields or highest identity: ${JSON.stringify(candidate)}`,
-    );
-  }
-  assert(candidatePage.data.items.find((candidate) => candidate.id === String(ordinary.data.id))?.requires_initial_password === true,
-    'pure learner candidate did not require an administrator initial password');
-  const allCandidates = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators/candidates?page=1&page_size=100');
-  assert(allCandidates.status === 200 && allCandidates.data?.items?.every((candidate) => candidate.id !== '1' && candidate.system_role !== 'super_admin'), `super admin appeared in candidate set: ${allCandidates.status}`);
-  const malformedCandidate = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators/candidates?page=not-a-number');
-  assert(malformedCandidate.status === 400, `malformed candidate page was accepted: ${malformedCandidate.status}`);
-  const unknownCandidateField = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators/candidates?unexpected=1');
-  assert(unknownCandidateField.status === 400, `unknown candidate query field was accepted: ${unknownCandidateField.status}`);
-
+  assert(writeAdministrators.status === 200 && Array.isArray(writeAdministrators.data?.items), `administrator write listing failed: ${writeAdministrators.status}`);
   const assignableOptions = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators/assignable-roles');
   assert(assignableOptions.status === 200 && Array.isArray(assignableOptions.data) && assignableOptions.data.length > 0, `administrator write role options failed: ${assignableOptions.status}`);
   for (const option of assignableOptions.data) {
@@ -391,22 +364,12 @@ async function runBody(ctx, mockPort) {
       `role options leaked unsafe fields or disabled/system role: ${JSON.stringify(option)}`,
     );
   }
-  const firstAssignment = await ctx.request(writeLogin.actor, 'PUT', `/admin/administrators/${ordinary.data.id}/roles`, {
-    role_ids: [String(firstAssignmentRole.data.id)],
-    initial_password: randomStrongPassword(ordinaryUsername, '普通候选账号'),
-  });
-  assert(firstAssignment.status === 200, `first business-role assignment failed: ${firstAssignment.status}`);
-  const assignedAdministrators = await ctx.request(writeLogin.actor, 'GET', '/admin/administrators');
-  const assignedOrdinary = assignedAdministrators.data?.find((item) => item.id === String(ordinary.data.id));
-  assert(assignedAdministrators.status === 200 && assignedOrdinary?.role_ids?.includes(String(firstAssignmentRole.data.id)), 'first assignment was not reflected in administrator listing');
-  const assignedCandidatePage = await ctx.request(
-    writeLogin.actor, 'GET', `/admin/administrators/candidates?page=1&page_size=100&keyword=${encodeURIComponent(ordinaryUsername)}`,
-  );
-  assert(
-    assignedCandidatePage.status === 200
-      && !assignedCandidatePage.data?.items?.some((candidate) => candidate.id === String(ordinary.data.id)),
-    `already-authorized account remained in candidate set: ${assignedCandidatePage.status}`,
-  );
+  await verifyAdministratorManagement(ctx, {
+    admin, roleId: fixtureAdminRoleIds[0], categoryId: fixtureCategoryId,
+    readActor: readLogin.actor, writeActor: writeLogin.actor,
+    writeId: String(writeUser.data.id), writeRoleId: String(adminWriteRole.data.id),
+  }, { captchaLogin, completeFirstLogin, holdRowLock, waitForLockWaits, closeLock });
+  await verifyRoleMenuManagement(ctx, admin, { captchaLogin, completeFirstLogin, holdRowLock, waitForLockWaits, closeLock });
 
   const roleCode = `limited_${randomBytes(4).toString('hex')}`;
   const role = await ctx.request(admin.actor, 'POST', '/admin/roles', {
@@ -433,8 +396,8 @@ async function runBody(ctx, mockPort) {
   const rollbackRows = await ctx.queryTestDb('SELECT COUNT(*) AS count FROM sys_role WHERE code = ?', [rollbackRoleCode]);
   assert(Number(rollbackRows[0]?.count || 0) === 0, 'invalid role transaction left a partial sys_role row');
 
-  const employeeAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, { role_ids: [String(employeeRole.data.id)] });
-  assert(employeeAssigned.status === 200, `employee role assignment failed: ${employeeAssigned.status}`);
+  const employeeAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}`, { role_ids: [String(employeeRole.data.id)] });
+  assert(employeeAssigned.status === 200, `employee role update failed: ${employeeAssigned.status}`);
   const preGrantEmployeeSession = await ctx.request({ accessToken: employeeLogin.data.access_token }, 'GET', '/statistics/regulations');
   assert(preGrantEmployeeSession.status === 401, `employee session before role grant remained valid: ${preGrantEmployeeSession.status}`);
   const employeeWithoutCaptcha = await ctx.request(null, 'POST', '/auth/login', {
@@ -493,16 +456,16 @@ async function runBody(ctx, mockPort) {
   const raceBlocker = await holdRowLock(ctx, 'SELECT id FROM sys_user WHERE id = ? FOR UPDATE', [String(raceEmployee.data.id)]);
   let raceReleased = false;
   try {
-    const raceAssignmentPromise = ctx.request(admin.actor, 'PUT', `/admin/administrators/${raceEmployee.data.id}/roles`, {
+    const raceRoleUpdatePromise = ctx.request(admin.actor, 'PUT', `/admin/administrators/${raceEmployee.data.id}`, {
       role_ids: [String(role.data.id)],
     });
-    await waitForLockWaits(ctx, 1, 'login/grant assignment');
+    await waitForLockWaits(ctx, 1, 'login/administrator role update');
     const raceLoginPromise = captchaLogin(ctx, raceUsername, raceReady.password);
-    await waitForLockWaits(ctx, 2, 'login/grant classification');
+    await waitForLockWaits(ctx, 2, 'login/administrator role classification');
     await closeLock(raceBlocker, true);
     raceReleased = true;
-    const [raceAssignment, raceLogin] = await Promise.all([raceAssignmentPromise, raceLoginPromise]);
-    assert(raceAssignment.status === 200, `deterministic role assignment failed: ${raceAssignment.status}`);
+    const [raceRoleUpdate, raceLogin] = await Promise.all([raceRoleUpdatePromise, raceLoginPromise]);
+    assert(raceRoleUpdate.status === 200, `deterministic administrator role update failed: ${raceRoleUpdate.status}`);
     assert(raceLogin.result.status === 200, `deterministic post-grant administrator login failed: ${raceLogin.result.status}`);
     const raceProfile = await ctx.request(raceLogin.actor, 'GET', '/auth/profile');
     assert(raceProfile.status === 200, `post-grant login issued a stale generation: ${raceProfile.status}`);
@@ -519,17 +482,19 @@ async function runBody(ctx, mockPort) {
   try {
     const roleUpdatePromise = ctx.request(admin.actor, 'PUT', `/admin/roles/${employeeRole.data.id}`, {
       name: `员工运营管理员 barrier ${randomBytes(3).toString('hex')}`,
-      permissions: employeeRole.data.permissions,
+      // Exercise an actual authorization change. Metadata-only edits and an
+      // unchanged permission set intentionally preserve active sessions.
+      permissions: [...new Set([...employeeRole.data.permissions, 'statistics:export'])],
     });
     await waitForLockWaits(ctx, 1, 'role update');
-    const roleAssignmentPromise = ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, {
+    const administratorRoleUpdatePromise = ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}`, {
       role_ids: [String(employeeRole.data.id)],
     });
-    await waitForLockWaits(ctx, 2, 'role update/assignment');
+    await waitForLockWaits(ctx, 2, 'role definition/account update');
     await closeLock(roleBlocker, true);
     roleReleased = true;
-    const [roleUpdate, roleAssignment] = await Promise.all([roleUpdatePromise, roleAssignmentPromise]);
-    assert(roleUpdate.status === 200 && roleAssignment.status === 200, `role update/assignment barrier failed: ${roleUpdate.status}/${roleAssignment.status}`);
+    const [roleUpdate, administratorRoleUpdate] = await Promise.all([roleUpdatePromise, administratorRoleUpdatePromise]);
+    assert(roleUpdate.status === 200 && administratorRoleUpdate.status === 200, `role definition/account update barrier failed: ${roleUpdate.status}/${administratorRoleUpdate.status}`);
   } finally {
     if (!roleReleased) await closeLock(roleBlocker);
   }
@@ -538,10 +503,10 @@ async function runBody(ctx, mockPort) {
   );
   assert(
     Number(roleVersionAfter[0]?.auth_version || 0) >= Number(roleVersionBefore[0]?.auth_version || 0) + 2,
-    'role update/assignment barrier collapsed security-generation increments',
+    'role definition/account update barrier collapsed security-generation increments',
   );
   const oldRoleBarrierToken = await ctx.request({ accessToken: roleBarrierLogin.actor.accessToken }, 'GET', '/auth/profile');
-  assert(oldRoleBarrierToken.status === 401, `role update/assignment left an old session active: ${oldRoleBarrierToken.status}`);
+  assert(oldRoleBarrierToken.status === 401, `role definition/account update left an old session active: ${oldRoleBarrierToken.status}`);
 
   const passwordRaceUsername = `password_race_${randomBytes(4).toString('hex')}`;
   const passwordRacePassword = randomStrongPassword(passwordRaceUsername, '并发改密');
@@ -703,10 +668,10 @@ async function runBody(ctx, mockPort) {
   });
   assert(configReaderRole.status === 200 && configReaderRole.data?.id, `AI config reader role create failed: ${configReaderRole.status}`);
 
-  const configWriterAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, {
+  const configWriterRoleUpdated = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}`, {
     role_ids: [String(configWriterRole.data.id)],
   });
-  assert(configWriterAssigned.status === 200, `AI config writer assignment failed: ${configWriterAssigned.status}`);
+  assert(configWriterRoleUpdated.status === 200, `AI config writer role update failed: ${configWriterRoleUpdated.status}`);
   const configWriterLogin = await completeFirstLogin(
     ctx,
     await captchaLogin(ctx, employee.data.username, employeeAdminLogin.password),
@@ -720,10 +685,10 @@ async function runBody(ctx, mockPort) {
   });
   assert(ownedConfigWrite.status === 200 && ownedConfigWrite.data?.api_key_masked, `AI config writer write failed: ${ownedConfigWrite.status}`);
 
-  const configReaderAssigned = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, {
+  const configReaderRoleUpdated = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}`, {
     role_ids: [String(configReaderRole.data.id)],
   });
-  assert(configReaderAssigned.status === 200, `AI config reader assignment failed: ${configReaderAssigned.status}`);
+  assert(configReaderRoleUpdated.status === 200, `AI config reader role update failed: ${configReaderRoleUpdated.status}`);
   const configReaderLogin = await completeFirstLogin(
     ctx,
     await captchaLogin(ctx, employee.data.username, configWriterLogin.password),
@@ -737,7 +702,7 @@ async function runBody(ctx, mockPort) {
   assert(configReaderPut.status === 403, `AI config reader write unexpectedly allowed: ${configReaderPut.status}`);
   const configReaderTest = await ctx.request(configReaderLogin.actor, 'POST', '/ai/config/test');
   assert(configReaderTest.status === 403, `AI config reader test unexpectedly allowed: ${configReaderTest.status}`);
-  const restoredEmployee = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}/roles`, {
+  const restoredEmployee = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${employee.data.id}`, {
     role_ids: [String(employeeRole.data.id)],
   });
   assert(restoredEmployee.status === 200, `employee AI config fixture role restore failed: ${restoredEmployee.status}`);
@@ -882,9 +847,16 @@ async function runBody(ctx, mockPort) {
   const deniedExport = await ctx.request(restrictedLogin.actor, 'GET', '/statistics/export');
   assert(deniedExport.status === 403, `restricted statistics export expected 403, got ${deniedExport.status}`);
 
+  const permissionFreeRole = await ctx.request(admin.actor, 'POST', '/admin/roles', {
+    code: `permission_free_${randomBytes(4).toString('hex')}`,
+    name: '无管理权限', permissions: [],
+  });
+  assert(permissionFreeRole.status === 200 && permissionFreeRole.data?.id, `permission-free role create failed: ${permissionFreeRole.status}`);
   const oldRestrictedToken = restrictedLogin.actor.accessToken;
-  const removed = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${restricted.data.id}/roles`, { role_ids: [] });
-  assert(removed.status === 200, `role removal failed: ${removed.status}`);
+  const removed = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${restricted.data.id}`, {
+    role_ids: [String(permissionFreeRole.data.id)],
+  });
+  assert(removed.status === 200, `permission removal failed: ${removed.status}`);
   const oldAfterRoleRemoval = await ctx.request({ accessToken: oldRestrictedToken }, 'GET', '/statistics/regulations');
   assert(oldAfterRoleRemoval.status === 403, `oldTokenAfterRoleRemoval expected 403, got ${oldAfterRoleRemoval.status}`);
   const oldNoSidAfterRoleRemoval = await ctx.request({ accessToken: legacyNoSidToken }, 'GET', '/statistics/regulations');
@@ -896,16 +868,13 @@ async function runBody(ctx, mockPort) {
   assert(removedLogin.status === 401 && removedLogin.code === 40104, 'permission-free employee regained a PC session');
   // Restore only statistics access before testing explicit session revocation.
   // The restored administrator still cannot read or write AI/question/paper APIs.
-  const restoredRestrictedPassword = randomStrongPassword(restricted.data.username, '受限管理员');
-  const restoredRestricted = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${restricted.data.id}/roles`, {
+  const restoredRestricted = await ctx.request(admin.actor, 'PUT', `/admin/administrators/${restricted.data.id}`, {
     role_ids: [String(role.data.id)],
-    initial_password: restoredRestrictedPassword,
   });
   assert(restoredRestricted.status === 200, 'restricted role restoration failed');
   const postRemovalLogin = await completeFirstLogin(
-    ctx,
-    await captchaLogin(ctx, restricted.data.username, restoredRestrictedPassword),
-    restricted.data.username, restoredRestrictedPassword, 'RestrictedAfterRemoval',
+    ctx, await captchaLogin(ctx, restricted.data.username, restrictedLogin.password),
+    restricted.data.username, restrictedLogin.password, 'RestrictedAfterRemoval',
   );
   const deniedReference = referenceTaskUpload(String(createdCategory.data.id));
   const deniedRemovedGeneration = await ctx.request(postRemovalLogin.actor, 'POST', '/admin/questions/ai-import-tasks', deniedReference.body, deniedReference.headers);
@@ -936,13 +905,8 @@ async function runBody(ctx, mockPort) {
   const oldAfterKick = await ctx.request({ accessToken: kickedToken }, 'GET', '/statistics/regulations');
   assert(oldAfterKick.status === 401, `oldTokenAfterKick expected 401, got ${oldAfterKick.status}`);
 
-  const roles = (await ctx.request(admin.actor, 'GET', '/admin/roles')).data;
-  const superRole = Array.isArray(roles) ? roles.find((item) => item.code === 'super_admin') : null;
-  const selfEscalation = await ctx.request(admin.actor, 'PUT', '/admin/administrators/1/roles', { role_ids: [String(superRole?.id || '')] });
-  assert(selfEscalation.status === 400, `systemRoleSelfEscalation expected 400, got ${selfEscalation.status}`);
-  const removeLastSuperAdmin = await ctx.request(admin.actor, 'PUT', '/admin/administrators/1/roles', { role_ids: [] });
-  assert(removeLastSuperAdmin.status === 409, `removeLastSuperAdmin expected 409, got ${removeLastSuperAdmin.status}`);
-  assert(superRole || removeLastSuperAdmin.status === 409, 'system super admin role missing');
+  const superRoleEdit = await ctx.request(admin.actor, 'PUT', '/admin/administrators/1', { role_ids: fixtureAdminRoleIds });
+  assert(superRoleEdit.status === 400, `super administrator role edit expected 400, got ${superRoleEdit.status}`);
 
   const adminLoginCountBeforeConcurrent = await ctx.queryTestDb('SELECT login_count FROM sys_user WHERE id = 1');
   const [parallelAdminLoginA, parallelAdminLoginB] = await Promise.all([

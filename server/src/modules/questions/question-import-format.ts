@@ -1,6 +1,5 @@
 import ExcelJS from 'exceljs';
 import { Errors } from '../../common/errors';
-import { activeDifficulties } from '../../common/question-difficulty';
 
 export type QuestionImportFormat = 'xlsx' | 'txt';
 export type QuestionImportTemplatePurpose = 'human' | 'ai';
@@ -34,27 +33,6 @@ const DEFAULT_LIMITS: QuestionImportLimits = {
   maxBytes: 5 * 1024 * 1024,
   maxRows: 1000,
 };
-
-const TEMPLATE_ROWS: Array<Record<QuestionImportHeader, string>> = [
-  {
-    category: '', type: 'single', difficulty: 'easy',
-    stem: '<p>进入作业区域前首先应做什么？</p>',
-    options: JSON.stringify([{ key: 'A', text: '完成风险确认' }, { key: 'B', text: '直接开始作业' }]),
-    answer: JSON.stringify([0]), analysis: '<p>应先完成风险确认。</p>',
-  },
-  {
-    category: '', type: 'multiple', difficulty: 'hard',
-    stem: '<p>以下哪些属于作业前检查？</p>',
-    options: JSON.stringify([{ key: 'A', text: '检查防护用品' }, { key: 'B', text: '确认作业许可' }, { key: 'C', text: '跳过交底' }]),
-    answer: JSON.stringify([0, 1]), analysis: '<p>防护用品和作业许可均须确认。</p>',
-  },
-  {
-    category: '', type: 'judgment', difficulty: 'hard',
-    stem: '<p>未完成安全交底也可以开始作业。</p>',
-    options: JSON.stringify([{ key: 'A', text: '正确' }, { key: 'B', text: '错误' }]),
-    answer: JSON.stringify([1]), analysis: '<p>必须先完成安全交底。</p>',
-  },
-];
 
 const HUMAN_EXAMPLES: Array<Record<HumanQuestionImportHeader, string>> = [
   {
@@ -449,14 +427,10 @@ export async function buildQuestionImportTemplate(
 ): Promise<Buffer> {
   assertFormat(format);
   assertPurpose(purpose);
-  if (purpose === 'human') return format === 'xlsx' ? buildHumanXlsxTemplate() : buildHumanTxtTemplate();
-  const enabled = activeDifficulties();
-  return buildQuestionImportFile(format, TEMPLATE_ROWS.map((row) => ({
-    ...row, difficulty: enabled.includes(row.difficulty as typeof enabled[number]) ? row.difficulty : enabled[0],
-  })));
+  return format === 'xlsx' ? buildHumanXlsxTemplate() : buildHumanTxtTemplate();
 }
 
-/** Canonical seven-column writer used by AI reference templates and generated-result downloads. */
+/** Canonical seven-column writer used by generated-result downloads and legacy file compatibility. */
 export async function buildQuestionImportFile(
   format: QuestionImportFormat,
   rows: Array<Record<QuestionImportHeader, string>>,

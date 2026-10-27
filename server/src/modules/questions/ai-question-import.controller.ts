@@ -31,6 +31,12 @@ function formatOf(value: unknown): QuestionImportFormat {
   return value;
 }
 
+function categoryIdOf(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) throw Errors.param('category_id 非法');
+  return value;
+}
+
 function rowOf(value: string): number {
   if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 2) throw Errors.param('行号非法');
   return Number(value);
@@ -51,8 +57,13 @@ export class AiQuestionImportController {
   ) {
     if (!file?.buffer) throw Errors.param('缺少上传文件');
     try {
-      const values = keys(body, ['format']);
-      return await this.importer.start(String(user.id), file.buffer, formatOf(values.format));
+      const values = keys(body, ['format', 'category_id']);
+      return await this.importer.start(
+        String(user.id),
+        file.buffer,
+        formatOf(values.format),
+        categoryIdOf(values.category_id),
+      );
     } finally {
       file.buffer.fill(0);
     }

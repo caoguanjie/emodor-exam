@@ -15,9 +15,12 @@ import { Errors } from '../src/common/errors';
 import ExcelJS from 'exceljs';
 
 describe('question import format', () => {
-  it('keeps the AI template and generated export on the canonical seven-column contract', async () => {
+  it('uses the Chinese template for AI references while generated exports stay on the canonical seven-column contract', async () => {
     const txt = await buildQuestionImportTemplate('txt', 'ai');
-    expect(txt.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/)[0]).toBe('category\ttype\tdifficulty\tstem\toptions\tanswer\tanalysis');
+    const templateText = txt.toString('utf8').replace(/^\uFEFF/, '');
+    expect(templateText).toContain('# 试题导入 TXT 模板');
+    expect(templateText).toContain('[题干]');
+    expect(templateText).not.toContain('category\ttype\tdifficulty');
     const exported = await buildQuestionImportFile('txt', [{
       category: '10', type: 'single', difficulty: 'easy', stem: '<p>AI 导出题</p>',
       options: '[{"key":"A","text":"是"},{"key":"B","text":"否"}]', answer: '[0]', analysis: '',
@@ -90,16 +93,17 @@ describe('question import format', () => {
     expect(preview.warnings).toEqual(['旧模板分值已忽略，请在组卷时设置']);
   });
 
-  it('round-trips the same template rows through xlsx and UTF-8 TSV', async () => {
+  it('builds AI reference downloads with the same Chinese Excel and TXT format as ordinary import', async () => {
     const xlsx = await buildQuestionImportTemplate('xlsx', 'ai');
     const txt = await buildQuestionImportTemplate('txt', 'ai');
+    const ordinaryTxt = await buildQuestionImportTemplate('txt');
 
-    const xlsxRows = await parseQuestionImportFile(xlsx, 'xlsx');
-    const txtRows = await parseQuestionImportFile(txt, 'txt');
-
-    expect(xlsxRows).toEqual(txtRows);
-    expect(xlsxRows.map((row) => row.row)).toEqual([2, 3, 4]);
-    expect(Object.keys(xlsxRows[0])).not.toContain('rubric');
+    expect(txt).toEqual(ordinaryTxt);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(xlsx as any);
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(['试题导入模板', '填写示例', '填写说明']);
+    expect(workbook.worksheets[0].getRow(1).values).toEqual([undefined, '试题内容', '试题类型', '选项内容', '答案', '难度']);
+    expect(workbook.worksheets[0].actualRowCount).toBe(1);
   });
 
   it('builds an empty styled Chinese Excel input sheet with separate examples and instructions', async () => {
@@ -299,7 +303,7 @@ describe('question import HTTP boundary', () => {
     return { controller, importer };
   }
 
-  it('uses the human template by default and the canonical template only for purpose=ai', async () => {
+  it('keeps the optional purpose query while both download purposes use the human template contract', async () => {
     const { controller, importer } = controllerFixture();
     const response = { setHeader: vi.fn(), end: vi.fn() };
 

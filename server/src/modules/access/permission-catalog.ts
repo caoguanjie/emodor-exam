@@ -11,7 +11,11 @@ export const PERMISSION_CATALOG = [
   'exam_records:read',
   'statistics:read', 'statistics:export',
   'roles:read', 'roles:write',
+  'roles:create', 'roles:update', 'roles:delete', 'roles:permissions',
   'administrators:read', 'administrators:write',
+  'administrators:create', 'administrators:update', 'administrators:delete',
+  'administrators:reset_password',
+  'menus:read', 'menus:create', 'menus:update', 'menus:delete',
   'sessions:read', 'sessions:write',
   'media:read', 'media:write',
   'courses:read', 'courses:write', 'courses:publish',
@@ -20,6 +24,9 @@ export const PERMISSION_CATALOG = [
 
 export type PermissionCode = (typeof PERMISSION_CATALOG)[number];
 export const PERMISSION_SET = new Set<string>(PERMISSION_CATALOG);
+/** 聚合项仅用于旧 API 入参迁移，不出现在可配置目录或运行时授权中。 */
+export const LEGACY_AGGREGATE_PERMISSIONS: readonly string[] = ['administrators:write', 'roles:write'];
+export const CONFIGURABLE_PERMISSION_CATALOG = PERMISSION_CATALOG.filter((code) => !LEGACY_AGGREGATE_PERMISSIONS.includes(code));
 
 export const PERMISSION_NAMES: Record<PermissionCode, string> = {
   'training_categories:read': '查看培训类别',
@@ -46,8 +53,20 @@ export const PERMISSION_NAMES: Record<PermissionCode, string> = {
   'statistics:export': '导出统计',
   'roles:read': '查看角色',
   'roles:write': '维护角色',
+  'roles:create': '新增角色',
+  'roles:update': '修改角色',
+  'roles:delete': '删除角色',
+  'roles:permissions': '设置角色权限',
   'administrators:read': '查看管理员',
-  'administrators:write': '维护管理员角色',
+  'administrators:write': '维护管理员账号与角色',
+  'administrators:create': '新增管理员',
+  'administrators:update': '修改管理员',
+  'administrators:delete': '删除管理员',
+  'administrators:reset_password': '重置管理员密码',
+  'menus:read': '查看菜单',
+  'menus:create': '新增菜单',
+  'menus:update': '修改菜单',
+  'menus:delete': '删除菜单',
   'sessions:read': '查看在线会话',
   'sessions:write': '强制下线会话',
   'media:read': '读取媒体',

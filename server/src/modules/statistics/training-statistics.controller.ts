@@ -7,6 +7,11 @@ import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { Errors } from '../../common/errors';
 import { SkipEnvelope } from '../../common/response.interceptor';
 import { TrainingStatisticsService } from './training-statistics.service';
+import { AdminDashboardService } from './admin-dashboard.service';
+import {
+  DASHBOARD_LEARNING_OPTIONS_QUERY_KEYS, DASHBOARD_LEARNING_SUMMARY_QUERY_KEYS, DASHBOARD_TREND_QUERY_KEYS,
+  DashboardLearningOptionsQueryDto, DashboardLearningSummaryQueryDto, DashboardTrendQueryDto,
+} from './admin-dashboard.dto';
 import {
   TRAINING_STATISTICS_OVERVIEW_QUERY_KEYS, TRAINING_STATISTICS_QUERY_KEYS,
   TrainingStatisticsOverviewQueryDto, TrainingStatisticsQueryDto,
@@ -90,18 +95,58 @@ export class TrainingStatisticsController {
       source_ip: req.ip || null,
     });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent('培训考试难度排名.xlsx')}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent('培训考试成绩排名.xlsx')}"`);
     res.end(buffer);
   }
 }
 
 @Controller('admin/dashboard')
 export class AdminDashboardController {
-  constructor(private readonly statistics: TrainingStatisticsService) {}
+  constructor(private readonly dashboardService: AdminDashboardService) {}
 
   @Get()
   dashboard(@CurrentUser() user: AuthUser, @Req() req: Request) {
     assertQueryKeys(req.query, []);
-    return this.statistics.dashboard(String(user.id));
+    return this.dashboardService.overview(String(user.id));
+  }
+
+  @Get('exam-trend')
+  @Permissions('statistics:read')
+  examTrend(
+    @CurrentUser() user: AuthUser,
+    @Query(new StrictDtoValidationPipe(DASHBOARD_TREND_QUERY_KEYS)) query: DashboardTrendQueryDto,
+    @Req() req: Request,
+  ) {
+    assertQueryKeys(req.query, DASHBOARD_TREND_QUERY_KEYS);
+    return this.dashboardService.examTrend(String(user.id), query.days);
+  }
+
+  @Get('learning-options')
+  @Permissions('statistics:read')
+  learningOptions(
+    @CurrentUser() user: AuthUser,
+    @Query(new StrictDtoValidationPipe(DASHBOARD_LEARNING_OPTIONS_QUERY_KEYS)) query: DashboardLearningOptionsQueryDto,
+    @Req() req: Request,
+  ) {
+    assertQueryKeys(req.query, DASHBOARD_LEARNING_OPTIONS_QUERY_KEYS);
+    return this.dashboardService.learningOptions(String(user.id), query.toFilter());
+  }
+
+  @Get('learning-summary')
+  @Permissions('statistics:read')
+  learningSummary(
+    @CurrentUser() user: AuthUser,
+    @Query(new StrictDtoValidationPipe(DASHBOARD_LEARNING_SUMMARY_QUERY_KEYS)) query: DashboardLearningSummaryQueryDto,
+    @Req() req: Request,
+  ) {
+    assertQueryKeys(req.query, DASHBOARD_LEARNING_SUMMARY_QUERY_KEYS);
+    return this.dashboardService.learningSummary(String(user.id), query.paper_id, query.release_id);
+  }
+
+  @Get('recent-exams')
+  @Permissions('statistics:read')
+  recentExams(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    assertQueryKeys(req.query, []);
+    return this.dashboardService.recentExams(String(user.id));
   }
 }

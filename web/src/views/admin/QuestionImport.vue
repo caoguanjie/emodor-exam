@@ -88,28 +88,71 @@
     </section>
 
     <section v-else class="ai-import-panel">
-      <el-alert type="info" :closable="false" show-icon title="上传标准 7 列 Excel / UTF-8 TSV 模板（最多 50 道参考题、5MB）。每题生成简单与困难两个版本；参考题不入库，文件不保留。" />
-      <el-alert v-if="!auth.can('ai:read') || !auth.can('ai:write')" type="warning" :closable="false" title="发起并查看生成任务需要 AI 读取和编辑权限。" />
-      <el-form label-width="110px" class="import-form ai-import-form">
-        <el-form-item label="文件格式" required>
-          <el-radio-group v-model="aiFormat" :disabled="ai.interactionLocked.value">
-            <el-radio-button value="xlsx">Excel (.xlsx)</el-radio-button>
-            <el-radio-button value="txt">TXT (.txt)</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="参考题文件" required>
-          <div class="file-actions">
-            <el-button :disabled="ai.taskBusy.value || ai.rowBusy.value" @click="downloadAiTemplate">下载 {{ aiFormat.toUpperCase() }} 模板</el-button>
-            <el-upload :key="aiUploadKey" :show-file-list="false" :auto-upload="false"
-              :accept="aiFormat === 'xlsx' ? '.xlsx' : '.txt,text/plain'"
-              :disabled="!catalogReady || ai.interactionLocked.value || !auth.can('ai:write') || !auth.can('ai:read')"
-              :on-change="generateFromFile">
-              <el-button type="primary" :loading="ai.taskBusy.value || ai.generating.value"
-                :disabled="!catalogReady || ai.interactionLocked.value || !auth.can('ai:write') || !auth.can('ai:read')">选择参考文件并生成</el-button>
-            </el-upload>
+      <header class="import-heading">
+        <h2>AI 生成试题</h2>
+        <p>上传参考题，生成简单与困难两个版本，确认后导入题库。</p>
+      </header>
+
+      <el-alert type="info" :closable="false" show-icon title="上传与文件导入一致的中文 Excel / TXT 模板（最多 50 道参考题、5MB）。每题生成简单与困难两个版本；参考题不入库，文件不保留。" />
+
+      <div class="import-workspace ai-import-workspace">
+        <aside class="import-prep-panel">
+          <p class="import-section-kicker">01 准备参考题</p>
+          <div class="import-prep-content">
+            <h3>下载参考题模板</h3>
+            <p class="import-panel-description">首次生成请先下载模板，按照示例填写参考题。</p>
+            <div class="template-actions">
+              <el-button :disabled="ai.taskBusy.value || ai.rowBusy.value" @click="downloadAiTemplate('xlsx')">下载 Excel 模板（推荐）</el-button>
+              <el-button :disabled="ai.taskBusy.value || ai.rowBusy.value" @click="downloadAiTemplate('txt')">下载 TXT 模板</el-button>
+            </div>
+            <p class="import-existing-hint">已有参考题文件，可跳过下载。</p>
           </div>
-        </el-form-item>
-      </el-form>
+        </aside>
+
+        <section class="import-upload-panel">
+          <p class="import-section-kicker">02 上传并生成</p>
+          <el-alert v-if="!auth.can('ai:read') || !auth.can('ai:write')" type="warning" :closable="false" title="发起并查看生成任务需要 AI 读取和编辑权限。" />
+          <el-alert v-if="categoryError" class="category-load-error" type="error" :closable="false" :title="categoryError" show-icon>
+            <el-button link :loading="categoryLoading" @click="loadCategories">重新加载培训类别</el-button>
+          </el-alert>
+          <el-form label-width="92px" class="import-category-form">
+            <el-form-item label="培训类别" required>
+              <div class="import-category-control">
+                <el-select
+                  v-model="selectedCategoryId"
+                  filterable
+                  placeholder="请选择培训类别"
+                  class="import-category-select"
+                  :loading="categoryLoading"
+                  :disabled="ai.interactionLocked.value || categoryLoading || !!categoryError"
+                  no-data-text="暂无可用培训类别"
+                >
+                  <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
+                </el-select>
+                <p>生成的试题将归入所选类别。</p>
+              </div>
+            </el-form-item>
+          </el-form>
+          <el-upload
+            :key="aiUploadKey"
+            class="question-file-upload"
+            drag
+            :show-file-list="false"
+            :auto-upload="false"
+            accept=".xlsx,.txt,text/plain"
+            :disabled="!selectedCategoryId || !catalogReady || ai.interactionLocked.value || categoryLoading || !!categoryError || !auth.can('ai:write') || !auth.can('ai:read')"
+            :on-change="generateFromFile"
+          >
+            <svg class="question-file-upload__icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" />
+            </svg>
+            <p class="question-file-upload__title">拖入参考题文件，或点击选择</p>
+            <p class="question-file-upload__support">支持 .xlsx / .txt，最多 50 道参考题，单个文件不超过 5MB</p>
+            <el-button type="primary" :loading="ai.taskBusy.value || ai.generating.value"
+              :disabled="!selectedCategoryId || !catalogReady || ai.interactionLocked.value || categoryLoading || !!categoryError || !auth.can('ai:write') || !auth.can('ai:read')">选择参考文件并生成</el-button>
+          </el-upload>
+        </section>
+      </div>
 
       <div v-if="ai.task.value" class="task-summary">
         <el-tag :type="ai.task.value.status === 'failed' ? 'danger' : ai.task.value.status === 'completed' ? 'success' : 'info'">
@@ -266,7 +309,6 @@ const uploadKey = ref(0);
 const fileSelectedRows = ref<number[]>([]);
 const filePreviewVisible = ref(false);
 const dialogMounted = ref(true);
-const aiFormat = ref<'xlsx' | 'txt'>('xlsx');
 const aiUploadKey = ref(0);
 const taskStatusLabel = { queued: '等待生成', running: '正在生成', completed: '生成完成', failed: '生成失败' };
 const typeLabel: Record<QuestionType, string> = { single: '单选题', multiple: '多选题', judgment: '判断题' };
@@ -325,7 +367,6 @@ function selectAllFileRows(checked: boolean) {
   if (!preview.value || commitBusy.value || statusBusy.value || commitUnknown.value) return;
   fileSelectedRows.value = checked ? [...new Set(preview.value.valid_rows)] : [];
 }
-watch(aiFormat, () => { aiUploadKey.value += 1; });
 
 async function changeMode(value: string | number) {
   if (value !== 'file' && value !== 'ai') return;
@@ -335,20 +376,25 @@ async function changeMode(value: string | number) {
   if (await unsaved.confirmDiscard()) mode.value = value;
 }
 
-function downloadAiTemplate() {
-  void download('/admin/questions/import-template', `AI参考题模板.${aiFormat.value}`, { format: aiFormat.value, purpose: 'ai' });
+function downloadAiTemplate(fileFormat: 'xlsx' | 'txt') {
+  void download('/admin/questions/import-template', `AI参考题模板.${fileFormat}`, { format: fileFormat, purpose: 'ai' });
 }
 
 async function generateFromFile(value: UploadFile) {
   const file = value.raw;
-  if (!(file instanceof File) || !catalogReady.value || !auth.can('ai:write') || !auth.can('ai:read')) return;
-  const expected = aiFormat.value === 'xlsx' ? /\.xlsx$/i : /\.txt$/i;
-  if (!expected.test(file.name) || file.size > 5 * 1024 * 1024) {
-    ElMessage.warning(!expected.test(file.name) ? `请选择 .${aiFormat.value} 文件` : '参考文件不能超过 5MB');
+  if (!(file instanceof File) || !selectedCategoryId.value || !catalogReady.value || !auth.can('ai:write') || !auth.can('ai:read')) return;
+  const fileFormat = /\.xlsx$/i.test(file.name) ? 'xlsx' : /\.txt$/i.test(file.name) ? 'txt' : null;
+  if (!fileFormat || file.size > 5 * 1024 * 1024) {
+    ElMessage.warning(!fileFormat ? '请选择 Excel (.xlsx) 或 TXT (.txt) 文件' : '参考文件不能超过 5MB');
     aiUploadKey.value += 1;
     return;
   }
-  try { await ai.startTask(() => upload('/admin/questions/ai-import-tasks', file, 'file', { format: aiFormat.value })); }
+  try {
+    await ai.startTask(() => upload('/admin/questions/ai-import-tasks', file, 'file', {
+      format: fileFormat,
+      category_id: selectedCategoryId.value,
+    }));
+  }
   finally { aiUploadKey.value += 1; }
 }
 
@@ -541,8 +587,9 @@ onBeforeUnmount(() => { workflow.deactivate(); ai.deactivate(); });
 .preview-summary { margin-bottom: 14px; }
 .batch-id { color: #909399; font-size: 13px; }
 .preview-actions { justify-content: flex-end; margin-top: 18px; }
+.ai-import-workspace { margin-top: 24px; }
 .ai-import-panel > .el-alert + .el-alert { margin-top: 12px; }
-.ai-import-form, .generated-edit-form { margin-top: 20px; }
+.generated-edit-form { margin-top: 20px; }
 .task-summary, .preview-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
 .preview-toolbar { justify-content: space-between; }
 .generated-option { display: flex; align-items: center; gap: 12px; width: 100%; }

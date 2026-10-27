@@ -156,7 +156,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, onMounted, reactive, ref, watch, type Ref } from 'vue';
+import { computed, inject, reactive, ref, watch, type Ref } from 'vue';
 import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import http from '../../api/http';
@@ -169,7 +169,8 @@ import ManualQuestionEditor from '../../components/ManualQuestionEditor.vue';
 import { manualContentFromDraft } from '../../components/manual-question-content';
 import QuestionBusinessDialog, { type QuestionDialogMode } from '../../components/QuestionBusinessDialog.vue';
 import QuestionPreview from '../../components/QuestionPreview.vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import { useDashboardListNavigation } from '../../utils/admin-dashboard-navigation';
 import {
   questionDraftFromView,
   questionDraftWithContent,
@@ -192,6 +193,8 @@ const typeOptions: Array<{ value: QuestionType; label: string }> = [
 ];
 const auth = useAuthStore();
 const router = useRouter();
+const route = useRoute();
+const formRouteKey = ref(route.fullPath);
 const contentDialogTarget = inject<Ref<HTMLElement | undefined>>('contentDialogTarget', ref<HTMLElement>());
 const questionDialogAppendTarget = computed<string | HTMLElement>(() => contentDialogTarget.value || 'body');
 const { difficultyOptions, difficultyLabel: catalogDifficultyLabel, load: loadAuthoringOptions,
@@ -288,7 +291,7 @@ function discardEditorDraft() {
   editorDirty.value = false;
 }
 
-const editorUnsaved = useUnsavedChanges(editorDirty, { onDiscard: discardEditorDraft });
+const editorUnsaved = useUnsavedChanges(editorDirty, { routeKey: formRouteKey, onDiscard: discardEditorDraft });
 watch(
   () => [editorSessionActive.value, JSON.stringify(editorSnapshot()), JSON.stringify(editorBaseline.value), editorHasUncommittedContent.value] as const,
   ([visible, current, baseline, uncommitted]) => {
@@ -341,17 +344,20 @@ async function load() {
   }
   loading.value = true;
   try {
-    const result: any = await http.get('/ai/questions', { params: cleanParams(query) });
+    const result: any = await http.get('/ai/questions', { params: cleanParams({ page: query.page, page_size: query.page_size,
+      category_id: query.category_id, enabled: typeof query.enabled === 'boolean' ? query.enabled : undefined,
+      type: query.type, difficulty: query.difficulty, keyword: query.keyword,
+    }) });
     if (request !== listRequest) return;
     list.value = result.list || [];
     total.value = result.total || 0;
   } finally { if (request === listRequest) loading.value = false; }
 }
 
-async function submitFilters() { query.page = 1; await load(); }
+async function submitFilters() { query.page = 1; await navigation.syncQuery({ enabled: query.enabled === '' ? 'all' : String(query.enabled) }); await load(); }
 async function resetFilters() {
   Object.assign(query, { page: 1, category_id: '', enabled: true, type: '', difficulty: '', keyword: '' });
-  await load();
+  await submitFilters();
 }
 
 function toDraft(row: QuestionView): QuestionDraftPayload {
@@ -673,10 +679,20 @@ async function deleteQuestion(row: QuestionView) {
   } finally { delete questionRowBusy[row.question_id]; }
 }
 
-onMounted(async () => {
-  if (auth.can('questions:read') || auth.can('questions:write')) await loadAuthoringOptions();
-  await loadCategories();
-  await load();
+const navigation = useDashboardListNavigation(route, router, {
+  path: '/admin/questions', routeKey: formRouteKey,
+  beforeEntry: () => editorUnsaved.confirmDiscard(),
+  apply(entry, explicit) {
+    if (entry.kind !== 'questions') return;
+    if (explicit) Object.assign(query, { page: 1, category_id: '', type: '', difficulty: '', keyword: '' });
+    query.enabled = entry.enabled ?? '';
+  },
+  async prepare() {
+    if (auth.can('questions:read') || auth.can('questions:write')) await loadAuthoringOptions();
+    await loadCategories();
+  },
+  load,
+  onInvalid: () => { ElMessage.warning('已清除无效的试题入口参数'); },
 });
 </script>
 

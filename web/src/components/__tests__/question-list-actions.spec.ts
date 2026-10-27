@@ -7,12 +7,18 @@ import Questions from '../../views/admin/Questions.vue';
 const api = vi.hoisted(() => ({
   get: vi.fn(), put: vi.fn(), post: vi.fn(), remove: vi.fn(),
   canWrite: true, success: vi.fn(), warning: vi.fn(), confirm: vi.fn(),
+  route: { path: '/admin/questions', fullPath: '/admin/questions', hash: '', query: {} },
 }));
 vi.mock('../../api/http', () => ({ default: { get: api.get, put: api.put, post: api.post, delete: api.remove } }));
 vi.mock('../../stores/auth', () => ({ useAuthStore: () => ({
   can: (permission: string) => permission !== 'questions:write' || api.canWrite,
 }) }));
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('vue-router', () => {
+  return {
+    useRoute: () => api.route,
+    useRouter: () => ({ push: vi.fn(), replace: vi.fn(async (value) => { api.route.query = value.query; }) }),
+  };
+});
 vi.mock('../../composables/useUnsavedChanges', () => ({
   useUnsavedChanges: () => ({ markClean: vi.fn(), confirmDiscard: vi.fn().mockResolvedValue(true) }),
 }));
@@ -38,6 +44,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  api.route.query = {};
   vi.clearAllMocks();
   api.canWrite = true;
   api.confirm.mockResolvedValue('confirm');

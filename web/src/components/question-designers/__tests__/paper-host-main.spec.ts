@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
-import ElementPlus, { ElOption, ElSelect } from 'element-plus';
+import ElementPlus, { ElMessageBox, ElOption, ElSelect } from 'element-plus';
 import { defineComponent, h, KeepAlive } from 'vue';
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import PaperDetail from '../../../views/admin/PaperDetail.vue';
@@ -12,6 +12,7 @@ import PaperLibrarySidebar from '../PaperLibrarySidebar.vue';
 import { confirmUnsavedRoutes } from '../../../composables/useUnsavedChanges';
 import type { AuthoringBundle } from '../../../api/question-document-types';
 import { paperFixture, copy } from './paper-designer-fixtures';
+import { tabCacheKey } from '../../../stores/tab-cache';
 
 const transport = vi.hoisted(() => ({ calls: [] as Array<{ method: string; path: string; body?: any; config?: any }>, permissions: new Set<string>(), respond: async (_method: string, _path: string, _body?: any, _config?: any): Promise<any> => ({}) }));
 vi.mock('../../../api/http', () => ({ default: Object.fromEntries(['get', 'post', 'put', 'delete'].map((method) => [method, async (path: string, body?: any, config?: any) => {
@@ -51,14 +52,32 @@ afterEach(() => { wrappers.splice(0).forEach((wrapper) => wrapper.unmount()); do
 async function show(component: typeof PaperDetail | typeof Papers, url: string) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/admin/papers', component: Papers }, { path: '/admin/papers/:id', component: PaperDetail }] });
   await router.push(url); await router.isReady();
-  // MainLayout caches each full URL separately, including the designer query.
+  // Mirror MainLayout: list filters share one cache; designer details keep their full URL.
   const wrapper = mount(defineComponent({ setup: () => () => h(RouterView, null, {
-    default: ({ Component, route }: any) => h(KeepAlive, { max: 20 }, () => Component ? h(Component, { key: route.fullPath }) : null),
+    default: ({ Component, route }: any) => h(KeepAlive, { max: 20 }, () => Component ? h(Component, { key: tabCacheKey(route.fullPath, {}) }) : null),
   }) }), { attachTo: document.body, global: { plugins: [ElementPlus, router] } }); wrappers.push(wrapper); await flushPromises();
   return { wrapper, router, state: (wrapper.getComponent(component).vm.$ as any).setupState as any };
 }
 
 describe('main fixed paper entry', () => {
+  it('opens a dashboard create once and protects the consumed URL when leaving or refreshing is cancelled', async () => {
+    const { wrapper, state, router } = await show(Papers, '/admin/papers?entry=dashboard&create=1');
+    expect(state.trainingCreateVisible).toBe(true);
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
+    state.trainingCreate.title = '继续编辑的草稿';
+    await flushPromises();
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel');
+    try {
+      expect(await confirmUnsavedRoutes(['/admin/papers'])).toBe(false);
+      await router.push('/admin/papers?entry=dashboard&status=all');
+      await flushPromises();
+      expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
+      expect((wrapper.getComponent(Papers).vm.$ as any).setupState.trainingCreate.title).toBe('继续编辑的草稿');
+      expect(state.trainingCreateVisible).toBe(true);
+      expect(transport.calls.filter(call => call.method === 'post')).toEqual([]);
+    } finally { confirm.mockRestore(); }
+  });
+
   it('creates a 120 point draft and rejects a pass score above its target', async () => {
     const { state } = await show(Papers, '/admin/papers');
     state.openTrainingCreate(); state.trainingCreate.title = '120分试卷';
@@ -71,7 +90,7 @@ describe('main fixed paper entry', () => {
     expect(transport.calls.find(call => call.method === 'post' && call.path === '/admin/papers')?.body).toMatchObject({ total_score: 120, pass_score: 72 });
   });
 
-  it('queries and resets the training list explicitly with only draft and published filters', async () => {
+  it('queries and resets the training list explicitly with all supported status filters', async () => {
     const { wrapper, state } = await show(Papers, '/admin/papers');
     const listReads = () => transport.calls.filter((call) => call.method === 'get' && call.path === '/admin/papers');
     const selects = wrapper.findAllComponents(ElSelect);
@@ -80,6 +99,8 @@ describe('main fixed paper entry', () => {
     expect(status.findAllComponents(ElOption).map((option) => ({ value: option.props('value'), label: option.props('label') }))).toEqual([
       { value: 'draft', label: '草稿' },
       { value: 'published', label: '已发布' },
+      { value: 'withdrawn', label: '已撤回' },
+      { value: 'archived', label: '已归档' },
     ]);
 
     const initialReads = listReads().length;

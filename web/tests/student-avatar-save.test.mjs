@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
-import { createRenderer, h, nextTick } from '@vue/runtime-core';
+import { createRenderer, h, nextTick, reactive } from '@vue/runtime-core';
 
 const webRoot = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const clientComponentId = '\0student-avatar-save-client-test';
@@ -20,12 +20,24 @@ const testContext = {
   post: async () => ({}),
   put: async () => ({}),
   messages: [],
+  calls: [],
+  route: null,
 };
 let clientComponentCode = '';
 let vite;
 let Users;
 
-const routeStubCode = `export function useRoute() { return { path: '/admin/students' }; }`;
+const routeStubCode = `
+  const context = globalThis.__studentAvatarSaveTest;
+  export function useRoute() { return context.route; }
+  export function useRouter() { return {
+    async push() {},
+    async replace(value) {
+      context.route.query = value.query;
+      context.route.fullPath = context.route.path + (Object.keys(value.query).length ? '?' + new URLSearchParams(value.query) : '');
+    },
+  }; }
+`;
 const elementStubCode = `
   const context = globalThis.__studentAvatarSaveTest;
   export const ElMessage = {
@@ -40,7 +52,8 @@ const elementStubCode = `
 const httpStubCode = `
   const context = globalThis.__studentAvatarSaveTest;
   export default {
-    async get(path) {
+    async get(path, config) {
+      context.calls.push({ path, params: config?.params });
       if (path === '/departments/tree') return { list: [] };
       if (path === '/admin/training-categories') return { items: [{ id: 'category-1', name: '默认类别' }] };
       if (path === '/admin/students') return { items: [], total: 0 };
@@ -237,6 +250,27 @@ beforeEach(() => {
   testContext.post = async () => ({});
   testContext.put = async () => ({});
   testContext.messages = [];
+  testContext.calls = [];
+  testContext.route = reactive({ path: '/admin/students', fullPath: '/admin/students', query: {} });
+});
+
+test('dashboard student entries clear old filters, restore source and status, and consume without a second request', async () => {
+  const mounted = await mountUsers();
+  try {
+    Object.assign(mounted.state.studentQuery, { keyword: '旧关键词', category_id: 'category-old', source: 'institution', page: 5 });
+    testContext.calls = [];
+    testContext.route.query = { entry: 'dashboard', source: 'external', status: '1' };
+    await nextTick();
+    await new Promise(resolvePromise => setImmediate(resolvePromise));
+    const requests = testContext.calls.filter(call => call.path === '/admin/students');
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].params, { page: 1, page_size: 20, source: 'external', status: 1 });
+    assert.deepEqual(testContext.route.query, { source: 'external', status: '1' });
+    mounted.state.studentQuery.source = 'institution';
+    await mounted.state.searchStudents();
+    await nextTick();
+    assert.equal(testContext.route.query.source, 'institution');
+  } finally { mounted.unmount(); }
 });
 
 test('disables the create form while its POST result is in flight', async () => {

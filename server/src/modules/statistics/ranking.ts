@@ -1,7 +1,8 @@
 import type {
   ExamDifficulty, LearnerSource, RankRow, RuleSnapshot, ScoreGroup, TrainingCourseCompletion,
-  StatsFilter, TrainingExamSummary,
+  StatsFilter, TrainingExamSummary, TrainingExamOverviewRow,
 } from '../../common/training-contracts';
+import type { ExamRecord } from '../../entities/exam-record.entity';
 
 export interface StatisticsRecord {
   id: string;
@@ -23,6 +24,23 @@ export interface StatisticsRecord {
 }
 
 const DIFFICULTIES: ExamDifficulty[] = ['easy', 'medium', 'hard', 'mixed', 'unknown'];
+
+/** Map the minimal persisted score projection without loading answers. */
+export function statisticsRecordView(row: ExamRecord): StatisticsRecord {
+  const date = (value: Date | string | null | undefined, fallback?: Date): Date =>
+    value ? new Date(value) : fallback ? new Date(fallback) : new Date(0);
+  const difficulty = row.difficulty as ExamDifficulty;
+  return {
+    id: String(row.id), paperId: String(row.paperId), releaseId: row.releaseId ? String(row.releaseId) : null,
+    userId: String(row.userId), categoryId: row.categoryId ? String(row.categoryId) : null,
+    source: row.source || null, difficulty: DIFFICULTIES.includes(difficulty) ? difficulty : 'unknown',
+    ruleSnapshot: row.ruleSnapshot || null, status: row.status, gradingState: row.gradingState,
+    score: row.score == null ? null : Number(row.score), startedAt: date(row.startedAt),
+    submittedAt: row.submittedAt ? date(row.submittedAt) : null,
+    deadlineAt: date(row.deadlineAt, row.startedAt), submissionMethod: row.submissionMethod,
+    gradedAt: row.gradedAt ? date(row.gradedAt) : null,
+  };
+}
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
@@ -83,6 +101,22 @@ export function bestFinalizedRecords(
   return [...byUser.values()];
 }
 
+export function summarizeReleaseRecords(
+  records: StatisticsRecord[],
+  releaseId: string,
+  rule: RuleSnapshot | null,
+): Pick<TrainingExamOverviewRow, 'participant_count' | 'finalized_users' | 'average_score'> {
+  const sameRelease = records.filter(record => record.releaseId === releaseId);
+  const best = bestFinalizedRecords(sameRelease, undefined, releaseId, rule);
+  return {
+    participant_count: new Set(sameRelease.map(record => record.userId)).size,
+    finalized_users: best.length,
+    average_score: best.length
+      ? Math.round(best.reduce((sum, record) => sum + Number(record.score), 0) / best.length * 100) / 100
+      : null,
+  };
+}
+
 export function examDurationSeconds(record: StatisticsRecord): number {
   const end = record.submissionMethod === 'timeout'
     ? record.deadlineAt
@@ -93,7 +127,7 @@ export function examDurationSeconds(record: StatisticsRecord): number {
 export function buildRankingRows(
   records: StatisticsRecord[],
   userNames: Map<string, string>,
-  difficulty: ExamDifficulty,
+  difficulty: ExamDifficulty | undefined,
   releaseId: string | null,
   rule: RuleSnapshot | null,
   options: Pick<StatsFilter, 'sort_by' | 'sort_order'> & { userGenders?: Map<string, RankRow['gender']> } = {},
@@ -121,7 +155,7 @@ export function buildRankingRows(
       name: userNames.get(record.userId) || '未知学员',
       gender: options.userGenders?.get(record.userId) || null,
       source: record.source,
-      difficulty,
+      difficulty: difficulty || difficultyOf(record),
       score,
       duration_seconds: examDurationSeconds(record),
       record_id: record.id,

@@ -1,6 +1,6 @@
 -- =====================================================================
 -- EmodorRuleExam 制度学习及考试系统 · 数据库初始化脚本
--- 依据 docs/design/03-数据库设计.md 建表（当前 40 张业务表 + 1 张迁移元数据表，InnoDB + utf8mb4）
+-- 依据 docs/design/03-数据库设计.md 建表（当前 41 张业务表 + 1 张迁移元数据表，InnoDB + utf8mb4）
 -- 时间字段 DATETIME(3)；无数据库级外键（03 册 1.6 节，应用层维护）
 -- 枚举字段 VARCHAR + 应用层校验（03 册 1.7 节）
 -- 种子数据（根部门 / 超级管理员）由 database/seed.mjs 按环境变量生成，
@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   `last_login_at` DATETIME(3)  NULL COMMENT '最后一次成功登录时间；refresh 不更新',
   `last_login_ip` VARCHAR(64)  NULL COMMENT '最后一次成功登录来源 IP',
   `roles_configured` TINYINT NOT NULL DEFAULT 0 COMMENT '1=已显式配置业务角色（含清空）',
+  `deleted_at`    DATETIME(3)  NULL COMMENT '管理员逻辑删除；保留账号、角色关系与业务历史',
   `created_at`    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at`    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
@@ -67,12 +68,14 @@ CREATE TABLE IF NOT EXISTS `sys_role` (
   `id`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `code`       VARCHAR(64)  NOT NULL COMMENT '角色代码，单家机构内唯一',
   `name`       VARCHAR(128) NOT NULL COMMENT '角色名称',
+  `remark`     VARCHAR(500) NULL COMMENT '角色备注',
   `is_system`  TINYINT      NOT NULL DEFAULT 0 COMMENT '1=系统角色，不可删除',
   `status`     TINYINT      NOT NULL DEFAULT 1 COMMENT '1=启用，0=停用',
   `created_at` DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at` DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_sys_role_code` (`code`),
+  UNIQUE KEY `uk_sys_role_name` (`name`),
   KEY `idx_sys_role_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='可配置业务角色';
 
@@ -748,7 +751,7 @@ CREATE TABLE IF NOT EXISTS `video_learning_session` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='可恢复视频学习会话';
 
 -- ---------------------------------------------------------------------
--- 8. 后台公共配置域（3 张，A5）
+-- 8. 后台公共配置域（4 张，含字典分类元数据）
 -- ---------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS `sys_menu` (
@@ -767,6 +770,19 @@ CREATE TABLE IF NOT EXISTS `sys_menu` (
   KEY `idx_sys_menu_parent_sort` (`parent_id`, `sort`),
   KEY `idx_sys_menu_permission` (`permission_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='后台菜单与按钮目录';
+
+CREATE TABLE IF NOT EXISTS `sys_dictionary_type` (
+  `type` VARCHAR(64) NOT NULL,
+  `label` VARCHAR(128) NOT NULL,
+  `description` VARCHAR(255) NULL,
+  `sort` INT NOT NULL DEFAULT 1000,
+  `is_system` TINYINT NOT NULL DEFAULT 0,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`type`),
+  UNIQUE KEY `uk_sys_dictionary_type_label` (`label`),
+  KEY `idx_sys_dictionary_type_sort` (`sort`, `type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='字典分类元数据；内置分类仅名称与描述可编辑';
 
 CREATE TABLE IF NOT EXISTS `sys_dictionary` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -796,8 +812,30 @@ CREATE TABLE IF NOT EXISTS `site_setting` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='站点公开展示配置白名单';
 
 INSERT INTO `sys_permission` (`code`, `name`) VALUES
-  ('exam_records:read', '查看考试记录')
+  ('exam_records:read', '查看考试记录'),
+  ('administrators:create', '新增管理员'),
+  ('administrators:update', '修改管理员'),
+  ('administrators:delete', '删除管理员'),
+  ('administrators:reset_password', '重置管理员密码'),
+  ('roles:create', '新增角色'),
+  ('roles:update', '修改角色'),
+  ('roles:delete', '删除角色'),
+  ('roles:permissions', '设置角色权限'),
+  ('menus:read', '查看菜单'),
+  ('menus:create', '新增菜单'),
+  ('menus:update', '修改菜单'),
+  ('menus:delete', '删除菜单')
 ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
+
+INSERT INTO `sys_dictionary_type` (`type`, `label`, `sort`, `is_system`) VALUES
+  ('question_type', '试题类型', 0, 1),
+  ('difficulty', '题目难度', 1, 1),
+  ('learner_source', '学员来源', 2, 1),
+  ('paper_status', '试卷状态', 3, 1),
+  ('exam_status', '考试状态', 4, 1),
+  ('question_status', '题目状态', 5, 1),
+  ('regulation_status', '制度状态', 6, 1)
+ON DUPLICATE KEY UPDATE `type` = `type`;
 
 INSERT INTO `sys_dictionary` (`type`, `code`, `label`, `sort`, `status`, `is_system`, `remark`) VALUES
   ('learner_source','institution','本机构学员',10,1,1,'业务固定枚举'),
@@ -847,11 +885,35 @@ INSERT INTO `sys_menu` (`id`, `parent_id`, `name`, `type`, `route_path`, `permis
   (20,2,'管理员','menu','/admin/administrators','administrators:read','UserFilled',20,1),
   (21,2,'角色权限','menu','/admin/roles','roles:read','SetUp',30,1),
   (22,2,'在线会话','menu','/admin/sessions','sessions:read','Monitor',70,1),
-  (23,2,'菜单配置','menu','/admin/system/menus','system_settings:read','Menu',60,1),
+  (23,2,'菜单配置','menu','/admin/system/menus','menus:read','Menu',60,1),
   (24,2,'字典配置','menu','/admin/system/dictionaries','system_settings:read','Notebook',50,1),
   (25,2,'网站配置','menu','/admin/system/site-settings','system_settings:read','Picture',40,1),
   (26,2,'审计日志','menu','/admin/system/audit-logs','system_settings:read','DocumentChecked',80,1)
 ON DUPLICATE KEY UPDATE `id` = `id`;
+
+-- 管理员、角色与菜单使用独立按钮权限；已有相同父级/权限的按钮保持原配置。
+INSERT IGNORE INTO sys_menu (parent_id, name, type, route_path, permission_code, icon, sort, status)
+SELECT id, '新增管理员', 'button', NULL, 'administrators:create', NULL, 10, 1 FROM sys_menu WHERE type='menu' AND route_path='/admin/administrators' AND id NOT IN (SELECT parent_id FROM sys_menu WHERE type='button' AND permission_code='administrators:create' AND parent_id IS NOT NULL)
+UNION ALL
+SELECT id, '修改管理员', 'button', NULL, 'administrators:update', NULL, 20, 1 FROM sys_menu WHERE type='menu' AND route_path='/admin/administrators' AND id NOT IN (SELECT parent_id FROM sys_menu WHERE type='button' AND permission_code='administrators:update' AND parent_id IS NOT NULL)
+UNION ALL
+SELECT id, '删除管理员', 'button', NULL, 'administrators:delete', NULL, 30, 1 FROM sys_menu WHERE type='menu' AND route_path='/admin/administrators' AND id NOT IN (SELECT parent_id FROM sys_menu WHERE type='button' AND permission_code='administrators:delete' AND parent_id IS NOT NULL)
+UNION ALL
+SELECT id, '重置管理员密码', 'button', NULL, 'administrators:reset_password', NULL, 40, 1 FROM sys_menu WHERE type='menu' AND route_path='/admin/administrators' AND id NOT IN (SELECT parent_id FROM sys_menu WHERE type='button' AND permission_code='administrators:reset_password' AND parent_id IS NOT NULL)
+UNION ALL
+SELECT id, '新增角色', 'button', NULL, 'roles:create', NULL, 60, 1 FROM sys_menu WHERE type='menu' AND route_path='/admin/roles' AND id NOT IN (SELECT parent_id FROM sys_menu WHERE type='button' AND permission_code='roles:create' AND parent_id IS NOT NULL)
+UNION ALL
+SELECT id, '修改角色', 'button', NULL, 'roles:update', NULL, 70, 1 FROM sys_menu WHERE type='menu' AND route_path='/admin/roles' AND id NOT IN (SELECT parent_id FROM sys_menu WHERE type='button' AND permission_code='roles:update' AND parent_id IS NOT NULL)
+UNION ALL
+SELECT id, '删除角色', 'button', NULL, 'roles:delete', NULL, 80, 1 FROM sys_menu WHERE type='menu' AND route_path='/admin/roles' AND id NOT IN (SELECT parent_id FROM sys_menu WHERE type='button' AND permission_code='roles:delete' AND parent_id IS NOT NULL)
+UNION ALL
+SELECT id, '设置角色权限', 'button', NULL, 'roles:permissions', NULL, 90, 1 FROM sys_menu WHERE type='menu' AND route_path='/admin/roles' AND id NOT IN (SELECT parent_id FROM sys_menu WHERE type='button' AND permission_code='roles:permissions' AND parent_id IS NOT NULL)
+UNION ALL
+SELECT id, '新增菜单', 'button', NULL, 'menus:create', NULL, 100, 1 FROM sys_menu WHERE type='menu' AND route_path='/admin/system/menus' AND id NOT IN (SELECT parent_id FROM sys_menu WHERE type='button' AND permission_code='menus:create' AND parent_id IS NOT NULL)
+UNION ALL
+SELECT id, '修改菜单', 'button', NULL, 'menus:update', NULL, 110, 1 FROM sys_menu WHERE type='menu' AND route_path='/admin/system/menus' AND id NOT IN (SELECT parent_id FROM sys_menu WHERE type='button' AND permission_code='menus:update' AND parent_id IS NOT NULL)
+UNION ALL
+SELECT id, '删除菜单', 'button', NULL, 'menus:delete', NULL, 120, 1 FROM sys_menu WHERE type='menu' AND route_path='/admin/system/menus' AND id NOT IN (SELECT parent_id FROM sys_menu WHERE type='button' AND permission_code='menus:delete' AND parent_id IS NOT NULL);
 
 INSERT INTO `sys_menu` (`parent_id`, `name`, `type`, `route_path`, `permission_code`, `icon`, `sort`, `status`)
 SELECT 3, '试题导入', 'menu', '/admin/questions/import', 'questions:write', 'Upload', 30, 1

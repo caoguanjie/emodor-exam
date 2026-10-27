@@ -228,6 +228,7 @@ export interface TrainingExamSummary {
     paper_id: Id;
     title: string;
     category_id: Id | null;
+    mode: 'fixed' | 'random';
     total_score: number | null;
     duration_minutes: number | null;
     pass_score: number | null;
@@ -266,15 +267,61 @@ export interface TrainingStatisticsOptions {
   categories: Array<{ id: Id; name: string }>;
 }
 
+export type DashboardDateRange = { date_from: string; date_to: string };
+
 export interface AdminDashboard {
   as_of: string;
   timezone: 'Asia/Shanghai';
+  periods: { today: DashboardDateRange; last_7_days: DashboardDateRange };
   metrics: {
     learner_count?: number;
+    learner_institution_count?: number;
+    learner_external_count?: number;
+    learner_unknown_source_count?: number;
+    today_participant_count?: number;
+    today_attempt_count?: number;
+    last_7_days_participant_count?: number;
+    last_7_days_attempt_count?: number;
     question_count?: number;
+    enabled_question_count?: number;
     paper_count?: number;
+    published_paper_count?: number;
   };
   exam_trend?: Array<{ date: string; count: number }>;
+}
+
+export interface DashboardExamTrend extends DashboardDateRange {
+  as_of: string;
+  timezone: 'Asia/Shanghai';
+  days: 7 | 30;
+  points: Array<{ date: string; participant_count: number; institution_count: number;
+    external_count: number; unknown_source_count: number }>;
+}
+
+export interface DashboardLearningOptions extends Page<{
+  paper_id: Id; title: string; release_id: Id; released_at: string; required_learning_minutes: number;
+}> {
+  as_of: string;
+}
+
+export interface DashboardLearningSummary {
+  as_of: string;
+  state: 'ready' | 'no_audience';
+  paper_id: Id;
+  title: string;
+  release_id: Id;
+  released_at: string;
+  required_learning_minutes: number;
+  eligible_count: number;
+  achieved_count: number;
+  pending_count: number;
+  achievement_rate: number | null;
+}
+
+export interface DashboardRecentExams {
+  as_of: string;
+  limit: 4;
+  items: Array<TrainingExamOverviewRow & { released_at: string }>;
 }
 
 export const TRAINING_DEFAULTS = Object.freeze({

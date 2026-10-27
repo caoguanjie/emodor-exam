@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import http, { tryRefresh } from '../api/http';
 import { invalidateMediaContext, mediaContext } from '../services/media-context';
 import { mediaResumeStore } from '../services/media-upload-resume';
+import { hasAccountPermission } from '../utils/account-permissions';
 
 export interface AuthUser {
   id: number;
@@ -11,6 +12,7 @@ export interface AuthUser {
   department_id: number | null;
   role: 'super_admin' | 'regulation_admin' | 'employee';
   permissions?: string[];
+  permission_schema_version?: number;
   force_password_change?: boolean;
   login_count?: number;
   last_login_at?: string | null;
@@ -29,7 +31,7 @@ export const useAuthStore = defineStore('auth', {
     isLoggedIn: (s) => !!s.accessToken,
     isAdmin: (s) => !!s.user && (s.user.role === 'super_admin' || s.user.role === 'regulation_admin' || (s.user.permissions?.length || 0) > 0),
     isSuperAdmin: (s) => !!s.user && s.user.role === 'super_admin',
-    can: (s) => (code: string) => s.user?.role === 'super_admin' || !!s.user?.permissions?.includes(code),
+    can: (s) => (code: string) => hasAccountPermission(s.user, code),
   },
   actions: {
     setAccessToken(token: string) {

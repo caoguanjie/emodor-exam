@@ -38,9 +38,9 @@ function editor(value = draft()) {
   wrappers.push(wrapper); return wrapper;
 }
 async function show() {
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: Questions },
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/admin/questions', component: Questions },
     { path: '/other', component: { render: () => h('p', '其他页面') } }] });
-  await router.push('/'); await router.isReady();
+  await router.push('/admin/questions'); await router.isReady();
   const wrapper = mount(RouterView, { attachTo: document.body, global: { plugins: [ElementPlus, router], stubs: { MediaUpload: true, transition: false } } });
   wrappers.push(wrapper); await flushPromises(); return { wrapper, router };
 }
@@ -178,7 +178,7 @@ describe('question bank has no scores', () => {
     expect(confirm).toHaveBeenCalledTimes(1);
     expect((form.vm as any).getEditor().getText()).toContain('修改的题干');
     await router.push('/other');
-    expect(router.currentRoute.value.path).toBe('/');
+    expect(router.currentRoute.value.path).toBe('/admin/questions');
     expect(api.post).not.toHaveBeenCalled(); expect(api.put).not.toHaveBeenCalled();
   });
 
@@ -240,7 +240,7 @@ describe('question bank has no scores', () => {
     await click(wrapper, '取消');
     expect(confirm).toHaveBeenCalledOnce();
     await router.push('/other');
-    expect(router.currentRoute.value.path).toBe('/');
+    expect(router.currentRoute.value.path).toBe('/admin/questions');
     expect(instance.getText()).toContain('首次粘贴的新文字');
     expect(api.put).not.toHaveBeenCalled();
   });
@@ -277,7 +277,7 @@ describe('question bank has no scores', () => {
     const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('继续编辑'));
     await router.push('/other');
     expect(confirm).toHaveBeenCalledOnce();
-    expect(router.currentRoute.value.path).toBe('/');
+    expect(router.currentRoute.value.path).toBe('/admin/questions');
 
     await click(wrapper, '返回编辑');
     expect(editorDialog().text()).toContain('保存结果尚未确认');

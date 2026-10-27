@@ -1,0 +1,30 @@
+{
+  "generator": "Built-in imagegen",
+  "generated_at": "2026-10-27",
+  "transparent_background": true,
+  "prompt_composition": "common_prompt + assets[].subject",
+  "common_prompt": "Use case: logo-brand. Asset type: one production dashboard metric icon, to be displayed at 28x28 CSS pixels in a Chinese education administration website. Generate exactly ONE icon, centered on a square TRANSPARENT canvas. Clean flat vector-like rounded OUTLINE icon, precise geometry, consistent medium 1.8px-equivalent stroke on a 24-unit grid, round caps and joins. The subject occupies 80% of the canvas width/height so it reads clearly when tiny. Primary royal blue #3858E9 and secondary teal #16877E. Two flat colors only, no gradient, no shadow, no background tile, no enclosing colored square, no 3D, no decorative particles, no text, no numbers, no labels, no watermark. Generous but equal margins all sides; isolated transparent alpha, no checkerboard drawing. This is a cohesive family closely resembling a refined Lucide outline UI icon. ",
+  "assets": [
+    {
+      "file": "learners.png",
+      "subject": "Subject: two people, one primary person in front and a second person slightly behind to the right. Two simple circular heads and shoulder outlines, front outline royal blue and rear outline teal. Clearly communicates a group of learners. No faces, no clothes detail."
+    },
+    {
+      "file": "today-exams.png",
+      "subject": "Subject: a rounded rectangular calendar with two short binding tabs, a single horizontal header separator and one teal CHECK MARK in the center. Calendar outline royal blue. Do not add tiny dates, numbers, grid dots or text. Clearly communicates today's exam attendance."
+    },
+    {
+      "file": "weekly-exams.png",
+      "subject": "Subject: an upward statistics chart: four vertical slim outlined columns rising from left to right, above them a single upward zigzag arrow ending at top right. Teal arrow and blue columns. Airy open icon, NO solid square or surrounding frame. Clearly communicates growing weekly exam participation."
+    },
+    {
+      "file": "questions.png",
+      "subject": "Subject: a single circular blue OUTLINE surrounding a centered teal QUESTION MARK. The circular interior is fully transparent. Simple beautifully balanced ring, medium outline. No filled circle, no square, no extra objects."
+    },
+    {
+      "file": "papers.png",
+      "subject": "Subject: two overlapping upright document pages. Front page offset to upper right, back page lower left. Blue page outlines, front page has a teal outlined folded top-right corner and two short teal horizontal text strokes. Clearly reads as paper documents, not two generic empty squares."
+    }
+  ],
+  "usage": "DashboardMetrics.vue; decorative images, transparent PNG originals displayed at 32 CSS pixels."
+}

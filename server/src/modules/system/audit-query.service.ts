@@ -49,8 +49,25 @@ export interface AuditQuery {
   date_to?: string;
   actor?: string;
   action?: string;
+  scope?: 'management' | 'security' | 'exam' | 'learner' | 'system' | 'all';
+  result?: 'success' | 'failure';
   page?: number;
   page_size?: number;
+}
+
+const AUDIT_SCOPES = new Set(['management', 'security', 'exam', 'learner', 'system', 'all']);
+const MANAGEMENT_ACTION_PREFIXES = [
+  'access.', 'system.', 'student.', 'user.', 'training_category.', 'course.',
+  'question', 'ai.', 'paper.', 'training_paper.', 'statistics.', 'regulation.',
+];
+
+function scopeOf(row: AuditEntry): Exclude<AuditQuery['scope'], 'all' | undefined> {
+  if (row.action.startsWith('auth.') || row.action.startsWith('identity.')) return 'security';
+  if (row.action.startsWith('exam.')) return 'exam';
+  if (row.action === 'student.training_category.confirm') return 'learner';
+  if (MANAGEMENT_ACTION_PREFIXES.some((prefix) => row.action.startsWith(prefix))) return 'management';
+  if (row.actor_id === null || row.actor_name === 'system') return 'system';
+  return 'management';
 }
 
 @Injectable()
@@ -67,6 +84,11 @@ export class AuditQueryService {
     const to = query.date_to?.trim();
     if ((from && !DAY.test(from)) || (to && !DAY.test(to)) || (from && to && from > to)) {
       throw Errors.param('审计日期范围非法');
+    }
+    const scope = query.scope || 'all';
+    if (!AUDIT_SCOPES.has(scope)) throw Errors.param('审计记录范围非法');
+    if (query.result !== undefined && query.result !== 'success' && query.result !== 'failure') {
+      throw Errors.param('审计结果非法');
     }
 
     const root = resolve(this.config.logDir, 'audit');
@@ -134,7 +156,9 @@ export class AuditQueryService {
         || String(row.actor_id ?? '').toLowerCase() === actor
         || String(row.actor_name || '').toLowerCase().includes(actor);
       const actionMatches = !action || String(row.action).toLowerCase().includes(action);
-      return actorMatches && actionMatches;
+      const scopeMatches = scope === 'all' || scopeOf(row) === scope;
+      const resultMatches = !query.result || row.result === query.result;
+      return actorMatches && actionMatches && scopeMatches && resultMatches;
     }).sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
     return {
       items: filtered.slice((page - 1) * pageSize, page * pageSize),

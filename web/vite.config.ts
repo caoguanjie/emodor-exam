@@ -18,6 +18,11 @@ export default defineConfig(({ mode }) => ({
     symbolId: 'icon-[name]',
   })],
   css: { preprocessorOptions: { scss: { api: 'modern' } } },
+  // Keep ECharts' shared Source/DataStore classes in the same dependency pass.
+  // Late entry discovery can otherwise load versioned and unversioned copies.
+  optimizeDeps: {
+    include: ['echarts/core', 'echarts/charts', 'echarts/components', 'echarts/renderers'],
+  },
   server: {
     // 监听所有网卡，允许局域网设备访问开发服务器
     host: '0.0.0.0',

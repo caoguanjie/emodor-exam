@@ -503,12 +503,16 @@ export class QuestionImportService implements OnModuleInit {
   }
 
   /** Validate references without calling any preview/DB/cache/audit writer. */
-  async normalizeAiReferences(ownerId: string, rows: ParsedQuestionImportRow[]): Promise<QuestionDraft[]> {
+  async normalizeAiReferences(ownerId: string, rows: ParsedQuestionImportRow[], categoryId?: string): Promise<QuestionDraft[]> {
     const categoryCache = new Map<string, TrainingCategory | null>();
     const drafts: QuestionDraft[] = [];
     for (const row of rows) {
       try {
-        const candidate = await this.candidate(ownerId, { ...row, difficulty: 'easy' }, categoryCache);
+        const candidate = await this.candidate(ownerId, {
+          ...row,
+          category: categoryId || row.category,
+          difficulty: 'easy',
+        }, categoryCache);
         drafts.push(candidate.draft);
       } catch (error) {
         if (error instanceof BizError && error.message === '考点组已取消，请清空后重试') throw error;

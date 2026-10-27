@@ -48,6 +48,7 @@ export const SUITE_REGISTRY = Object.freeze({
   'training-submissions': join(ROOT, 'tests', 'training-submissions.mjs'),
   'training-records': join(ROOT, 'tests', 'training-records.mjs'),
   'training-statistics': join(ROOT, 'tests', 'training-statistics.mjs'),
+  'admin-dashboard': join(ROOT, 'tests', 'admin-dashboard.mjs'),
   'training-full-flow': join(ROOT, 'tests', 'training-full-flow.mjs'),
   'main-question-designers': join(ROOT, 'tests', 'main-question-designers.mjs'),
   'main-question-designers-compatibility': join(ROOT, 'tests', 'main-question-designers-compatibility.mjs'),
@@ -76,7 +77,7 @@ export function suiteRuntimeEnvOverrides(suitePath) {
   if (['mobile-auth', 'training-courses'].some((name) => SUITE_REGISTRY[name] === suitePath)) {
     return { NODE_ENV: 'test', SERVER_DEBUG_LOGIN_ENABLED: 'true', SMS_PROVIDER: 'disabled' };
   }
-  if (['mobile-identity', 'mobile-media-ticket', 'training-paper-learning', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5', 'main-question-designers', 'main-question-designers-compatibility'].some((name) => SUITE_REGISTRY[name] === suitePath)) {
+  if (['mobile-identity', 'mobile-media-ticket', 'training-paper-learning', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5', 'main-question-designers', 'main-question-designers-compatibility', 'admin-dashboard'].some((name) => SUITE_REGISTRY[name] === suitePath)) {
     return {
       NODE_ENV: 'test',
       SERVER_DEBUG_LOGIN_ENABLED: 'true',
@@ -105,7 +106,7 @@ export function suiteRuntimeEnvOverrides(suitePath) {
 }
 
 export function suiteRuntimeApi(suitePath) {
-  if (!['mobile-identity', 'mobile-media-ticket', 'training-video-learning', 'training-paper-learning', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5', 'main-question-designers', 'main-question-designers-compatibility', 'cos-media-flow'].some((name) => SUITE_REGISTRY[name] === suitePath)) return {};
+  if (!['mobile-identity', 'mobile-media-ticket', 'training-video-learning', 'training-paper-learning', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5', 'main-question-designers', 'main-question-designers-compatibility', 'cos-media-flow', 'admin-dashboard'].some((name) => SUITE_REGISTRY[name] === suitePath)) return {};
   return {
     apiEntry: join(ROOT, 'server', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
     apiArgs: [join(ROOT, 'server', 'test', suitePath === SUITE_REGISTRY['cos-media-flow'] ? 'cos-e2e-main.ts' : 'identity-e2e-main.ts')],

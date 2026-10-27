@@ -83,6 +83,10 @@ export class SysUser {
   @Column({ name: 'roles_configured', type: 'tinyint', default: 0 })
   rolesConfigured: number;
 
+  /** 管理员逻辑删除；普通列保留历史关联查询，不使用全局软删除过滤。 */
+  @Column({ name: 'deleted_at', type: 'datetime', precision: 3, nullable: true })
+  deletedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at', precision: 3 })
   createdAt: Date;
 

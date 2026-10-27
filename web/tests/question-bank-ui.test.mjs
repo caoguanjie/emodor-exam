@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createServer } from 'vite';
-import { computed, createRenderer, h, inject, nextTick, provide, ref, watch } from '@vue/runtime-core';
+import { computed, createRenderer, h, inject, nextTick, provide, reactive, ref, watch } from '@vue/runtime-core';
 import TreeStore from '../node_modules/element-plus/es/components/tree/src/model/tree-store.mjs';
 
 const webRoot = resolve(fileURLToPath(new URL('../', import.meta.url)));
@@ -61,6 +61,7 @@ const context = {
   http: null,
   navigations: [],
   downloads: [],
+  route: null,
 };
 
 const stubs = new Map([
@@ -183,7 +184,14 @@ const stubs = new Map([
       return { markClean: source.markClean, confirmDiscard: source.confirmDiscard };
     }
   `],
-  [routeStubId, `export function useRouter() { return { push(path) { globalThis.__questionBankUiTest.navigations.push(path); } }; }`],
+  [routeStubId, `
+    const context = globalThis.__questionBankUiTest;
+    export function useRoute() { return context.route; }
+    export function useRouter() { return {
+      push(path) { context.navigations.push(path); },
+      async replace(value) { context.route.query = value.query; context.route.fullPath = context.route.path + '?' + new URLSearchParams(value.query); },
+    }; }
+  `],
   [iconsStubId, `
     import { h } from 'vue';
     export const Filter = { setup() { return () => h('filter-icon'); } };
@@ -698,6 +706,7 @@ after(async () => {
 });
 
 beforeEach(() => {
+  context.route = reactive({ path: '/admin/questions', fullPath: '/admin/questions', query: {} });
   context.permissions = new Set(['questions:read', 'questions:write', 'questions:review']);
   context.row = legacyRow();
   context.calls = [];
@@ -719,6 +728,26 @@ beforeEach(() => {
     ],
   };
   setHttp();
+});
+
+test('dashboard question entry clears stale filters and removes the default enabled-only API filter', async () => {
+  const mounted = mount(Questions);
+  try {
+    await waitFor(() => context.calls.some(call => call.url === '/ai/questions'), 'initial question list');
+    const state = mounted.instance.$.setupState;
+    Object.assign(state.query, { keyword: '旧题干', category_id: 'old-category', type: 'single', difficulty: 'hard', page: 4 });
+    context.calls = [];
+    context.route.query = { entry: 'dashboard', enabled: 'all' };
+    await nextTick();
+    await new Promise(resolvePromise => setImmediate(resolvePromise));
+    const requests = context.calls.filter(call => call.url === '/ai/questions');
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].config.params, { page: 1, page_size: 20 });
+    assert.deepEqual(context.route.query, { enabled: 'all' });
+    state.query.enabled = false;
+    await state.submitFilters();
+    assert.equal(context.route.query.enabled, 'false');
+  } finally { mounted.unmount(); }
 });
 
 test('uses a conservative non-DOM fallback instead of regex-filtered HTML', () => {
@@ -1724,8 +1753,12 @@ test('AI import uploads a transient reference file, polls its task and renders o
   const mounted = mount(QuestionImport);
   try {
     await switchImportTab(mounted, 'ai');
-    await click(button(mounted.root, '下载 XLSX 模板'));
+    await click(button(mounted.root, '下载 Excel 模板（推荐）'));
     assert.deepEqual(context.downloads.at(-1).params, { format: 'xlsx', purpose: 'ai' });
+    const category = walk(mounted.root, (node) => node.type === 'el-wrapper' && node.props.placeholder === '请选择培训类别')[0];
+    assert.ok(category);
+    category.props['onUpdate:modelValue']('7');
+    await nextTick();
     const uploader = walk(mounted.root, (node) => node.type === 'el-wrapper' && (node.props['on-change'] || node.props.onChange))[0];
     assert.ok(uploader);
     const reference = new File(['原始参考题不得进入预览'], 'reference.xlsx');
@@ -1733,7 +1766,7 @@ test('AI import uploads a transient reference file, polls its task and renders o
     await waitFor(() => walk(mounted.root, (node) => node.type === 'table' && node.props.data?.length === 3).length > 0, 'AI generated preview');
     const uploadCall = context.calls.find((call) => call.method === 'upload');
     assert.equal(uploadCall.url, '/admin/questions/ai-import-tasks');
-    assert.deepEqual(uploadCall.body.fields, { format: 'xlsx' });
+    assert.deepEqual(uploadCall.body.fields, { format: 'xlsx', category_id: '7' });
     assert.ok(context.calls.some((call) => call.method === 'get' && call.url === '/admin/questions/ai-import-tasks/ai-task-1'));
     const rows = walk(mounted.root, (node) => node.type === 'table').at(-1).props.data;
     assert.deepEqual(rows.map((row) => row.difficulty), ['easy', 'hard', 'easy']);

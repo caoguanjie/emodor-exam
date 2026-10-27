@@ -54,6 +54,7 @@ import { QuestionVersion } from './entities/question-version.entity';
 import { QuestionAuthoringCommit } from './entities/question-authoring-commit.entity';
 import { SysMenu } from './entities/sys-menu.entity';
 import { SysDictionary } from './entities/sys-dictionary.entity';
+import { SysDictionaryType } from './entities/sys-dictionary-type.entity';
 import { SiteSetting } from './entities/site-setting.entity';
 import { LearnerIdentity } from './entities/learner-identity.entity';
 import { IdentityVerificationSession } from './entities/identity-verification-session.entity';
@@ -112,6 +113,7 @@ import { StatisticsController } from './modules/statistics/statistics.controller
 import { StatisticsService } from './modules/statistics/statistics.service';
 import { AdminDashboardController, TrainingStatisticsController } from './modules/statistics/training-statistics.controller';
 import { TrainingStatisticsService } from './modules/statistics/training-statistics.service';
+import { AdminDashboardService } from './modules/statistics/admin-dashboard.service';
 import { HealthController } from './modules/health/health.controller';
 import { TasksService } from './tasks.service';
 import { MediaController } from './modules/media/media.controller';
@@ -176,7 +178,7 @@ const config = loadConfig();
       TrainingCourse, CourseChapter, CourseLesson, LessonVersion,
       VideoLearningRecord, VideoLearningSession,
       QuestionConcept, QuestionVersion, QuestionAuthoringCommit,
-      SysMenu, SysDictionary, SiteSetting,
+      SysMenu, SysDictionary, SysDictionaryType, SiteSetting,
       LearnerIdentity, IdentityVerificationSession,
     ]),
     JwtModule.register({ secret: config.jwt.secret, signOptions: { expiresIn: config.jwt.expiresIn } }),
@@ -201,7 +203,7 @@ const config = loadConfig();
     AiConfigService, AiGatewayService, PdfVisionService, QuestionGenerationService, QuestionBankService, PaperService,
     LearningSessionService, ExamService, AttemptService, AttemptReaderService, LegacyExamAdapter, AnswerDraftService, SubmissionService,
     ExamHistoryService, ExamRecordsService,
-    ShuffleService, GradingService, PaperReleaseService, SamplingService, StatisticsService, TrainingStatisticsService,
+    ShuffleService, GradingService, PaperReleaseService, SamplingService, StatisticsService, TrainingStatisticsService, AdminDashboardService,
     RedisService, AuditService, TasksService,
     MediaService, MediaProbeService, MediaTicketService, MediaPublisher,
     MediaUploadSessionService, MediaUploadGrantService, MediaUploadFinalizerService, MediaUploadCleanupService,

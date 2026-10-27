@@ -486,13 +486,29 @@ describe('guided question import', () => {
     expect(api.upload).toHaveBeenCalledWith('/admin/questions/import-preview', file, 'file', { format: 'txt', category_id: '7' });
   });
 
-  it('downloads the legacy AI reference template with its explicit purpose', async () => {
+  it('offers both AI reference templates and detects the uploaded format without a format selector', async () => {
     const { wrapper } = await show();
     const aiTab = wrapper.findAll('.el-tabs__item').find((item) => item.text() === 'AI 生成');
     expect(aiTab).toBeDefined();
     await aiTab!.trigger('click'); await flushPromises();
-    await click(wrapper, '下载 XLSX 模板');
+
+    expect(wrapper.text()).toContain('01 准备参考题');
+    expect(wrapper.text()).toContain('02 上传并生成');
+    expect(wrapper.find('.import-workspace').exists()).toBe(true);
+    expect(wrapper.find('.el-upload-dragger').exists()).toBe(true);
+    expect(wrapper.text()).not.toContain('文件格式');
+    await click(wrapper, '下载 Excel 模板（推荐）');
     expect(api.download).toHaveBeenLastCalledWith('/admin/questions/import-template', 'AI参考题模板.xlsx', { format: 'xlsx', purpose: 'ai' });
+    await click(wrapper, '下载 TXT 模板');
+    expect(api.download).toHaveBeenLastCalledWith('/admin/questions/import-template', 'AI参考题模板.txt', { format: 'txt', purpose: 'ai' });
+
+    const input = wrapper.get('input[type="file"]');
+    expect((input.element as HTMLInputElement).disabled).toBe(true);
+    expect((input.element as HTMLInputElement).accept).toBe('.xlsx,.txt,text/plain');
+    await selectCategory(wrapper);
+    const file = new File(['example'], 'AI参考题.TXT');
+    await chooseFile(wrapper, file);
+    expect(api.upload).toHaveBeenLastCalledWith('/admin/questions/ai-import-tasks', file, 'file', { format: 'txt', category_id: '7' });
   });
 
   it('rejects unsupported and oversized files without starting a preview', async () => {

@@ -88,7 +88,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, provide, reactive, ref, watch, type Component } from 'vue';
+import { computed, onBeforeUnmount, onMounted, provide, reactive, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
@@ -145,8 +145,21 @@ function normalizeNavigation(nodes:NavigationNode[]){return nodes.map(root=>{
   children.sort((left,right)=>(examMenuOrder.get(left.route_path||'')??1000)-(examMenuOrder.get(right.route_path||'')??1000));
   return{...root,children};
 })}
-function flattenMenus(nodes:NavigationNode[], output:NavigationItem[]=[]){for(const node of nodes){if(!node.status)continue;if(node.type==='menu'&&node.route_path&&routeAllowed(node.route_path))output.push({name:node.name,path:node.route_path,icon:node.icon});if(node.children?.length)flattenMenus(node.children,output)}return output}
-async function loadNavigation(){if(!auth.isAdmin){adminGroups.value=[];return}try{const roots=normalizeNavigation(await http.get('/admin/menus/navigation') as NavigationNode[]);adminGroups.value=roots.filter(root=>root.status).map(root=>{const directPath=root.type==='menu'&&root.route_path&&routeAllowed(root.route_path)?root.route_path:null;return{id:String(root.id),name:root.name,path:directPath,icon:root.icon,items:directPath?[]:flattenMenus(root.children||[])}}).filter(group=>!!group.path||group.items.length>0)}catch{adminGroups.value=[]}}
+  function flattenMenus(nodes:NavigationNode[], output:NavigationItem[]=[]){for(const node of nodes){if(!node.status)continue;if(node.type==='menu'&&node.route_path&&routeAllowed(node.route_path))output.push({name:node.route_path==='/admin/system/audit-logs'?'操作记录':node.name,path:node.route_path,icon:node.icon});if(node.children?.length)flattenMenus(node.children,output)}return output}
+let navigationRequest=0;
+let navigationActive=true;
+function currentNavigation(request:number){return navigationActive&&request===navigationRequest&&auth.isAdmin}
+async function loadNavigation(){
+  const request=++navigationRequest;
+  if(!navigationActive)return;
+  if(!auth.isAdmin){adminGroups.value=[];return}
+  try{
+    const nodes=await http.get('/admin/menus/navigation') as NavigationNode[];
+    if(!currentNavigation(request))return;
+    const roots=normalizeNavigation(nodes);
+    adminGroups.value=roots.filter(root=>root.status).map(root=>{const directPath=root.type==='menu'&&root.route_path&&routeAllowed(root.route_path)?root.route_path:null;return{id:String(root.id),name:root.name,path:directPath,icon:root.icon,items:directPath?[]:flattenMenus(root.children||[])}}).filter(group=>!!group.path||group.items.length>0);
+  }catch{if(currentNavigation(request))adminGroups.value=[]}
+}
 async function loadSiteConfig(){try{const value=await http.get('/site-config') as SiteConfig;siteConfig.logo_asset_id=value.logo_asset_id||null}catch{/* bundled logo remains */}}
 function toggleSidebar(){sidebarCollapsed.value=!sidebarCollapsed.value;try{window.localStorage?.setItem(SIDEBAR_STORAGE_KEY,sidebarCollapsed.value?'1':'0')}catch{/* layout preference stays in memory */}}
 
@@ -197,7 +210,9 @@ async function saveProfile(){profileSaving.value=true;try{await http.patch('/me/
 async function onLogout(){try{await ElMessageBox.confirm('确定退出当前账号吗？','退出登录',{type:'warning'})}catch{return}if(!await confirmAllUnsavedChanges())return;await auth.logout();tabs.reset();await router.push('/login')}
 function onUserCommand(command:string){if(command==='profile')void openProfile();else if(command==='password')void router.push('/change-password');else if(command==='logout')void onLogout()}
 
-onMounted(()=>{void loadNavigation();void loadSiteConfig()});
+function onAdminMenusChanged(){void loadNavigation()}
+onMounted(()=>{void loadNavigation();void loadSiteConfig();window.addEventListener('re:admin-menus-changed',onAdminMenusChanged)});
+onBeforeUnmount(()=>{navigationActive=false;navigationRequest+=1;window.removeEventListener('re:admin-menus-changed',onAdminMenusChanged)});
 </script>
 
 <style scoped>

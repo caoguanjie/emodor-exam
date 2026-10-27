@@ -8,7 +8,7 @@ import {
 } from 'class-validator';
 import { Request, Response } from 'express';
 import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator';
-import { Permissions } from '../../common/decorators/permissions.decorator';
+import { Permissions, PermissionsAny } from '../../common/decorators/permissions.decorator';
 import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { Errors } from '../../common/errors';
 import { Public } from '../../common/guards/public.decorator';
@@ -47,6 +47,13 @@ class DictionaryDto {
   @IsOptional() @IsString() @MaxLength(255) remark?: string | null;
 }
 
+export class DictionaryTypeDto {
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
+  @IsString() @MinLength(1) @MaxLength(128) label!: string;
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() || null : value)
+  @IsOptional() @IsString() @MaxLength(255) description?: string | null;
+}
+
 class DictionaryQueryDto {
   @IsOptional() @QueryNumber() @IsInt() @Min(1) page?: number;
   @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
@@ -71,6 +78,8 @@ class AuditQueryDto {
   @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) date_to?: string;
   @IsOptional() @IsString() @MaxLength(128) actor?: string;
   @IsOptional() @IsString() @MaxLength(128) action?: string;
+  @IsOptional() @IsString() @IsIn(['management', 'security', 'exam', 'learner', 'system', 'all']) scope?: 'management' | 'security' | 'exam' | 'learner' | 'system' | 'all';
+  @IsOptional() @IsString() @IsIn(['success', 'failure']) result?: 'success' | 'failure';
   @IsOptional() @QueryNumber() @IsInt() @Min(1) page?: number;
   @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
 }
@@ -92,25 +101,25 @@ export class SystemController {
   }
 
   @Get('menus')
-  @Permissions('system_settings:read')
+  @Permissions('menus:read')
   menus() {
     return this.system.menuTree({ includeButtons: true });
   }
 
   @Get('menus/permission-options')
-  @Permissions('system_settings:write')
+  @PermissionsAny('menus:create', 'menus:update')
   permissionOptions() {
     return this.system.permissionOptions();
   }
 
   @Get('menus/:id')
-  @Permissions('system_settings:read')
+  @Permissions('menus:read')
   menu(@Param('id') id: string) {
     return this.system.menuDetail(id);
   }
 
   @Post('menus')
-  @Permissions('system_settings:write')
+  @Permissions('menus:create')
   createMenu(
     @Body(new StrictDtoValidationPipe(['parent_id', 'name', 'type', 'route_path', 'permission_code', 'icon', 'sort', 'status'])) dto: MenuDto,
     @CurrentUser() user: AuthUser,
@@ -121,7 +130,7 @@ export class SystemController {
   }
 
   @Put('menus/:id')
-  @Permissions('system_settings:write')
+  @Permissions('menus:update')
   updateMenu(
     @Param('id') id: string,
     @Body(new StrictDtoValidationPipe(['parent_id', 'name', 'type', 'route_path', 'permission_code', 'icon', 'sort', 'status'])) dto: MenuDto,
@@ -133,9 +142,45 @@ export class SystemController {
   }
 
   @Delete('menus/:id')
-  @Permissions('system_settings:write')
+  @Permissions('menus:delete')
   removeMenu(@Param('id') id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
     return this.system.removeMenu(id, this.actor(user), req.ip || null);
+  }
+
+  @Get('dictionaries/types')
+  @Permissions('system_settings:read')
+  dictionaryTypes(@Req() req: Request) {
+    assertRequestKeys(req.query, [], '字典分类查询');
+    return this.system.dictionaryTypes();
+  }
+
+  @Post('dictionaries/types')
+  @Permissions('system_settings:write')
+  createDictionaryType(
+    @Body(new StrictDtoValidationPipe(['label', 'description'])) dto: DictionaryTypeDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    assertRequestKeys(req.body, ['label', 'description'], '字典分类请求');
+    return this.system.createDictionaryType(dto, this.actor(user), req.ip || null);
+  }
+
+  @Put('dictionaries/types/:type')
+  @Permissions('system_settings:write')
+  updateDictionaryType(
+    @Param('type') type: string,
+    @Body(new StrictDtoValidationPipe(['label', 'description'])) dto: DictionaryTypeDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    assertRequestKeys(req.body, ['label', 'description'], '字典分类请求');
+    return this.system.updateDictionaryType(type, dto, this.actor(user), req.ip || null);
+  }
+
+  @Delete('dictionaries/types/:type')
+  @Permissions('system_settings:write')
+  removeDictionaryType(@Param('type') type: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.system.removeDictionaryType(type, this.actor(user), req.ip || null);
   }
 
   @Get('dictionaries')
@@ -201,10 +246,10 @@ export class SystemController {
   @Get('audit-logs')
   @Permissions('system_settings:read')
   auditLogs(
-    @Query(new StrictDtoValidationPipe(['date_from', 'date_to', 'actor', 'action', 'page', 'page_size'])) query: AuditQueryDto,
+    @Query(new StrictDtoValidationPipe(['date_from', 'date_to', 'actor', 'action', 'scope', 'result', 'page', 'page_size'])) query: AuditQueryDto,
     @Req() req: Request,
   ) {
-    assertRequestKeys(req.query, ['date_from', 'date_to', 'actor', 'action', 'page', 'page_size'], '审计查询');
+    assertRequestKeys(req.query, ['date_from', 'date_to', 'actor', 'action', 'scope', 'result', 'page', 'page_size'], '审计查询');
     return this.auditQuery.list(query);
   }
 }

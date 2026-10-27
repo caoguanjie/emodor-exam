@@ -173,6 +173,7 @@ export interface TrainingExamOverviewRow {
 
 export interface TrainingExamSummary {
   exam: Pick<TrainingExamOverviewRow, 'paper_id' | 'title' | 'category_id' | 'total_score' | 'duration_minutes' | 'pass_score'> & {
+    mode: 'fixed' | 'random';
     excellent_score: null;
   };
   release_id: Id | null;
@@ -208,15 +209,79 @@ export interface TrainingStatisticsOptions {
   categories: Array<{ id: Id; name: string }>;
 }
 
+export interface DashboardDateRange {
+  date_from: string;
+  date_to: string;
+}
+
 export interface AdminDashboard {
   as_of: string;
   timezone: 'Asia/Shanghai';
+  periods: { today: DashboardDateRange; last_7_days: DashboardDateRange };
   metrics: {
     learner_count?: number;
+    learner_institution_count?: number;
+    learner_external_count?: number;
+    learner_unknown_source_count?: number;
+    today_participant_count?: number;
+    today_attempt_count?: number;
+    last_7_days_participant_count?: number;
+    last_7_days_attempt_count?: number;
     question_count?: number;
+    enabled_question_count?: number;
     paper_count?: number;
+    published_paper_count?: number;
   };
   exam_trend?: Array<{ date: string; count: number }>;
+}
+
+export interface DashboardExamTrend {
+  as_of: string;
+  timezone: 'Asia/Shanghai';
+  days: 7 | 30;
+  date_from: string;
+  date_to: string;
+  points: Array<{
+    date: string;
+    participant_count: number;
+    institution_count: number;
+    external_count: number;
+    unknown_source_count: number;
+  }>;
+}
+
+export interface DashboardLearningOptions {
+  as_of: string;
+  items: Array<{
+    paper_id: Id;
+    title: string;
+    release_id: Id;
+    released_at: string;
+    required_learning_minutes: number;
+  }>;
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface DashboardLearningSummary {
+  as_of: string;
+  state: 'ready' | 'no_audience';
+  paper_id: Id;
+  title: string;
+  release_id: Id;
+  released_at: string;
+  required_learning_minutes: number;
+  eligible_count: number;
+  achieved_count: number;
+  pending_count: number;
+  achievement_rate: number | null;
+}
+
+export interface DashboardRecentExams {
+  as_of: string;
+  limit: 4;
+  items: Array<TrainingExamOverviewRow & { released_at: string }>;
 }
 
 export interface TrainingCategory {
