@@ -1,48 +1,53 @@
 <template>
-  <section class="page-card">
-    <div class="toolbar">
-      <el-button @click="router.back()">返回</el-button><el-button :loading="loading" @click="load">刷新</el-button>
-    </div>
+  <el-dialog :model-value="true" title="考试记录详情" width="1000px" align-center
+    :append-to="contentDialogTarget || 'body'" class="re-form-dialog exam-record-dialog" @close="returnToList">
     <el-alert v-if="errorMessage" :title="errorMessage" type="error" show-icon :closable="false"><el-button link @click="load">重试</el-button></el-alert>
     <el-skeleton v-if="loading && !record" :rows="7" animated />
     <template v-else-if="record">
-      <el-descriptions :column="3" border>
-        <el-descriptions-item label="记录 ID">{{ record.record_id }}</el-descriptions-item>
-        <el-descriptions-item label="试卷">{{ record.paper_title }}（{{ record.paper_id }}）</el-descriptions-item>
-        <el-descriptions-item label="作答次数">第 {{ record.attempt_no }} 次</el-descriptions-item>
-        <el-descriptions-item label="学员">{{ record.name }}（{{ record.username }}）</el-descriptions-item>
-        <el-descriptions-item label="来源 / 难度">{{ sourceLabel(record.source) }} / {{ difficultyLabel(record.difficulty) }}</el-descriptions-item>
-        <el-descriptions-item label="进度">{{ record.answered_count }} / {{ record.total_count }}</el-descriptions-item>
-        <el-descriptions-item label="考试状态"><el-tag :type="statusType(record.status)">{{ statusLabel(record.status) }}</el-tag></el-descriptions-item>
-        <el-descriptions-item label="结果状态">{{ gradingLabel(record.grading_state) }}</el-descriptions-item>
-        <el-descriptions-item label="提交方式">{{ submissionLabel(record.submission_method) }}</el-descriptions-item>
-        <el-descriptions-item label="成绩">{{ record.score === null ? '—' : `${record.score} 分` }}</el-descriptions-item>
-        <el-descriptions-item label="开始时间">{{ formatTime(record.started_at) }}</el-descriptions-item>
-        <el-descriptions-item label="截止时间">{{ formatTime(record.deadline_at) }}</el-descriptions-item>
-        <el-descriptions-item label="提交时间">{{ formatTime(record.submitted_at) }}</el-descriptions-item>
-      </el-descriptions>
-      <el-alert v-if="record.status === 'in_progress'" class="readonly-note" type="info" :closable="false" show-icon
-        title="考试仍在进行中，本页只展示安全元数据，不请求题目、答案或解析。" />
-      <template v-else>
-        <el-alert class="readonly-note" type="info" :closable="false" show-icon
-          title="本页为只读结果，不提供强制交卷或改分。" />
+      <section class="learner-profile" aria-label="学员档案">
+        <el-avatar :size="72" :src="imageUrl || undefined" class="profile-avatar" @error="retryImage"><el-icon :size="32"><UserFilled /></el-icon></el-avatar>
+        <div class="profile-info">
+          <h2>{{ record.name || '未填写姓名' }}</h2>
+          <p>账号：{{ record.username }}</p>
+          <span>培训类别：{{ record.category_name || '—' }}</span>
+        </div>
+      </section>
+      <section class="exam-overview" aria-label="本次考试">
+        <h3>{{ record.paper_title }}</h3>
+        <div class="exam-outcome">
+          <strong class="exam-score">{{ examRecordScoreLabel(record) }}</strong>
+          <el-tag :type="examRecordResultType(record)">{{ examRecordResultLabel(record) }}</el-tag>
+          <span>第 {{ record.attempt_no }} 次考试</span>
+        </div>
+        <div class="exam-times">
+          <div><span>开考时间</span><b>{{ formatExamRecordTime(record.started_at) }}</b></div>
+          <div><span>交卷时间</span><b>{{ formatExamRecordTime(record.submitted_at) }}</b></div>
+          <div><span>考试用时</span><b>{{ examDuration }}</b></div>
+        </div>
+        <div class="exam-extra">
+          <details><summary>更多考试信息</summary><p>截止时间：{{ formatExamRecordTime(record.deadline_at) }}</p><p>提交方式：{{ submissionLabel(record.submission_method) }}</p></details>
+          <span>时间均为北京时间</span>
+        </div>
+      </section>
+      <el-alert v-if="!canReadExamRecordResult(record)" class="readonly-note" type="info" :closable="false" show-icon :title="businessNote" />
+      <template v-if="canReadExamRecordResult(record)">
         <section v-if="result" class="result-section">
           <div class="result-head">
-            <div><h3>卷面结果</h3><p>题目、作答与判分均来自统一冻结结果。</p></div>
-            <div class="result-metrics">
-              <span>总分 <b>{{ result.score === null ? '待汇总' : `${result.score} 分` }}</b></span>
+            <div><h3>答卷详情</h3><p>本次考试的题目、作答与评分。</p></div>
+            <div v-if="result.grading_state === 'finalized'" class="result-metrics">
               <span>正确率 <b>{{ formatRate(result.correct_rate) }}</b></span>
-              <span>结算时间 <b>{{ formatTime(result.graded_at) }}</b></span>
+              <span>评分时间 <b>{{ formatExamRecordTime(result.graded_at) }}</b></span>
             </div>
           </div>
           <el-alert v-if="result.legacy && !result.items.length" type="warning" :closable="false" show-icon
-            title="该历史记录没有冻结题单，暂无可安全还原的逐题结果。" />
+            title="该历史记录未保存逐题答卷，暂时无法查看题目与作答。" />
           <article v-for="(item, index) in result.items" :key="item.item_id" class="question-card">
             <header>
               <strong>第 {{ index + 1 }} 题</strong>
-              <el-tag size="small" type="info">{{ item.gained_score === null ? '—' : `${item.gained_score} / ${item.score} 分` }}</el-tag>
+              <el-tag size="small" type="info">{{ questionTypeLabels[item.type] }}</el-tag>
+              <el-tag size="small" type="info">{{ record.grading_state !== 'finalized' || item.gained_score === null ? '—' : `${item.gained_score} / ${item.score} 分` }}</el-tag>
             </header>
-            <QuestionPreview :question="previewQuestion(item)" :reveal-answer="true" :show-score="true" />
+            <QuestionPreview :question="previewQuestion(item)" variant="library" :reveal-answer="true" />
             <div class="answer-panel">
               <h4>学员作答</h4>
               <div v-if="selectedOptionLabels(item).length" class="selected-options">
@@ -51,42 +56,70 @@
                 </el-tag>
               </div>
               <span v-else class="muted">未作答</span>
-              <div class="score-meta">得分：{{ item.gained_score === null ? '—' : `${item.gained_score} 分` }}</div>
+              <div class="score-meta">得分：{{ record.grading_state !== 'finalized' || item.gained_score === null ? '—' : `${item.gained_score} 分` }}</div>
             </div>
           </article>
         </section>
       </template>
     </template>
-  </section>
+    <template #footer>
+      <el-button :loading="loading" @click="load">刷新</el-button>
+      <el-button type="primary" @click="returnToList">关闭</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, inject, onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import http from '../../api/http';
-import type { ExamRecordDetail, FinalResult, FinalResultItem, FinalResultItemCanonical, SubmissionMethod } from '../../api/training-types';
+import type { ExamRecordDetail, FinalResult, FinalResultItem, FinalResultItemCanonical, QuestionType, SubmissionMethod } from '../../api/training-types';
+import { UserFilled } from '@element-plus/icons-vue';
+import { usePcMediaUrl } from '../../composables/usePcMediaUrl';
 import QuestionPreview from '../../components/QuestionPreview.vue';
 import { createLatestRequestScope } from '../../utils/latest-request-scope';
+import {
+  canReadExamRecordResult, examRecordResultLabel, examRecordResultStatus, examRecordResultType,
+  examRecordScoreLabel, formatExamRecordTime, safeExamRecordsReturnTo,
+} from '../../utils/exam-records';
 
+const props = defineProps<{ recordId?: string }>();
+const emit = defineEmits<{ close: [] }>();
+const contentDialogTarget = inject<Ref<HTMLElement | undefined>>('contentDialogTarget', ref());
 const route = useRoute();
 const router = useRouter();
 const record = ref<ExamRecordDetail | null>(null);
 const result = ref<FinalResult | null>(null);
+const { imageUrl, retryImage } = usePcMediaUrl(computed(() => record.value?.avatar_id || null));
+const examDuration = computed(() => {
+  const item = record.value;
+  if (!item || !canReadExamRecordResult(item) || !item.submitted_at) return '—';
+  const seconds = Math.floor((Date.parse(item.submitted_at) - Date.parse(item.started_at)) / 1000);
+  if (!Number.isFinite(seconds) || seconds < 0) return '—';
+  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+});
 const loading = ref(false);
 const errorMessage = ref('');
 const requestScope = createLatestRequestScope();
-const sourceLabels: Record<string, string> = { institution: '本机构', external: '外来' };
-const difficultyLabels: Record<string, string> = { easy: '初级', medium: '中级', hard: '高级', mixed: '混合', unknown: '历史未知' };
-const statusLabels: Record<string, string> = { in_progress: '进行中', submitted: '历史结果待确认', passed: '已通过', failed: '未通过', timeout: '超时未交卷' };
-const gradingLabels: Record<string, string> = { not_submitted: '未交卷', finalized: '已出分' };
+const questionTypeLabels: Record<QuestionType, string> = { single: '单选题', multiple: '多选题', judgment: '判断题' };
+const businessNote = computed(() => {
+  if (!record.value) return '';
+  switch (examRecordResultStatus(record.value)) {
+    case 'in_progress': return '考试仍在进行中，学员交卷后可查看成绩与答卷。';
+    case 'timeout': return '考试已结束，学员未在规定时间内交卷，暂无成绩和答卷。';
+    default: return '可查看本次考试的成绩与逐题作答。';
+  }
+});
 
-function sourceLabel(value: string | null) { return value ? sourceLabels[value] || value : '未知'; }
-function difficultyLabel(value: string | null) { return value ? difficultyLabels[value] || value : '未知'; }
-function statusLabel(value: string) { return statusLabels[value] || value; }
-function gradingLabel(value: string) { return gradingLabels[value] || value; }
-function submissionLabel(value: SubmissionMethod | null) { return value === 'manual' ? '主动交卷' : value === 'timeout' ? '超时交卷' : record.value?.status === 'timeout' ? '未交卷' : '历史未知'; }
-function statusType(value: string) { return value === 'passed' ? 'success' : value === 'failed' || value === 'timeout' ? 'danger' : value === 'in_progress' ? 'primary' : 'warning'; }
-function formatTime(value: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'; }
+function returnToList() {
+  requestScope.stop();
+  if (props.recordId) emit('close');
+  else void router.replace(safeExamRecordsReturnTo(route.query?.return_to));
+}
+function submissionLabel(value: SubmissionMethod | null) {
+  if (value === 'manual') return '主动交卷';
+  return record.value && ['timeout', 'in_progress'].includes(examRecordResultStatus(record.value)) ? '未交卷' : '—';
+}
 function formatRate(value: number | null) { return value === null ? '待汇总' : `${Math.round(value * 10000) / 100}%`; }
 function isCanonicalItem(item: FinalResultItem): item is FinalResultItemCanonical { return typeof item.stem !== 'string'; }
 function previewQuestion(item: FinalResultItem) {
@@ -114,15 +147,17 @@ function selectedOptionLabels(item: FinalResultItem): string[] {
 }
 async function load() {
   const ticket = requestScope.begin();
+  const recordId = encodeURIComponent(String(props.recordId || route.params.id));
   loading.value = true;
   errorMessage.value = '';
+  record.value = null;
+  result.value = null;
   try {
-    const data = await http.get(`/admin/exam-records/${encodeURIComponent(String(route.params.id))}`, { signal: ticket.signal }) as ExamRecordDetail;
+    const data = await http.get(`/admin/exam-records/${recordId}`, { signal: ticket.signal }) as ExamRecordDetail;
     if (!ticket.isCurrent()) return;
     record.value = data;
-    result.value = null;
-    if (data.status === 'in_progress') return;
-    const finalResult = await http.get(`/admin/exam-records/${encodeURIComponent(String(route.params.id))}/result`, {
+    if (!canReadExamRecordResult(data)) return;
+    const finalResult = await http.get(`/admin/exam-records/${recordId}/result`, {
       signal: ticket.signal,
       headers: { 'X-Question-Content-Version': '3' },
     }) as FinalResult;
@@ -131,14 +166,34 @@ async function load() {
     if (ticket.isCurrent()) errorMessage.value = error instanceof Error ? error.message : '考试记录详情加载失败';
   } finally {
     if (ticket.isCurrent()) loading.value = false;
+    ticket.finish();
   }
 }
 
-onMounted(load);
+watch(() => props.recordId || route.params.id, () => { void load(); }, { immediate: true });
 onBeforeUnmount(requestScope.stop);
 </script>
 
 <style scoped>
+.learner-profile { display: flex; align-items: center; gap: 20px; padding-bottom: 24px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.profile-avatar { flex: none; background: var(--el-fill-color-light); color: var(--el-text-color-placeholder); }
+.profile-info { min-width: 0; overflow-wrap: anywhere; }
+.profile-info h2 { margin: 0 0 8px; font-size: 22px; color: var(--el-text-color-primary); }
+.profile-info p { margin: 0 0 6px; color: var(--el-text-color-regular); }
+.profile-info > span { color: var(--el-text-color-secondary); font-size: 13px; }
+.exam-overview { padding: 22px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
+.exam-overview h3 { margin: 0 0 16px; font-size: 17px; line-height: 1.6; overflow-wrap: anywhere; }
+.exam-outcome { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; color: var(--el-text-color-secondary); }
+.exam-score { font-size: 25px; color: var(--el-text-color-primary); }
+.exam-times { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 22px; }
+.exam-times > div { display: flex; flex-direction: column; gap: 8px; }
+.exam-times span, .exam-extra { color: var(--el-text-color-secondary); font-size: 13px; }
+.exam-times b { font-weight: 400; font-variant-numeric: tabular-nums; }
+.exam-extra { display: flex; justify-content: space-between; gap: 16px; margin-top: 18px; }
+.exam-extra summary { cursor: pointer; }
+.exam-extra p { margin: 10px 0 0; }
+@media (max-width: 640px) { .exam-times { grid-template-columns: 1fr; }.exam-times > div { flex-direction: row; flex-wrap: wrap; }.exam-extra { flex-wrap: wrap; } }
+
 .readonly-note { margin-top: 18px; }
 .result-section { margin-top: 20px; }
 .result-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 14px; }

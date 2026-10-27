@@ -136,3 +136,74 @@ test('bulk tab closing is atomic when the one unsaved-routes confirmation is can
     else globalThis.sessionStorage = originalSessionStorage;
   }
 });
+
+function withStoredTabs(initial, run) {
+  const originalSessionStorage = globalThis.sessionStorage;
+  const values = new Map([['re_admin_tabs', JSON.stringify(initial)]]);
+  globalThis.sessionStorage = {
+    getItem(key) { return values.get(key) ?? null; },
+    setItem(key, value) { values.set(key, String(value)); },
+    removeItem(key) { values.delete(key); },
+  };
+  try { run(useTabsStore(createPinia()), () => JSON.parse(values.get('re_admin_tabs'))); }
+  finally {
+    if (originalSessionStorage === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = originalSessionStorage;
+  }
+}
+
+test('exam record filter and page changes reuse one list tab and persist its latest full URL', () => {
+  unsavedContext.calls = [];
+  withStoredTabs([{ path: '/admin/dashboard', title: '业务首页', closable: false }], (tabs, persisted) => {
+    tabs.visit('/admin/exam-records?paper_id=7', '考试记录');
+    tabs.visit('/admin/exam-records?paper_id=8&result_status=failed', '考试记录');
+    const current = '/admin/exam-records?paper_id=8&result_status=failed&page=2&page_size=50';
+    tabs.visit(current, '考试记录');
+    assert.deepEqual(tabs.tabs, [
+      { path: '/admin/dashboard', title: '业务首页', closable: false },
+      { path: current, title: '考试记录', closable: true },
+    ]);
+    assert.deepEqual(persisted(), tabs.tabs);
+    assert.deepEqual(unsavedContext.calls, []);
+  });
+});
+
+test('different record details and other page queries stay separate while the same readonly record keeps its latest return URL', () => {
+  withStoredTabs([], (tabs, persisted) => {
+    tabs.visit('/admin/exam-records/42?return_to=%2Fadmin%2Fexam-records%3Fpaper_id%3D7', '答卷甲');
+    const secondRecord = '/admin/exam-records/43?return_to=%2Fadmin%2Fexam-records%3Fpaper_id%3D7';
+    tabs.visit(secondRecord, '答卷乙');
+    const updatedRecord = '/admin/exam-records/42?return_to=%2Fadmin%2Fexam-records%3Fpaper_id%3D8%26page%3D2';
+    tabs.visit(updatedRecord, '答卷甲');
+    tabs.visit('/admin/papers/7?designer=1', '编辑试卷');
+    tabs.visit('/admin/papers/7?designer=1&scope=training', '培训试卷');
+    assert.deepEqual(tabs.tabs.map(tab => tab.path), [
+      updatedRecord, secondRecord, '/admin/papers/7?designer=1', '/admin/papers/7?designer=1&scope=training',
+    ]);
+    assert.deepEqual(persisted(), tabs.tabs);
+  });
+});
+
+test('restoration and the next record visit converge old duplicate record tabs without merging other tabs', () => {
+  withStoredTabs([
+    { path: '/admin/exam-records?paper_id=7', title: '考试记录', closable: true },
+    { path: '/admin/papers/7?designer=1', title: '编辑试卷', closable: true },
+    { path: '/admin/exam-records?paper_id=8&page=3', title: '考试记录', closable: true },
+    { path: '/admin/exam-records/42?return_to=old', title: '旧答卷标题', closable: true },
+    { path: '/admin/exam-records/43', title: '另一答卷', closable: true },
+    { path: '/admin/exam-records/42?return_to=new', title: '答卷详情', closable: true },
+    { path: '/admin/papers/7?designer=1&scope=training', title: '培训试卷', closable: true },
+  ], (tabs, persisted) => {
+    assert.deepEqual(tabs.tabs.map(tab => tab.path), [
+      '/admin/exam-records?paper_id=8&page=3', '/admin/papers/7?designer=1',
+      '/admin/exam-records/42?return_to=new', '/admin/exam-records/43', '/admin/papers/7?designer=1&scope=training',
+    ]);
+    assert.equal(tabs.tabs[2].title, '答卷详情');
+    assert.deepEqual(persisted(), tabs.tabs);
+    tabs.tabs.push({ path: '/admin/exam-records?user_id=9', title: '重复考试记录', closable: true });
+    tabs.visit('/admin/exam-records?user_id=10&page=2', '考试记录');
+    assert.equal(tabs.tabs.length, 5);
+    assert.equal(tabs.tabs[0].path, '/admin/exam-records?user_id=10&page=2');
+    assert.deepEqual(persisted(), tabs.tabs);
+  });
+});

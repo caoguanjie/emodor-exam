@@ -91,7 +91,13 @@ export interface DraftAck {
 
 export type GradeState = 'not_submitted' | 'finalized';
 export type SubmissionMethod = 'manual' | 'timeout';
-export type ExamRecordStatus = 'in_progress' | 'submitted' | 'passed' | 'failed' | 'timeout';
+export type ExamRecordStatus = 'in_progress' | 'passed' | 'failed' | 'timeout';
+export type ExamRecordResultStatus = ExamRecordStatus;
+
+export interface ExamRecordOptions {
+  papers: Array<{ id: Id; title: string }>;
+  categories: Array<{ id: Id; name: string }>;
+}
 
 export interface ExamRecordSummary {
   record_id: Id;
@@ -102,6 +108,7 @@ export interface ExamRecordSummary {
   name: string;
   source: LearnerSource | null;
   category_id: Id | null;
+  category_name?: string | null;
   difficulty: ExamDifficulty | null;
   release_id: Id | null;
   attempt_no: number;
@@ -114,9 +121,12 @@ export interface ExamRecordSummary {
   grading_state: GradeState;
   submission_method: SubmissionMethod | null;
   score: number | null;
+  /** Additive projections may be absent on older responses. Never infer a historical maximum. */
+  total_score?: number | null;
+  result_status?: ExamRecordResultStatus;
 }
 
-export type ExamRecordDetail = ExamRecordSummary;
+export type ExamRecordDetail = ExamRecordSummary & { avatar_id?: Id | null };
 
 export interface ScoreDistributionBucket {
   lower: number;

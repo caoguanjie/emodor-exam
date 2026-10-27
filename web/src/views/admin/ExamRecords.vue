@@ -6,118 +6,147 @@
           <el-form-item label="关键字">
             <el-input v-model="query.keyword" clearable placeholder="学员姓名、账号或试卷" @keyup.enter="search" />
           </el-form-item>
-          <el-form-item label="试卷 ID">
-            <el-input v-model="query.paper_id" clearable placeholder="精确 ID" @keyup.enter="search" />
+          <el-form-item label="试卷名称">
+            <el-select v-model="query.paper_id" filterable clearable placeholder="全部试卷" :loading="optionsLoading">
+              <el-option v-for="paper in paperOptions" :key="paper.id" :label="paper.title" :value="paper.id" />
+            </el-select>
           </el-form-item>
-          <el-form-item label="来源">
-            <el-select v-model="query.source" clearable style="width: 130px">
-              <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
+          <el-form-item label="培训类别">
+            <el-select v-model="query.category_id" filterable clearable placeholder="全部类别" :loading="optionsLoading">
+              <el-option v-for="category in categoryOptions" :key="category.id" :label="category.name" :value="category.id" />
             </el-select>
           </el-form-item>
           <el-form-item label="难度">
-            <el-select v-model="query.difficulty" clearable style="width: 130px">
-              <el-option label="初级" value="easy" /><el-option label="中级" value="medium" />
-              <el-option label="高级" value="hard" /><el-option label="混合" value="mixed" />
-              <el-option label="历史未知" value="unknown" />
+            <el-select v-model="query.difficulty" clearable placeholder="全部难度">
+              <el-option v-for="option in examRecordDifficultyOptions" :key="option.value" :label="option.label" :value="option.value" />
             </el-select>
           </el-form-item>
           <el-form-item label="考试状态">
-            <el-select v-model="query.status" clearable style="width: 140px">
-              <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
+            <el-select v-model="query.result_status" clearable placeholder="全部状态">
+              <el-option v-for="option in examRecordResultOptions" :key="option.value" :label="option.label" :value="option.value" />
             </el-select>
           </el-form-item>
-          <el-form-item label="结果状态">
-            <el-select v-model="query.grading_state" clearable style="width: 140px">
-              <el-option v-for="item in gradingOptions" :key="item.value" :label="item.label" :value="item.value" />
-            </el-select>
+          <el-form-item label="考试日期">
+            <el-date-picker v-model="dateRange" type="daterange" value-format="YYYY-MM-DD" format="YYYY-MM-DD"
+              start-placeholder="开始日期" end-placeholder="结束日期" range-separator="至"
+              aria-label="考试日期范围" />
           </el-form-item>
           <template #actions><el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button></template>
         </FitsListSearch>
+        <p v-if="entryHint" class="entry-hint">{{ entryHint }}</p>
+        <el-alert v-if="optionsError" :title="optionsError" type="warning" show-icon :closable="false">
+          <el-button link @click="loadOptions">重试选项</el-button>
+        </el-alert>
       </template>
-      <template #actions><el-button :loading="loading" @click="load">刷新</el-button></template>
-
       <el-alert v-if="errorMessage" :title="errorMessage" type="error" show-icon :closable="false">
         <el-button link @click="load">重试</el-button>
       </el-alert>
-      <el-table v-loading="loading" :data="items" empty-text="暂无考试记录">
-        <el-table-column prop="record_id" label="记录 ID" width="105" />
+      <el-table v-loading="loading" :data="items">
+        <template #empty><el-empty v-if="!loading && !errorMessage" description="暂无考试记录" /></template>
         <el-table-column label="学员" min-width="150">
           <template #default="{ row }"><b>{{ row.name }}</b><div class="muted">{{ row.username }}</div></template>
         </el-table-column>
-        <el-table-column prop="paper_title" label="试卷" min-width="180" show-overflow-tooltip />
-        <el-table-column label="来源 / 难度" width="150">
-          <template #default="{ row }">{{ sourceLabel(row.source) }} / {{ difficultyLabel(row.difficulty) }}</template>
+        <el-table-column label="试卷" min-width="210">
+          <template #default="{ row }"><div>{{ row.paper_title }}</div><div class="muted">第 {{ row.attempt_no }} 次</div></template>
         </el-table-column>
-        <el-table-column label="作答进度" width="110">
-          <template #default="{ row }">{{ row.answered_count }} / {{ row.total_count }}</template>
+        <el-table-column label="培训类别" min-width="130">
+          <template #default="{ row }">{{ row.category_name || '—' }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="125">
-          <template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template>
+        <el-table-column label="成绩" min-width="135">
+          <template #default="{ row }">{{ examRecordScoreLabel(row) }}</template>
         </el-table-column>
-        <el-table-column label="结果" width="115">
-          <template #default="{ row }">{{ gradingLabel(row.grading_state) }}</template>
+        <el-table-column label="考试状态" min-width="155">
+          <template #default="{ row }"><el-tag :type="examRecordResultType(row)">{{ examRecordResultLabel(row) }}</el-tag></template>
         </el-table-column>
-        <el-table-column label="成绩" width="90">
-          <template #default="{ row }">{{ row.score === null ? '—' : `${row.score} 分` }}</template>
-        </el-table-column>
-        <el-table-column label="开始时间" min-width="175">
-          <template #default="{ row }">{{ formatTime(row.started_at) }}</template>
+        <el-table-column label="开考时间" min-width="190">
+          <template #default="{ row }">{{ formatExamRecordTime(row.started_at) }}</template>
         </el-table-column>
         <el-table-column label="操作" fixed="right" width="90">
           <template #default="{ row }"><FitsTableActions><FitsTableAction type="primary" @click="openDetail(row.record_id)">详情</FitsTableAction></FitsTableActions></template>
         </el-table-column>
       </el-table>
       <template #pagination>
-        <el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size"
-          :total="total" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next" @change="load" />
+        <el-pagination :current-page="query.page" :page-size="query.page_size"
+          :total="total" :page-sizes="[20, 50, 100]" layout="total, sizes, prev, pager, next"
+          @current-change="changePage" @size-change="changePageSize" />
       </template>
     </FitsTable>
+    <ExamRecordDetail v-if="detailRecordId" :key="detailRecordId" :record-id="detailRecordId" @close="detailRecordId = ''" />
   </section>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
+import ExamRecordDetail from './ExamRecordDetail.vue';
 import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import http from '../../api/http';
-import type { ExamRecordSummary, Page } from '../../api/training-types';
+import type { ExamRecordOptions, ExamRecordSummary, Page } from '../../api/training-types';
 import { createLatestRequestScope } from '../../utils/latest-request-scope';
+import {
+  examRecordDifficultyOptions, examRecordResultOptions, examRecordResultLabel, examRecordResultType,
+  examRecordScoreLabel, examRecordsFiltersFromRoute, examRecordsParams, examRecordsRouteQuery,
+  formatExamRecordTime, type ExamRecordsFilters,
+} from '../../utils/exam-records';
 
+const route = useRoute();
+const detailRecordId = ref('');
+onDeactivated(() => { detailRecordId.value = ''; });
 const router = useRouter();
 const items = ref<ExamRecordSummary[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const errorMessage = ref('');
-const query = reactive({ page: 1, page_size: 20, keyword: '', paper_id: '', source: '', difficulty: '', status: '', grading_state: '' });
+const query = reactive(examRecordsFiltersFromRoute(route.query));
+const dateRange = computed<[string, string] | null>({
+  get: (): [string, string] | null => query.date_from && query.date_to ? [query.date_from, query.date_to] : null,
+  set: value => {
+    query.date_from = value?.[0] || '';
+    query.date_to = value?.[1] || '';
+  },
+});
+const options = ref<ExamRecordOptions>({ papers: [], categories: [] });
+const optionsLoading = ref(false);
+const optionsError = ref('');
 const requestScope = createLatestRequestScope();
-const statusOptions = [
-  { value: 'in_progress', label: '进行中' }, { value: 'submitted', label: '历史结果待确认' },
-  { value: 'passed', label: '已通过' }, { value: 'failed', label: '未通过' }, { value: 'timeout', label: '超时未交卷' },
-];
-const gradingOptions = [
-  { value: 'not_submitted', label: '未交卷' }, { value: 'finalized', label: '已出分' },
-];
-const sourceLabels: Record<string, string> = { institution: '本机构', external: '外来' };
-const difficultyLabels: Record<string, string> = { easy: '初级', medium: '中级', hard: '高级', mixed: '混合', unknown: '历史未知' };
-const statusLabels: Record<string, string> = Object.fromEntries(statusOptions.map((item) => [item.value, item.label]));
-const gradingLabels: Record<string, string> = Object.fromEntries(gradingOptions.map((item) => [item.value, item.label]));
+const optionsScope = createLatestRequestScope();
+const routeText = (value: unknown) => typeof value === 'string' ? value : '';
+const paperOptions = computed(() => query.paper_id && !options.value.papers.some(paper => paper.id === query.paper_id)
+  ? [{ id: query.paper_id, title: query.paper_id === route.query.paper_id ? routeText(route.query.paper_title) || '所选试卷' : '所选试卷' }, ...options.value.papers]
+  : options.value.papers);
+const categoryOptions = computed(() => query.category_id && !options.value.categories.some(category => category.id === query.category_id)
+  ? [{ id: query.category_id, name: '所选培训类别' }, ...options.value.categories] : options.value.categories);
+const entryHint = computed(() => [
+  route.query.user_id ? `学员：${routeText(route.query.learner_name) || '所选学员'}` : '',
+  route.query.paper_id && routeText(route.query.paper_title) ? `试卷：${routeText(route.query.paper_title)}` : '',
+].filter(Boolean).join('；'));
 
-function compactParams() { return Object.fromEntries(Object.entries(query).filter(([, value]) => value !== '')); }
-function sourceLabel(value: string | null) { return value ? sourceLabels[value] || value : '未知'; }
-function difficultyLabel(value: string | null) { return value ? difficultyLabels[value] || value : '未知'; }
-function statusLabel(value: string) { return statusLabels[value] || value; }
-function gradingLabel(value: string) { return gradingLabels[value] || value; }
-function statusType(value: string) { return value === 'passed' ? 'success' : value === 'failed' || value === 'timeout' ? 'danger' : value === 'in_progress' ? 'primary' : 'warning'; }
-function formatTime(value: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'; }
-function openDetail(recordId: string) { void router.push(`/admin/exam-records/${recordId}`); }
-function search() { query.page = 1; void load(); }
-function reset() { Object.assign(query, { page: 1, page_size: 20, keyword: '', paper_id: '', source: '', difficulty: '', status: '', grading_state: '' }); void load(); }
+function openDetail(recordId: string) {
+  detailRecordId.value = recordId;
+}
+async function applyFilters(filters: ExamRecordsFilters) {
+  const paperTitle = options.value.papers.find(paper => paper.id === filters.paper_id)?.title
+    || (filters.paper_id === route.query.paper_id ? routeText(route.query.paper_title) : '');
+  const next = { path: '/admin/exam-records', query: examRecordsRouteQuery(filters, {
+    paper_title: paperTitle, learner_name: filters.user_id === route.query.user_id ? routeText(route.query.learner_name) : '',
+  }) };
+  if (router.resolve(next).fullPath === route.fullPath) {
+    Object.assign(query, examRecordsFiltersFromRoute(route.query));
+    await load();
+  } else await router.push(next);
+}
+function search() { void applyFilters({ ...query, keyword: query.keyword.trim(), page: 1 }); }
+function reset() { void applyFilters(examRecordsFiltersFromRoute({})); }
+function changePage(page: number) { void applyFilters({ ...examRecordsFiltersFromRoute(route.query), page }); }
+function changePageSize(page_size: number) { void applyFilters({ ...examRecordsFiltersFromRoute(route.query), page: 1, page_size }); }
 async function load() {
   const ticket = requestScope.begin();
   loading.value = true;
   errorMessage.value = '';
   try {
-    const data = await http.get('/admin/exam-records', { params: compactParams(), signal: ticket.signal }) as Page<ExamRecordSummary>;
+    const data = await http.get('/admin/exam-records', {
+      params: examRecordsParams(examRecordsFiltersFromRoute(route.query)), signal: ticket.signal,
+    }) as Page<ExamRecordSummary>;
     if (!ticket.isCurrent()) return;
     items.value = data.items;
     total.value = data.total;
@@ -125,13 +154,35 @@ async function load() {
     if (ticket.isCurrent()) errorMessage.value = error instanceof Error ? error.message : '考试记录加载失败';
   } finally {
     if (ticket.isCurrent()) loading.value = false;
+    ticket.finish();
+  }
+}
+async function loadOptions() {
+  const ticket = optionsScope.begin();
+  optionsLoading.value = true;
+  optionsError.value = '';
+  try {
+    const data = await http.get('/admin/exam-records/options', { signal: ticket.signal }) as ExamRecordOptions;
+    if (ticket.isCurrent()) options.value = data;
+  } catch (error) {
+    if (ticket.isCurrent()) optionsError.value = error instanceof Error ? error.message : '筛选选项加载失败';
+  } finally {
+    if (ticket.isCurrent()) optionsLoading.value = false;
+    ticket.finish();
   }
 }
 
-onMounted(load);
-onBeforeUnmount(requestScope.stop);
+watch(() => route.fullPath, () => {
+  if (route.path !== '/admin/exam-records') return;
+  Object.assign(query, examRecordsFiltersFromRoute(route.query));
+  void load();
+}, { immediate: true });
+onMounted(loadOptions);
+onBeforeUnmount(() => { requestScope.stop(); optionsScope.stop(); });
 </script>
 
 <style scoped>
 .muted { color: var(--el-text-color-secondary); font-size: 12px; margin-top: 3px; }
+.entry-hint { color: var(--el-text-color-secondary); font-size: 13px; margin: 0 0 12px; }
+.entry-hint { margin-top: 4px; }
 </style>

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import ElementPlus, { ElSelect } from 'element-plus';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import Students from '../../views/admin/Users.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -47,7 +48,9 @@ beforeEach(() => {
 afterEach(() => wrappers.splice(0).forEach((wrapper) => wrapper.unmount()));
 
 async function render() {
-  const wrapper = mount(Students, { global: { plugins: [ElementPlus], stubs: { MediaUpload: true, ImportPreview: true } } });
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: Students }] });
+  await router.push('/'); await router.isReady();
+  const wrapper = mount(Students, { global: { plugins: [ElementPlus, router], stubs: { MediaUpload: true, ImportPreview: true } } });
   wrappers.push(wrapper);
   await flushPromises();
   return wrapper;

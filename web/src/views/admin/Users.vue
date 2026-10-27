@@ -3,14 +3,14 @@
     <FitsTable>
       <template #search>
         <FitsListSearch @submit.prevent>
-          <el-form-item label="关键字"><el-input v-model="studentQuery.keyword" placeholder="姓名 / 手机号" style="width:210px" clearable @keyup.enter="loadStudents" /></el-form-item>
+          <el-form-item label="关键字"><el-input v-model="studentQuery.keyword" placeholder="姓名 / 手机号" clearable @keyup.enter="loadStudents" /></el-form-item>
           <el-form-item label="培训类别">
-            <el-select v-model="studentQuery.category_id" clearable placeholder="全部类别" style="width:180px" @change="loadStudents">
+            <el-select v-model="studentQuery.category_id" clearable placeholder="全部类别" @change="loadStudents">
               <el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" />
             </el-select>
           </el-form-item>
           <el-form-item label="来源">
-            <el-select v-model="studentQuery.source" clearable placeholder="全部来源" style="width:150px" @change="loadStudents">
+            <el-select v-model="studentQuery.source" clearable placeholder="全部来源" @change="loadStudents">
               <el-option label="本机构" value="institution" /><el-option label="外来" value="external" />
             </el-select>
           </el-form-item>
@@ -73,10 +73,11 @@
             />
           </template>
         </el-table-column>
-        <el-table-column v-if="auth.can('students:write')" label="操作" width="100" fixed="right">
+        <el-table-column v-if="auth.can('students:write') || auth.can('exam_records:read')" label="操作" :width="auth.can('exam_records:read') ? 185 : 100" fixed="right">
           <template #default="{ row }">
             <FitsTableActions>
-              <FitsTableAction type="primary" :disabled="!!studentRowBusy[row.id]" @click="openStudentEdit(row)">编辑</FitsTableAction>
+              <FitsTableAction v-if="auth.can('students:write')" type="primary" :disabled="!!studentRowBusy[row.id]" @click="openStudentEdit(row)">编辑</FitsTableAction>
+              <FitsTableAction v-if="auth.can('exam_records:read')" type="primary" @click="openStudentRecords(row)">考试记录</FitsTableAction>
             </FitsTableActions>
           </template>
         </el-table-column>
@@ -133,6 +134,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { FitsTable, FitsListSearch, FitsTableActions, FitsTableAction } from '../../components/FitsTable';
 import { ElMessage } from 'element-plus';
+import { useRouter } from 'vue-router';
 import type { UploadFile } from 'element-plus';
 import http, { download, upload } from '../../api/http';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
@@ -152,6 +154,10 @@ import {
 } from '../../utils/avatar-save-state';
 
 const auth = useAuthStore();
+const router = useRouter();
+function openStudentRecords(row: { id: string; real_name?: string; username: string }) {
+  if (auth.can('exam_records:read')) void router.push({ path: '/admin/exam-records', query: { user_id: String(row.id), learner_name: row.real_name || row.username } });
+}
 const students = ref<any[]>([]);
 const studentTotal = ref(0);
 const studentLoading = ref(false);

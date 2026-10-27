@@ -8,7 +8,7 @@ import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { Errors } from '../../common/errors';
 import { TRAINING_DEFAULTS } from '../../common/training-contracts';
 import { ExamHistoryService } from './exam-history.service';
-import { ExamRecordsService } from './exam-records.service';
+import { ExamRecordsService, type ExamRecordResultStatus } from './exam-records.service';
 
 const QueryNumber = () => Transform(({ value }) => (
   value === undefined || value === null || value === '' ? undefined : Number(value)
@@ -27,6 +27,12 @@ export class ExamRecordListQueryDto {
   @IsOptional() @IsString() @Matches(/^[1-9]\d*$/)
   paper_id?: string;
 
+  @IsOptional() @IsString() @Matches(/^[1-9]\d*$/)
+  user_id?: string;
+
+  @IsOptional() @IsString() @Matches(/^[1-9]\d*$/)
+  category_id?: string;
+
   @IsOptional() @IsIn(['institution', 'external'])
   source?: string;
 
@@ -38,10 +44,20 @@ export class ExamRecordListQueryDto {
 
   @IsOptional() @IsIn(['not_submitted', 'finalized'])
   grading_state?: string;
+
+  @IsOptional() @IsIn(['in_progress', 'passed', 'failed', 'timeout'])
+  result_status?: ExamRecordResultStatus;
+
+  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  date_from?: string;
+
+  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  date_to?: string;
 }
 
 const RECORD_QUERY_KEYS = [
   'page', 'page_size', 'keyword', 'paper_id', 'source', 'difficulty', 'status', 'grading_state',
+  'user_id', 'category_id', 'result_status', 'date_from', 'date_to',
 ] as const;
 
 function assertQueryKeys(request: Request, allowed: readonly string[], label: string): void {
@@ -73,6 +89,12 @@ export class ExamAdminController {
     return this.recordsService.list(String(user.id), query);
   }
 
+  @Get('exam-records/options')
+  @Permissions('exam_records:read')
+  options(@CurrentUser() user: AuthUser) {
+    return this.recordsService.options(String(user.id));
+  }
+
   @Get('exam-records/:id')
   @Permissions('exam_records:read')
   record(@Param('id') recordId: string, @CurrentUser() user: AuthUser) {
@@ -81,7 +103,10 @@ export class ExamAdminController {
 
   @Get('exam-records/:id/result')
   @Permissions('exam_records:read')
-  result(@Param('id') recordId: string, @CurrentUser() user: AuthUser) {
-    return this.historyService.adminResult(String(user.id), positiveId(recordId, 'record_id'));
+  async result(@Param('id') recordId: string, @CurrentUser() user: AuthUser) {
+    const actorId = String(user.id);
+    const id = positiveId(recordId, 'record_id');
+    await this.recordsService.detail(actorId, id);
+    return this.historyService.adminResult(actorId, id);
   }
 }

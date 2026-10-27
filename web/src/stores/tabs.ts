@@ -14,6 +14,23 @@ function retiredTabPath(path: string): boolean {
   return isRetiredAdminPath(path) || /^\/my\/exams(?:\/|[?#]|$)/.test(path);
 }
 
+/** These readonly routes change query state without opening a different business page. */
+function examRecordTabPath(path: string): string | null {
+  const pathname = path.split(/[?#]/, 1)[0];
+  return /^\/admin\/exam-records(?:\/[1-9]\d*)?$/.test(pathname) ? pathname : null;
+}
+
+function mergeExamRecordTabs(tabs: BusinessTab[]): BusinessTab[] {
+  const merged: BusinessTab[] = [];
+  for (const tab of tabs) {
+    const key = examRecordTabPath(tab.path);
+    const index = key ? merged.findIndex((item) => examRecordTabPath(item.path) === key) : -1;
+    if (index < 0) merged.push(tab);
+    else merged[index] = { ...merged[index], path: tab.path, title: tab.title || merged[index].title };
+  }
+  return merged;
+}
+
 function restoreTabs(): BusinessTab[] {
   try {
     const parsed = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '[]');
@@ -21,7 +38,7 @@ function restoreTabs(): BusinessTab[] {
     const valid = parsed.filter((item): item is BusinessTab => (
       item && typeof item.path === 'string' && typeof item.title === 'string' && typeof item.closable === 'boolean'
     ));
-    const active = valid.filter((item) => !retiredTabPath(item.path));
+    const active = mergeExamRecordTabs(valid.filter((item) => !retiredTabPath(item.path)));
     if (active.length !== valid.length) sessionStorage.setItem(STORAGE_KEY, JSON.stringify(active));
     return active;
   } catch {
@@ -37,8 +54,13 @@ export const useTabsStore = defineStore('tabs', {
     },
     visit(path: string, title: string) {
       if (!path || path.startsWith('/login') || path === '/change-password' || retiredTabPath(path)) return;
-      const existing = this.tabs.find((tab) => tab.path === path);
-      if (existing) existing.title = title || existing.title;
+      const recordPath = examRecordTabPath(path);
+      if (recordPath) this.tabs = mergeExamRecordTabs(this.tabs);
+      const existing = this.tabs.find((tab) => recordPath ? examRecordTabPath(tab.path) === recordPath : tab.path === path);
+      if (existing) {
+        existing.path = path;
+        existing.title = title || existing.title;
+      }
       else this.tabs.push({ path, title: title || '未命名页面', closable: true });
       this.persist();
     },

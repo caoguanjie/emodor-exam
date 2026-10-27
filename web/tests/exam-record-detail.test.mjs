@@ -144,6 +144,9 @@ async function mountDetail() {
   const root = { type: 'root', props: {}, children: [], parent: null, text: '' };
   const app = host.createApp(ExamRecordDetail);
   for (const [name, component] of Object.entries({
+    'el-dialog': passthrough('dialog'),
+    'el-avatar': passthrough('avatar'),
+    'el-icon': passthrough('icon'),
     'el-button': passthrough('button'),
     'el-alert': passthrough('alert'),
     'el-skeleton': passthrough('skeleton'),
