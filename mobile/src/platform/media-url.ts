@@ -1,5 +1,6 @@
 /** Leaf module: URL validation must not import API clients, stores or UI components. */
 import { assertCosMediaUrl } from './cos-media-url'
+import { normalizeApiOrigin } from './api-url'
 type MediaPlatform = 'h5' | 'mp-weixin'
 class MediaUrlError extends Error {
   readonly code = -2
@@ -20,8 +21,7 @@ function absoluteUrl(path: string, platform: MediaPlatform, origin = ''): string
     if (!/^https?:\/\/[^/?#@\s\\]+$/.test(pageOrigin)) throw new MediaUrlError('当前网页域名不可用')
     return `${pageOrigin}${path}`
   }
-  if (!/^https:\/\/(?:[A-Za-z0-9-]+\.)*[A-Za-z0-9-]+(?::\d{1,5})?\/?$/.test(origin)) throw new MediaUrlError('微信媒体需要配置合法 HTTPS 域名')
-  return `${origin.replace(/\/$/, '')}${path}`
+  return `${normalizeApiOrigin(origin)}${path}`
 }
 
 export function mediaContentUrl(url: string, platform: MediaPlatform, origin = ''): string {

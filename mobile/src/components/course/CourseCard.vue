@@ -9,13 +9,15 @@ const emit = defineEmits<{ select: [course: CourseCardModel] }>()
 </script>
 <template>
   <view class="course-card" role="button" :aria-label="course.title" @click="emit('select', course)">
-    <view class="course-card__cover"><ProtectedImage v-if="course.coverAssetId" :asset-id="course.coverAssetId" owner-type="training_course_cover" :owner-id="course.id" :width="64" :height="64"><AppIcon :name="course.icon" :size="30" color="#1989fa" /></ProtectedImage><AppIcon v-else :name="course.icon" :size="30" color="#1989fa" /></view>
+    <view class="course-card__cover"><ProtectedImage v-if="course.coverAssetId" :asset-id="course.coverAssetId" owner-type="training_course_cover" :owner-id="course.id" :width="64" :height="64"><AppIcon :name="course.icon" :size="30" color="#1989fa" /></ProtectedImage><view v-else class="course-card__placeholder"><AppIcon :name="course.icon" :size="24" color="#1989fa" /><text class="course-card__placeholder-label">暂无封面</text></view></view>
     <view class="course-card__copy"><text class="course-card__title">{{ course.title }}</text><template v-if="showProgress"><view class="course-card__track"><view class="course-card__progress" :style="{ width: `${course.progress || 0}%` }" /></view><text class="course-card__state" :class="{ 'course-card__state--complete': completed }">{{ course.progress === null ? '进度暂不可用' : completed ? '已完成' : course.progress ? `已学习 ${course.progress}%` : '未学习' }}</text></template><text v-else class="course-card__count">共{{ course.lessonCount }}节</text></view>
   </view>
 </template>
 <style scoped>
 .course-card { min-height: 88px; display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--app-color-border); border-radius: var(--app-radius-lg); background: var(--app-color-surface); }
 .course-card__cover { width: 64px; height: 64px; flex: none; display: flex; align-items: center; justify-content: center; overflow:hidden; border-radius: var(--app-radius-md); background: var(--app-color-primary-soft); }
+.course-card__placeholder { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.course-card__placeholder-label { color: var(--app-color-text-muted); font-size: 10px; line-height: 14px; }
 .course-card__copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 6px; }
 .course-card__title { font-size: 14px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
 .course-card__count { font-size: 12px; color: var(--app-color-text-muted); }

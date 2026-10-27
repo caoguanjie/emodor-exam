@@ -1,3 +1,13 @@
+import { currentApiPlatform, normalizeApiOrigin, resolveApiUrl } from './api-url'
+import { createNativeAuthCookieJar } from './native-auth-cookie'
+
+// Never put the native refresh credential in a store or persistent storage.
+const nativeAuthCookie = createNativeAuthCookieJar()
+
+export function beginNativeAuthLogin() { if (currentApiPlatform() === 'mp-weixin') nativeAuthCookie.beginLogin() }
+export function beginNativeAuthLogout() { if (currentApiPlatform() === 'mp-weixin') nativeAuthCookie.beginLogout() }
+export function invalidateNativeAuthSession() { if (currentApiPlatform() === 'mp-weixin') nativeAuthCookie.reset() }
+
 /** Platform transport only; token storage and refresh coordination belong to the session store. */
 export interface SessionTransport {
   refresh(): Promise<string>
@@ -11,20 +21,34 @@ export interface SessionWireRequest {
   headers: Record<string, string>
 }
 
-/** H5 uses the browser's HttpOnly mobile Cookie; no token is read from storage. */
+/** H5 uses its browser cookie jar; MP uses only the scoped in-memory credential. */
 export function sendSessionRequest(config: SessionWireRequest): Promise<{ status: number; data: unknown }> {
-  return new Promise((resolve, reject) => {
+  const platform = currentApiPlatform()
+  const origin = platform === 'mp-weixin' ? normalizeApiOrigin(import.meta.env.VITE_API_ORIGIN || '') : ''
+  const url = resolveApiUrl(config.url, platform, origin)
+  const generation = nativeAuthCookie.generation()
+  const native = platform === 'mp-weixin'
+  const logout = native && config.method === 'POST' && url === `${origin}/api/v1/mobile/auth/logout`
+  const headers = native ? Object.fromEntries(Object.entries(config.headers).filter(([name]) => name.toLowerCase() !== 'cookie')) : config.headers
+  return new Promise<{ status: number; data: unknown }>((resolve, reject) => {
     uni.request({
-      url: config.url,
+      url,
       method: config.method,
       data: config.data as UniApp.RequestOptions['data'],
-      header: config.headers,
-      withCredentials: true,
+      header: { ...headers, ...(native && config.method === 'POST' ? nativeAuthCookie.headers(url, origin) : {}) },
+      ...(native ? {} : { withCredentials: true }),
       timeout: 15000,
-      success: response => resolve({ status: response.statusCode, data: response.data }),
+      success: response => {
+        if (native && config.method === 'POST' && response.statusCode >= 200 && response.statusCode < 300
+          && response.data && typeof response.data === 'object' && 'code' in response.data && response.data.code === 0
+          && 'message' in response.data && typeof response.data.message === 'string' && 'data' in response.data) {
+          nativeAuthCookie.acceptResponse(url, origin, response, generation)
+        }
+        resolve({ status: response.statusCode, data: response.data })
+      },
       fail: reject,
     })
-  })
+  }).finally(() => { if (logout) nativeAuthCookie.finishLogout(generation) })
 }
 
 export function enterMobileLogin() {

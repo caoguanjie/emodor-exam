@@ -1,14 +1,10 @@
 import type { ApiEnvelope, ApiRequestConfig } from '@/types/api'
 import { sendSessionRequest } from '@/platform/session'
+import { ApiUrlError, apiPath } from '@/platform/api-url'
 import { useSessionStore } from '@/stores/session'
 
 export class ApiError extends Error {
   constructor(public code: number, message: string, public data: unknown = null, public status = 0) { super(message); this.name = 'ApiError' }
-}
-
-function apiUrl(url: string): string {
-  if (!url.startsWith('/') || url.startsWith('//')) throw new ApiError(40001, '接口地址无效')
-  return url.startsWith('/api/v1/') ? url : `/api/v1${url}`
 }
 
 function isEnvelope(value: unknown): value is ApiEnvelope<unknown> {
@@ -16,7 +12,7 @@ function isEnvelope(value: unknown): value is ApiEnvelope<unknown> {
 }
 
 export async function request<T>(config: ApiRequestConfig): Promise<T> {
-  const url = apiUrl(config.url)
+  const url = apiPath(config.url)
   const publicAuth = /^\/api\/v1\/mobile\/auth\/(?:refresh|sms\/send|sms\/login|debug-login)(?:\?|$)/.test(url)
   const authenticated = config.auth !== false && !publicAuth
   const session = authenticated ? useSessionStore() : null
@@ -37,7 +33,8 @@ export async function request<T>(config: ApiRequestConfig): Promise<T> {
         data: config.data,
         headers: { 'Content-Type': 'application/json', ...config.headers, ...(sentToken ? { Authorization: `Bearer ${sentToken}` } : {}) },
       })
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiUrlError) throw new ApiError(error.code, error.message)
       throw new ApiError(-1, '网络连接失败，请检查网络后重试')
     }
 

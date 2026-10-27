@@ -1,10 +1,29 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assertCosMediaUrl } from '../src/platform/cos-media-url';
 const origin = 'https://shared-123456.cos.ap-guangzhou.myqcloud.com';
 const prefix = 'ruleexam/dev/media/';
 const query = 'q-sign-algorithm=sha1&q-ak=unusable-fixture-id&q-sign-time=1793000000%3B1793000300&q-key-time=1793000000%3B1793000300&q-header-list=host&q-url-param-list=versionid&q-signature=' + 'a'.repeat(40) + '&versionId=fixture-version';
 const signed = `${origin}/${prefix}session/file.mp4?${query}`;
+afterEach(() => vi.unstubAllGlobals());
 describe('precise COS signed media URLs', () => {
+  beforeEach(() => {
+    vi.stubGlobal('URL', undefined);
+    vi.stubGlobal('URLSearchParams', undefined);
+  });
+  it('validates native signed URLs when browser URL globals are absent', () => {
+    expect(assertCosMediaUrl(signed, origin, prefix)).toBe(signed);
+    expect(() => assertCosMediaUrl(signed + '&q%2Dsignature=' + 'b'.repeat(40), origin, prefix)).toThrow();
+  });
+  it.each([
+    signed + '&response-content-type=%ZZ',
+    signed + '&response-content-type=%E0%A4%A',
+    signed + '&response-content-type=%00',
+    signed + '&response-content-type=Bearer+unusable-fixture',
+    signed.replace('/session/', '/session/./'),
+    signed.replace('/session/', '/session//'),
+  ])('rejects ambiguous or malformed native URL encodings: %s', value => {
+    expect(() => assertCosMediaUrl(value, origin, prefix)).toThrow();
+  });
   it('accepts the exact configured media origin/prefix and v5 signature query without changing it', () => {
     expect(assertCosMediaUrl(signed, origin, prefix)).toBe(signed);
     expect(assertCosMediaUrl(signed + '&response-content-disposition=inline%3B%20filename%3Dvideo.mp4&x-cos-security-token=unusable-sts-fixture', origin, prefix)).toContain('response-content-disposition');

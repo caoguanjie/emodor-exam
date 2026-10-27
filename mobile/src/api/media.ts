@@ -2,6 +2,7 @@ import { ApiError, request } from './client'
 import { useSessionStore } from '@/stores/session'
 import type { PickedMedia } from '@/platform/media-picker'
 import { safeMediaUrl } from '@/platform/media-url'
+import { resolveApiUrl } from '@/platform/api-url'
 export { safeMediaUrl } from '@/platform/media-url'
 
 export interface MediaTicketView { content_url: string; expires_at: string }
@@ -34,12 +35,13 @@ export async function getMediaTicket(assetId: string, ownerType: string, ownerId
 }
 /** Upload transport shares the session epoch and one-refresh rule with JSON requests. */
 export async function uploadMedia<T>(url: string, file: PickedMedia, formData: Record<string, string>): Promise<T> {
+  const uploadUrl = resolveApiUrl(url)
   const session = useSessionStore(), epoch = session.sessionEpoch
   function same() { if (epoch !== session.sessionEpoch || session.isLoggingIn) throw new ApiError(40107, '登录会话已切换，请重新操作') }
   async function send(replayed: boolean): Promise<T> {
     same(); const token = session.accessToken
     const result = await new Promise<UniApp.UploadFileSuccessCallbackResult>((resolve, reject) => uni.uploadFile({
-      url: `/api/v1${url}`, filePath: file.tempFilePath, name: 'file', formData,
+      url: uploadUrl, filePath: file.tempFilePath, name: 'file', formData,
       header: token ? { Authorization: `Bearer ${token}` } : {}, timeout: 30000,
       success: resolve, fail: () => reject(new ApiError(-1, '网络连接失败，请重试上传')),
     }))

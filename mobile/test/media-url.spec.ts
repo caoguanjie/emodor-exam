@@ -29,6 +29,14 @@ describe('controlled media URL resolution', () => {
     expect(() => resolveMediaUrl(ticket)).toThrow('HTTPS')
     for (const origin of ['', 'http://mp.example', '//mp.example', 'https://mp.example/mobile', 'https://user@mp.example', 'https://mp.example?x=1']) expect(() => mediaContentUrl(ticket, 'mp-weixin', origin)).toThrow()
   })
+  it('uses the shared strict native origin rules without browser URL globals', async () => {
+    const { mediaContentUrl } = await import(path)
+    vi.stubGlobal('URL', undefined); vi.stubGlobal('URLSearchParams', undefined)
+    expect(mediaContentUrl(ticket, 'mp-weixin', 'https://mp.example/')).toBe(`https://mp.example${ticket}`)
+    for (const origin of ['https://-mp.example', 'https://mp-.example', 'https://mp.example:0', 'https://mp.example:65536']) {
+      expect(() => mediaContentUrl(ticket, 'mp-weixin', origin)).toThrow('HTTPS')
+    }
+  })
   it.each(['https://foreign.example/api/v1/media/tickets/a/content', '//foreign.example/a', '/mobile/api/v1/media/tickets/a/content', '/api/v1/media/tickets/a/content?token=x', '/api/v1/media/tickets/a/content#x', '/api/v1/media/tickets/a\\evil/content', '/api/v1/media/tickets/%2f/content', 'javascript:alert(1)'])('rejects an unsafe URL before resolving its platform origin: %s', async unsafe => {
     const { mediaContentUrl = (value: string) => value } = await import(path).catch(() => ({}))
     expect(() => mediaContentUrl(unsafe, 'h5')).toThrow('媒体地址无效')

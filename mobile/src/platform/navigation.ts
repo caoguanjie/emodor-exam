@@ -3,7 +3,7 @@ export interface NavigationGuard {
   confirmExitExam(): Promise<boolean>
 }
 
-/** Native back uses onBackPress; H5 also protects browser history and refresh. */
+/** H5 protects browser history and refresh; WeChat's optional native prompt is managed separately. */
 export function protectExamNavigation(shouldBlock: () => boolean, requestExit: () => void): () => void {
   // #ifdef H5
   if (typeof window !== 'undefined') {

@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 import { useLearnerStore } from './learner'
 import { ApiError } from '@/api/client'
 import { loginWithSms, logoutMobileSession, refreshMobileSession } from '@/api/auth'
-import { enterMobileLogin } from '@/platform/session'
+import { beginNativeAuthLogin, beginNativeAuthLogout, enterMobileLogin, invalidateNativeAuthSession } from '@/platform/session'
 import type { MobileSessionResult, SmsLoginInput } from '@/types/api'
 import { clearUserDrafts } from '@/utils/exam-draft'
 
@@ -45,6 +45,7 @@ export const useSessionStore = defineStore('mobile-session', () => {
 
   function expireSession() {
     revision.value++
+    invalidateNativeAuthSession()
     clearMemory()
     if (!loginNavigationRequested) {
       loginNavigationRequested = true
@@ -81,6 +82,7 @@ export const useSessionStore = defineStore('mobile-session', () => {
   function login(input: SmsLoginInput): Promise<MobileSessionResult> {
     if (loginPromise) return Promise.reject(new ApiError(40001, '正在登录，请稍候'))
     const startedRevision = ++revision.value
+    beginNativeAuthLogin()
     learner.invalidateProfile()
     loggingIn.value = true
     const pending = enqueueAuthWrite(async () => {
@@ -99,6 +101,7 @@ export const useSessionStore = defineStore('mobile-session', () => {
   function logout(): Promise<void> {
     const previousUser = user.value?.id
     const startedRevision = ++revision.value
+    beginNativeAuthLogout()
     learner.invalidateProfile()
     const previousToken = accessToken.value
     return enqueueAuthWrite(async () => {

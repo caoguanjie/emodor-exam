@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import AppTopBar from './AppTopBar.vue'
 import AppTabBar from './AppTabBar.vue'
+import { nativeNavigationStyle } from '@/platform/native-layout'
+const nativeStyle = nativeNavigationStyle()
 withDefaults(defineProps<{ title?: string; back?: boolean; tab?: string; active?: string; padded?: boolean; backTarget?: string; historyFirst?: boolean }>(), { title: '', back: true, tab: '', active: '', padded: true, backTarget: '', historyFirst: true })
 </script>
 <template>
-  <view class="app-page" :class="{ 'app-page--tab': tab || active }">
+  <view class="app-page" :class="{ 'app-page--tab': tab || active }" :style="nativeStyle">
     <slot name="header"><AppTopBar v-if="title" :title="title" :back="back" :back-target="backTarget" :history-first="historyFirst" /></slot>
     <view class="app-page__body" :class="{ 'app-page__body--padded': padded }"><slot /></view>
     <slot name="footer" />

@@ -6,7 +6,7 @@ import { getMediaTicket, getMediaTickets, uploadAvatar } from '../src/api/media'
 import { uploadIdentityImage } from '../src/api/identity'
 const ok = (data: unknown) => ({ statusCode: 200, data: { code: 0, message: 'ok', data } })
 beforeEach(() => { setActivePinia(createPinia()); useSessionStore().$patch({ accessToken: 'old', initialized: true }) })
-afterEach(() => { vi.unstubAllGlobals() })
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 describe('private media transport', () => {
   it('does not enter the H5 transfer after the account changes while choosing the direct-upload branch', async () => {
     const fetch = vi.fn(); vi.stubGlobal('fetch', fetch)
@@ -19,12 +19,13 @@ describe('private media transport', () => {
   })
   it('keeps MP avatars and identity materials on the controlled upload endpoint', async () => {
     vi.stubGlobal('window', undefined)
+    vi.stubEnv('VITE_API_ORIGIN', 'https://training.example.test')
     const fetch = vi.fn(); const uploaded: { url: string; formData: unknown }[] = []
     vi.stubGlobal('fetch', fetch)
     vi.stubGlobal('uni', { uploadFile: (wire: { url: string; formData: unknown; success(value: unknown): void }) => { uploaded.push(wire); wire.success({ statusCode: 200, data: JSON.stringify({ code: 0, message: 'ok', data: { asset_id: '91', status: 'ready', duration_ms: null } }) }) } })
     await uploadAvatar({ tempFilePath: 'wxfile://picked', size: 20 })
     await uploadIdentityImage('face', { tempFilePath: 'wxfile://face', size: 20 })
-    expect(uploaded.map(item => [item.url, item.formData])).toEqual([['/api/v1/media/upload', { purpose: 'avatar' }], ['/api/v1/me/identity-verification/images', { image_type: 'face' }]])
+    expect(uploaded.map(item => [item.url, item.formData])).toEqual([['https://training.example.test/api/v1/media/upload', { purpose: 'avatar' }], ['https://training.example.test/api/v1/me/identity-verification/images', { image_type: 'face' }]])
     expect(fetch).not.toHaveBeenCalled()
   })
   it('keeps duplicate assets separate by exact item and retains per-item denial', async () => {

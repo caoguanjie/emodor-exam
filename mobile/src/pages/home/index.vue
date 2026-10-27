@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import AppPage from '@/components/common/AppPage.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import CourseCard from '@/components/course/CourseCard.vue'
 import { institution, platformSubtitle, shellCourses, useShellScenario } from '@/fixtures/ui-scenarios/shell'
 import { isStaticSessionPreview } from '@/platform/session'
@@ -20,17 +21,17 @@ function openCourse(course: { id: string }) { uni.navigateTo({ url: preview.valu
 function moreCourses() { uni.reLaunch({ url: `/pages/course/index${preview.value ? '?scenario=course-list' : ''}` }) }
 </script>
 <template>
-  <AppPage tab="home"><template #header><view class="home-brand"><view class="home-brand__logo"><image :src="logo" mode="aspectFit" /></view><view><text class="home-brand__name">{{ institution }}</text><text class="home-brand__subtitle">{{ platformSubtitle }}</text></view></view></template>
+  <AppPage tab="home"><template #header><view class="home-brand"><view class="home-brand__logo"><image :src="logo" mode="aspectFit" /></view><view class="home-brand__copy"><text class="home-brand__name">{{ institution }}</text><text class="home-brand__subtitle">{{ platformSubtitle }}</text></view></view></template>
     <wd-swiper v-if="banners.length" :list="banners" :height="140" :radius="12" image-mode="aspectFill" /><view v-else class="home-banner"><view><text class="home-banner__title">安全学习，从这里开始</text><text class="home-banner__subtitle">系统学习 · 掌握安全技能</text></view><view class="home-banner__icon"><AppIcon name="hard-hat" :size="36" color="#ffffff" /></view><view class="home-banner__dots"><view class="home-banner__dot--active" /><view /><view /></view></view>
-    <view class="home-heading"><text>推荐课程</text><text class="home-heading__more" role="button" @click="moreCourses">更多课程 ›</text></view>
+    <view class="home-heading"><text>推荐课程</text><text v-if="courses.length" class="home-heading__more" role="button" @click="moreCourses">更多课程 ›</text></view>
     <view v-if="!preview && store.homeLoading && !courses.length" class="home-state">课程加载中…</view>
     <view v-else-if="!preview && store.homeError" class="home-state"><text>{{ store.homeError }}</text><wd-button size="small" @click="reload">重新加载</wd-button></view>
-    <view v-else-if="!courses.length" class="home-state">暂无课程</view>
+    <EmptyState v-else-if="!courses.length" image="/static/states/empty-data.png" title="暂无课程" />
     <view class="home-courses"><CourseCard v-for="course in courses" :key="course.id" :course="course" @select="openCourse" /></view>
   </AppPage>
 </template>
 <style scoped>
-.home-brand { height: 74px; padding: 12px 16px 14px; display: flex; align-items: center; gap: 12px; background: #3c82f8; color: var(--app-color-surface); }
+.home-brand { height: 74px; padding: 12px calc(16px + var(--app-native-menu-inset, 0px)) 14px 16px; display: flex; align-items: center; gap: 12px; background: #3c82f8; color: var(--app-color-surface); }
 .home-brand__logo { width: 48px; height: 48px; padding: 4px; flex: none; border-radius: var(--app-radius-md); background: var(--app-color-surface); }
 .home-brand__logo image { width: 40px; height: 40px; }
 .home-brand__name, .home-brand__subtitle { display: block; }
@@ -47,4 +48,8 @@ function moreCourses() { uni.reLaunch({ url: `/pages/course/index${preview.value
 .home-heading__more { color: var(--app-color-primary); font-size: 12px; font-weight: 400; }
 .home-courses { display: flex; flex-direction: column; gap: 12px; }
 .home-state { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 32px 16px; color: var(--app-color-text-muted); font-size: 13px; }
+/* #ifdef MP-WEIXIN */
+.home-brand__copy { flex: 1; min-width: 0; }
+.home-brand__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* #endif */
 </style>
