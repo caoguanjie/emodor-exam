@@ -4,11 +4,14 @@ const require = createRequire(new URL('../../server/package.json', import.meta.u
 require('reflect-metadata');
 const { DataSource } = require('typeorm');
 const { ExamPaper } = require('./dist/entities/exam-paper.entity.js');
+const { ExamAssignment } = require('./dist/entities/exam-assignment.entity.js');
+const { ExamRecord } = require('./dist/entities/exam-record.entity.js');
 const { PaperQuestion } = require('./dist/entities/paper-question.entity.js');
 const { PaperRelease } = require('./dist/entities/paper-release.entity.js');
 const { PaperReleaseQuestion } = require('./dist/entities/paper-release-question.entity.js');
 const { Question } = require('./dist/entities/question.entity.js');
 const { QuestionVersion } = require('./dist/entities/question-version.entity.js');
+const { SysUser } = require('./dist/entities/sys-user.entity.js');
 const { Regulation } = require('./dist/entities/regulation.entity.js');
 const { RegulationVersion } = require('./dist/entities/regulation-version.entity.js');
 const { MediaAsset } = require('./dist/entities/media-asset.entity.js');
@@ -42,8 +45,8 @@ function dataSourceOptions(ctx) {
     charset: 'utf8mb4_0900_ai_ci',
     timezone: 'Z',
     entities: [
-      TrainingCategory, TrainingCourse, Regulation, ExamPaper, PaperQuestion,
-      PaperRelease, PaperReleaseQuestion, Question, QuestionVersion,
+      TrainingCategory, TrainingCourse, Regulation, ExamPaper, ExamAssignment, ExamRecord, PaperQuestion,
+      PaperRelease, PaperReleaseQuestion, Question, QuestionVersion, SysUser,
       RegulationVersion, MediaAsset, MediaReference,
     ],
     synchronize: false,
@@ -124,6 +127,7 @@ function paperServiceFor(dataSource, delayedPreRead) {
     regulationRepo: dataSource.getRepository(Regulation),
     courseRepo: dataSource.getRepository(TrainingCourse),
     releaseRepo: dataSource.getRepository(PaperRelease),
+    userRepo: dataSource.getRepository(SysUser),
     categories,
     dataSource,
     audit: { log() {} },
@@ -237,14 +241,14 @@ function bankServiceFor(ctx, dataSource) {
     new AuditService({ logDir: ctx.env.LOG_DIR }), dataSource);
 }
 
-function observeIdentityLock(dataSource, entered) {
+function observeWriteLock(dataSource, entered, lockedEntity = Question) {
   return {
     transaction: (work) => dataSource.transaction((manager) => work(new Proxy(manager, {
       get(target, property) {
         if (property !== 'getRepository') return Reflect.get(target, property);
         return (entity) => {
           const repo = target.getRepository(entity);
-          if (entity !== Question) return repo;
+          if (entity !== lockedEntity) return repo;
           return new Proxy(repo, {
             get(repository, method) {
               if (method !== 'findOne') return Reflect.get(repository, method);
@@ -284,7 +288,7 @@ export async function proveDeletePublicationOrdering(ctx, input, actorId) {
       };
       deleting = capture(bank.softDelete(String(questionId), String(versionId), true, actor, null));
       await withTimeout(staged.promise, 10_000, 'softDelete did not stage its real transaction');
-      pair.serviceA.dataSource = observeIdentityLock(pair.dataSourceA, competingLock);
+      pair.serviceA.dataSource = observeWriteLock(pair.dataSourceA, competingLock);
       publishing = capture(pair.serviceA.publish(String(paperId), String(actorId)));
     } else {
       pair.serviceA.dataSource = {
@@ -301,7 +305,7 @@ export async function proveDeletePublicationOrdering(ctx, input, actorId) {
       };
       publishing = capture(pair.serviceA.publish(String(paperId), String(actorId)));
       await withTimeout(staged.promise, 10_000, 'publication did not stage its real release');
-      bank.dataSource = observeIdentityLock(pair.dataSourceB, competingLock);
+      bank.dataSource = observeWriteLock(pair.dataSourceB, competingLock);
       deleting = capture(bank.softDelete(String(questionId), String(versionId), true, actor, null));
     }
     await withTimeout(competingLock.promise, 10_000, 'competing service did not attempt the shared identity lock');
@@ -328,6 +332,101 @@ export async function proveDeletePublicationOrdering(ctx, input, actorId) {
     }
     return { order: deleteFirst ? 'delete-first' : 'publish-first', connection_ids: pair.connectionIds,
       publication: publishResult.status === 'fulfilled' ? publishResult.value.releaseId : publishResult.reason.code };
+  } finally {
+    allowCommit.resolve();
+    await Promise.allSettled([deleting, publishing].filter(Boolean));
+    for (const source of [pair.dataSourceA, pair.dataSourceB]) if (source.isInitialized) await source.destroy();
+  }
+}
+
+/** Delete and publish run real transactions on separate single-connection pools. */
+export async function provePaperDeletePublicationOrdering(ctx, input, actorId) {
+  const pair = await createPair(ctx);
+  const staged = deferred();
+  const competingLock = deferred();
+  const allowCommit = deferred();
+  const paperId = String(input.paperId);
+  const papers = paperServiceFor(pair.dataSourceB);
+  papers.audit = new AuditService({ logDir: ctx.env.LOG_DIR });
+  const actor = { id: String(actorId), name: 'paper-delete-concurrency' };
+  let deleting;
+  let publishing;
+  let frozenBeforeDelete;
+  try {
+    const linksBefore = await pair.dataSourceA.getRepository(PaperQuestion).find({ where: { paperId } });
+    assert(linksBefore.length > 0, 'paper delete race requires a non-empty draft');
+    const gateCommit = (dataSource, beforeCommit) => ({
+      transaction: (work) => dataSource.transaction(async (manager) => {
+        const result = await work(manager);
+        if (beforeCommit) await beforeCommit(manager);
+        staged.resolve();
+        await allowCommit.promise;
+        return result;
+      }),
+    });
+    if (input.deleteFirst) {
+      papers.dataSource = gateCommit(pair.dataSourceB);
+      deleting = capture(papers.deleteTraining(paperId, actor, null));
+      await withTimeout(staged.promise, 10_000, 'paper deletion did not stage its transaction');
+      pair.serviceA.dataSource = observeWriteLock(pair.dataSourceA, competingLock, ExamPaper);
+      publishing = capture(pair.serviceA.publish(paperId, String(actorId)));
+    } else {
+      pair.serviceA.dataSource = gateCommit(pair.dataSourceA, async (manager) => {
+        frozenBeforeDelete = await manager.query(
+          'SELECT rq.* FROM paper_release_question rq JOIN paper_release r ON r.id=rq.release_id WHERE r.paper_id=? ORDER BY rq.position',
+          [paperId],
+        );
+      });
+      publishing = capture(pair.serviceA.publish(paperId, String(actorId)));
+      await withTimeout(staged.promise, 10_000, 'paper publication did not stage its transaction');
+      papers.dataSource = observeWriteLock(pair.dataSourceB, competingLock, ExamPaper);
+      deleting = capture(papers.deleteTraining(paperId, actor, null));
+    }
+    await withTimeout(competingLock.promise, 10_000, 'competing operation did not attempt the shared paper write lock');
+    allowCommit.resolve();
+    const [deleteResult, publishResult] = await withTimeout(
+      Promise.all([deleting, publishing]), 10_000, 'paper delete/publication race stalled',
+    );
+    const [state] = await pair.dataSourceA.query(
+      `SELECT
+        (SELECT status FROM exam_paper WHERE id=?) AS status,
+        (SELECT COUNT(*) FROM exam_paper WHERE id=?) AS papers,
+        (SELECT COUNT(*) FROM paper_question WHERE paper_id=?) AS links,
+        (SELECT COUNT(*) FROM paper_release WHERE paper_id=?) AS releases,
+        (SELECT COUNT(*) FROM paper_release_question rq JOIN paper_release r ON r.id=rq.release_id WHERE r.paper_id=?) AS release_questions,
+        (SELECT COUNT(*) FROM exam_assignment WHERE paper_id=?) AS assignments,
+        (SELECT COUNT(*) FROM exam_record WHERE paper_id=?) AS records,
+        (SELECT COUNT(*) FROM paper_release_question rq WHERE NOT EXISTS (SELECT 1 FROM paper_release r WHERE r.id=rq.release_id)) AS orphan_snapshots`,
+      Array(7).fill(paperId),
+    );
+    assert(Number(state.assignments) === 0 && Number(state.records) === 0 && Number(state.orphan_snapshots) === 0,
+      'paper race left assignment, exam or orphan snapshot facts');
+    for (const link of linksBefore) {
+      assert(await pair.dataSourceA.getRepository(Question).existsBy({ id: String(link.questionId) }), 'paper deletion removed a shared question');
+      assert(await pair.dataSourceA.getRepository(QuestionVersion).existsBy({ id: String(link.questionVersionId) }), 'paper deletion removed a shared question version');
+    }
+    if (input.deleteFirst) {
+      assert(deleteResult.status === 'fulfilled' && deleteResult.value === null, 'paper deletion that locked first did not commit');
+      assert(publishResult.status === 'rejected' && publishResult.reason?.code === 40401, 'publication did not reject the deleted paper');
+      assert(Number(state.papers) === 0 && Number(state.links) === 0 && Number(state.releases) === 0 && Number(state.release_questions) === 0,
+        'paper deletion left draft links or partial publication facts');
+    } else {
+      assert(publishResult.status === 'fulfilled', 'paper publication that locked first did not commit');
+      assert(deleteResult.status === 'rejected' && deleteResult.reason?.code === 40970, 'paper deletion accepted a concurrently published paper');
+      assert(state.status === 'published' && Number(state.papers) === 1 && Number(state.links) === linksBefore.length
+        && Number(state.releases) === 1 && Number(state.release_questions) === linksBefore.length,
+      'paper deletion damaged a committed paper or its complete publication');
+      const frozenAfterDelete = await pair.dataSourceA.query(
+        'SELECT rq.* FROM paper_release_question rq JOIN paper_release r ON r.id=rq.release_id WHERE r.paper_id=? ORDER BY rq.position',
+        [paperId],
+      );
+      assert(JSON.stringify(frozenAfterDelete) === JSON.stringify(frozenBeforeDelete), 'rejected paper deletion changed the frozen release');
+    }
+    return {
+      order: input.deleteFirst ? 'delete-first' : 'publish-first', connection_ids: pair.connectionIds,
+      deletion: deleteResult.status === 'fulfilled' ? null : deleteResult.reason.code,
+      publication: publishResult.status === 'fulfilled' ? publishResult.value.releaseId : publishResult.reason.code,
+    };
   } finally {
     allowCommit.resolve();
     await Promise.allSettled([deleting, publishing].filter(Boolean));

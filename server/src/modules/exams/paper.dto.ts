@@ -107,6 +107,7 @@ export class CreateTrainingPaperDto {
 }
 
 export class UpdateTrainingPaperDto {
+  @ValidateIf((_object, value) => value !== undefined) @IsBoolean() preserve_questions?: boolean;
   @IsOptional() @IsString() @MinLength(1) @MaxLength(128) title?: string;
   @IsOptional() @IsIn(['fixed', 'random']) mode?: 'fixed' | 'random';
   @IsOptional() @IsString() @Matches(ID_PATTERN) category_id?: string;
@@ -166,7 +167,7 @@ export const PAPER_CREATE_KEYS = [
   'required_learning_minutes', 'remark', 'sort_order',
   'total_score', 'pass_score', 'duration_minutes', 'max_attempts', 'partial_credit_ratio', 'rules', 'designer_layout',
 ] as const;
-export const PAPER_UPDATE_KEYS = PAPER_CREATE_KEYS;
+export const PAPER_UPDATE_KEYS = [...PAPER_CREATE_KEYS, 'preserve_questions'] as const;
 export const PAPER_LIST_KEYS = ['page', 'page_size', 'keyword', 'category_id', 'mode', 'status'] as const;
 export const PAPER_CANDIDATE_KEYS = ['type', 'difficulty', 'page', 'page_size'] as const;
 export const PAPER_OPTION_KEYS = ['category_id', 'page', 'page_size'] as const;

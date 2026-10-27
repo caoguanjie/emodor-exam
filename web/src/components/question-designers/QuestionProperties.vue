@@ -2,6 +2,12 @@
   <el-form label-position="left" label-width="76px" require-asterisk-position="right" class="question-properties" @submit.prevent>
     <h3 class="designer-property-group-title">基础属性</h3>
     <div class="designer-property-content">
+    <el-form-item v-if="questionPosition !== undefined" label="题目位置">
+      <el-input class="question-properties__position" aria-label="题目位置" type="number" inputmode="numeric" :min="1" :max="questionCount" :step="1" v-model="positionDraft" :disabled="readonly || positionDisabled" @keydown.enter.prevent="moveToPosition">
+        <template #suffix><span class="question-properties__position-hint">共 {{ questionCount }} 题</span></template>
+        <template #append><el-button :disabled="readonly || positionDisabled || !validPosition" @click="moveToPosition">移动</el-button></template>
+      </el-input>
+    </el-form-item>
     <el-form-item label="类型" required>
       <el-select aria-label="类型" :model-value="meta.type" :disabled="readonly" @update:model-value="emit('type-change', $event)">
         <el-option label="单选题" value="single" /><el-option label="多选题" value="multiple" /><el-option label="判断题" value="judgment" />
@@ -53,6 +59,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 import type { Editor } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -70,9 +77,18 @@ const props = withDefaults(defineProps<{
   regulations?: QuestionRegulationOption[];
   readonly?: boolean; categoryReadonly?: boolean; totalScore?: number; mediaResolver?: MediaResolver; difficultyOptions?: DesignerOption[];
   canUploadMedia?: boolean; mediaAdapter?: DesignerMediaAdapter;
+  questionPosition?: number; questionCount?: number; positionDisabled?: boolean;
 }>(), { answerSummary: '', categories: () => [], regulations: () => [], readonly: false, categoryReadonly: false, totalScore: 100,
   difficultyOptions: () => [] });
-const emit = defineEmits<{ change: [patch: Partial<QuestionMeta>]; 'type-change': [type: SingleQuestionType]; 'upload-state-change': [state: { pending: boolean }] }>();
+const emit = defineEmits<{ change: [patch: Partial<QuestionMeta>]; 'type-change': [type: SingleQuestionType]; 'upload-state-change': [state: { pending: boolean }]; 'move-position': [position: number] }>();
+const positionDraft = ref('');
+watch(() => [props.clientId, props.questionPosition, props.questionCount], () => { positionDraft.value = String(props.questionPosition ?? ''); }, { immediate: true });
+const validPosition = computed(() => positionDraft.value.trim() !== '' && Number.isInteger(Number(positionDraft.value)) && Number(positionDraft.value) >= 1 && Number(positionDraft.value) <= (props.questionCount ?? 0));
+function moveToPosition() {
+  if (props.readonly || props.positionDisabled || !validPosition.value) return;
+  if (Number(positionDraft.value) === props.questionPosition) { ElMessage.info('当前题目已在该位置'); return; }
+  emit('move-position', Number(positionDraft.value));
+}
 const scoreDraft = ref('');
 const scoreLimit = computed(() => Number.isFinite(props.totalScore) && props.totalScore > 0 ? Math.min(999.99, props.totalScore) : 999.99);
 watch(() => [props.clientId, props.meta.score_cents] as const, ([clientId, cents], previous) => {
@@ -192,6 +208,15 @@ onBeforeUnmount(cancelAnalysisImage);
 </script>
 
 <style scoped>
+.question-properties__position { width:100%; min-width:0; border:1px solid var(--el-border-color); border-radius:var(--el-border-radius-base, 4px); overflow:hidden; box-sizing:border-box; transition:border-color .18s, box-shadow .18s; }
+.question-properties__position:not(.is-disabled):hover { border-color:var(--el-border-color-hover); }
+.question-properties__position:not(.is-disabled):focus-within { border-color:var(--el-color-primary); box-shadow:0 0 0 3px var(--el-color-primary-light-9); }
+.question-properties .question-properties__position :deep(.el-input__wrapper),
+.question-properties .question-properties__position :deep(.el-input__wrapper.is-focus) { border-radius:0; box-shadow:none !important; min-height:30px; }
+.question-properties .question-properties__position :deep(.el-input-group__append) { width:48px; padding:0; border:0; border-left:1px solid var(--el-border-color-lighter); border-radius:0; box-shadow:none; overflow:hidden; }
+.question-properties__position .el-button { width:100%; height:100%; min-height:30px; margin:0; padding:0 10px; border:0; border-radius:0; box-shadow:none; background:transparent; }
+.question-properties__position .el-button:not(:disabled):hover { color:var(--el-color-primary); background:var(--el-color-primary-light-9); }
+.question-properties__position-hint { font-size:12px; color:var(--el-text-color-placeholder); white-space:nowrap; }
 .question-properties :deep(.el-input-group__append) { width:40px; padding:0; box-sizing:border-box; }
 .question-properties :deep(input[type="number"]) { appearance:textfield; -moz-appearance:textfield; }
 .question-properties :deep(input::-webkit-inner-spin-button),

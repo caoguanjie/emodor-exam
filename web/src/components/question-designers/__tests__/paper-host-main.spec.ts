@@ -128,21 +128,6 @@ describe('main fixed paper entry', () => {
     await designer.vm.save(); await flushPromises();
     expect(transport.calls.filter((call) => call.method === 'put')).toHaveLength(0);
   });
-  it.each([undefined, 7300])('assigns a paper score on insertion, ignoring candidate score %s', async (oldScore) => {
-    const candidate = { question_id: '41', question_version_id: '51', type: 'single', difficulty: 'easy',
-      concept_id: null, regulation_id: null, stem: '新候选', options: [], ...(oldScore === undefined ? {} : { score_cents: oldScore }) };
-    const fallback = transport.respond;
-    transport.respond = async (method, path, body, config) => path.endsWith('/candidates')
-      ? { items: [candidate], total: 1, page: 1, page_size: 50 } : fallback(method, path, body, config);
-    const { wrapper, state } = await show(PaperDetail, '/admin/papers/100?scope=training');
-    await state.openCandidatePicker(); await flushPromises();
-    const table = wrapper.findAllComponents({ name: 'ElTable' }).find((table) => table.props('data')?.[0]?.question_version_id === '51')!;
-    expect(table.text()).not.toMatch(/建议分|默认分/);
-    table.vm.$emit('selection-change', [candidate]); await flushPromises();
-    await wrapper.findAll('button').find((button) => button.text() === '加入题单')!.trigger('click');
-    expect(state.fixedQuestions.map((item: any) => item.score_cents)).toEqual([10000, 500]);
-    expect(candidate).toEqual(expect.objectContaining({ question_id: '41' }));
-  });
   it('saves a draft on the list without opening the designer and prevents a second save action while pending', async () => {
     const fallback = transport.respond;
     let complete!: (value: any) => void;
@@ -200,95 +185,7 @@ describe('main fixed paper entry', () => {
     expect(visibleLabels()).not.toContain('组卷模式');
     expect(visibleLabels()).not.toContain('随机规则');
   });
-  it('uses only enabled catalog difficulties in the existing fixed candidate picker', async () => {
-    const fallback = transport.respond;
-    transport.respond = async (method, path, body, config) => path.endsWith('/candidates') ? { items: [], total: 0, page: 1, page_size: 50 } : fallback(method, path, body, config);
-    const { wrapper, state } = await show(PaperDetail, '/admin/papers/100?scope=training');
-    await state.openCandidatePicker(); await flushPromises();
-    const difficulty = wrapper.findAllComponents(ElSelect).find((select) => select.props('placeholder') === '难度')!;
-    expect(difficulty.findAllComponents(ElOption).map((option) => ({ value: option.props('value'), label: option.props('label') }))).toEqual([{ value: 'easy', label: '简单' }, { value: 'hard', label: '困难' }]);
-    expect(transport.calls.filter((call) => call.path === '/admin/questions/authoring-options')).toHaveLength(1);
-  });
-  it('does not fetch candidates until the authoritative difficulty catalog can be loaded', async () => {
-    const fallback = transport.respond; let failed = true;
-    transport.respond = async (method, path, body, config) => { if (path === '/admin/questions/authoring-options' && failed) throw new Error('候选难度离线'); return fallback(method, path, body, config); };
-    const { state } = await show(PaperDetail, '/admin/papers/100?scope=training');
-    await state.openCandidatePicker(); await flushPromises();
-    expect(state.candidateVisible).toBe(false); expect(transport.calls.some((call) => call.path.endsWith('/candidates'))).toBe(false);
-    failed = false; await state.openCandidatePicker(); await flushPromises();
-    expect(state.candidateVisible).toBe(true); expect(transport.calls.filter((call) => call.path.endsWith('/candidates'))).toHaveLength(1);
-  });
-  it('describes the current two random pools without offering historical medium questions for new fixed papers', async () => {
-    const fallback = transport.respond;
-    transport.respond = async (method, path, body, config) => path === '/admin/papers/100' ? detail({ mode: 'random' }) : fallback(method, path, body, config);
-    const { wrapper } = await show(PaperDetail, '/admin/papers/100?scope=training');
-    expect(wrapper.text()).toContain('简单题池'); expect(wrapper.text()).toContain('困难题池');
-    expect(wrapper.text()).not.toContain('可用于固定卷');
-  });
-  it('keeps an existing random paper random while removing mode switching and copy creation', async () => {
-    const rules = [{ type: 'single', count: 1, score_cents: 10000 }];
-    const fallback = transport.respond;
-    transport.respond = async (method, path, body, config) => {
-      if (path === '/admin/papers/100') return method === 'put'
-        ? detail({ mode: 'random', rules, ...body })
-        : detail({ mode: 'random', rules });
-      return fallback(method, path, body, config);
-    };
-    const { wrapper, state } = await show(PaperDetail, '/admin/papers/100?scope=training');
-    expect(wrapper.findAll('.el-tag').map((tag) => tag.text())).toContain('随机组卷');
-    expect(wrapper.findAll('.el-form-item__label').map((label) => label.text().trim())).not.toContain('组卷模式');
-    expect(wrapper.findAll('button').some((button) => button.text() === '复制')).toBe(false);
-    state.form.title = '保留随机模式';
-    state.form.mode = 'fixed';
-    await state.saveConfig(); await flushPromises();
-    const update = transport.calls.find((call) => call.method === 'put' && call.path === '/admin/papers/100')!;
-    expect(update.body).toMatchObject({ title: '保留随机模式', mode: 'random', rules });
-    expect(state.form.mode).toBe('random');
-    await state.copyPaper(); await flushPromises();
-    expect(transport.calls.some((call) => call.method === 'post' && call.path === '/admin/papers/100/copy')).toBe(false);
-  });
-  it('does not suggest copying an immutable published random paper', async () => {
-    const fallback = transport.respond;
-    transport.respond = async (method, path, body, config) => path === '/admin/papers/100'
-      ? detail({ mode: 'random', status: 'published' })
-      : fallback(method, path, body, config);
-    const { wrapper } = await show(PaperDetail, '/admin/papers/100?scope=training');
-    expect(wrapper.text()).toContain('发布版本不可修改；题库后续修订不会改写本卷。');
-    expect(wrapper.text()).not.toContain('请复制为新试卷');
-  });
-  it.each([
-    ['published', '已发布'],
-    ['withdrawn', '已撤回'],
-    ['archived', '已归档'],
-  ])('keeps historical %s training papers visible without withdrawal or archive actions', async (status, label) => {
-    transport.permissions.add('papers:publish');
-    const fallback = transport.respond;
-    transport.respond = async (method, path, body, config) => path === '/admin/papers/100'
-      ? detail({ status })
-      : fallback(method, path, body, config);
-    const { wrapper, state } = await show(PaperDetail, '/admin/papers/100?scope=training');
-    expect(wrapper.findAll('.el-tag').map((tag) => tag.text())).toContain(label);
-    const actions = wrapper.findAll('button').map((button) => button.text());
-    expect(actions).not.toContain('撤回');
-    expect(actions).not.toContain('归档');
-    expect(state.withdrawPaper).toBeUndefined();
-    expect(state.archivePaper).toBeUndefined();
-    expect(transport.calls.some((call) => call.path.endsWith('/withdraw') || call.path.endsWith('/archive'))).toBe(false);
-  });
-  it('removes the fixed mode label while preserving fixed-paper copy', async () => {
-    const fallback = transport.respond;
-    transport.respond = async (method, path, body, config) => path === '/admin/papers/100/copy'
-      ? { id: 'copied-fixed' }
-      : fallback(method, path, body, config);
-    const { wrapper, router, state } = await show(PaperDetail, '/admin/papers/100?scope=training');
-    expect(wrapper.findAll('.el-tag').map((tag) => tag.text())).not.toContain('固定组卷');
-    expect(wrapper.findAll('.el-form-item__label').map((label) => label.text().trim())).not.toContain('组卷模式');
-    expect(wrapper.findAll('button').some((button) => button.text() === '复制')).toBe(true);
-    await state.copyPaper(); await flushPromises();
-    expect(transport.calls.some((call) => call.method === 'post' && call.path === '/admin/papers/100/copy')).toBe(true);
-    expect(router.currentRoute.value.fullPath).toBe('/admin/papers/copied-fixed?scope=training');
-  });
-  it('mounts the complete real designer and saves in place before closing to the current detail', async () => {
+  it('opens the designer directly and returns to the list after a successful save', async () => {
     const { wrapper, router } = await show(PaperDetail, '/admin/papers/100?scope=training&designer=1');
     expect(wrapper.findAll('.paper-designer__canvas .ProseMirror')).toHaveLength(1);
     expect(wrapper.findAllComponents(QuestionDocumentEditor)).toHaveLength(1);
@@ -296,12 +193,9 @@ describe('main fixed paper entry', () => {
     expect(designer.props('difficultyOptions')).toEqual([{ value: 'easy', label: '简单' }, { value: 'hard', label: '困难' }]);
     await designer.get('input[aria-label="顶部试卷标题"]').setValue('重命名');
     await designer.vm.save(); await flushPromises();
-    expect(designer.get('[role="status"]').text()).toBe('已保存');
     expect(transport.calls.filter((call) => call.path === '/admin/question-documents/commit')).toHaveLength(0);
     expect(transport.calls.filter((call) => call.method === 'put').map((call) => call.path)).toEqual(['/admin/papers/100', '/admin/papers/100/questions']);
-    expect(router.currentRoute.value.query.designer).toBe('1');
-    await designer.vm.requestClose(); await flushPromises();
-    expect(router.currentRoute.value.fullPath).toBe('/admin/papers/100?scope=training');
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
     expect(wrapper.findComponent(PaperDesigner).exists()).toBe(false);
   });
   it('does not open a writer for random, published, or missing question-read access', async () => {
@@ -343,32 +237,25 @@ describe('main fixed paper entry', () => {
     expect(transport.calls.some((call) => call.path === '/admin/papers/regulation-options')).toBe(false);
     expect(designer.props('modelValue').paper).toMatchObject({ ...source.paper, id: '100' });
   });
-  it('opens one designer session per fullPath and refreshes the cached ordinary detail after save and close', async () => {
+  it('reopens a cached designer route using the latest server value after closing to the list', async () => {
     const fallback = transport.respond; let persisted = detail();
     transport.respond = async (method, path, body, config) => {
       if (path === '/admin/papers/100') { if (method === 'put') persisted = { ...persisted, ...copy(body) }; return copy(persisted); }
       return fallback(method, path, body, config);
     };
     const { wrapper, router } = await show(PaperDetail, '/admin/papers/100?scope=training');
-    const originalDetailUid = wrapper.getComponent(PaperDetail).vm.$.uid;
-    await wrapper.findAll('button').find((button) => button.text() === '编辑试卷')!.trigger('click'); await flushPromises();
     const designer = wrapper.getComponent(PaperDesigner);
-    await designer.get('input[aria-label="顶部试卷标题"]').setValue('缓存壳保存后的标题');
+    await designer.get('input[aria-label="顶部试卷标题"]').setValue('保存后的标题');
     expect(await designer.vm.save()).toBe(true); await flushPromises();
-    await designer.vm.requestClose(); await flushPromises();
-    expect(router.currentRoute.value.fullPath).toBe('/admin/papers/100?scope=training');
-    expect(wrapper.getComponent(PaperDetail).vm.$.uid).toBe(originalDetailUid);
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
     expect(wrapper.findComponent(PaperDesigner).exists()).toBe(false);
-    expect(wrapper.get('.detail-title').text()).toBe('缓存壳保存后的标题');
-    expect(transport.calls.filter((call) => call.path === '/admin/question-documents/assemble')).toHaveLength(1);
-
     persisted.title = '服务端更新后的标题';
-    await wrapper.findAll('button').find((button) => button.text() === '编辑试卷')!.trigger('click'); await flushPromises();
+    await router.push('/admin/papers/100?scope=training'); await flushPromises();
     const reopened = wrapper.getComponent(PaperDesigner);
     expect((reopened.get('input[aria-label="顶部试卷标题"]').element as HTMLInputElement).value).toBe('服务端更新后的标题');
-    expect(transport.calls.filter((call) => call.path === '/admin/question-documents/assemble')).toHaveLength(2);
+    expect(transport.calls.filter(call=>call.path==='/admin/question-documents/assemble')).toHaveLength(2);
     await reopened.vm.requestClose(); await flushPromises();
+    expect(router.currentRoute.value.path).toBe('/admin/papers');
     expect(wrapper.findComponent(PaperDesigner).exists()).toBe(false);
-    expect(wrapper.get('.detail-title').text()).toBe('服务端更新后的标题');
   });
 });

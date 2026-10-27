@@ -1,16 +1,23 @@
 <template>
-  <div class="question-preview" :class="{ 'question-preview--library': variant === 'library' }">
-    <div v-if="variant !== 'library'" class="question-preview__meta">
+  <div class="question-preview" :class="{
+    'question-preview--library': variant === 'library',
+    'question-preview--paper': variant === 'paper',
+  }">
+    <div v-if="variant === 'default'" class="question-preview__meta">
       <el-tag size="small">{{ typeLabel }}</el-tag>
       <el-tag size="small" type="info">{{ difficultyLabel }}</el-tag>
       <span v-if="showScore && question.score != null">{{ Number(question.score) }} 分</span>
     </div>
-    <div class="question-preview__stem rich-content" v-html="rendered.stem" />
+    <div v-if="variant === 'paper'" class="question-preview__stem question-preview__paper-stem">
+      <span v-if="questionNumber != null" class="question-preview__paper-number">{{ questionNumber }}、</span>
+      <div class="question-preview__paper-stem-content rich-content" v-html="rendered.stem" />
+    </div>
+    <div v-else class="question-preview__stem rich-content" v-html="rendered.stem" />
     <div class="question-preview__options">
       <div v-for="(option, index) in rendered.options" :key="option.key" class="question-preview__option">
-        <span class="question-preview__key">{{ String.fromCharCode(65 + index) }}{{ variant === 'library' ? '.' : '' }}</span>
+        <span class="question-preview__key">{{ String.fromCharCode(65 + index) }}{{ variant === 'paper' ? '、' : variant === 'library' ? '.' : '' }}</span>
         <div class="rich-content" v-html="option.text" />
-        <el-tag v-if="variant !== 'library' && revealAnswer && rendered.correctIds.includes(option.key)" size="small" type="success">正确答案</el-tag>
+        <el-tag v-if="variant === 'default' && revealAnswer && rendered.correctIds.includes(option.key)" size="small" type="success">正确答案</el-tag>
       </div>
     </div>
     <section v-if="variant === 'library' && revealAnswer" class="question-preview__result">
@@ -27,6 +34,17 @@
         <span class="question-preview__result-label">答案解析</span>
         <div v-if="rendered.analysis" class="question-preview__analysis-content rich-content" v-html="rendered.analysis" />
         <span v-else class="question-preview__analysis-content question-preview__analysis-empty">暂无解析</span>
+      </div>
+    </section>
+    <section v-else-if="variant === 'paper' && revealAnswer" class="question-preview__paper-result">
+      <div class="question-preview__paper-result-row">
+        <span class="question-preview__paper-result-label">正确答案：</span>
+        <span>{{ paperCorrectAnswer || '—' }}</span>
+      </div>
+      <div class="question-preview__paper-result-row">
+        <span class="question-preview__paper-result-label">解析：</span>
+        <div v-if="rendered.analysis" class="question-preview__paper-analysis rich-content" v-html="rendered.analysis" />
+        <span v-else class="question-preview__analysis-empty">暂无解析</span>
       </div>
     </section>
     <section v-else-if="revealAnswer && rendered.analysis" class="question-preview__explanation">
@@ -56,7 +74,8 @@ const props = withDefaults(defineProps<{
   };
   revealAnswer?: boolean;
   showScore?: boolean;
-  variant?: 'default' | 'library';
+  variant?: 'default' | 'library' | 'paper';
+  questionNumber?: number;
 }>(), { revealAnswer: true, showScore: false, variant: 'default' });
 const emit = defineEmits<{ ready: [result: { ok: boolean }] }>();
 
@@ -72,6 +91,7 @@ const correctOptions = computed(() => rendered.options.flatMap((option, index) =
     ? [{ key: option.key, letter: String.fromCharCode(65 + index), text: option.text }]
     : []
 )));
+const paperCorrectAnswer = computed(() => correctOptions.value.map((option) => option.letter).join('、'));
 
 async function decodeMediaUrl(url: string): Promise<void> {
   if (typeof Image === 'undefined') return;
@@ -245,4 +265,92 @@ onBeforeUnmount(() => {
 .rich-content :deep(blockquote) { border-left: 3px solid #dcdfe6; margin: 8px 0; padding-left: 12px; }
 .rich-content :deep(pre) { white-space: pre-wrap; padding: 8px; background: #f5f7fa; }
 .rich-content :deep(.question-preview__missing-media) { color: #c45656; }
+.question-preview--paper {
+  display: block;
+  color: #000;
+  font-family: SimSun, "宋体", serif;
+  font-size: 11pt;
+  line-height: 1.8;
+  break-inside: auto;
+  page-break-inside: auto;
+}
+.question-preview--paper .question-preview__paper-stem {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  font-size: inherit;
+  font-weight: 400;
+  line-height: inherit;
+  break-after: avoid-page;
+  page-break-after: avoid;
+}
+.question-preview__paper-number { flex: 0 0 auto; }
+.question-preview__paper-stem-content { flex: 1; min-width: 0; }
+.question-preview--paper .question-preview__options {
+  display: block;
+  break-before: avoid-page;
+  break-inside: auto;
+  page-break-before: avoid;
+  page-break-inside: auto;
+}
+.question-preview--paper .question-preview__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+}
+.question-preview--paper .question-preview__key {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 400;
+  line-height: inherit;
+}
+.question-preview--paper .question-preview__paper-stem-content :deep(p),
+.question-preview--paper .question-preview__option > .rich-content :deep(p),
+.question-preview--paper .question-preview__paper-analysis :deep(p) { margin: 0; }
+.question-preview--paper .rich-content { overflow: visible; overflow-wrap: anywhere; }
+.question-preview--paper .rich-content :deep(img) {
+  max-width: 100%;
+  max-height: 250mm;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+}
+.question-preview__paper-result {
+  margin-top: 8pt;
+  break-inside: auto;
+  page-break-inside: auto;
+}
+.question-preview__paper-result-row {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+}
+.question-preview__paper-result-label { flex: 0 0 auto; }
+.question-preview__paper-analysis { flex: 1; min-width: 0; }
+
+@media print {
+  .question-preview--paper,
+  .question-preview--paper .question-preview__options { break-inside: auto; page-break-inside: auto; }
+  .question-preview--paper .question-preview__paper-stem { break-after: avoid-page; page-break-after: avoid; }
+  .question-preview--paper .question-preview__options { break-before: avoid-page; page-break-before: avoid; }
+  .question-preview--paper .question-preview__option,
+  .question-preview--paper .rich-content :deep(img) { break-inside: avoid-page; page-break-inside: avoid; }
+  .question-preview--paper .rich-content :deep(img) { max-width: 100%; max-height: 250mm; width: auto; height: auto; object-fit: contain; }
+}
 </style>

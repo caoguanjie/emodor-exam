@@ -1,0 +1,217 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { defineComponent } from 'vue';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import ElementPlus, { ElMessageBox } from 'element-plus';
+import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
+import Papers from '../../../views/admin/Papers.vue';
+import PaperPreviewDialog from '../../PaperPreviewDialog.vue';
+
+interface Call { method: string; path: string; payload?: any }
+const transport = vi.hoisted(() => ({
+  calls: [] as Call[], permissions: new Set<string>(),
+  respond: async (_method: string, _path: string, _payload?: any): Promise<any> => ({}),
+}));
+vi.mock('../../../api/http', () => ({ default: Object.fromEntries(['get', 'post', 'put', 'delete'].map(method => [method, async (path: string, payload?: any) => {
+  transport.calls.push({ method, path, payload: payload ? JSON.parse(JSON.stringify(payload)) : undefined });
+  return transport.respond(method, path, payload);
+}])) }));
+vi.mock('../../../stores/auth', () => ({ useAuthStore: () => ({ can: (permission: string) => transport.permissions.has(permission) }) }));
+const wrappers: VueWrapper[] = [];
+const draft = {
+  id: '2', title: '草稿试卷', business_scope: 'training', mode: 'fixed', status: 'draft', category_id: '1',
+  requires_learning: true, required_learning_minutes: 60, course_ids: ['10'], regulation_ids: [], rules: [],
+  duration_minutes: 45, total_score: 100, pass_score: 60, max_attempts: 3, partial_credit_ratio: .5,
+  remark: '班组考核备注', created_at: '2026-10-27T00:30:00Z',
+};
+const random = { ...draft, id: '3', title: '历史随机卷', mode: 'random' };
+const published = { ...draft, id: '4', title: '发布试卷', status: 'published' };
+function previewData(id = '2') {
+  return {
+    paper_id: id, release_id: null, mode: 'fixed', sample_kind: 'fixed_paper', note: '预览', difficulty: 'easy',
+    rule: { total_cents: 10000, pass_cents: 6000, duration_minutes: 30, max_attempts: 3, partial_credit_ratio: .5, rules: [] },
+    capacities: [], questions: [{ question_id: '40', question_version_id: '50', type: 'single', difficulty: 'easy', stem: '题干', options: [{ key: 'A', text: '选项甲' }, { key: 'B', text: '选项乙' }], score: 100, answer: [0], analysis: '秘密解析' }],
+  };
+}
+beforeEach(() => {
+  transport.calls = [];
+  transport.permissions = new Set(['papers:read', 'papers:write', 'papers:publish', 'questions:read']);
+  transport.respond = async (_method, path) => {
+    if (path === '/admin/papers/category-options') return { items: [{ id: '1', name: '产业工人' }], total: 1 };
+    if (path === '/admin/papers') return { items: [draft, random, published], total: 3 };
+    if (path.includes('/preview')) return previewData();
+    return { id: '5' };
+  };
+});
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks(); document.body.innerHTML = ''; });
+async function list() {
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/admin/papers', component: Papers }, { path: '/admin/papers/:id', component: { template: '<div />' } }] });
+  await router.push('/admin/papers'); await router.isReady();
+  const wrapper = mount(RouterView, { attachTo: document.body, global: { plugins: [ElementPlus, router] } });
+  wrappers.push(wrapper); await flushPromises();
+  return { wrapper, router, state: (wrapper.getComponent(Papers).vm.$ as any).setupState };
+}
+async function preview(realQuestion = false) {
+  const wrapper = mount(PaperPreviewDialog, {
+    attachTo: document.body,
+    global: { plugins: [ElementPlus], stubs: realQuestion ? {} : { QuestionPreview: defineComponent({ name: 'QuestionPreview', emits: ['ready'], template: '<div class="question-preview-stub" />' }) } },
+  });
+  wrappers.push(wrapper); await flushPromises();
+  return { wrapper, state: (wrapper.vm.$ as any).setupState };
+}
+function rowActions(wrapper: VueWrapper, title: string) {
+  const id = ({ 草稿试卷: '2', 历史随机卷: '3', 发布试卷: '4' } as Record<string, string>)[title];
+  return wrapper.getComponent(Papers).get(`[data-paper-id="${id}"]`);
+}
+async function choose(wrapper: VueWrapper, title: string, label: string) {
+  const button = rowActions(wrapper, title).findAll('button').find(item => item.text() === label);
+  expect(button, `missing row action ${label}`).toBeDefined();
+  await button!.trigger('click'); await flushPromises();
+}
+const requests = (method: string, path: string) => transport.calls.filter(c => c.method === method && c.path === path);
+
+describe('paper list operations', () => {
+  it('renders seven management columns without exposing learning requirements in a row', async () => {
+    const { wrapper } = await list();
+    expect(wrapper.findAll('.el-table__header th').map(h => h.text())).toEqual(['试卷名称', '培训类别', '考试时间', '状态', '备注', '创建时间', '操作']);
+    const row = wrapper.findAll('.el-table__body tr').find(r => r.text().includes('草稿试卷'))!;
+    expect(row.text()).toContain('产业工人'); expect(row.text()).toContain('45 分钟'); expect(row.text()).toContain('班组考核备注');
+    expect(row.text()).not.toContain('学习'); expect(row.text()).not.toContain('开启');
+  });
+  it('shows status-appropriate flat action buttons and keeps historical random publication', async () => {
+    const { wrapper } = await list();
+    const labels = (title: string) => rowActions(wrapper, title).findAll('button').map(item => item.text());
+    expect(labels('草稿试卷')).toEqual(['试卷管理', '修改', '预览/打印', '复制', '发布', '删除']);
+    expect(labels('历史随机卷')).toEqual(['预览/打印', '发布', '删除']);
+    expect(labels('发布试卷')).toEqual(['预览/打印', '复制']);
+  });
+  it('opens ordinary preview from its row button without requesting answers', async () => {
+    const { wrapper } = await list();
+    await choose(wrapper, '草稿试卷', '预览/打印');
+    expect(requests('get', '/admin/papers/2/preview')).toHaveLength(1);
+    expect(transport.calls.some(c => c.path.endsWith('/answers'))).toBe(false);
+    expect(wrapper.get('.paper-detail').classes()).toContain('paper-preview-open');
+    wrapper.getComponent(PaperPreviewDialog).vm.close(); await flushPromises();
+    expect(wrapper.get('.paper-detail').classes()).not.toContain('paper-preview-open');
+  });
+  it('routes paper management to the existing designer', async () => {
+    const { wrapper, router } = await list();
+    await choose(wrapper, '草稿试卷', '试卷管理');
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers/2?scope=training&designer=1');
+  });
+  it('blocks writes for read-only access and allows basic editing without question access', async () => {
+    transport.permissions = new Set(['papers:read']);
+    const { wrapper, state } = await list();
+    expect(wrapper.findAll('.fits-table-action').map(i => i.text())).toEqual(['预览/打印', '预览/打印', '预览/打印']);
+    await state.copyPaper(draft); await state.publishPaper(draft); await state.deletePaper(draft); await state.editPaper(draft);
+    expect(transport.calls.filter(c => c.method !== 'get')).toEqual([]);
+    transport.permissions.add('papers:write');
+    expect(state.canModify(draft)).toBe(true); expect(state.canEdit(draft)).toBe(false);
+  });
+  it('sends one copy request during repeated clicks and refreshes without leaving the list', async () => {
+    const original = transport.respond; let complete!: (value: any) => void;
+    transport.respond = async (method, path, payload) => path.endsWith('/copy') ? new Promise(resolve => { complete = resolve; }) : original(method, path, payload);
+    const { wrapper, state, router } = await list();
+    const first = state.copyPaper(draft); await flushPromises(); await state.copyPaper(draft);
+    expect(requests('post', '/admin/papers/2/copy')).toHaveLength(1);
+    expect(rowActions(wrapper, '草稿试卷').findAll('button').every(button => button.attributes('disabled') !== undefined)).toBe(true);
+    complete({ id: '5' }); await first; await flushPromises();
+    expect(requests('get', '/admin/papers')).toHaveLength(2);
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
+    await state.copyPaper(random); expect(requests('post', '/admin/papers/3/copy')).toHaveLength(0);
+  });
+  it('confirms publication once, refreshes the list, and ignores cancel', async () => {
+    let confirm!: (value: any) => void;
+    vi.spyOn(ElMessageBox, 'confirm').mockImplementation(() => new Promise(resolve => { confirm = resolve; }) as any);
+    const { state } = await list();
+    const first = state.publishPaper(draft); await flushPromises(); await state.publishPaper(draft);
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1); confirm('confirm'); await first; await flushPromises();
+    expect(requests('post', '/admin/papers/2/publish')).toHaveLength(1);
+    expect(requests('get', '/admin/papers')).toHaveLength(2);
+    vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel'); await state.publishPaper(draft);
+    expect(requests('post', '/admin/papers/2/publish')).toHaveLength(1);
+    vi.mocked(ElMessageBox.confirm).mockResolvedValueOnce('confirm' as any); await state.publishPaper(random);
+    expect(requests('post', '/admin/papers/3/publish')).toHaveLength(1);
+  });
+  it('confirms deletion once and holds its lock through the pending receipt', async () => {
+    let confirm!: (value: any) => void; let deleted!: (value: any) => void;
+    const original = transport.respond;
+    transport.respond = (method, path, payload) => method === 'delete' ? new Promise(resolve => { deleted = resolve; }) : original(method, path, payload);
+    vi.spyOn(ElMessageBox, 'confirm').mockImplementation(() => new Promise(resolve => { confirm = resolve; }) as any);
+    const { state } = await list();
+    const first = state.deletePaper(draft); await flushPromises(); await state.deletePaper(draft);
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1); expect(requests('delete', '/admin/papers/2')).toHaveLength(0);
+    confirm('confirm'); await flushPromises(); await state.deletePaper(draft);
+    expect(requests('delete', '/admin/papers/2')).toHaveLength(1);
+    deleted(null); await first;
+    expect(requests('get', '/admin/papers')).toHaveLength(2);
+    vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel'); await state.deletePaper(draft); await state.deletePaper(published);
+    expect(requests('delete', '/admin/papers/2')).toHaveLength(1); expect(requests('delete', '/admin/papers/4')).toHaveLength(0);
+  });
+  it('returns from an emptied final page to the previous remaining page after deletion', async () => {
+    let deleted = false; const original = transport.respond;
+    transport.respond = async (method, path, payload) => {
+      if (method === 'delete') { deleted = true; return null; }
+      if (path === '/admin/papers' && payload?.params.page === 2) return { items: deleted ? [] : [draft], total: deleted ? 20 : 21 };
+      if (path === '/admin/papers' && deleted) return { items: [published], total: 20 };
+      return original(method, path, payload);
+    };
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any);
+    const { state } = await list(); state.trainingQuery.page = 2; await state.loadTraining();
+    await state.deletePaper(draft); await flushPromises();
+    expect(state.trainingQuery.page).toBe(1); expect(state.trainingItems.map((item: any) => item.id)).toEqual(['4']);
+    expect(requests('get', '/admin/papers').at(-1)?.payload.params.page).toBe(1);
+  });
+  it('does not delete after leaving a pending confirmation', async () => {
+    let confirm!: (value: any) => void;
+    vi.spyOn(ElMessageBox, 'confirm').mockImplementation(() => new Promise(resolve => { confirm = resolve; }) as any);
+    const { state, router } = await list();
+    const pending = state.deletePaper(draft); await flushPromises(); await router.push('/admin/papers/4');
+    confirm('confirm'); await pending;
+    expect(requests('delete', '/admin/papers/2')).toHaveLength(0);
+  });
+  it('ignores a delete receipt that arrives after the list has been left', async () => {
+    let complete!: (value: any) => void; const original = transport.respond;
+    transport.respond = (method, path, payload) => method === 'delete' ? new Promise(resolve => { complete = resolve; }) : original(method, path, payload);
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any);
+    const { state, router } = await list(); const pending = state.deletePaper(draft); await flushPromises();
+    expect(requests('delete', '/admin/papers/2')).toHaveLength(1);
+    await router.push('/admin/papers/4'); complete(null); await pending; await flushPromises();
+    expect(requests('get', '/admin/papers')).toHaveLength(1);
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers/4');
+  });
+});
+
+describe('reusable paper preview', () => {
+  it('does not reopen a closed dialog when its request finishes late', async () => {
+    let complete!: (value: any) => void; transport.respond = async () => new Promise(resolve => { complete = resolve; });
+    const { wrapper, state } = await preview(); const open = wrapper.vm.open(draft, false); await flushPromises();
+    wrapper.vm.close(); complete(previewData()); await open; await flushPromises();
+    expect(state.previewVisible).toBe(false); expect(state.previewSession).toBeNull();
+  });
+  it('discards a late answer response after a newer ordinary preview and gates printing by media readiness', async () => {
+    let answer!: (value: any) => void;
+    transport.respond = async (_m, path) => path.endsWith('/answers') ? new Promise(resolve => { answer = resolve; }) : previewData('4');
+    const { wrapper, state } = await preview(); const old = wrapper.vm.open(draft, true); await flushPromises();
+    await wrapper.vm.open(published, false); answer(previewData('2')); await old; await flushPromises();
+    expect(state.previewSession.paperId).toBe('4'); expect(state.previewAnswers).toBe(false);
+    expect(state.previewResourcesReady).toBe(false);
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {}); state.printPreview(); expect(print).not.toHaveBeenCalled();
+    const op = state.previewSession.operation; state.markPreviewQuestionReady(op, 0, '50', { ok: false }); expect(state.previewResourcesFailed).toBe(true);
+    state.retryPreviewMedia(); state.markPreviewQuestionReady(op, 0, '50', { ok: true }); expect(state.previewResourcesReady).toBe(false);
+    state.markPreviewQuestionReady(op, 1, '50', { ok: true }); state.printPreview(); expect(print).toHaveBeenCalledTimes(1);
+  });
+  it('renders an ordinary printable paper without exposing answer, analysis, or JSON export actions', async () => {
+    const { wrapper } = await preview(true); await wrapper.vm.open(draft, false); await flushPromises();
+    const dialog = document.body.querySelector('.paper-preview-dialog')!;
+    expect(dialog.textContent).toContain('草稿试卷'); expect(dialog.textContent).toContain('题干'); expect(dialog.textContent).toContain('选项甲');
+    expect(dialog.textContent).not.toContain('秘密解析'); expect(dialog.textContent).not.toContain('正确答案');
+    expect(Array.from(dialog.querySelectorAll('.el-dialog__footer button')).map(button => button.textContent?.trim())).toEqual(['关闭', '打印']);
+    expect(dialog.querySelector('.el-dialog__footer .el-button--primary')?.textContent?.trim()).toBe('打印');
+    expect(dialog.classList.contains('re-form-dialog')).toBe(true);
+    expect(dialog.querySelector('.paper-print-sheet')).not.toBeNull();
+    expect(dialog.querySelector('.question-preview__meta')).toBeNull();
+    expect(dialog.textContent).not.toContain('简单');
+    expect(dialog.textContent).not.toContain('单选题');
+    expect(transport.calls.some(c => c.path.endsWith('/answers'))).toBe(false);
+  });
+});

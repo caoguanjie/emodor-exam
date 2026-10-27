@@ -405,6 +405,7 @@ html { scrollbar-color: var(--re-scrollbar-thumb) transparent; scrollbar-width: 
   }
 
   .paper-preview-overlay .el-button,
+  .paper-preview-overlay .el-dialog__header,
   .paper-preview-overlay .el-dialog__footer,
   .paper-preview-overlay .el-dialog__headerbtn,
   .paper-preview-overlay .preview-difficulty .el-radio-group { display: none !important; }

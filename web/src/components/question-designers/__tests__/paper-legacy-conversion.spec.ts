@@ -87,51 +87,6 @@ async function editQuestion(wrapper: VueWrapper) {
 }
 
 describe('legacy paper range conversion through the real UI', () => {
-  it('keeps a cancelled detail edit intact and saves a changed category after explicit conversion', async () => {
-    const { wrapper } = await show();
-    const page = wrapper.getComponent(PaperDetail);
-    const title = page.findAllComponents(ElFormItem).find((item) => item.props('label') === '试卷名称')!.getComponent(ElInput);
-    await title.get('input').setValue('调整后的旧草稿');
-    const category = page.findAllComponents(ElFormItem).find((item) => item.props('label') === '培训类别')!.getComponent(ElSelect);
-    await category.get('.el-select__wrapper').trigger('click'); await flushPromises();
-    const option = new DOMWrapper(document.body).findAll('.el-select-dropdown__item').find((item) => item.text() === '新培训类别')!;
-    await option.trigger('click'); await flushPromises();
-    await button(page, '保存配置').trigger('click'); await flushPromises();
-    expect(confirmation().exists()).toBe(true); expect(confirmation().text()).toContain('转换为当前试卷配置');
-    expect(confirmation().text()).toContain('题目来源'); expect(confirmation().text()).toContain('历史发布'); expect(writes()).toEqual([]);
-    await button(confirmation(), '取消').trigger('click'); await flushPromises();
-    const state = (page.vm.$ as any).setupState;
-    expect(state.form).toMatchObject({ title: '调整后的旧草稿', category_id: '20', regulation_ids: ['30'] }); expect(writes()).toEqual([]);
-    await button(page, '保存配置').trigger('click'); await flushPromises();
-    await button(confirmation(), '转换并保存').trigger('click'); await flushPromises();
-    expect(writes()).toEqual([expect.objectContaining({ method: 'put', path: '/admin/papers/100', body: expect.objectContaining({ category_id: '20', regulation_ids: [] }) })]);
-    expect(state.form.regulation_ids).toEqual([]); expect(state.dirty).toBe(false);
-    await title.get('input').setValue('转换后的再次编辑'); await button(page, '保存配置').trigger('click'); await flushPromises();
-    expect(writes()).toHaveLength(2); expect(confirmation().exists()).toBe(false);
-  });
-
-  it('converts a legacy random draft only after confirmation and preserves its rules on a category change', async () => {
-    const rules = [{ type: 'single', count: 1, score_cents: 10000 }];
-    records.set('100', record({ mode: 'random', rules }));
-    const { wrapper } = await show();
-    const page = wrapper.getComponent(PaperDetail);
-    const category = page.findAllComponents(ElFormItem).find((item) => item.props('label') === '培训类别')!.getComponent(ElSelect);
-    await category.get('.el-select__wrapper').trigger('click'); await flushPromises();
-    await new DOMWrapper(document.body).findAll('.el-select-dropdown__item').find((item) => item.text() === '新培训类别')!.trigger('click'); await flushPromises();
-    await button(page, '保存配置').trigger('click'); await flushPromises();
-    expect(confirmation().exists()).toBe(true); expect(writes()).toEqual([]);
-    await button(confirmation(), '取消').trigger('click'); await flushPromises();
-    const state = (page.vm.$ as any).setupState;
-    expect(state.form).toMatchObject({ mode: 'random', category_id: '20', regulation_ids: ['30'], rules });
-    expect(writes()).toEqual([]);
-    await button(page, '保存配置').trigger('click'); await flushPromises();
-    await button(confirmation(), '转换并保存').trigger('click'); await flushPromises();
-    expect(writes()).toEqual([expect.objectContaining({ method: 'put', path: '/admin/papers/100',
-      body: expect.objectContaining({ mode: 'random', category_id: '20', regulation_ids: [], rules }) })]);
-    expect(state.form).toMatchObject({ mode: 'random', category_id: '20', regulation_ids: [], rules });
-    expect(state.dirty).toBe(false);
-  });
-
   it('cancels an edited source question without writes and then continues the existing phased save after conversion', async () => {
     const { wrapper } = await show('/admin/papers/100?scope=training&designer=1');
     const designer = await editQuestion(wrapper);
@@ -146,23 +101,20 @@ describe('legacy paper range conversion through the real UI', () => {
     expect(writes().map((call) => call.path)).toEqual(['/admin/question-documents/commit', '/admin/papers/100', '/admin/papers/100/questions']);
     expect(writes()[1]!.body.regulation_ids).toEqual([]);
     expect(writes()[0]!.body.bundle).toMatchObject({ identities: {}, document: { questions: { question_one: { regulation_id: null, regulation_version_id: null } } } });
-    expect(designer.get('[role="status"]').text()).toBe('已保存');
-    expect(designer.props('modelValue').paper.regulation_ids).toEqual([]);
+    expect(wrapper.findComponent(PaperDesigner).exists()).toBe(false);
+    expect(records.get('100').regulation_ids).toEqual([]);
   });
 
   it('converts an inherited range on a copied draft while leaving the published source intact', async () => {
     const published = record({ status: 'published', latest_release_id: '500' }); records.set('100', published);
-    const { wrapper, router } = await show();
-    await button(wrapper.getComponent(PaperDetail), '复制').trigger('click'); await flushPromises();
-    expect(router.currentRoute.value.path).toBe('/admin/papers/200');
-    expect(records.get('200').regulation_ids).toEqual(['30']);
-    await button(wrapper.getComponent(PaperDetail), '编辑试卷').trigger('click'); await flushPromises();
+    records.set('200', record({ id: '200', regulation_ids: ['30'] }));
+    const { wrapper } = await show('/admin/papers/200?scope=training');
     const designer = await editQuestion(wrapper);
     await button(designer, '保存').trigger('click'); await flushPromises();
     expect(confirmation().exists()).toBe(true);
     await button(confirmation(), '转换并保存').trigger('click'); await flushPromises();
     expect(writes().find((call) => call.path === '/admin/papers/200')?.body.regulation_ids).toEqual([]);
-    expect(designer.get('[role="status"]').text()).toBe('已保存');
+    expect(wrapper.findComponent(PaperDesigner).exists()).toBe(false);
     expect(records.get('100')).toEqual(published);
     expect(writes().some((call) => call.method === 'put' && call.path.startsWith('/admin/papers/100'))).toBe(false);
   });
@@ -179,16 +131,15 @@ describe('legacy paper range conversion through the real UI', () => {
     expect(writes().map((call) => call.path)).toEqual(['/admin/papers']);
   });
 
-  it.each([false, true])('does not save a departed paper after confirming conversion (designer=%s)', async (designerMode) => {
+  it.each([false, true])('does not save a departed designer route after confirming conversion (query flag=%s)', async (designerMode) => {
     const { wrapper, router } = await show(`/admin/papers/100?scope=training${designerMode ? '&designer=1' : ''}`);
     const page = wrapper.getComponent(PaperDetail);
-    await button(designerMode ? wrapper.getComponent(PaperDesigner) : page, designerMode ? '保存' : '保存配置').trigger('click'); await flushPromises();
+    await button(wrapper.getComponent(PaperDesigner), '保存').trigger('click'); await flushPromises();
     expect(confirmation().exists()).toBe(true);
     await router.push('/admin/papers'); await flushPromises();
     expect(router.currentRoute.value.path).toBe('/admin/papers');
     await button(confirmation(), '转换并保存').trigger('click'); await flushPromises();
     expect(writes()).toEqual([]);
-    expect((page.vm.$ as any).setupState.form.regulation_ids).toEqual(['30']);
     expect(records.get('100').regulation_ids).toEqual(['30']);
   });
 });

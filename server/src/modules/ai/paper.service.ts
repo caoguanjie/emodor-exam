@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { ExamPaper } from '../../entities/exam-paper.entity';
+import { ExamAssignment } from '../../entities/exam-assignment.entity';
+import { ExamRecord } from '../../entities/exam-record.entity';
 import { PaperQuestion } from '../../entities/paper-question.entity';
 import { Question } from '../../entities/question.entity';
 import { QuestionVersion } from '../../entities/question-version.entity';
@@ -527,6 +529,7 @@ export class PaperService {
     const paper = await this.dataSource.transaction(async (manager) => {
       await this.validateTrainingRelations(manager, categoryId, regulationIds, courseIds);
       const repo = manager.getRepository(ExamPaper);
+      const now = new Date();
       const draft = repo.create({
         regulationId: null,
         businessScope: 'training',
@@ -548,6 +551,8 @@ export class PaperService {
         status: 'draft',
         createdBy: String(actor.id),
         updatedBy: String(actor.id),
+        createdAt: now,
+        updatedAt: now,
       });
       draft.ruleConfig = this.trainingRule(draft, input.rules || [], input.mode === 'random');
       return repo.save(draft);
@@ -575,6 +580,12 @@ export class PaperService {
         throw Errors.paperReleaseConflict('试卷类别或组卷模式已变化，请刷新后重试');
       }
       if (paper.status !== 'draft') throw Errors.paperReleaseConflict('发布后不可修改规则或题池，请复制为新试卷');
+      const oldMode = paper.mode;
+      const oldCategory = String(paper.categoryId);
+      if (patch.preserve_questions === true && (oldMode !== (patch.mode ?? oldMode) || oldCategory !== targetCategory)
+        && await manager.getRepository(PaperQuestion).existsBy({ paperId: String(id) })) {
+        throw Errors.paperReleaseConflict('试卷已有题目，基本修改不能更换培训类别或组卷模式，请刷新后重试');
+      }
       const regulationIds = (patch.regulation_ids ?? paper.regulationIds ?? []).map(String);
       const learning = normalizePaperLearning({
         requiresLearning: patch.requires_learning === undefined ? paper.requiresLearning : patch.requires_learning,
@@ -584,8 +595,6 @@ export class PaperService {
       const courseIds = learning.courseIds;
       const remark = patch.remark === undefined ? paper.remark ?? null : normalizePaperRemark(patch.remark);
       await this.validateTrainingRelations(manager, targetCategory, regulationIds, courseIds, true);
-      const oldMode = paper.mode;
-      const oldCategory = String(paper.categoryId);
       if (patch.title !== undefined) paper.title = patch.title.trim();
       if (patch.mode !== undefined) paper.mode = patch.mode;
       paper.categoryId = targetCategory;
@@ -616,6 +625,29 @@ export class PaperService {
       object_id: String(id), detail: patch as any, result: 'success', source_ip: ip,
     });
     return this.trainingPaperOperationView(updated);
+  }
+
+  async deleteTraining(id: string, actor: PaperActor, ip: string | null): Promise<null> {
+    const paperId = String(id);
+    const deleted = await this.dataSource.transaction(async (manager) => {
+      const repo = manager.getRepository(ExamPaper);
+      const paper = await repo.findOne({ where: { id: paperId }, lock: { mode: 'pessimistic_write' } });
+      this.assertTrainingPaper(paper);
+      if (paper.status !== 'draft') throw Errors.paperReleaseConflict('只有草稿试卷可以删除');
+      if (await manager.getRepository(PaperRelease).existsBy({ paperId })
+        || await manager.getRepository(ExamAssignment).existsBy({ paperId })
+        || await manager.getRepository(ExamRecord).existsBy({ paperId })) {
+        throw Errors.paperReleaseConflict('试卷已有发布或考试记录，不能删除');
+      }
+      await manager.getRepository(PaperQuestion).delete({ paperId });
+      await repo.delete({ id: paperId });
+      return paper;
+    });
+    this.audit.log({
+      actor_id: Number(actor.id), actor_name: actor.name, action: 'training_paper.delete', object_type: 'exam_paper',
+      object_id: paperId, detail: { mode: deleted.mode, category_id: deleted.categoryId }, result: 'success', source_ip: ip,
+    });
+    return null;
   }
 
   async setTrainingQuestions(id: string, items: FixedQuestionInput[], actor: PaperActor, ip: string | null) {
@@ -778,6 +810,7 @@ export class PaperService {
       }
       const links = await manager.getRepository(PaperQuestion).find({ where: { paperId: String(id) }, order: { sort: 'ASC', id: 'ASC' } });
       await this.assertEnabledPaperLinks(manager, links);
+      const now = new Date();
       const created = await paperRepo.save(paperRepo.create({
         regulationId: null, businessScope: 'training', mode: locked.mode, categoryId: locked.categoryId,
         requiresLearning: locked.requiresLearning, regulationIds: cloneJson(locked.regulationIds || []),
@@ -789,6 +822,7 @@ export class PaperService {
         durationMinutes: locked.durationMinutes, maxAttempts: locked.maxAttempts,
         partialCreditRatio: locked.partialCreditRatio, status: 'draft', createdBy: String(actor.id),
         updatedBy: String(actor.id),
+        createdAt: now, updatedAt: now,
       }));
       if (links.length) await manager.getRepository(PaperQuestion).save(links.map((item) => manager.getRepository(PaperQuestion).create({
         paperId: String(created.id), questionId: item.questionId, questionVersionId: item.questionVersionId,

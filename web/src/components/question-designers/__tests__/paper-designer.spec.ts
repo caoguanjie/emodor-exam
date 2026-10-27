@@ -248,7 +248,17 @@ describe('public paper designer', () => {
     }
     const wrapper = await show(value);
     const core = wrapper.findComponent(QuestionEditor).vm.getEditor();
-    (wrapper.vm as unknown as { moveQuestion: (id: string, index: number) => void }).moveQuestion('question_99', 0);
+    wrapper.findComponent(QuestionEditor).vm.focus('question_99');
+    await flushPromises();
+    const positionInput = wrapper.get('input[aria-label="题目位置"]');
+    expect((positionInput.element as HTMLInputElement).value).toBe('100');
+    expect(button(wrapper, '移动').attributes('disabled')).toBeUndefined();
+    await button(wrapper, '移动').trigger('click'); await flushPromises();
+    expect(document.body.textContent).toContain('当前题目已在该位置');
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined();
+    await positionInput.setValue('1');
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined();
+    await button(wrapper, '移动').trigger('click');
     await flushPromises();
     const moved = latest(wrapper);
     expect(moved.document.content.content![0]!.attrs!.client_id).toBe('question_99');
@@ -256,6 +266,18 @@ describe('public paper designer', () => {
     expect(wrapper.findAll('.paper-designer__canvas .ProseMirror')).toHaveLength(1);
     expect(validatePaperStructure(moved)).toEqual([]);
     expect(planPaperSave(moved).reuse).toHaveLength(100);
+    expect(wrapper.findComponent(QuestionProperties).props('clientId')).toBe('question_99');
+    expect((wrapper.get('input[aria-label="题目位置"]').element as HTMLInputElement).value).toBe('1');
+    for (const invalid of ['', '0', '101', '1.5']) {
+      const count = wrapper.emitted('update:modelValue')!.length;
+      await wrapper.get('input[aria-label="题目位置"]').setValue(invalid);
+      await wrapper.get('input[aria-label="题目位置"]').trigger('keydown', {key:'Enter'});
+      expect(wrapper.emitted('update:modelValue')!.length).toBe(count);
+    }
+    await wrapper.get('input[aria-label="题目位置"]').setValue('100');
+    await wrapper.get('input[aria-label="题目位置"]').trigger('keydown', {key:'Enter'});
+    await flushPromises();
+    expect(latest(wrapper).document.content.content!.at(-1)!.attrs!.client_id).toBe('question_99');
   }, 20000);
 
   it('removes a question only after confirmation and atomically removes its binding', async () => {
@@ -267,6 +289,15 @@ describe('public paper designer', () => {
     expect(validatePaperStructure(latest(wrapper))).toEqual([]);
   });
 
+  it('notifies its host only after the entire paper save succeeds', async () => {
+    const pending = deferred<any>();
+    const wrapper = await show(paperFixture(), { saveDraft: () => pending.promise });
+    await button(wrapper, '保存').trigger('click'); await flushPromises();
+    expect(wrapper.emitted('saved')).toBeUndefined();
+    pending.resolve({ status:'saved', value:paperFixture() }); await flushPromises();
+    expect(wrapper.emitted('saved')).toHaveLength(1);
+  });
+
   it('freezes unknown save outcomes and only offers continuing the original request', async () => {
     const requests: string[] = [];
     const wrapper = await show(paperFixture(), { saveDraft: async (value, context) => {
@@ -274,6 +305,7 @@ describe('public paper designer', () => {
     } });
     await button(wrapper, '保存').trigger('click'); await flushPromises();
     expect(wrapper.text()).toContain('提交结果未知');
+    expect(wrapper.emitted('saved')).toBeUndefined();
     expect(button(wrapper, '继续保存')).toBeDefined(); expect(button(wrapper, '放弃本次保存')).toBeUndefined();
     expect(wrapper.findComponent(QuestionEditor).props('disabled')).toBe(true);
     expect((wrapper.get('input[aria-label="试卷标题"]').element as HTMLInputElement).disabled).toBe(true);

@@ -65,7 +65,7 @@ describe('main complete paper kernel', () => {
     const wrapper = await show();
     const input = wrapper.get('input[aria-label="分值"]');
     expect(wrapper.find('.question-properties .el-input-number').exists()).toBe(false);
-    expect(wrapper.get('.question-properties .el-input-group__append').text()).toBe('分');
+    expect(input.element.closest('.el-input')?.querySelector('.el-input-group__append')?.textContent).toBe('分');
     await input.setValue('5.25'); await flushPromises();
     expect(latest(wrapper).document.questions.question_one!.score_cents).toBe(525);
     await input.setValue('101'); await input.trigger('blur'); await flushPromises();

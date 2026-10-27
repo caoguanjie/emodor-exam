@@ -8,6 +8,7 @@ import { KeepAlive, createRenderer, h, nextTick, ref as vueRef } from '@vue/runt
 const webRoot = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const papersClientId = '\0paper-management-papers-client-test';
 const detailClientId = '\0paper-management-detail-client-test';
+const editClientId = '\0paper-management-edit-client-test';
 const previewClientId = '\0paper-management-preview-client-test';
 const routeStubId = '\0paper-management-route-test';
 const elementStubId = '\0paper-management-element-test';
@@ -31,7 +32,8 @@ const context = {
   trainingPaper: null,
   previewOrdinary: null,
   previewAnswers: null,
-  media: async () => new Blob(['image'], { type: 'image/png' }),
+  media: async () => ({content_url:'/api/v1/media/preview-tickets/test.sig/content',expires_at:'2099-01-01T00:00:00Z'}),
+  mediaInvalidations: [],
   mediaCalls: [],
 };
 
@@ -75,10 +77,11 @@ const unsavedStubCode = `
 `;
 const mediaStubCode = `
   const context = globalThis.__paperManagementStateTest;
-  export async function getMediaImageContent(assetId) {
+  export async function resolvePcMedia(assetId) {
     context.mediaCalls.push(assetId);
     return context.media(assetId);
   }
+  export function invalidatePcMedia(assetId) { context.mediaInvalidations.push(assetId); }
 `;
 const httpStubCode = `
   const context = globalThis.__paperManagementStateTest;
@@ -94,6 +97,7 @@ const httpStubCode = `
     get(path, config) { return request('GET', path, undefined, config); },
     post(path, body, config) { return request('POST', path, body, config); },
     put(path, body, config) { return request('PUT', path, body, config); },
+    delete(path, config) { return request('DELETE', path, undefined, config); },
   };
 `;
 
@@ -102,27 +106,31 @@ function plugin() {
     name: 'paper-management-state-test-stubs',
     enforce: 'pre',
     resolveId(source, importer) {
+      if (source.startsWith('/@id/__x00__paper-management-')) return source.replace('/@id/__x00__', '\0');
       const owner = String(importer || '');
       const isPaperView = owner.includes('/src/views/admin/Papers.vue')
-        || owner.includes('/src/views/admin/PaperDetail.vue')
-        || owner === papersClientId || owner === detailClientId;
+        || owner.includes('/src/components/PaperPreviewDialog.vue')
+        || owner.includes('/src/components/PaperEditDialog.vue')
+        || owner === papersClientId || owner === detailClientId || owner === editClientId;
       const isPreview = owner.includes('/src/components/QuestionPreview.vue') || owner === previewClientId;
       const isAuthoringApi = owner.includes('/src/api/question-authoring.ts');
       if (source === 'vue-router' && isPaperView) return routeStubId;
       if (source === 'element-plus' && (isPaperView || isPreview)) return elementStubId;
       if (source === '@element-plus/icons-vue' && isPaperView) return iconsStubId;
-      if ((source === '../../api/http' || source === '/src/api/http.ts') && isPaperView) return httpStubId;
+      if ((source === '../../api/http' || source === '../api/http' || source === '/src/api/http.ts') && isPaperView) return httpStubId;
       if ((source === './http' || source === '/src/api/http.ts') && isAuthoringApi) return httpStubId;
-      if ((source === '../../stores/auth' || source === '/src/stores/auth.ts') && isPaperView) return authStubId;
-      if ((source === '../../composables/useUnsavedChanges' || source === '/src/composables/useUnsavedChanges.ts') && isPaperView) return unsavedStubId;
-      if ((source === '../api/media' || source === '/src/api/media.ts') && isPreview) return mediaStubId;
+      if ((source === '../../stores/auth' || source === '../stores/auth' || source === '/src/stores/auth.ts') && isPaperView) return authStubId;
+      if ((source === '../../composables/useUnsavedChanges' || source === '../composables/useUnsavedChanges' || source === '/src/composables/useUnsavedChanges.ts') && isPaperView) return unsavedStubId;
+      if ((source === '../services/media-content' || source === '/src/services/media-content.ts') && isPreview) return mediaStubId;
       if (source.includes('__x00__paper-management-media-test')) return mediaStubId;
       if (source.includes('__x00__plugin-vue:export-helper')) return exportHelperStubId;
-      if ((source === '../../components/QuestionPreview.vue' || source === '/src/components/QuestionPreview.vue') && isPaperView) return previewClientId;
+      if ((source === '../../components/QuestionPreview.vue' || source === './QuestionPreview.vue' || source === '/src/components/QuestionPreview.vue') && isPaperView) return previewClientId;
+      if ((source === '../../components/PaperPreviewDialog.vue' || source === '/src/components/PaperPreviewDialog.vue') && isPaperView) return detailClientId;
+      if ((source === '../../components/PaperEditDialog.vue' || source === '/src/components/PaperEditDialog.vue') && isPaperView) return editClientId;
       // This Node renderer exercises page state without a DOM. The real designer
       // and Tiptap integration is mounted in paper-host-main.spec.ts (jsdom).
       if ((source === '../../components/question-designers/PaperDesigner.vue' || source === '/src/components/question-designers/PaperDesigner.vue') && isPaperView) return designerStubId;
-      if ([papersClientId, detailClientId, previewClientId].includes(source)) return source;
+      if ([papersClientId, detailClientId, editClientId, previewClientId].includes(source)) return source;
       return undefined;
     },
     load(id) {
@@ -190,10 +198,10 @@ function registerUi(app) {
     'el-alert', 'el-button', 'el-card', 'el-descriptions', 'el-descriptions-item', 'el-dialog', 'el-divider',
     'el-form', 'el-form-item', 'el-icon', 'el-input', 'el-input-number', 'el-option', 'el-pagination',
     'el-radio-button', 'el-radio-group', 'el-select', 'el-switch', 'el-tab-pane', 'el-tabs', 'el-tag',
-    'el-table', 'el-table-column',
+    'el-table', 'el-table-column', 'el-dropdown', 'el-dropdown-menu', 'el-dropdown-item',
   ];
   for (const name of wrappers) {
-    const slots = name === 'el-dialog' ? ['default', 'footer'] : name === 'el-card' ? ['default', 'header'] : ['default'];
+    const slots = name === 'el-dialog' ? ['default', 'footer'] : name === 'el-dropdown' ? ['default', 'dropdown'] : name === 'el-card' ? ['default', 'header'] : ['default'];
     app.component(name, passthrough(name.slice(3), slots));
   }
   app.directive('loading', {});
@@ -412,8 +420,9 @@ before(async () => {
     plugins: [plugin()],
   });
   await loadClientSfc('/src/components/QuestionPreview.vue', previewClientId);
+  PaperDetail = await loadClientSfc('/src/components/PaperPreviewDialog.vue', detailClientId);
+  await loadClientSfc('/src/components/PaperEditDialog.vue', editClientId);
   Papers = await loadClientSfc('/src/views/admin/Papers.vue', papersClientId);
-  PaperDetail = await loadClientSfc('/src/views/admin/PaperDetail.vue', detailClientId);
 });
 
 after(async () => {
@@ -432,7 +441,8 @@ beforeEach(() => {
   context.trainingPaper = trainingPaper();
   context.previewOrdinary = previewFixture('普通预览');
   context.previewAnswers = previewFixture('答案预览', true);
-  context.media = async () => new Blob(['image'], { type: 'image/png' });
+  context.media = async () => ({content_url:'/api/v1/media/preview-tickets/test.sig/content',expires_at:'2099-01-01T00:00:00Z'});
+  context.mediaInvalidations = [];
   context.mediaCalls = [];
   setResponder();
 });
@@ -447,7 +457,7 @@ async function mountPapers() {
 async function mountDetail() {
   context.route = { params: { id: 'paper-1' }, query: { scope: 'training' } };
   const mounted = mount(PaperDetail);
-  await waitFor(() => mounted.state.paper, 'paper detail');
+  mounted.state.openPreview = (withAnswers) => mounted.state.open({ id:'paper-1', title:'五档固定卷' }, withAnswers);
   await nextTick();
   return mounted;
 }
@@ -553,143 +563,7 @@ test('a create receipt arriving while the Papers SFC is deactivated cannot recla
   mounted.unmount();
 });
 
-test('saves five same-type fixed scores, reopens, and omits derived rules from a later config PUT', async () => {
-  let mounted = await mountDetail();
-  assert.deepEqual(mounted.state.fixedQuestions.map((item) => item.score_cents), [1000, 1500, 2000, 2500, 3000]);
-  await mounted.state.saveFixedQuestions();
-  const questionPut = context.calls.find((call) => call.method === 'PUT' && call.path.endsWith('/questions'));
-  assert.deepEqual(questionPut.body.items.map((item) => item.score_cents), [1000, 1500, 2000, 2500, 3000]);
-  mounted.unmount();
-
-  mounted = await mountDetail();
-  mounted.state.form.title = '重开后改标题';
-  mounted.state.form.pass_score = 61;
-  await mounted.state.saveConfig();
-  const configPut = context.calls.filter((call) => call.method === 'PUT' && call.path === '/admin/papers/paper-1').at(-1);
-  assert.equal(Object.hasOwn(configPut.body, 'rules'), false);
-  assert.equal(configPut.body.title, '重开后改标题');
-  assert.equal(configPut.body.pass_score, 61);
-  mounted.unmount();
-});
-
-test('pages fixed candidates beyond 100 while preserving cross-page selections and rejecting stale pages', async () => {
-  const allCandidates = Array.from({ length: 120 }, (_, index) => question(index + 1, 100));
-  const fallback = context.respond;
-  const candidatePage = (page, pageSize = 50) => ({
-    items: allCandidates.slice((page - 1) * pageSize, page * pageSize),
-    total: allCandidates.length,
-    page,
-    page_size: pageSize,
-  });
-  context.respond = async (method, path, body, config) => {
-    if (method === 'GET' && path === '/admin/papers/paper-1/candidates') {
-      return candidatePage(config.params.page, config.params.page_size);
-    }
-    return fallback(method, path, body, config);
-  };
-
-  const mounted = await mountDetail();
-  await mounted.state.openCandidatePicker();
-  await nextTick();
-  const firstRequest = context.calls.filter((call) => call.path === '/admin/papers/paper-1/candidates').at(-1);
-  assert.deepEqual(firstRequest.config.params, { page: 1, page_size: 50 });
-  assert.equal(mounted.state.candidates.length, 50);
-  assert.equal(mounted.state.candidates[0].question_version_id, 'version-1');
-
-  let candidateTable = walk(mounted.root, (node) => node.type === 'table' && typeof node.props?.onSelectionChange === 'function')[0];
-  let pagination = walk(mounted.root, (node) => node.type === 'pagination')[0];
-  assert.ok(candidateTable, 'candidate table must expose its real selection event');
-  assert.ok(pagination, 'candidate picker must render visible pagination');
-  assert.equal(pagination.props.total, 120);
-  assert.equal(pagination.props.pageSize ?? pagination.props['page-size'], 50);
-  candidateTable.props.onSelectionChange([mounted.state.candidates[5]]);
-
-  await pagination.props.onCurrentChange(3);
-  await nextTick();
-  assert.equal(mounted.state.candidates.length, 20);
-  assert.equal(mounted.state.candidates[0].question_version_id, 'version-101');
-  candidateTable = walk(mounted.root, (node) => node.type === 'table' && typeof node.props?.onSelectionChange === 'function')[0];
-  candidateTable.props.onSelectionChange([mounted.state.candidates[5]]);
-  assert.deepEqual(mounted.state.pickedCandidates.map((item) => item.question_version_id).sort(), ['version-106', 'version-6']);
-
-  mounted.state.candidateQuery.type = 'multiple';
-  const typeFilter = walk(mounted.root, (node) => node.type === 'select' && node.props?.placeholder === '题型')[0];
-  assert.ok(typeFilter, 'candidate type filter must expose its real change event');
-  await typeFilter.props.onChange('multiple');
-  await nextTick();
-  const filteredRequest = context.calls.filter((call) => call.path === '/admin/papers/paper-1/candidates').at(-1);
-  assert.deepEqual(filteredRequest.config.params, { page: 1, page_size: 50, type: 'multiple' });
-  assert.deepEqual(mounted.state.pickedCandidates.map((item) => item.question_version_id).sort(), ['version-106', 'version-6']);
-
-  pagination = walk(mounted.root, (node) => node.type === 'pagination')[0];
-  const stalePage = deferredRequest('GET', '/admin/papers/paper-1/candidates');
-  const latestPage = deferredRequest('GET', '/admin/papers/paper-1/candidates');
-  const staleLoad = pagination.props.onCurrentChange(2);
-  const latestLoad = pagination.props.onCurrentChange(3);
-  await waitFor(() => context.calls.filter((call) => call.path === '/admin/papers/paper-1/candidates').length >= 5, 'out-of-order candidate pages');
-  latestPage.resolve(candidatePage(3));
-  await latestLoad;
-  stalePage.resolve(candidatePage(2));
-  await staleLoad;
-  assert.equal(mounted.state.candidatePage.page, 3);
-  assert.equal(mounted.state.candidates[0].question_version_id, 'version-101');
-  assert.deepEqual(mounted.state.pickedCandidates.map((item) => item.question_version_id).sort(), ['version-106', 'version-6']);
-
-  mounted.state.addCandidates();
-  assert.ok(mounted.state.fixedQuestions.some((item) => item.question_version_id === 'version-6'));
-  assert.ok(mounted.state.fixedQuestions.some((item) => item.question_version_id === 'version-106'));
-  mounted.unmount();
-});
-
-test('a delayed GET after config save or publish cannot overwrite edits made after the submitted snapshot', async () => {
-  const mounted = await mountDetail();
-  mounted.state.form.title = '配置提交 A';
-  const saveReload = deferredRequest('GET', '/admin/papers/paper-1');
-  const save = mounted.state.saveConfig();
-  await waitFor(() => context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length === 2, 'save reload');
-  mounted.state.form.title = 'GET 等待期间草稿 B';
-  await nextTick();
-  saveReload.resolve(trainingPaper({ title: '配置提交 A' }));
-  await save;
-  assert.equal(mounted.state.form.title, 'GET 等待期间草稿 B');
-  assert.equal(mounted.state.dirty, true);
-
-  await context.unsavedSources[0].confirmDiscard();
-  const publishReload = deferredRequest('GET', '/admin/papers/paper-1');
-  const publish = mounted.state.publishPaper();
-  await waitFor(() => context.calls.some((call) => call.method === 'POST' && call.path.endsWith('/publish')), 'publish request');
-  await waitFor(() => context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length === 3, 'publish reload');
-  mounted.state.form.title = '发布刷新期间新草稿';
-  await nextTick();
-  publishReload.resolve(trainingPaper({ title: '配置提交 A', status: 'published', latest_release_id: 'release-1' }));
-  await publish;
-  assert.equal(mounted.state.form.title, '发布刷新期间新草稿');
-  assert.equal(mounted.state.dirty, true);
-  mounted.unmount();
-});
-
-test('applies the normalized PUT receipt before the follow-up detail GET resolves', async () => {
-  const mounted = await mountDetail();
-  const defaultRespond = context.respond;
-  context.respond = async (method, path, body, config) => {
-    if (method === 'PUT' && path === '/admin/papers/paper-1') {
-      context.trainingPaper = { ...context.trainingPaper, ...body, title: body.title.trim(), rules: body.rules ?? context.trainingPaper.rules };
-      return context.trainingPaper;
-    }
-    return defaultRespond(method, path, body, config);
-  };
-  mounted.state.form.title = '  规范化标题  ';
-  const reload = deferredRequest('GET', '/admin/papers/paper-1');
-  const save = mounted.state.saveConfig();
-  await waitFor(() => context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length === 2, 'normalized save reload');
-  assert.equal(mounted.state.form.title, '规范化标题');
-  assert.equal(mounted.state.dirty, false);
-  reload.resolve(context.trainingPaper);
-  await save;
-  mounted.unmount();
-});
-
-test('commits preview mode atomically, invalidates close, and whitelists ordinary export fields', async () => {
+test('commits preview mode atomically, invalidates close, and keeps ordinary rendered output answer-free', async () => {
   const mounted = await mountDetail();
   const answers = deferredRequest('GET', '/admin/papers/paper-1/preview/answers');
   const ordinary = deferredRequest('GET', '/admin/papers/paper-1/preview');
@@ -703,44 +577,14 @@ test('commits preview mode atomically, invalidates close, and whitelists ordinar
   assert.equal(mounted.state.preview.note, '普通响应却含敏感字段');
   assert.equal(mounted.state.previewAnswers, false);
 
-  const originalDocument = globalThis.document;
-  const originalCreateObjectUrl = URL.createObjectURL;
-  const originalRevokeObjectUrl = URL.revokeObjectURL;
-  let exportedBlob;
-  let downloadName = '';
-  globalThis.document = {
-    createElement(tag) {
-      assert.equal(tag, 'a');
-      return { href: '', set download(value) { downloadName = value; }, click() {} };
-    },
-  };
-  URL.createObjectURL = (blob) => { exportedBlob = blob; return 'blob:paper-export'; };
-  URL.revokeObjectURL = () => {};
-  try {
-    mounted.state.preview.questions[0].content_schema_version = 3;
-    mounted.state.preview.questions[0].content_json = {
-      stem: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '富文本导出' }] }] },
-      options: [{ id: 'A', content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '甲' }] }] } }],
-      analysis: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '嵌套秘密解析' }] }] },
-      answer_option_ids: ['A'],
-    };
-    mounted.state.exportPreview();
-    const exported = JSON.parse(await exportedBlob.text());
-    assert.equal(Object.hasOwn(exported.questions[0], 'answer'), false);
-    assert.equal(Object.hasOwn(exported.questions[0], 'analysis'), false);
-    assert.equal(Object.hasOwn(exported.questions[0], 'rubric'), false);
-    assert.equal(exported.questions[0].content_schema_version, 3);
-    assert.equal(exported.questions[0].content_json.stem.content[0].content[0].text, '富文本导出');
-    assert.equal(Object.hasOwn(exported.questions[0].content_json, 'analysis'), false);
-    assert.equal(Object.hasOwn(exported.questions[0].content_json, 'answer_option_ids'), false);
-    assert.equal(JSON.stringify(exported).includes('嵌套秘密解析'), false);
-    assert.match(downloadName, /固定卷\.json$/);
-  } finally {
-    if (originalDocument === undefined) delete globalThis.document;
-    else globalThis.document = originalDocument;
-    URL.createObjectURL = originalCreateObjectUrl;
-    URL.revokeObjectURL = originalRevokeObjectUrl;
-  }
+  await waitFor(() => mounted.state.previewResourcesReady, 'ordinary preview rendered');
+  const html = walk(mounted.root, (node) => typeof node.props?.innerHTML === 'string')
+    .map((node) => node.props.innerHTML).join('');
+  assert.match(html, /预览题/);
+  assert.equal(html.includes('答案解析'), false);
+  assert.equal(renderedText(mounted.root).includes('正确答案'), false);
+  assert.equal(renderedText(mounted.root).includes('导出 JSON'), false);
+  assert.equal(renderedText(mounted.root).includes('五档固定卷'), true);
 
   const late = deferredRequest('GET', '/admin/papers/paper-1/preview');
   const reload = mounted.state.openPreview(false);
@@ -754,9 +598,9 @@ test('commits preview mode atomically, invalidates close, and whitelists ordinar
   mounted.unmount();
 });
 
-test('a preview response arriving while PaperDetail is deactivated stays invalid after reactivation', async () => {
+test('a preview response arriving while PaperPreviewDialog is deactivated stays invalid after reactivation', async () => {
   const mounted = await mountCached(PaperDetail);
-  await waitFor(() => mounted.state.paper, 'cached paper detail');
+  mounted.state.openPreview = (withAnswers) => mounted.state.open({ id:'paper-1', title:'五档固定卷' }, withAnswers);
   const pending = deferredRequest('GET', '/admin/papers/paper-1/preview');
   const open = mounted.state.openPreview(false);
   await waitFor(() => context.calls.some((call) => call.path === '/admin/papers/paper-1/preview'), 'preview before deactivate');
@@ -769,184 +613,7 @@ test('a preview response arriving while PaperDetail is deactivated stays invalid
   mounted.unmount();
 });
 
-test('fix2 safely reloads training detail after repeated initial KeepAlive invalidations', async () => {
-  const first = deferredRequest('GET', '/admin/papers/paper-1');
-  const mounted = await mountCached(PaperDetail);
-  await waitFor(() => context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length === 1, 'first training detail request');
-
-  await mounted.deactivate();
-  first.resolve(trainingPaper({ title: '首次停用后的旧响应' }));
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  assert.equal(mounted.state.paper, null);
-
-  const second = deferredRequest('GET', '/admin/papers/paper-1');
-  await mounted.activate();
-  assert.equal(context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length, 2);
-  await mounted.deactivate();
-  second.resolve(trainingPaper({ title: '第二次停用后的旧响应' }));
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  assert.equal(mounted.state.paper, null);
-
-  const third = deferredRequest('GET', '/admin/papers/paper-1');
-  await mounted.activate();
-  assert.equal(context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length, 3);
-  third.resolve(trainingPaper({ title: '重新激活后的权威培训卷' }));
-  await waitFor(() => mounted.state.paper?.title === '重新激活后的权威培训卷', 'reloaded training detail');
-  assert.equal(mounted.state.form.title, '重新激活后的权威培训卷');
-  mounted.unmount();
-});
-
-test('fix2 reactivation preserves a loaded unsaved training draft without another detail read', async () => {
-  const mounted = await mountCached(PaperDetail);
-  await waitFor(() => mounted.state.paper, 'loaded training detail');
-  mounted.state.form.title = '停用期间保留的培训草稿';
-  mounted.state.fixedQuestions[0].score_cents = 999;
-  await nextTick();
-  const detailReads = context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length;
-
-  await mounted.deactivate();
-  await mounted.activate();
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  assert.equal(context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length, detailReads);
-  assert.equal(mounted.state.form.title, '停用期间保留的培训草稿');
-  assert.equal(mounted.state.fixedQuestions[0].score_cents, 999);
-  assert.equal(mounted.state.dirty, true);
-  mounted.unmount();
-});
-
-test('fix3 restores matching relation options after the inactive initial chain used an empty category', async () => {
-  context.trainingPaper = trainingPaper({
-    title: '含已保存关系的培训卷',
-    category_id: 'category-2',
-    requires_learning: true,
-    required_learning_minutes: 15,
-    regulation_ids: ['regulation-saved'],
-    course_ids: ['course-saved'],
-  });
-  respondWithTrainingOptions({
-    categories: [{ id: 'category-2', name: '类别二' }],
-    regulations: [{ id: 'regulation-saved', title: '已保存制度' }],
-    courses: [{ id: 'course-saved', title: '已保存课程' }],
-  });
-  const firstDetail = deferredRequest('GET', '/admin/papers/paper-1');
-  const mounted = await mountCached(PaperDetail);
-  await waitFor(() => context.calls.filter((call) => call.method === 'GET' && call.path === '/admin/papers/paper-1').length === 1, 'first detail request');
-
-  await mounted.deactivate();
-  firstDetail.resolve(context.trainingPaper);
-  await waitFor(() => context.calls.some((call) => call.method === 'GET' && call.path === '/admin/papers/category-options'), 'inactive initial option chain');
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  assert.equal(mounted.state.paper, null);
-  assert.equal(mounted.state.form.category_id, '');
-  assert.deepEqual(mounted.state.courseOptions, []);
-
-  await mounted.activate();
-  await waitFor(() => mounted.state.paper?.title === '含已保存关系的培训卷', 'recovered detail');
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  assert.deepEqual(mounted.state.categories, [{ id: 'category-2', name: '类别二' }]);
-  assert.deepEqual(mounted.state.courseOptions, [{ id: 'course-saved', title: '已保存课程' }]);
-  assert.equal(context.calls.some((call) => call.path === '/admin/papers/regulation-options'), false);
-  assert.deepEqual(mounted.state.form.regulation_ids, ['regulation-saved']);
-  assert.deepEqual(mounted.state.form.course_ids, ['course-saved']);
-  const relationCalls = context.calls.filter((call) => ['/admin/papers/regulation-options', '/admin/papers/course-options'].includes(call.path));
-  assert.ok(relationCalls.every((call) => call.config.params.category_id === 'category-2'));
-  mounted.unmount();
-});
-
-test('fix3 reloads category options invalidated by deactivation without rebasing the current draft', async () => {
-  context.trainingPaper = trainingPaper({
-    category_id: 'category-1',
-    requires_learning: true,
-    required_learning_minutes: 15,
-    regulation_ids: ['regulation-saved'],
-    course_ids: ['course-saved'],
-  });
-  respondWithTrainingOptions({
-    categories: [{ id: 'category-1', name: '当前类别' }],
-    regulations: [{ id: 'regulation-saved', title: '已保存制度' }, { id: 'regulation-draft', title: '草稿制度' }],
-    courses: [{ id: 'course-saved', title: '已保存课程' }, { id: 'course-draft', title: '草稿课程' }],
-  });
-  const staleCategories = deferredRequest('GET', '/admin/papers/category-options');
-  const mounted = await mountCached(PaperDetail);
-  await waitFor(() => mounted.state.paper, 'loaded detail before category options');
-  await waitFor(() => context.calls.filter((call) => call.path === '/admin/papers/category-options').length === 1, 'first category option request');
-  mounted.state.form.title = '类别请求期间的未保存标题';
-  mounted.state.form.regulation_ids = ['regulation-saved', 'regulation-draft'];
-  mounted.state.form.course_ids = ['course-saved', 'course-draft'];
-  await nextTick();
-
-  await mounted.deactivate();
-  staleCategories.resolve({ items: [{ id: 'stale-category', name: '迟到旧类别' }], total: 1, page: 1, page_size: 100 });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  assert.deepEqual(mounted.state.categories, []);
-  const detailReads = context.calls.filter((call) => call.path === '/admin/papers/paper-1').length;
-
-  await mounted.activate();
-  assert.equal(context.calls.filter((call) => call.path === '/admin/papers/category-options').length, 2);
-  await waitFor(() => mounted.state.courseOptions.length === 2, 'reloaded category dependency chain');
-  assert.equal(context.calls.some((call) => call.path === '/admin/papers/regulation-options'), false);
-  assert.deepEqual(mounted.state.categories, [{ id: 'category-1', name: '当前类别' }]);
-  assert.deepEqual(mounted.state.paper.regulation_ids, ['regulation-saved']);
-  assert.deepEqual(mounted.state.paper.course_ids, ['course-saved']);
-  assert.equal(mounted.state.form.title, '类别请求期间的未保存标题');
-  assert.deepEqual(mounted.state.form.regulation_ids, ['regulation-saved', 'regulation-draft']);
-  assert.deepEqual(mounted.state.form.course_ids, ['course-saved', 'course-draft']);
-  assert.equal(mounted.state.dirty, true);
-  assert.equal(context.calls.filter((call) => call.path === '/admin/papers/paper-1').length, detailReads);
-  mounted.unmount();
-});
-
-test('fix3 replaces invalidated relation options once and keeps a loaded draft on later activations', async () => {
-  context.trainingPaper = trainingPaper({
-    category_id: 'category-1',
-    requires_learning: true,
-    required_learning_minutes: 15,
-    regulation_ids: ['regulation-saved'],
-    course_ids: ['course-saved'],
-  });
-  respondWithTrainingOptions({
-    categories: [{ id: 'category-1', name: '当前类别' }],
-    regulations: [{ id: 'regulation-saved', title: '已保存制度' }, { id: 'regulation-draft', title: '草稿制度' }],
-    courses: [{ id: 'course-saved', title: '已保存课程' }, { id: 'course-draft', title: '草稿课程' }],
-  });
-  const staleCourses = deferredRequest('GET', '/admin/papers/course-options');
-  const mounted = await mountCached(PaperDetail);
-  await waitFor(() => context.calls.some((call) => call.path === '/admin/papers/course-options'), 'first course option request');
-  mounted.state.form.title = '关系请求期间的未保存标题';
-  mounted.state.form.regulation_ids = ['regulation-saved', 'regulation-draft'];
-  mounted.state.form.course_ids = ['course-saved', 'course-draft'];
-  await nextTick();
-
-  await mounted.deactivate();
-  staleCourses.resolve({ items: [{ id: 'stale-course', title: '迟到旧课程' }], total: 1, page: 1, page_size: 100 });
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  assert.deepEqual(mounted.state.courseOptions, []);
-
-  await mounted.activate();
-  assert.equal(context.calls.some((call) => call.path === '/admin/papers/regulation-options'), false);
-  assert.equal(context.calls.filter((call) => call.path === '/admin/papers/course-options').length, 2);
-  await waitFor(() => mounted.state.courseOptions.length === 2, 'reloaded relation options');
-  assert.deepEqual(mounted.state.paper.regulation_ids, ['regulation-saved']);
-  assert.deepEqual(mounted.state.paper.course_ids, ['course-saved']);
-  assert.equal(mounted.state.form.title, '关系请求期间的未保存标题');
-  assert.deepEqual(mounted.state.form.regulation_ids, ['regulation-saved', 'regulation-draft']);
-  assert.deepEqual(mounted.state.form.course_ids, ['course-saved', 'course-draft']);
-  assert.equal(mounted.state.dirty, true);
-
-  const optionReads = context.calls.filter((call) => ['/admin/papers/category-options', '/admin/papers/regulation-options', '/admin/papers/course-options'].includes(call.path)).length;
-  const detailReads = context.calls.filter((call) => call.path === '/admin/papers/paper-1').length;
-  await mounted.deactivate();
-  await mounted.activate();
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  assert.equal(context.calls.filter((call) => ['/admin/papers/category-options', '/admin/papers/regulation-options', '/admin/papers/course-options'].includes(call.path)).length, optionReads);
-  assert.equal(context.calls.filter((call) => call.path === '/admin/papers/paper-1').length, detailReads);
-  assert.equal(mounted.state.form.title, '关系请求期间的未保存标题');
-  assert.deepEqual(mounted.state.form.regulation_ids, ['regulation-saved', 'regulation-draft']);
-  assert.deepEqual(mounted.state.form.course_ids, ['course-saved', 'course-draft']);
-  mounted.unmount();
-});
-
-test('uses controlled media readiness for printing and revokes a decoding image when preview closes', async () => {
+test('uses controlled media readiness for printing and ignores a late decode after preview closes', async () => {
   const originalDocument = globalThis.document;
   const originalImage = globalThis.Image;
   const originalWindow = globalThis.window;
@@ -977,7 +644,7 @@ test('uses controlled media readiness for printing and revokes a decoding image 
 
     mounted.state.previewVisible = false;
     await nextTick();
-    assert.deepEqual(revoked, ['blob:paper-preview-image']);
+    assert.deepEqual(revoked, [], 'signed media URLs are not object URLs owned by the preview');
     decode.resolve();
     await new Promise((resolvePromise) => setImmediate(resolvePromise));
     assert.equal(mounted.state.previewResourcesReady, false);
@@ -1030,7 +697,7 @@ test('allows printing only after a controlled image finishes decoding', async ()
     assert.equal(printCalls, 1);
     mounted.state.previewVisible = false;
     await nextTick();
-    assert.deepEqual(revoked, ['blob:decoded-paper-image']);
+    assert.deepEqual(revoked, [], 'signed media URLs are not revoked as blobs');
     mounted.unmount();
   } finally {
     if (originalDocument === undefined) delete globalThis.document;
@@ -1067,7 +734,8 @@ test('treats a controlled image decode failure as a visible non-printable result
     await waitFor(() => mounted.state.previewResourcesFailed === true, 'decode failure state');
     mounted.state.printPreview();
     assert.equal(printCalls, 0);
-    assert.deepEqual(revoked, ['blob:failed-decode-image']);
+    assert.deepEqual(context.mediaInvalidations, ['44']);
+    assert.deepEqual(revoked, []);
     assert.ok(walk(mounted.root, (node) => String(node.props?.innerHTML || '').includes('图片 44 暂不可预览')).length > 0);
     mounted.unmount();
   } finally {
@@ -1097,7 +765,7 @@ test('marks failed controlled media as non-printable and can retry the visible f
     context.media = async () => {
       mediaAttempts += 1;
       if (mediaAttempts === 1) throw new Error('media unavailable');
-      return new Blob(['image'], { type: 'image/png' });
+      return {content_url:'/api/v1/media/preview-tickets/test.sig/content',expires_at:'2099-01-01T00:00:00Z'};
     };
     context.previewOrdinary = previewFixture('失败题图', false, '<p>题图<img data-media-id="77" alt="题图"></p>');
     const mounted = await mountDetail();

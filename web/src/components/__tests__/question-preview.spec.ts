@@ -73,3 +73,69 @@ describe('question library lightweight preview', () => {
     expect(wrapper.find('.question-preview__result').exists()).toBe(false);
   });
 });
+
+describe('paper question preview', () => {
+  it('renders a numbered Word-style question without metadata, cards, or answer leakage', async () => {
+    const wrapper = await render({
+      variant: 'paper',
+      questionNumber: 1,
+      revealAnswer: false,
+      showScore: true,
+      question: question({ analysis: '<p>仅答案版可见的解析</p>' }),
+    });
+
+    expect(wrapper.classes()).toContain('question-preview--paper');
+    expect(wrapper.find('.question-preview__meta').exists()).toBe(false);
+    expect(wrapper.get('.question-preview__paper-number').text()).toBe('1、');
+    expect(wrapper.get('.question-preview__paper-stem').text()).toContain('1、以下哪些属于作业前检查？');
+    expect(wrapper.findAll('.question-preview__key').map((node) => node.text())).toEqual(['A、', 'B、', 'C、']);
+    expect(wrapper.findAll('.question-preview__option .el-tag')).toHaveLength(0);
+    expect(wrapper.find('.question-preview__paper-result').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('仅答案版可见的解析');
+  });
+
+  it('keeps the paper stem as ordinary text while preserving explicit rich-text font choices', async () => {
+    const richDoc = (text: string) => ({ type: 'doc' as const, content: [{ type: 'paragraph' as const, content: [{ type: 'text' as const, text }] }] });
+    const wrapper = await render({
+      variant: 'paper',
+      questionNumber: 2,
+      revealAnswer: false,
+      question: {
+        type: 'single',
+        content_schema_version: 3,
+        content_json: {
+          stem: { type: 'doc', content: [{ type: 'paragraph', content: [
+            { type: 'text', text: '默认正文' },
+            { type: 'text', text: '局部格式', marks: [{ type: 'textStyle', attrs: { fontFamily: 'SimHei', fontSize: '18px' } }] },
+          ] }] },
+          options: [{ id: 'stable-a', content: richDoc('检查设备') }, { id: 'stable-b', content: richDoc('直接开工') }],
+        },
+      },
+    });
+
+    const stem = wrapper.get('.question-preview__paper-stem');
+    const inline = stem.get('span[style]');
+    expect(stem.find('strong').exists()).toBe(false);
+    expect(inline.attributes('style')).toContain('font-family:SimHei');
+    expect(inline.attributes('style')).toContain('font-size:18px');
+  });
+
+  it('shows compact correct-answer and analysis text only when explicitly requested', async () => {
+    const wrapper = await render({
+      variant: 'paper',
+      questionNumber: 3,
+      revealAnswer: false,
+      question: question({ analysis: '<p>作业前应先完成设备与防护检查。</p>' }),
+    });
+
+    expect(wrapper.find('.question-preview__paper-result').exists()).toBe(false);
+    await wrapper.setProps({ revealAnswer: true });
+    await flushPromises();
+
+    const result = wrapper.get('.question-preview__paper-result');
+    expect(result.text().replace(/\s+/g, ' ').trim()).toContain('正确答案：A、C');
+    expect(result.text()).toContain('解析：');
+    expect(result.text()).toContain('作业前应先完成设备与防护检查。');
+    expect(wrapper.findAll('.question-preview__option .el-tag')).toHaveLength(0);
+  });
+});

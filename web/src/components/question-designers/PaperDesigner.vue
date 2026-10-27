@@ -63,7 +63,7 @@
           <el-tab-pane label="试卷设置" name="paper" />
           <el-tab-pane label="模板设置" name="template" />
         </el-tabs>
-        <QuestionProperties v-if="selectedMeta" v-show="panel === 'question'" :client-id="selectedId" :meta="selectedMeta" :answer-summary="answerSummary"
+        <QuestionProperties v-if="selectedMeta" v-show="panel === 'question'" :client-id="selectedId" :meta="selectedMeta" :question-position="selectedPosition" :question-count="questionCount" :position-disabled="uploading" @move-position="moveSelectedQuestion" :answer-summary="answerSummary"
           :categories="categories" :regulations="questionRegulations" :total-score="value.paper.total_score ?? 100"
           :readonly="locked" category-readonly :media-resolver="mediaResolver" :can-upload-media="!!mediaAdapter" :media-adapter="mediaAdapter" :difficulty-options="difficultyOptions"
           @change="changeMeta" @type-change="changeType" @upload-state-change="analysisUploading = $event.pending" />
@@ -121,7 +121,7 @@ const props = withDefaults(defineProps<{
   difficultyOptions?: DesignerOption[];
 }>(), { mode: 'create', categories: () => [], regulations: () => [], courses: () => [], difficultyOptions: () => [] });
 const emit = defineEmits<{
-  'update:modelValue': [value: PaperDesignerValue]; close: []; 'dirty-change': [dirty: boolean];
+  'update:modelValue': [value: PaperDesignerValue]; close: []; saved: []; 'dirty-change': [dirty: boolean];
   'selection-change': [selection: { client_id: string | null; option_id: string | null }];
 }>();
 function copy<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
@@ -179,6 +179,7 @@ watch([() => value.value.paper_layout, () => value.value.paper.title], ([layout,
 }, { deep: true });
 const allocatedScoreCents = computed(() => Object.values(value.value.document.questions).reduce((sum, meta) => sum + meta.score_cents, 0));
 const questionCount = computed(() => Object.keys(value.value.document.questions).length);
+const selectedPosition = computed(() => (value.value.document.content.content || []).findIndex(block => block.attrs?.client_id === selectedId.value) + 1);
 const selectedMeta = computed(() => value.value.document.questions[selectedId.value]);
 const categoryRegulations = computed(() => props.regulations.filter((item) => !item.category_id || item.category_id === value.value.paper.category_id));
 const categoryCourses = computed(() => props.courses.filter((item) => !item.category_id || item.category_id === value.value.paper.category_id));
@@ -235,6 +236,17 @@ async function removeQuestion(clientId: string) {
   if (locked.value || uploading.value) return;
   const revision = controller.revision.value;
   if (await ask('确定从当前试卷删除这道题吗？试题库中的原题会保留。', '删除题目') && revision === controller.revision.value && !locked.value) editor.value?.removeQuestion(clientId);
+}
+async function moveSelectedQuestion(position: number) {
+  if (locked.value || uploading.value || !Number.isInteger(position) || position < 1 || position > questionCount.value) return;
+  const id = selectedId.value;
+  if (!editor.value?.moveQuestion(id, position - 1)) return;
+  selectedId.value = id;
+  await nextTick();
+  editor.value?.focus(id);
+  const root = editor.value?.$el as HTMLElement | undefined;
+  const block = Array.from(root?.querySelectorAll<HTMLElement>('[data-question-block]') || []).find(item => item.dataset.clientId === id);
+  block?.scrollIntoView?.({ block: 'start', behavior: 'auto' });
 }
 function moveQuestion(clientId: string, toIndex: number) { if (!locked.value && !uploading.value) editor.value?.moveQuestion(clientId, toIndex); }
 async function changeType(type: 'single' | 'multiple' | 'judgment') {
@@ -294,7 +306,12 @@ async function requestClose() {
   }
   if (await controller.requestClose(() => ask('当前试卷有未保存内容，确定关闭并放弃修改吗？', '关闭试卷'))) { cancelImage(); emit('close'); }
 }
-function save() { return uploading.value ? Promise.resolve(false) : controller.save(); }
+async function save() {
+  if (uploading.value) return false;
+  const saved = await controller.save();
+  if (saved) { await nextTick(); emit('saved'); }
+  return saved;
+}
 const fileInput = ref<HTMLInputElement | null>(null); const editorUploading = ref(false); const uploadingFile = ref(false); const analysisUploading = ref(false);
 const failedUpload = shallowRef<File | null>(null); const uploading = computed(() => editorUploading.value || uploadingFile.value || analysisUploading.value);
 let imageToken: string | null = null; let imageSerial = 0;

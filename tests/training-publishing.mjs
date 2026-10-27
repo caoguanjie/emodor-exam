@@ -6,6 +6,7 @@ import {
   provePaperReleaseSingleConnectionPools,
   proveTrainingCategoryChangeConflicts,
   proveDisableWinsPublication,
+  provePaperDeletePublicationOrdering,
 } from './support/paper-release-concurrency-checks.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
@@ -474,12 +475,106 @@ async function runPublishing(ctx) {
   assert.equal(concurrentRows.length, 2);
   assert.equal(concurrentRows.every((row) => Number(row.release_count) === 1), true);
 
+  stage = 'draft paper deletion and publication ordering';
+  const disposable = await ctx.request(admin.actor, 'POST', '/admin/papers', {
+    title: `C1 可删除草稿 ${suffix}`, mode: 'fixed', category_id: categoryId,
+  });
+  assert.equal(disposable.status, 200);
+  const disposableId = String(disposable.data.id);
+  const disposableQuestions = await ctx.request(admin.actor, 'PUT', `/admin/papers/${disposableId}/questions`, {
+    items: [{ question_version_id: fixedQuestions[1].versionId, score_cents: 10000 }],
+  });
+  assert.equal(disposableQuestions.status, 200);
+  const readOnlyDelete = await ctx.request(paperExporter.actor, 'DELETE', `/admin/papers/${disposableId}`);
+  assert.equal(readOnlyDelete.status, 403, 'paper read/export permission must not authorize deletion');
+  const deleteDraft = await ctx.request(admin.actor, 'DELETE', `/admin/papers/${disposableId}`);
+  assert.equal(deleteDraft.status, 200);
+  assert.equal(deleteDraft.code, 0);
+  assert.equal(deleteDraft.data, null, 'successful draft deletion must return data:null');
+  for (const method of ['GET', 'DELETE']) {
+    const gone = await ctx.request(admin.actor, method, `/admin/papers/${disposableId}`);
+    assert.equal(gone.status, 404);
+    assert.equal(gone.code, 40401);
+  }
+  const [deletedDraftState] = await ctx.queryTestDb(
+    `SELECT
+      (SELECT COUNT(*) FROM paper_question WHERE paper_id=?) AS links,
+      (SELECT COUNT(*) FROM question WHERE id=?) AS questions,
+      (SELECT COUNT(*) FROM question_version WHERE id=?) AS versions`,
+    [disposableId, fixedQuestions[1].questionId, fixedQuestions[1].versionId],
+  );
+  assert.equal(Number(deletedDraftState.links), 0);
+  assert.equal(Number(deletedDraftState.questions), 1, 'paper deletion must retain the shared bank question');
+  assert.equal(Number(deletedDraftState.versions), 1, 'paper deletion must retain the shared question version');
+  const deletePublished = await ctx.request(admin.actor, 'DELETE', `/admin/papers/${fixedId}`);
+  assert.equal(deletePublished.status, 409);
+  assert.equal(deletePublished.code, 40970);
+  for (const deleteFirst of [true, false]) {
+    const draft = await ctx.request(admin.actor, 'POST', '/admin/papers', {
+      title: `C1 试卷删除并发 ${deleteFirst ? '删除先' : '发布先'} ${suffix}`, mode: 'fixed', category_id: categoryId,
+    });
+    assert.equal(draft.status, 200);
+    const selected = await ctx.request(admin.actor, 'PUT', `/admin/papers/${draft.data.id}/questions`, {
+      items: [{ question_version_id: fixedQuestions[1].versionId, score_cents: 10000 }],
+    });
+    assert.equal(selected.status, 200);
+    const evidence = await provePaperDeletePublicationOrdering(ctx, { paperId: String(draft.data.id), deleteFirst }, admin.id);
+    assert.equal(new Set(evidence.connection_ids).size, 2);
+    assert.equal(evidence.order, deleteFirst ? 'delete-first' : 'publish-first');
+    if (deleteFirst) {
+      assert.equal(evidence.deletion, null);
+      assert.equal(evidence.publication, 40401);
+    } else {
+      assert.equal(evidence.deletion, 40970);
+      assert.match(String(evidence.publication), /^\d+$/);
+    }
+  }
+
   stage = 'real category-change stale-read conflicts';
   const categoryRaceQuestion = await ctx.request(admin.actor, 'GET', `/ai/questions/${fixedQuestions[1].questionId}`);
   assert.equal(categoryRaceQuestion.status, 200, JSON.stringify(categoryRaceQuestion));
   assert.equal(categoryRaceQuestion.data.enabled, true);
   assert.equal(String(categoryRaceQuestion.data.current_version_id), fixedQuestions[1].versionId);
   const categoryBId = await createCategory(ctx, admin.actor, `C1 并发类别 B ${suffix}`);
+
+  stage = 'basic paper edit preserves newly added questions';
+  const basicDraft = await ctx.request(admin.actor, 'POST', '/admin/papers', {
+    title: `C1 基本修改保护 ${suffix}`, mode: 'fixed', category_id: categoryId,
+  });
+  assert.equal(basicDraft.status, 200);
+  const openedBasic = await ctx.request(admin.actor, 'GET', `/admin/papers/${basicDraft.data.id}`);
+  assert.equal(openedBasic.status, 200);
+  assert.deepEqual(openedBasic.data.questions, [], 'the basic edit dialog initially observed an empty paper');
+  const addedAfterOpen = await ctx.request(admin.actor, 'PUT', `/admin/papers/${basicDraft.data.id}/questions`, {
+    items: [{ question_version_id: fixedQuestions[1].versionId, score_cents: 10000 }],
+  });
+  assert.equal(addedAfterOpen.status, 200);
+  const beforeBasicEdit = await ctx.request(admin.actor, 'GET', `/admin/papers/${basicDraft.data.id}`);
+  assert.equal(beforeBasicEdit.status, 200);
+  assert.equal(beforeBasicEdit.data.questions.length, 1);
+  const rejectedBasicEdit = await ctx.request(admin.actor, 'PUT', `/admin/papers/${basicDraft.data.id}`, {
+    category_id: categoryBId, title: '拒绝后不得修改标题', preserve_questions: true,
+  });
+  assert.equal(rejectedBasicEdit.status, 409);
+  assert.equal(rejectedBasicEdit.code, 40970);
+  const afterBasicEdit = await ctx.request(admin.actor, 'GET', `/admin/papers/${basicDraft.data.id}`);
+  assert.equal(afterBasicEdit.status, 200);
+  assert.deepEqual(afterBasicEdit.data, beforeBasicEdit.data, 'rejected basic edits must leave the paper and its question list untouched');
+
+  const emptyBasicDraft = await ctx.request(admin.actor, 'POST', '/admin/papers', {
+    title: `C1 空卷基本修改 ${suffix}`, mode: 'fixed', category_id: categoryId,
+  });
+  assert.equal(emptyBasicDraft.status, 200);
+  const updatedEmptyBasic = await ctx.request(admin.actor, 'PUT', `/admin/papers/${emptyBasicDraft.data.id}`, {
+    category_id: categoryBId, preserve_questions: true,
+  });
+  assert.equal(updatedEmptyBasic.status, 200);
+  assert.equal(updatedEmptyBasic.data.category_id, categoryBId);
+  const emptyBasicDetail = await ctx.request(admin.actor, 'GET', `/admin/papers/${emptyBasicDraft.data.id}`);
+  assert.equal(emptyBasicDetail.status, 200);
+  assert.deepEqual(emptyBasicDetail.data.questions, []);
+
+  stage = 'real category-change stale-read conflicts';
   const categoryRacePapers = {};
   for (const [key, label] of [['update', '更新'], ['questions', '题单'], ['copy', '复制']]) {
     const draft = await ctx.request(admin.actor, 'POST', '/admin/papers', {

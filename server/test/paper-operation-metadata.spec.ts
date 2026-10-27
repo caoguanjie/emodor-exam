@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExamPaper } from '../src/entities/exam-paper.entity';
 import { PaperQuestion } from '../src/entities/paper-question.entity';
 import { Question } from '../src/entities/question.entity';
@@ -9,7 +9,9 @@ import { PaperService } from '../src/modules/ai/paper.service';
 import {
   CreateTrainingPaperDto,
   PAPER_CREATE_KEYS,
+  PAPER_UPDATE_KEYS,
   TrainingPaperDtoValidationPipe,
+  UpdateTrainingPaperDto,
 } from '../src/modules/exams/paper.dto';
 
 const CREATOR = { id: '9', name: 'creator' };
@@ -29,13 +31,12 @@ function fixture() {
     create: vi.fn((value: any) => Object.assign(new ExamPaper(), structuredClone(value))),
     findOne: vi.fn(async ({ where }: any) => structuredClone(papers.get(String(where.id)) ?? null)),
     save: vi.fn(async (value: any) => {
-      const isNew = value.id == null;
       const id = String(value.id ?? nextId++);
       const now = new Date(Date.parse('2026-10-26T08:00:00.000Z') + tick++ * 1000);
       const saved = {
         ...structuredClone(value), id,
         createdAt: value.createdAt ?? now,
-        updatedAt: isNew ? now : value.updatedAt,
+        updatedAt: value.updatedAt ?? now,
       };
       papers.set(id, saved);
       return structuredClone(saved);
@@ -43,6 +44,7 @@ function fixture() {
   };
   const paperQuestionRepo = {
     find: vi.fn(async ({ where }: any) => links.filter((item) => String(item.paperId) === String(where.paperId)).map(item => structuredClone(item))),
+    existsBy: vi.fn(async ({ paperId }: any) => links.some((item) => String(item.paperId) === String(paperId))),
     create: vi.fn((value: any) => ({ id: String(700 + links.length), ...value })),
     delete: vi.fn(async ({ paperId }: any) => {
       const remaining = links.filter((item) => String(item.paperId) !== String(paperId));
@@ -73,17 +75,44 @@ function fixture() {
     throw new Error(`unexpected repository ${(entity as any)?.name}`);
   } };
   const service = Object.create(PaperService.prototype) as PaperService;
+  const audit = { log: vi.fn() };
   Object.assign(service, {
-    paperRepo, pqRepo: paperQuestionRepo, versionRepo, questionRepo, userRepo,
+    paperRepo, pqRepo: { ...paperQuestionRepo, existsBy() { throw new Error('question preservation must use the transaction repository'); } },
+    versionRepo, questionRepo, userRepo,
     releaseRepo: { findOne: vi.fn(async () => null) },
     categories: { lockActive: vi.fn(async () => ({ id: '7', status: 1 })) },
-    audit: { log: vi.fn() },
+    audit,
     dataSource: { transaction: (work: (value: any) => Promise<unknown>) => work(manager) },
   });
-  return { service, papers, userRepo };
+  return { service, papers, userRepo, paperRepo, paperQuestionRepo, links, audit };
 }
 
 describe('training paper operation metadata', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-27T01:57:26.706Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it.each(['create', 'copy'])('supplies one UTC instant to both timestamp columns at the %s save boundary', async (operation) => {
+    const f = fixture();
+    let result;
+    if (operation === 'create') {
+      result = await f.service.createTraining(CREATE, CREATOR, null);
+    } else {
+      const source = await f.service.createTraining(CREATE, CREATOR, null);
+      vi.advanceTimersByTime(60_000);
+      f.paperRepo.save.mockClear();
+      result = await f.service.copyTraining(source.id, UPDATER, null);
+    }
+    const saved = f.paperRepo.save.mock.calls[0][0];
+    expect(saved.createdAt).toBeInstanceOf(Date);
+    expect(saved.updatedAt).toBe(saved.createdAt);
+    expect(saved.createdAt.toISOString()).toBe(new Date().toISOString());
+    expect(result.created_at.toISOString()).toBe(new Date().toISOString());
+    expect(result.updated_at.toISOString()).toBe(result.created_at.toISOString());
+  });
+
   it('returns real creator/updater names after each write while preserving the creator', async () => {
     const f = fixture();
     const created = await f.service.createTraining(CREATE, CREATOR, null);
@@ -94,6 +123,7 @@ describe('training paper operation metadata', () => {
     const createdAt = created.created_at;
     expect(f.papers.get(created.id)).toMatchObject({ createdBy: '9', updatedBy: '9' });
 
+    vi.advanceTimersByTime(1_000);
     const updated = await f.service.updateTraining(created.id, { title: '修改配置' }, UPDATER, null);
     expect(updated).toMatchObject({ created_by_name: '创建管理员', updated_by_name: 'updater', created_at: createdAt });
     expect(updated.updated_at.getTime()).toBeGreaterThan(created.updated_at.getTime());
@@ -150,5 +180,81 @@ describe('training paper operation metadata', () => {
         type: 'body', metatype: CreateTrainingPaperDto,
       })).rejects.toMatchObject({ status: 400 });
     }
+  });
+});
+
+describe('basic paper updates preserve the current question list', () => {
+  it('accepts preserve_questions only as an optional update boolean', async () => {
+    const pipe = new TrainingPaperDtoValidationPipe(PAPER_UPDATE_KEYS);
+    for (const preserve_questions of [true, false]) {
+      await expect(pipe.transform({ preserve_questions }, { type: 'body', metatype: UpdateTrainingPaperDto }))
+        .resolves.toMatchObject({ preserve_questions });
+    }
+    await expect(pipe.transform({}, { type: 'body', metatype: UpdateTrainingPaperDto })).resolves.toEqual({});
+    for (const preserve_questions of [null, 'true', 1]) {
+      await expect(pipe.transform({ preserve_questions }, { type: 'body', metatype: UpdateTrainingPaperDto }))
+        .rejects.toMatchObject({ status: 400 });
+    }
+    await expect(new TrainingPaperDtoValidationPipe(PAPER_CREATE_KEYS).transform({ ...CREATE, preserve_questions: true }, {
+      type: 'body', metatype: CreateTrainingPaperDto,
+    })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it.each([
+    ['category', { category_id: '8', title: '旧弹框修改' }],
+    ['mode', { mode: 'random', rules: [{ type: 'single', count: 1, score_cents: 10000 }] }],
+  ])('rejects a stale basic %s change after another session adds questions, before changing the locked entity', async (_name, patch) => {
+    const f = fixture();
+    const created = await f.service.createTraining(CREATE, CREATOR, null);
+    expect((await f.service.trainingDetail(created.id)).questions).toEqual([]);
+    await f.service.setTrainingQuestions(created.id, [{ question_version_id: '501', score_cents: 10000 }], CREATOR, null);
+    const beforePaper = structuredClone(f.papers.get(created.id));
+    const beforeLinks = structuredClone(f.links);
+    f.paperRepo.save.mockClear(); f.paperQuestionRepo.delete.mockClear(); f.audit.log.mockClear();
+
+    await expect(f.service.updateTraining(created.id, { ...patch, preserve_questions: true } as UpdateTrainingPaperDto, UPDATER, null))
+      .rejects.toMatchObject({ code: 40970 });
+
+    expect(f.papers.get(created.id)).toEqual(beforePaper);
+    expect(await f.paperRepo.findOne.mock.results.at(-1)!.value).toEqual(beforePaper);
+    expect(f.links).toEqual(beforeLinks);
+    expect(f.paperQuestionRepo.existsBy).toHaveBeenCalledWith({ paperId: created.id });
+    expect(f.paperRepo.save).not.toHaveBeenCalled();
+    expect(f.paperQuestionRepo.delete).not.toHaveBeenCalled();
+    expect(f.audit.log).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { category_id: '8' },
+    { mode: 'random', rules: [{ type: 'single', count: 1, score_cents: 10000 }] },
+  ])('allows a basic category/mode change while the locked paper is empty: %j', async (patch) => {
+    const f = fixture();
+    const created = await f.service.createTraining(CREATE, CREATOR, null);
+    const updated = await f.service.updateTraining(created.id, { ...patch, preserve_questions: true } as UpdateTrainingPaperDto, UPDATER, null);
+    expect(updated).toMatchObject(patch.category_id ? { category_id: '8' } : { mode: 'random' });
+    expect(f.paperQuestionRepo.existsBy).toHaveBeenCalledWith({ paperId: created.id });
+    expect(f.links).toEqual([]);
+  });
+
+  it('allows basic title edits on a populated paper without clearing its question list', async () => {
+    const f = fixture();
+    const created = await f.service.createTraining(CREATE, CREATOR, null);
+    await f.service.setTrainingQuestions(created.id, [{ question_version_id: '501', score_cents: 10000 }], CREATOR, null);
+    const before = structuredClone(f.links);
+    const updated = await f.service.updateTraining(created.id, { title: '基本修改', preserve_questions: true }, UPDATER, null);
+    expect(updated.title).toBe('基本修改');
+    expect(updated).not.toHaveProperty('preserve_questions');
+    expect(f.links).toEqual(before);
+    expect(f.paperQuestionRepo.existsBy).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, false])('keeps explicit designer category-change behavior when preserve_questions=%s', async (preserve_questions) => {
+    const f = fixture();
+    const created = await f.service.createTraining(CREATE, CREATOR, null);
+    await f.service.setTrainingQuestions(created.id, [{ question_version_id: '501', score_cents: 10000 }], CREATOR, null);
+    const updated = await f.service.updateTraining(created.id, { category_id: '8', preserve_questions }, UPDATER, null);
+    expect(updated.category_id).toBe('8');
+    expect(f.links).toEqual([]);
+    expect(f.paperQuestionRepo.existsBy).not.toHaveBeenCalled();
   });
 });

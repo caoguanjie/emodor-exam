@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator';
 import { Permissions } from '../../common/decorators/permissions.decorator';
@@ -137,6 +137,12 @@ export class PaperAdminController {
   ) {
     assertKeys(req.body, PAPER_UPDATE_KEYS, '试卷请求');
     return this.papers.updateTraining(id(paperId, 'paper_id'), dto, this.actor(user), req.ip || null);
+  }
+
+  @Delete(':id')
+  @Permissions('papers:write')
+  delete(@Param('id') paperId: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    return this.papers.deleteTraining(id(paperId, 'paper_id'), this.actor(user), req.ip || null);
   }
 
   @Get(':id/candidates')

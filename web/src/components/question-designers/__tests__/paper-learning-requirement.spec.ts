@@ -93,7 +93,7 @@ describe('paper pre-exam learning configuration', () => {
     expect(requests('get', '/admin/papers/course-options')).toHaveLength(1);
     expect(formItem(dialog, '备注').getComponent(ElInput).props()).toMatchObject({ type: 'textarea', maxlength: 1000 });
     expect(dialog.findAll('.el-dialog__footer button').map((button) => button.text())).toEqual(['取消', '保存草稿', '保存并组卷']);
-    expect(wrapper.findAll('.el-table__header-wrapper .cell').map((item) => item.text())).toContain('考前学习要求');
+    expect(wrapper.findAll('.el-table__header-wrapper .cell').map((item) => item.text())).not.toContain('考前学习要求');
   });
 
   it('clears stale learning values from the disabled create payload and still opens the fixed designer', async () => {
@@ -127,7 +127,7 @@ describe('paper pre-exam learning configuration', () => {
     ['累计学习时长', ''], ['累计学习时长', '1.5'], ['累计学习时长', '2147483648'],
   ])('rejects invalid ordinary number input %s=%s through the create form', async (label, value) => {
     const { wrapper } = await openCreate();
-    const dialog = wrapper.getComponent(ElDialog);
+    const dialog = wrapper.findAllComponents(ElDialog).find(item => item.props('title') === '新增试卷')!;
     await formItem(dialog, '试卷名称').get('input').setValue('数字输入校验');
     await setSwitch(dialog, true);
     formItem(dialog, '关联课程').getComponent(ElSelect).vm.$emit('update:modelValue', ['71']);
@@ -148,8 +148,6 @@ describe('paper pre-exam learning configuration', () => {
   it('rejects an overlong remark before creating or saving', async () => {
     const create = await openCreate(); Object.assign(create.state.trainingCreate, { title: '超长备注', remark: '字'.repeat(1001) });
     await create.state.createTraining(); expect(requests('post', '/admin/papers')).toHaveLength(0);
-    const edit = await show(PaperDetail); edit.state.form.remark = '字'.repeat(1001);
-    await edit.state.saveConfig(); expect(requests('put', '/admin/papers/100')).toHaveLength(0);
   });
 
   it('keeps only the latest category courses and ignores a course response after disabling and reopening', async () => {
@@ -160,7 +158,7 @@ describe('paper pre-exam learning configuration', () => {
     expect(requests('get', '/admin/papers/course-options')).toHaveLength(0);
     await setSwitch(wrapper, true);
     state.trainingCreate.course_ids = ['71'];
-    const category = formItem(wrapper.getComponent(ElDialog), '培训类别').getComponent(ElSelect);
+    const category = formItem(wrapper.findAllComponents(ElDialog).find(item => item.props('title') === '新增试卷')!, '培训类别').getComponent(ElSelect);
     category.vm.$emit('update:modelValue', '20'); category.vm.$emit('change', '20'); await flushPromises();
     expect(state.trainingCreate.course_ids).toEqual([]);
     second.resolve({ items: [{ id: '81', title: '新课程' }] }); await flushPromises();
@@ -182,41 +180,6 @@ describe('paper pre-exam learning configuration', () => {
     vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel');
     await state.closeTrainingCreate();
     expect(state.trainingCreateVisible).toBe(true); expect(state.trainingCreate.remark).toBe('尚未保存');
-  });
-
-  it('round-trips learning and old partial-credit settings after confirming legacy range conversion', async () => {
-    saved = detail({ requires_learning: true, course_ids: ['71'], required_learning_minutes: 45, remark: '原备注', regulation_ids: ['91'], partial_credit_ratio: 0.35 });
-    const { wrapper, state } = await show(PaperDetail);
-    expect(formItem(wrapper, '资料来源筛选')).toBeUndefined();
-    expect(requests('get', '/admin/papers/regulation-options')).toHaveLength(0);
-    expect(formItem(wrapper, '累计学习时长（分钟）').getComponent(ElInputNumber).props('modelValue')).toBe(45);
-    expect(formItem(wrapper, '备注').getComponent(ElInput).props('modelValue')).toBe('原备注');
-    formItem(wrapper, '备注').getComponent(ElInput).vm.$emit('update:modelValue', '修改备注');
-    state.form.max_attempts = 5;
-    await state.saveConfig(); await flushPromises();
-    expect(ElMessageBox.confirm).toHaveBeenCalledWith(expect.stringContaining('题目来源'), '转换为当前试卷配置', expect.any(Object));
-    expect(requests('put', '/admin/papers/100')[0]?.body).toMatchObject({ requires_learning: true, course_ids: ['71'], required_learning_minutes: 45, remark: '修改备注', max_attempts: 5, regulation_ids: [], partial_credit_ratio: 0.35 });
-    expect(state.form.remark).toBe('修改备注'); expect(state.dirty).toBe(false);
-  });
-
-  it('enforces enabled detail requirements and normalizes hidden fields on disabling', async () => {
-    saved = detail({ requires_learning: true, course_ids: ['71'], required_learning_minutes: 15 });
-    const { wrapper, state } = await show(PaperDetail);
-    state.form.required_learning_minutes = null; await state.saveConfig();
-    expect(requests('put', '/admin/papers/100')).toHaveLength(0);
-    await setSwitch(wrapper, false); await state.saveConfig(); await flushPromises();
-    expect(requests('put', '/admin/papers/100')[0]?.body).toMatchObject({ requires_learning: false, course_ids: [], required_learning_minutes: null, remark: null });
-    expect(formItem(wrapper, '关联课程')).toBeUndefined();
-  });
-
-  it('reloads courses when a refreshed draft enables learning in the same category', async () => {
-    const { wrapper, state } = await show(PaperDetail);
-    expect(requests('get', '/admin/papers/course-options')).toHaveLength(0);
-    saved = detail({ requires_learning: true, course_ids: ['71'], required_learning_minutes: 15, remark: '设计器保存后' });
-    await state.loadTraining(true); await state.ensureTrainingOptions(); await flushPromises();
-    expect(formItem(wrapper, '关联课程').exists()).toBe(true);
-    expect(requests('get', '/admin/papers/course-options')).toHaveLength(1);
-    expect(state.courseOptions).toEqual(courses);
   });
 
   it('uses the same conditional fields in designer properties and clears course selection on category change', async () => {
