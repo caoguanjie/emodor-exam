@@ -16,6 +16,13 @@ test('content dialog overlays keep a local containing block even with reduced mo
   assert.match(css, /\.main\s*>\s*\.page-enter\s*\{[^}]*position:\s*relative/s);
   assert.match(css, /\.main\s*>\s*\.page-enter\s*>\s*\.el-overlay\s*\{[^}]*position:\s*absolute[^}]*inset:\s*-16px/s);
 });
+
+test('self profile avatar uses the same picture-card upload treatment as student management', () => {
+  const source = readFileSync(resolve(webRoot, 'src/layouts/MainLayout.vue'), 'utf8');
+  assert.match(source, /<el-form-item label="头像" class="profile-avatar-field">\s*<MediaUpload[^>]*list-type="picture-card"[^>]*compact/);
+  assert.match(source, /\.profile-avatar-field\s+:deep\(\.media-upload__picture\)\s*\{[^}]*--el-upload-picture-card-size:\s*100px/s);
+});
+
 const clientIds = {
   layout: '\0a5-main-layout-client-test',
   reading: '\0a5-reading-client-test',
