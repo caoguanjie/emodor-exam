@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomStrongPassword } from './training-access.mjs';
-import { debugLearner, materials } from './mobile-identity.mjs';
+import { completeIdentityProfile, debugLearner, materials } from './mobile-identity.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const Redis = require('ioredis');
@@ -96,6 +96,7 @@ async function createStudent(ctx, admin, categoryId) {
   // Keep the legacy reading fixture in its institutional scope. Video itself
   // must continue to work after this source/category is changed below.
   await ctx.queryTestDb("UPDATE sys_user SET source='institution',category_id=? WHERE id=?", [categoryId, actor.userId]);
+  await completeIdentityProfile(ctx, actor);
   const input = await materials(ctx, actor, `#${randomBytes(3).toString('hex')}`);
   const verified = await ctx.request(actor, 'POST', '/me/identity-verification/sessions', input);
   assert(verified.status === 200 && verified.data?.status === 'verified', 'synthetic identity provider fixture failed');
@@ -262,6 +263,7 @@ async function runBody(ctx) {
   const ticketOwner = { owner_type: 'lesson_version_video', owner_id: course.versionId };
   const unverifiedTicket = await ctx.request(unverified, 'POST', `/media/${course.assetId}/tickets`, ticketOwner);
   assert(unverifiedTicket.code === 40302 && unverifiedTicket.data?.reason_code === 'IDENTITY_REQUIRED', 'unverified ticket must expose structured identity reason');
+  await completeIdentityProfile(ctx, unverified);
   const pendingMaterials = await materials(ctx, unverified, `#${randomBytes(3).toString('hex')}`);
   await providerControl(ctx, 'pause');
   const pendingRequest = ctx.request(unverified, 'POST', '/me/identity-verification/sessions', pendingMaterials);

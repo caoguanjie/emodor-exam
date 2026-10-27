@@ -38,7 +38,7 @@ export interface LearnerProfile {
   role: 'employee' | 'regulation_admin' | 'super_admin'
   status: number
 }
-export interface EditableLearnerProfile { occupation?: string | null; gender?: 'male' | 'female' | null; birthday?: string | null; avatar_id?: string | null }
+export interface EditableLearnerProfile { real_name?: string; occupation?: string | null; gender?: 'male' | 'female' | null; birthday?: string | null; avatar_id?: string | null }
 export function getLearnerProfile(): Promise<LearnerProfile> { return request({ url: '/me/profile' }) }
 export function saveLearnerProfile(data: EditableLearnerProfile): Promise<LearnerProfile> {
   return request({ url: '/me/profile', method: 'POST', data })

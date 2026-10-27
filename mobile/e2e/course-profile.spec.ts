@@ -6,6 +6,7 @@ const first = { id: '9007199254740995', title: '接口推荐课程', category_id
 const second = { ...first, id: '9007199254740996', title: '接口第二门课程' }
 function envelope(data: unknown) { return { code: 0, message: 'ok', data } }
 async function auth(page: Page) {
+  await page.route('**/api/v1/me/identity-verification', route => route.fulfill({ json: envelope({ status: 'verified', real_name: profile.real_name, id_number_masked: '000****0000', verified_at: '2026-10-27T00:00:00Z', current_session_id: null, reason_code: null }) }))
   await page.route('**/api/v1/mobile/auth/refresh', route => route.fulfill({ json: envelope({ access_token: 'course-browser-access', expires_in: 900, user }) }))
 }
 async function courses(page: Page) {
@@ -109,7 +110,7 @@ test('profile saves only editable fields, preserves failed input, and accepts au
     expect(route.request().method()).toBe('POST')
     expect(route.request().postDataJSON()).toEqual({ gender: 'male', birthday: '2000-03-04' })
     saves++
-    return saves === 1 ? route.abort('internetdisconnected') : route.fulfill({ json: envelope({ ...profile, real_name: '实名权威姓名', gender: 'male', phone: '13900001111' }) })
+    return saves === 1 ? route.abort('internetdisconnected') : route.fulfill({ json: envelope({ ...profile, real_name: profile.real_name, gender: 'male', phone: '13900001111' }) })
   })
   await page.goto('/#/pages/profile/index')
   await expect(page.getByText('真实学员姓名', { exact: true })).toBeVisible()
@@ -127,7 +128,7 @@ test('profile saves only editable fields, preserves failed input, and accepts au
   await expect(page.getByRole('button', { name: '性别', exact: true })).toContainText('男')
   await page.getByText('保存资料', { exact: true }).click()
   await expect(page.getByText('已保存', { exact: true })).toBeVisible()
-  await expect(name).toHaveValue('实名权威姓名')
+  await expect(name).toHaveValue(profile.real_name)
   await expect(phone).toHaveValue('13900001111')
 })
 

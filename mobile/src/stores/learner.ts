@@ -6,6 +6,11 @@ import type { MobileSessionUser } from '@/types/api'
 
 function editablePatch(input: EditableLearnerProfile): EditableLearnerProfile {
   const patch: EditableLearnerProfile = {}
+  if ('real_name' in input) {
+    const name = typeof input.real_name === 'string' ? input.real_name.trim() : ''
+    if (!name || name.length > 64) throw new ApiError(40001, '真实姓名须为1—64个字')
+    patch.real_name = name
+  }
   if ('avatar_id' in input) patch.avatar_id = input.avatar_id || null
   if ('occupation' in input) {
     const occupation = input.occupation?.trim() || null
@@ -62,6 +67,7 @@ export const useLearnerStore = defineStore('mobile-learner', () => {
 
   function acceptProfile(result: LearnerProfile) {
     profile.value = result; categoryReadRequired.value = false
+    if (user.value && String(user.value.id) === result.id) user.value = { ...user.value, real_name: result.real_name, category_id: result.category_id }
     if (result.category_id) { categoryDraftId.value = ''; categoryConfirmVisible.value = false }
   }
 

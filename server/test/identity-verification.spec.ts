@@ -9,7 +9,7 @@ import { DisabledIdentityProvider, TencentIdentityProvider, TencentIdCardOcrAdap
 
 // The repository double models durable rows; a second service reuses the same DB.
 function fixture() {
-  const tables = new Map<any, any[]>([[SysUser, [{ id: '7', role: 'employee', status: 1, realName: '', source: 'external', categoryId: null }, { id: '8', role: 'employee', status: 1, realName: '' }]], [LearnerIdentity, []], [IdentityVerificationSession, []]]);
+  const tables = new Map<any, any[]>([[SysUser, [{ id: '7', role: 'employee', status: 1, realName: '待核验姓名', source: 'external', categoryId: '9' }, { id: '8', role: 'employee', status: 1, realName: '另一待核验姓名', categoryId: '9' }]], [LearnerIdentity, []], [IdentityVerificationSession, []]]);
   let failBind = false;
   const repos = new Map<any, any>();
   for (const [type, rows] of tables) {
@@ -42,6 +42,22 @@ function fixture() {
 const images = { face_asset_id: '11', id_card_portrait_asset_id: '12', id_card_emblem_asset_id: '13' };
 describe('durable learner identity', () => {
   afterEach(() => vi.useRealTimers());
+  it.each([{ realName: '', categoryId: '9' }, { realName: '   ', categoryId: '9' }, { realName: '待核验姓名', categoryId: null }])('rejects a new verification with incomplete profile %j before provider or session writes', async (patch) => {
+    const f = fixture(); Object.assign(f.tables.get(SysUser)![0], patch);
+    await expect(f.service.create('7', images)).rejects.toMatchObject({ code: 40001, message: '请先填写姓名并确认培训工种' });
+    expect(f.provider.verifyCalls).toBe(0); expect(f.tables.get(IdentityVerificationSession)).toHaveLength(0);
+  });
+  it('allows a pending session to be replayed after legacy profile fields become incomplete', async () => {
+    const f = fixture(); let finish!: (value: any) => void;
+    f.provider.verify = async () => { f.provider.verifyCalls++; return new Promise((resolve) => { finish = resolve; }); };
+    const first = f.service.create('7', images);
+    while (!finish) await new Promise((resolve) => setTimeout(resolve, 0));
+    Object.assign(f.tables.get(SysUser)![0], { realName: '', categoryId: null });
+    expect(await f.make().create('7', images)).toMatchObject({ status: 'pending' });
+    expect(f.provider.verifyCalls).toBe(1);
+    finish({ status: 'verified', realName: '合成测试主体', idNumber: 'SYNTHETIC-DOCUMENT-ONLY', providerRequestId: 'synthetic-request' });
+    expect(await first).toMatchObject({ status: 'verified' });
+  });
   it('starts unverified and rejects foreign or mismatched material before provider calls', async () => {
     const f = fixture();
     expect(await f.service.view('7')).toMatchObject({ status: 'unverified', real_name: null });
@@ -59,7 +75,7 @@ describe('durable learner identity', () => {
     expect(rows).toHaveLength(1);
     expect(JSON.stringify(rows)).not.toMatch(/SYNTHETIC-DOCUMENT-ONLY|合成测试主体/);
     expect(await f.service.view('7')).toMatchObject({ status: 'verified', real_name: '合成测试主体' });
-    expect(f.tables.get(SysUser)![0]).toMatchObject({ source: 'external', categoryId: null, realName: '合成测试主体' });
+    expect(f.tables.get(SysUser)![0]).toMatchObject({ source: 'external', categoryId: '9', realName: '合成测试主体' });
     await expect(f.service.get('8', result.session_id)).rejects.toMatchObject({ code: 40302 });
   });
   it('persists provider success before binding failure and recovers after a service restart', async () => {
@@ -147,6 +163,7 @@ describe('durable learner identity', () => {
     vi.useFakeTimers(); const f = fixture(); f.setBindFailure(true);
     await expect(f.service.create('7', images)).rejects.toThrow('bind failed');
     await vi.advanceTimersByTimeAsync(600_001); f.provider.enabled = false; f.setBindFailure(false);
+    Object.assign(f.tables.get(SysUser)![0], { realName: '', categoryId: null });
     expect(await f.make().create('7', images)).toMatchObject({ status: 'verified' });
     expect(f.provider.verifyCalls).toBe(1);
   });

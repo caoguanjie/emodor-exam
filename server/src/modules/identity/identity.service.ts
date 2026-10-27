@@ -79,7 +79,7 @@ export class IdentityService implements OnModuleInit {
   async create(userId: string, input: IdentitySessionCreateDto) {
     const fingerprint = this.fingerprint(input);
     const result = await this.dataSource.transaction(async (manager) => {
-      await this.user(manager, String(userId));
+      const user = await this.user(manager, String(userId));
       const identity = await manager.getRepository(LearnerIdentity).findOne({ where: { userId: String(userId) } });
       if (identity) throw Errors.identityAlreadyVerified();
       const repo = manager.getRepository(IdentityVerificationSession);
@@ -91,6 +91,7 @@ export class IdentityService implements OnModuleInit {
         if (['created', 'provider_pending', 'provider_unknown'].includes(stale.status) && stale.expiresAt.getTime() <= Date.now()) { stale.status = 'expired'; stale.reasonCode = 'SESSION_EXPIRED'; await repo.save(stale); }
       }
       if (active.some((s) => s.status === 'provider_verified' || !['verified', 'rejected', 'expired'].includes(s.status) && s.expiresAt.getTime() > Date.now())) throw Errors.sessionConflict('已有实名认证正在处理中');
+      if (!user.realName?.trim() || !user.categoryId) throw Errors.param('请先填写姓名并确认培训工种');
       this.assertAvailable();
       await this.material(String(userId), input, manager);
       const ttl = (this.config as AppConfig & { identity: IdentitySettings }).identity?.sessionTtlSeconds || 600;

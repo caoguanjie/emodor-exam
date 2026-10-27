@@ -54,10 +54,9 @@ test('selection and cancel are drafts; explicit confirmation saves the real ID o
   expect(state.writes).toEqual([{ category_id: '9007199254740993' }])
   await expect(page.getByRole('button', { name: '培训工种', exact: true })).toHaveCount(0)
   await expect(page.locator('.category-field__value')).toHaveText('真实高处作业')
-  await page.getByText('保存资料', { exact: true }).click()
-  await expect(page.getByText('已保存', { exact: true })).toBeVisible()
-  expect(state.saves).toEqual([{ gender: 'female', birthday: '2000-03-04' }])
-  await expect(page.getByRole('textbox').first()).not.toBeEditable()
+  await page.getByText('保存并去实名认证', { exact: true }).click()
+  await expect(page).toHaveURL(/pages\/identity\/index$/)
+  expect(state.saves).toEqual([{ real_name: initial.real_name, gender: 'female', birthday: '2000-03-04' }])
 })
 
 test('preassigned category displays its current name and refreshes on return without losing ordinary drafts', async ({ page }) => {
@@ -137,7 +136,7 @@ test('opening personal info during the profile tab read still initializes the fo
   await finishFirstRead()
   await expect(page.getByRole('textbox').first()).toHaveValue('实名权威姓名')
   await expect(page.locator('.category-field__value')).toHaveText('PC 已分配工种')
-  await expect(page.getByText('保存资料', { exact: true })).toBeVisible()
+  await expect(page.getByText('保存并去实名认证', { exact: true })).toBeVisible()
 })
 
 test('a long category list scrolls to and selects the final real ID', async ({ page }) => {
@@ -166,7 +165,7 @@ test('exam guidance prioritizes the missing category while keeping listed exams 
   await expect(page.getByText('当前可见考试', { exact: true })).toBeVisible()
   await expect(page.getByText('历史可见考试', { exact: true })).toBeVisible()
   await expect(page.getByText('考试记录', { exact: true })).toBeVisible()
-  await expect(page.locator('.exam-card').first().getByText('查看须知 ›', { exact: true })).toBeVisible()
+  await expect(page.locator('.exam-card').first().getByText('进入考试', { exact: true })).toBeVisible()
   await page.locator('.exam-guidance').getByText('去选择培训工种', { exact: true }).click()
   await expect(page).toHaveURL(/pages\/profile\/info$/)
 })

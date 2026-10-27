@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AppIcon from '@/components/common/AppIcon.vue'
+import IdentityVerifiedBadge from './IdentityVerifiedBadge.vue'
 import { computed } from 'vue'
 import type { IdentityVerifiedInfo } from '@/types/identity'
 
@@ -11,7 +12,7 @@ const emit = defineEmits<{ details: []; profile: []; retry: [] }>()
 <template>
   <view v-if="mode === 'success'" class="identity-result">
     <view class="identity-result__hero"><view class="identity-result__mark"><AppIcon name="shield-check" :size="44" color="#07c160" /></view><text class="identity-result__title">实名认证成功</text><text class="identity-result__description">已完成本人身份核验</text></view>
-    <view class="identity-result__card"><view class="identity-result__name-row"><text class="identity-result__name">{{ info.name }}</text><view class="identity-result__tag"><AppIcon name="badge-check" :size="14" color="#07c160" /><text>已实名</text></view></view><text class="identity-result__number">{{ info.maskedId }}</text><text class="identity-result__privacy">身份证号码已脱敏展示</text></view>
+    <view class="identity-result__card"><view class="identity-result__name-row"><text class="identity-result__name">{{ info.name }}</text><IdentityVerifiedBadge /></view><text class="identity-result__number">{{ info.maskedId }}</text><text class="identity-result__privacy">身份证号码已脱敏展示</text></view>
     <wd-button block @click="emit('details')">查看实名信息</wd-button>
     <wd-button block type="info" variant="plain" @click="emit('profile')">返回个人中心</wd-button>
   </view>
@@ -41,7 +42,6 @@ const emit = defineEmits<{ details: []; profile: []; retry: [] }>()
 .identity-result__card { padding: 20px; display: flex; flex-direction: column; gap: 16px; border-radius: var(--app-radius-lg); background: var(--app-color-surface); }
 .identity-result__name-row { display: flex; align-items: center; gap: 10px; }
 .identity-result__name { font-size: 22px; font-weight: 600; }
-.identity-result__tag { display: flex; align-items: center; gap: 4px; padding: 4px 8px; color: var(--app-color-success); background: var(--app-color-success-soft); border-radius: var(--app-radius-sm); font-size: 12px; }
 .identity-result__number { font-size: 17px; font-family: 'IBM Plex Mono', monospace; color: var(--app-color-text-secondary); }
 .identity-result__privacy, .identity-result__detail-privacy { font-size: 12px; color: var(--app-color-text-muted); }
 .identity-result__detail-privacy { text-align: center; }

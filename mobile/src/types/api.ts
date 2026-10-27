@@ -6,7 +6,7 @@ export interface MobileSessionUser {
   phone_masked: string
   role: 'employee'
   source: 'institution' | 'external' | null
-  category_id: number | null
+  category_id: number | string | null
   identity_status: 'unverified' | 'pending' | 'verified' | 'rejected'
 }
 export interface MobileSessionResult { access_token: string; expires_in: number; user: MobileSessionUser }

@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { debugLearner, materials } from '../mobile-identity.mjs';
+import { completeIdentityProfile, debugLearner, materials } from '../mobile-identity.mjs';
 
 // The ordinary debug login only supplies a mobile session. A real HTTP identity
 // session, with the external provider replaced in the isolated test process,
 // creates the authoritative verified fact used by exam policy.
 export async function verifyExamLearner(ctx, actor) {
+  const original = await completeIdentityProfile(ctx, actor);
   const input = await materials(ctx, actor, `#${randomBytes(3).toString('hex')}`);
   const verified = await ctx.request(actor, 'POST', '/me/identity-verification/sessions', input);
   assert.equal(verified.status, 200, `synthetic identity session: ${JSON.stringify(verified)}`);
   assert.equal(verified.data.status, 'verified');
+  // Some exam-policy fixtures deliberately remove the category after verification.
+  if (!original.category_id) await ctx.queryTestDb('UPDATE sys_user SET category_id=NULL WHERE id=?', [actor.userId]);
   return actor;
 }
 

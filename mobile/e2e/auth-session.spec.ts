@@ -4,6 +4,8 @@ const user = { id: 17, username: 'learner-17', real_name: '', phone_masked: '138
 const session = { access_token: 'browser-memory-access', expires_in: 900, user }
 // Authentication cases isolate their read-model requests after real business pages mount.
 test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/me/identity-verification', route => route.fulfill({ json: { code: 0, message: 'ok', data: { status: 'unverified', real_name: null, id_number_masked: null, verified_at: null, current_session_id: null, reason_code: null } } }))
+  await page.route('**/api/v1/me/training-categories?**', route => route.fulfill({ json: { code: 0, message: 'ok', data: { items: [], total: 0, page: 1, page_size: 100 } } }))
   await page.route('**/api/v1/me/home?**', route => route.fulfill({ json: { code: 0, message: 'ok', data: { site_config: { logo_asset_id: null, banners: [] }, courses: { items: [], total: 0, page: 1, page_size: 4 } } } }))
   await page.route('**/api/v1/me/profile', route => route.fulfill({ json: { code: 0, message: 'ok', data: { id: '17', username: user.username, real_name: user.real_name, phone: null, email: null, avatar_id: null, occupation: null, gender: null, birthday: null, source: user.source, category_id: null, role: user.role, status: 1 } } }))
 })
@@ -16,7 +18,7 @@ async function openLogin(page: Page) {
   await page.getByRole('textbox').first().fill('13800000000')
 }
 
-test('real API login handles loading, resend countdown, wrong code and success without forcing identity', async ({ page, context }) => {
+test('real API login handles loading, resend countdown, wrong code and success guiding a new learner to profile completion', async ({ page, context }) => {
   await context.addCookies([{ name: 'ruleexam_refresh', value: 'pc-cookie-preserved', domain: '127.0.0.1', path: '/api/v1/auth', httpOnly: true, sameSite: 'Strict' }])
   await noSession(page)
   let sends = 0
@@ -47,8 +49,8 @@ test('real API login handles loading, resend countdown, wrong code and success w
   await page.getByRole('spinbutton').pressSequentially('123456', { delay: 120 })
   await expect(page.locator('#mobile-sms-login')).not.toHaveClass(/is-disabled|is-loading/)
   await page.locator('#mobile-sms-login').click()
-  await expect(page).toHaveURL(/#\/pages\/home\/index$/)
-  await expect(page.getByText('推荐课程', { exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/#\/pages\/profile\/info\?onboarding=1$/)
+  await expect(page.getByText('完善个人资料', { exact: true })).toBeVisible()
   const persisted = await page.evaluate(() => [...Object.values(localStorage), ...Object.values(sessionStorage), document.cookie].join('|'))
   expect(persisted).not.toContain('browser-memory-access')
   expect(persisted).not.toContain('challenge-browser')
@@ -59,8 +61,8 @@ test('bootstrap restores the mobile session silently and leaves the login page',
   let refreshes = 0
   await page.route('**/api/v1/mobile/auth/refresh', route => { refreshes++; return route.fulfill({ json: { code: 0, message: 'ok', data: session } }) })
   await page.goto('/#/pages/auth/login')
-  await expect(page).toHaveURL(/#\/pages\/home\/index$/)
-  await expect(page.getByText('推荐课程', { exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/#\/pages\/profile\/info\?onboarding=1$/)
+  await expect(page.getByText('完善个人资料', { exact: true })).toBeVisible()
   expect(refreshes).toBe(1)
 })
 
@@ -119,7 +121,7 @@ test('login submission stays disabled until bootstrap refresh has settled', asyn
   await expect(page.locator('#mobile-sms-login')).not.toHaveClass(/is-disabled/)
   await page.getByRole('checkbox', { name: '我已阅读并同意服务协议' }).click()
   await page.locator('#mobile-sms-login').click()
-  await expect(page).toHaveURL(/#\/pages\/home\/index$/)
+  await expect(page).toHaveURL(/#\/pages\/profile\/info\?onboarding=1$/)
 })
 
 test('normal profile logout waits for the mobile endpoint and clears the session', async ({ page }) => {

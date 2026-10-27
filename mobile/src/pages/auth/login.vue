@@ -11,7 +11,10 @@ import { ApiError } from '@/api/client'
 import { isValidMobilePhone, normalizeMobilePhone, sendSmsCode } from '@/api/auth'
 import { isStaticSessionPreview } from '@/platform/session'
 import { useSessionStore } from '@/stores/session'
+import { learnerLandingUrl } from '@/utils/learner-onboarding'
+import { nativeNavigationStyle } from '@/platform/native-layout'
 
+const nativeStyle = nativeNavigationStyle()
 const { scenario, loadScenario } = useShellScenario('login-default')
 const preview = ref(false)
 const realHelpVisible = ref(false)
@@ -64,7 +67,7 @@ function setScenario(id: string) {
   else if (id === 'login-help') realHelpVisible.value = true
 }
 function openTerms() { uni.navigateTo({ url: `/pages/profile/terms${preview.value ? '?scenario=terms-default' : ''}` }) }
-function login() { if (active) uni.reLaunch({ url: preview.value ? '/pages/home/index?scenario=home-default' : '/pages/home/index' }) }
+function login() { if (active) uni.reLaunch({ url: preview.value ? '/pages/home/index?scenario=home-default' : session.user ? learnerLandingUrl(session.user) : '/pages/auth/login' }) }
 
 function showError(error: unknown) {
   hasError.value = true
@@ -109,8 +112,8 @@ async function submitLogin() {
 }
 </script>
 <template>
-  <view class="login-page">
-    <view class="login-page__hero"><AppTopBar title="学员登录" :back="false" action="帮助" light @action="setScenario('login-help')" /><view class="login-page__brand"><view class="login-page__logo"><image src="/static/brand-logo.png" mode="aspectFit" /></view><view class="login-page__brand-copy"><text class="login-page__institution">{{ institution }}</text><text class="login-page__subtitle">{{ platformSubtitle }}</text></view></view></view>
+  <view class="login-page" :style="nativeStyle">
+    <view class="login-page__hero"><AppTopBar title="学员登录" :back="false" light /><view class="login-page__brand"><view class="login-page__logo"><image src="/static/brand-logo.png" mode="aspectFit" /></view><view class="login-page__brand-copy"><text class="login-page__institution">{{ institution }}</text><text class="login-page__subtitle">{{ platformSubtitle }}</text></view></view></view>
     <view class="login-page__body">
       <SmsLoginForm v-if="preview" ref="previewForm" :scenario="scenario" @scenario="setScenario" @login="login" @terms="openTerms" />
       <view v-else class="login-form">
@@ -123,9 +126,9 @@ async function submitLogin() {
         <wd-button button-id="mobile-sms-login" block :disabled="!canLogin || confirmingConsent" :loading="loggingIn" custom-style="--wot-button-height-medium:50px;--wot-button-radius-main:var(--app-radius-md);font-weight:600" @click="submitLogin">{{ loggingIn ? '正在登录' : '登录' }}</wd-button>
         <LoginConsent ref="consent" :disabled="sending || loggingIn" :eligible="canLogin" :context-key="`${normalizeMobilePhone(phone)}|${challengeId}|${code}`" @terms="openTerms" />
       </view>
-      <view class="login-page__help"><text role="button" @click="setScenario('login-help')">收不到验证码？</text><text class="login-page__help-note">请使用培训机构登记的手机号</text></view>
+      <view class="login-page__help"><text role="button" @click="setScenario('login-help')">收不到验证码？</text></view>
     </view>
-    <ConfirmSheet v-model="helpVisible" title="收不到验证码？" confirm-text="我知道了" cancel-text=""><view class="sms-help"><view v-for="item in smsHelp" :key="item.title" class="sms-help__item"><text class="sms-help__title">{{ item.title }}</text><text>{{ item.description }}</text></view><view class="sms-help__notice"><text class="sms-help__title">手机号还未在机构登记？</text><text>请联系培训机构确认登记信息后再登录。</text></view></view></ConfirmSheet>
+    <ConfirmSheet v-model="helpVisible" title="收不到验证码？" confirm-text="我知道了" cancel-text=""><view class="sms-help"><view v-for="item in smsHelp" :key="item.title" class="sms-help__item"><text class="sms-help__title">{{ item.title }}</text><text>{{ item.description }}</text></view><view class="sms-help__notice"><text class="sms-help__title">首次使用本平台？</text><text>使用本人手机号获取验证码即可登录，首次登录后请补充姓名和培训工种。</text></view></view></ConfirmSheet>
   </view>
 </template>
 <style scoped>
@@ -139,7 +142,6 @@ async function submitLogin() {
 .login-page__subtitle { font-size: 14px; }
 .login-page__body { flex: 1; display: flex; flex-direction: column; justify-content: space-between; gap: 50px; padding: 28px 20px 24px; }
 .login-page__help { text-align: center; display: flex; flex-direction: column; gap: 10px; color: var(--app-color-primary); font-size: 14px; padding-top: 24px; }
-.login-page__help-note { color: var(--app-color-text-muted); font-size: 12px; }
 .sms-help { display: flex; flex-direction: column; gap: 20px; font-size: 12px; color: var(--app-color-text-secondary); }
 .sms-help__item, .sms-help__notice { display: flex; flex-direction: column; gap: 4px; }
 .sms-help__title { font-size: 14px; font-weight: 500; color: var(--app-color-text); }
@@ -153,4 +155,7 @@ async function submitLogin() {
 .login-form__feedback { min-height: 22px; display: flex; gap: 6px; align-items: center; color: var(--app-color-text-muted); font-size: 12px; }
 .login-form__feedback--error { color: var(--app-color-danger); }
 .login-form__feedback--sent { color: var(--app-color-primary); }
+/* #ifdef MP-WEIXIN */
+.login-page__body { padding-bottom: calc(24px + var(--app-safe-area-bottom)); }
+/* #endif */
 </style>

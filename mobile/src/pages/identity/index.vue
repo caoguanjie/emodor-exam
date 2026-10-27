@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { onHide, onLoad, onShow, onUnload } from '@dcloudio/uni-app'
 import AppPage from '@/components/common/AppPage.vue'
 import AppTopBar from '@/components/common/AppTopBar.vue'
@@ -15,10 +15,16 @@ import type { IdentityMaterialKind, IdentityMaterials } from '@/types/identity'
 import { useIdentityStore } from '@/stores/identity'
 import type { MediaSource } from '@/platform/media-picker'
 import { useSessionStore } from '@/stores/session'
+import { useLearnerStore } from '@/stores/learner'
+import { identityNeedsProfile } from '@/utils/learner-onboarding'
 
 const preview = ref(false)
 const store = useIdentityStore()
 const session = useSessionStore()
+const learner = useLearnerStore()
+const profileReady = ref(false)
+let active = true, pageRevision = 0
+let reloadPending: Promise<void> | null = null
 const fixtureScenario = ref<IdentityScenario>(identityScenarios['identity-collect'])
 const fixtureMaterials = ref<IdentityMaterials>({ ...fixtureScenario.value.materials })
 const scenario = computed<IdentityScenario>(() => preview.value ? fixtureScenario.value : {
@@ -49,8 +55,8 @@ const selectedKind = ref<IdentityMaterialKind>('portrait')
 const agreementVisible = ref(false)
 const localFeedback = ref('')
 const pending = computed(() => scenario.value.state === 'pending')
-const busy = computed(() => preview.value ? scenario.value.state === 'submitting' : store.busy)
-const submitEnabled = computed(() => preview.value ? canSubmitIdentity(materials.value) && !pending.value && !busy.value : store.canSubmit)
+const busy = computed(() => preview.value ? scenario.value.state === 'submitting' : store.busy || !profileReady.value)
+const submitEnabled = computed(() => preview.value ? canSubmitIdentity(materials.value) && !pending.value && !busy.value : profileReady.value && store.canSubmit)
 const feedback = computed(() => localFeedback.value || scenario.value.feedback)
 const feedbackTone = computed(() => localFeedback.value ? 'secondary' : scenario.value.feedbackTone)
 const sourceTitle = computed(() => selectedKind.value === 'emblem' ? '上传身份证国徽面' : '上传身份证人像面')
@@ -62,15 +68,48 @@ function applyScenario(next: IdentityScenario) {
   localFeedback.value = ''
 }
 onLoad(query => { preview.value = isStaticSessionPreview(query); if (preview.value) applyScenario(resolveIdentityScenario(query?.scenario)); else void reload() })
-onShow(() => { if (!preview.value && !store.authority && !store.loading) void reload() })
-async function reload() { await store.load(); if (store.pending && !store.loadError) void store.poll() }
+onShow(() => { active = true; if (!preview.value && (!profileReady.value || !store.authority) && !store.loading) void reload() })
+function reload(): Promise<void> {
+  if (reloadPending) return reloadPending
+  const epoch = session.sessionEpoch, current = pageRevision
+  profileReady.value = false
+  const pending = (async () => {
+    await store.load()
+    if (!active || current !== pageRevision || epoch !== session.sessionEpoch || store.loadError || !store.authority) return
+    if (!store.pending && !store.verified) {
+      try {
+        const profile = await learner.loadProfile()
+        if (!active || current !== pageRevision || epoch !== session.sessionEpoch) return
+        if (identityNeedsProfile(store.authority.status, profile)) { uni.redirectTo({ url: '/pages/profile/info?onboarding=1' }); return }
+      } catch (cause) { if (active && current === pageRevision && epoch === session.sessionEpoch) store.loadError = cause instanceof Error ? cause.message : '资料读取失败，请重试'; return }
+    }
+    profileReady.value = true
+    if (store.pending) void store.poll()
+  })().finally(() => { if (reloadPending === pending) reloadPending = null })
+  reloadPending = pending
+  return pending
+}
+watch(() => store.pending, (pending, previous) => {
+  if (preview.value || !previous || pending || store.authority?.status === 'verified') return
+  profileReady.value = false
+  overlay.value = undefined
+  const epoch = session.sessionEpoch, current = pageRevision
+  // A terminal result may arrive while the initial reload is settling.
+  // Recheck after that read instead of reusing its pending-state readiness.
+  void Promise.resolve(reloadPending).then(() => {
+    if (active && epoch === session.sessionEpoch && current === pageRevision && !store.pending && store.authority?.status !== 'verified') return reload()
+  })
+}, { flush: 'sync' })
 function discardTemporaryMaterials() {
   fixtureMaterials.value = { portrait: null, emblem: null, face: null, consent: false }
   if (!preview.value) store.leave()
   overlay.value = undefined
 }
-onHide(() => { if (preview.value) discardTemporaryMaterials(); else { overlay.value = undefined; store.hide() } })
-onUnload(discardTemporaryMaterials)
+onHide(() => { active = false; pageRevision++; if (!store.picking) { profileReady.value = false; reloadPending = null } if (preview.value) discardTemporaryMaterials(); else { overlay.value = undefined; store.hide() } })
+onUnload(() => {
+  active = false; pageRevision++; profileReady.value = false; reloadPending = null
+  discardTemporaryMaterials()
+})
 function selectMaterial(kind: IdentityMaterialKind) {
   if (pending.value || busy.value) return
   selectedKind.value = kind
@@ -118,7 +157,7 @@ function dismissError() { overlay.value = undefined }
       <view class="identity-source"><text class="identity-source__title">{{ sourceTitle }}</text><text class="identity-source__description">拍摄或选择清晰的身份证原件照片</text><view class="identity-source__option" role="button" aria-label="拍照" @click="selectSource('camera')"><AppIcon name="camera" :size="21" color="#1989fa" /><text>拍照</text></view><view class="identity-source__option" role="button" aria-label="从相册选择" @click="selectSource('album')"><AppIcon name="image" :size="21" color="#1989fa" /><text>从相册选择</text></view><wd-button block type="info" variant="plain" @click="overlay = undefined">取消</wd-button></view>
     </wd-popup>
     <wd-popup :model-value="overlay === 'face-guide' || overlay === 'verifying' || overlay === 'service-error' || overlay === 'bound'" position="center" round :close-on-click-modal="false" modal-style="background-color:#00000066" custom-style="width:calc(100% - 56px);max-width:480px;border-radius:var(--app-radius-lg)">
-      <view v-if="overlay === 'face-guide'" class="identity-dialog"><view class="identity-dialog__illustration"><AppIcon name="scan-face" :size="42" color="#1989fa" /></view><text class="identity-dialog__title identity-dialog__title--face">拍摄本人正脸</text><text class="identity-dialog__copy">{{ '接下来将打开系统拍摄界面。\n请保持正脸清晰，面部无遮挡。\n如无法拍摄，请检查浏览器相机权限。' }}</text><wd-button button-id="identity-live-face" block @click="selectedKind = 'face'; selectSource('camera')">现场拍照</wd-button><wd-button block type="info" variant="plain" @click="overlay = undefined">暂不拍摄</wd-button></view>
+      <view v-if="overlay === 'face-guide'" class="identity-dialog"><view class="identity-dialog__illustration"><AppIcon name="scan-face" :size="42" color="#1989fa" /></view><text class="identity-dialog__title identity-dialog__title--face">拍摄本人正脸</text><text class="identity-dialog__copy">{{ '接下来将打开系统拍摄界面。\n请保持正脸清晰，面部无遮挡。\n如无法拍摄，请检查相机访问权限。' }}</text><wd-button button-id="identity-live-face" block @click="selectedKind = 'face'; selectSource('camera')">现场拍照</wd-button><wd-button block type="info" variant="plain" @click="overlay = undefined">暂不拍摄</wd-button></view>
       <view v-else-if="overlay === 'verifying'" class="identity-dialog identity-dialog--verifying"><wd-loading :size="38" /><text class="identity-dialog__title">正在核验身份</text><text class="identity-dialog__copy">{{ '正在比对证件信息与本人照片\n请稍候，不要重复提交' }}</text></view>
       <view v-else-if="overlay === 'service-error'" class="identity-dialog"><AppIcon name="cloud-off" :size="36" color="#1989fa" /><text class="identity-dialog__title">核验服务暂不可用</text><text class="identity-dialog__copy">{{ '当前未能完成核验，请稍后重试。\n这不代表你的身份核验未通过。' }}</text><wd-button block @click="dismissError">返回重试</wd-button><wd-button block type="info" variant="plain" @click="profile">稍后再试</wd-button></view>
       <view v-else-if="overlay === 'bound'" class="identity-dialog"><AppIcon name="user-lock" :size="36" color="#ff976a" /><text class="identity-dialog__title identity-dialog__title--bound">该身份已绑定其他账号</text><text class="identity-dialog__copy">{{ '已绑定账号：138****1234\n请确认是否使用了本人证件。\n若为本人原账号，请使用原账号登录。' }}</text><wd-button block @click="dismissError">我知道了</wd-button></view>

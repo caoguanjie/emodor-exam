@@ -1,6 +1,12 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSessionStore } from '../src/stores/session'
+
+vi.mock('../src/platform/media-picker', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/platform/media-picker')>()
+  return { ...actual, pickIdentityMedia: vi.fn() }
+})
+
 const view = { status: 'unverified', real_name: null, id_number_masked: null, verified_at: null, current_session_id: null, reason_code: null }
 const pending = { session_id: 'session-1', status: 'pending', reason_code: null, clear_materials: [], expires_at: '2030-01-01T00:00:00Z' }
 type Wire = { url: string; method: string; data: unknown; header: Record<string, string>; success: (value: unknown) => void; fail: (error: unknown) => void }
@@ -10,6 +16,11 @@ function install(handler: (options: Wire) => unknown) {
 }
 beforeEach(() => { setActivePinia(createPinia()); useSessionStore().$patch({ accessToken: 'memory', initialized: true }); install(() => ok(view)) })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
+
+async function pickedMedia(path: string) {
+  const picker = await import('../src/platform/media-picker')
+  vi.mocked(picker.pickIdentityMedia).mockResolvedValue({ tempFilePath: path, size: 100, mimeType: 'image/jpeg' })
+}
 describe('identity authoritative state and material isolation', () => {
   it('does not assume unverified when the authority read fails', async () => {
     install(() => Promise.reject(new Error('offline')))
@@ -99,6 +110,7 @@ describe('identity authoritative state and material isolation', () => {
   it('drops an old-account upload and releases its local preview after logout', async () => {
     const revoked: string[] = []; const uploaded: string[] = []
     let complete: (v: unknown) => void = () => {}
+    await pickedMedia('blob:old-account')
     const { useIdentityStore } = await import('../src/stores/identity')
     vi.stubGlobal('URL', { revokeObjectURL: (url: string) => revoked.push(url) })
     vi.stubGlobal('uni', { chooseImage: (o: { success: (v: unknown) => void }) => o.success({ tempFiles: [{ path: 'blob:old-account', size: 100 }] }), uploadFile: (o: { success: (v: unknown) => void }) => { complete = o.success; uploaded.push('started') }, request: (o: Wire) => o.success(ok(null)), reLaunch: vi.fn() })
@@ -109,6 +121,7 @@ describe('identity authoritative state and material isolation', () => {
   })
   it('keeps native capture alive through a hide event but releases on actual page leave', async () => {
     let choose: (value: unknown) => void = () => {}
+    await pickedMedia('blob:native')
     install(o => ok({ asset_id: 'native-face', image_type: 'face', scan_status: 'safe', processed_preview: null }))
     const currentUni = uni
     vi.stubGlobal('uni', { ...currentUni, chooseImage: (o: { success: (v: unknown) => void }) => { choose = o.success } })
@@ -121,6 +134,7 @@ describe('identity authoritative state and material isolation', () => {
   })
   it('releases an asset when upload response validation fails after the server stored it', async () => {
     const deleted: string[] = []
+    await pickedMedia('blob:invalid')
     install(o => { if (o.method === 'DELETE') { deleted.push(o.url); return ok(null) }; return ok({ asset_id: 'invalid-response-asset', image_type: 'face', scan_status: 'unsafe', processed_preview: null }) })
     const currentUni = uni
     vi.stubGlobal('uni', { ...currentUni, chooseImage: (o: { success: (v: unknown) => void }) => o.success({ tempFiles: [{ path: 'blob:invalid', size: 100, type: 'image/jpeg' }] }) })

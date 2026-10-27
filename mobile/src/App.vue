@@ -2,13 +2,15 @@
 import { onLaunch } from '@dcloudio/uni-app'
 import { isStaticSessionPreview } from './platform/session'
 import { useSessionStore } from './stores/session'
+import { learnerLandingUrl } from './utils/learner-onboarding'
 
 onLaunch(async options => {
   if (isStaticSessionPreview(options?.query)) return
+  if (options?.path === 'pages/profile/about' || options?.path === 'pages/profile/terms') return
   const session = useSessionStore()
   const startedEpoch = session.sessionEpoch
   const restored = await session.bootstrap()
-  if (restored && startedEpoch === session.sessionEpoch && (!options?.path || options.path === 'pages/auth/login')) uni.reLaunch({ url: '/pages/home/index' })
+  if (restored && startedEpoch === session.sessionEpoch && session.user && (!options?.path || options.path === 'pages/auth/login')) uni.reLaunch({ url: learnerLandingUrl(session.user) })
 })
 </script>
 

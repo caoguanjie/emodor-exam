@@ -25,7 +25,7 @@ async function waitFor(check, description) {
 }
 
 async function concurrencyCases(ctx) {
-  const learner = await debugLearner(ctx);
+  const learner = await identityReadyLearner(ctx);
   const firstMaterials = await materials(ctx, learner, '#2364aa'); const secondMaterials = await materials(ctx, learner, '#2464aa');
   const before = await providerControl(ctx, 'pause');
   const replies = [];
@@ -45,7 +45,7 @@ async function concurrencyCases(ctx) {
   // Both lock orderings are safe: release wins => no session; create wins => release rejects.
   // Repeat with fresh users so no prior verified fact can short-circuit the race.
   for (let index = 0; index < 3; index++) {
-    const racer = await debugLearner(ctx); const input = await materials(ctx, racer, `#${30 + index}64aa`);
+    const racer = await identityReadyLearner(ctx); const input = await materials(ctx, racer, `#${30 + index}64aa`);
     const [created, released] = await Promise.all([
       ctx.request(racer, 'POST', '/me/identity-verification/sessions', input),
       ctx.request(racer, 'DELETE', `/me/identity-verification/images/${input.face_asset_id}`),
@@ -71,6 +71,31 @@ export async function debugLearner(ctx) {
   actor.accessToken = logged.data.access_token; actor.userId = String(logged.data.user.id);
   return actor;
 }
+// Prepare ordinary profile data through the same HTTP APIs as onboarding.
+// Category creation below is isolated fixture setup, never an identity shortcut.
+export async function completeIdentityProfile(ctx, actor) {
+  const profile = await ctx.request(actor, 'GET', '/me/profile');
+  assert.equal(profile.status, 200);
+  if (!profile.data.real_name?.trim()) {
+    const saved = await ctx.request(actor, 'POST', '/me/profile', { real_name: '合成待核验学员' });
+    assert.equal(saved.status, 200);
+  }
+  if (!profile.data.category_id) {
+    let [category] = await ctx.queryTestDb('SELECT id FROM training_category WHERE status=1 ORDER BY id LIMIT 1');
+    if (!category) {
+      const inserted = await ctx.queryTestDb('INSERT INTO training_category(name,status,created_by) VALUES (?,1,?)', [`实名测试工种 ${randomBytes(4).toString('hex')}`, actor.userId]);
+      category = { id: inserted.insertId };
+    }
+    const confirmed = await ctx.request(actor, 'PUT', '/me/training-category', { category_id: String(category.id) });
+    assert.equal(confirmed.status, 200);
+  }
+  return profile.data;
+}
+async function identityReadyLearner(ctx) {
+  const actor = await debugLearner(ctx);
+  await completeIdentityProfile(ctx, actor);
+  return actor;
+}
 export async function uploadIdentity(ctx, actor, imageType, bytes) {
   const boundary = `----ruleexam-identity-${randomBytes(12).toString('hex')}`;
   const body = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="image_type"\r\n\r\n${imageType}\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="synthetic.png"\r\nContent-Type: image/png\r\n\r\n`), bytes, Buffer.from(`\r\n--${boundary}--\r\n`)]);
@@ -91,7 +116,15 @@ export async function materials(ctx, actor, portraitColor = '#2164aa', faceColor
 
 /** Real HTTP/JWT/MySQL/media lifecycle; only the external identity provider is replaced. */
 export async function run(ctx) {
-  const learner = await debugLearner(ctx); const other = await debugLearner(ctx);
+  const learner = await identityReadyLearner(ctx); const other = await identityReadyLearner(ctx);
+  const incomplete = await debugLearner(ctx);
+  const incompleteImages = await materials(ctx, incomplete, '#5564aa');
+  const callsBefore = (await providerControl(ctx)).verify_calls;
+  const missing = await ctx.request(incomplete, 'POST', '/me/identity-verification/sessions', incompleteImages);
+  assert.equal(missing.code, 40001);
+  assert.equal((await providerControl(ctx)).verify_calls, callsBefore, 'incomplete profile cannot call provider');
+  await completeIdentityProfile(ctx, incomplete);
+  assert.equal((await ctx.request(incomplete, 'POST', '/me/identity-verification/sessions', incompleteImages)).data.status, 'verified');
   assert.equal((await ctx.request(learner, 'GET', '/me/identity-verification')).data.status, 'unverified');
   const bad = await uploadIdentity(ctx, learner, 'face', Buffer.from('not an image'));
   assert.equal(bad.code, 42201); assert.deepEqual(bad.data, { reason_code: null, clear_materials: [] });
@@ -118,7 +151,7 @@ export async function run(ctx) {
   assert.equal((await ctx.request(learner, 'DELETE', `/me/identity-verification/images/${input.face_asset_id}`)).code, 40913);
   const duplicate = await ctx.request(other, 'POST', '/me/identity-verification/sessions', foreign);
   assert.equal(duplicate.data.reason_code, 'IDENTITY_ALREADY_BOUND');
-  const failedLearner = await debugLearner(ctx); const rejectedInput = await materials(ctx, failedLearner, '#1264aa', '#ee1515');
+  const failedLearner = await identityReadyLearner(ctx); const rejectedInput = await materials(ctx, failedLearner, '#1264aa', '#ee1515');
   const rejected = await ctx.request(failedLearner, 'POST', '/me/identity-verification/sessions', rejectedInput);
   assert.equal(rejected.data.status, 'rejected'); assert.equal(rejected.data.reason_code, 'FACE_MISMATCH'); assert.deepEqual(rejected.data.clear_materials, ['face']);
   assert.equal((await ctx.request(failedLearner, 'POST', '/me/identity-verification/sessions', rejectedInput)).data.session_id, rejected.data.session_id);
@@ -130,7 +163,7 @@ export async function run(ctx) {
 
   // Force a local DB binding failure after the successful provider result commits.
   // This trigger exists only in this run-owned isolated database.
-  const recovering = await debugLearner(ctx); const recoverInput = await materials(ctx, recovering, '#9964aa');
+  const recovering = await identityReadyLearner(ctx); const recoverInput = await materials(ctx, recovering, '#9964aa');
   await ownedDdl(ctx, "CREATE TRIGGER identity_test_bind_failure BEFORE INSERT ON learner_identity FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='synthetic bind failure'");
   let pending;
   try {

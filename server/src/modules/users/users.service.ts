@@ -375,6 +375,13 @@ export class UsersService {
   async updateSelfProfile(id: string, patch: SelfProfilePatch) {
     const unknown = Object.keys(patch).filter((key) => !SELF_PROFILE_KEYS.includes(key));
     if (unknown.length) throw Errors.param(`本人资料请求 包含不支持的字段：${unknown.join(',')}`);
+    let realName = patch.real_name;
+    if ('real_name' in patch) {
+      if (typeof realName !== 'string' || !realName.trim() || realName.trim().length > 64) {
+        throw Errors.param('姓名去除首尾空白后须为 1—64 个字符');
+      }
+      realName = realName.trim();
+    }
     let occupation = patch.occupation;
     if (occupation !== undefined && occupation !== null) {
       if (typeof occupation !== 'string' || !occupation.trim() || occupation.trim().length > 64) {
@@ -390,7 +397,7 @@ export class UsersService {
         lock: { mode: 'pessimistic_write' },
       });
       if (!current) throw Errors.notFound('员工不存在');
-      if (patch.real_name !== undefined) { await this.identity?.assertNameEditable(manager, String(id), current.realName, patch.real_name); current.realName = patch.real_name; }
+      if (realName !== undefined) { await this.identity?.assertNameEditable(manager, String(id), current.realName, realName); current.realName = realName; }
       if (patch.email !== undefined) current.email = patch.email || null;
       if (occupation !== undefined) current.occupation = occupation;
       if (patch.gender !== undefined) current.gender = patch.gender;

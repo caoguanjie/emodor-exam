@@ -46,7 +46,8 @@ class StudentStatusDto {
   @IsInt() status!: number;
 }
 
-class SelfProfileDto {
+export class SelfProfileDto {
+  @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @IsOptional() @IsString() @MinLength(1) @MaxLength(64) real_name?: string;
   @IsOptional() @IsString() @MaxLength(128) email?: string | null;
   @IsOptional() @IsString() @MaxLength(32) avatar_id?: string | null;
