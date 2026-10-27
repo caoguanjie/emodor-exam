@@ -158,8 +158,10 @@ describe('permission schema v2 compatibility boundaries', () => {
     ]);
     expect(migration?.steps.find((step: any) => step.id === 'remove_assignment_grants')?.replacesCheck)
       .toBe('036_role_menu_button_permissions/copy_legacy_management_grants');
-    expect(migration?.steps.find((step: any) => step.id === 'remove_assignment_permission')?.replacesCheck)
+    const permissionCleanup = migration?.steps.find((step: any) => step.id === 'remove_assignment_permission');
+    expect(permissionCleanup?.replacesCheck)
       .toBe('036_role_menu_button_permissions/register_button_permissions');
+    expect(permissionCleanup?.checkSql).toContain('copy_legacy_management_grants');
   });
 
   it('loads the five controlled permission-upgrade steps through the existing migration parser', async () => {

@@ -111,6 +111,10 @@ export async function verifyLegacyRoleMenuUpgrade(ctx) {
       "SELECT COUNT(*) AS count FROM sys_role_permission WHERE permission_id IN (SELECT id FROM sys_permission WHERE code IN ('administrators:write','roles:write'))",
     );
     assert.equal(Number(aggregateLinks.count), 0, 'no role may retain deprecated administrator or role aggregate links');
+    const [[orphanedLinks]] = await connection.execute(
+      'SELECT COUNT(*) AS count FROM sys_role_permission LEFT JOIN sys_permission ON sys_permission.id=sys_role_permission.permission_id WHERE sys_permission.id IS NULL',
+    );
+    assert.equal(Number(orphanedLinks.count), 0, 'permission migration must not leave dangling role-permission links');
     const [legacyDictionary] = await connection.execute("SELECT code FROM sys_permission WHERE code IN ('administrators:write','roles:write') ORDER BY code");
     assert.deepEqual(legacyDictionary.map((row) => row.code), ['administrators:write', 'roles:write'], 'legacy input dictionary entries must remain registered');
     const [[retiredPermission]] = await connection.execute("SELECT COUNT(*) AS count FROM sys_permission WHERE code='administrators:assign_roles'");
