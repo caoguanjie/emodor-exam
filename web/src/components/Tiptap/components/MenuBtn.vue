@@ -68,16 +68,16 @@
 
                 </ul>
                 <template #reference>
-                    <el-tooltip effect="dark" content="字号，单位：磅（pt）" placement="top" :offset="5"
-                        :show-after="0" :hide-after="0" :show-arrow="false" popper-class="ruleexam-tiptap-tooltip-btn">
-                        <button type="button" class="menu-btn-item" @click="state.showFontSizePopover = !state.showFontSizePopover"
-                            ref="ignoreFontSizePopverElement" :aria-label="`字号：${fontSize} 磅（pt）`">
-                            <span class="menu-btn-item_name">{{ fontSize }} pt</span>
-                            <SvgIcon icon-class="arrow-down-s-line" style="color: #aab4bf"></SvgIcon>
-                        </button>
-                    </el-tooltip>
+                    <button type="button" class="menu-btn-item" @click="state.showFontSizePopover = !state.showFontSizePopover"
+                        ref="ignoreFontSizePopverElement" :aria-label="`字号：${fontSize} 磅（pt）`">
+                        <span class="menu-btn-item_name">{{ fontSize }} pt</span>
+                        <SvgIcon icon-class="arrow-down-s-line" style="color: #aab4bf"></SvgIcon>
+                    </button>
                 </template>
             </el-popover>
+            <el-tooltip effect="dark" content="字号，单位：磅（pt）" placement="top" :offset="5"
+                :show-after="0" :hide-after="0" :show-arrow="false" popper-class="ruleexam-tiptap-tooltip-btn"
+                virtual-triggering :virtual-ref="ignoreFontSizePopverElement" />
             <el-tooltip class="box-item" effect="dark" content="加粗" placement="bottom" :offset="5" :hide-after="0"
                 :show-arrow="false" popper-class="ruleexam-tiptap-tooltip-btn">
                 <button type="button" class="menu-btn-item" @click.stop="editor?.chain().focus().toggleBold().run()"
