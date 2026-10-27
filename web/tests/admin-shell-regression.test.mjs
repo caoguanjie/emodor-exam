@@ -61,7 +61,7 @@ const testContext = {
   tabResetCalls: 0,
   permissions: new Set(['system_settings:read', 'system_settings:write']),
   siteConfig: {
-    logo_asset_id: 'logo-saved',
+    logo_asset_id: '1001',
     banners: [{ asset_id: 'banner-saved', sort: 10 }],
   },
   profile: {
@@ -690,7 +690,7 @@ beforeEach(() => {
   testContext.trainingCategories = [{ id: 'category-1', name: '类别基线', description: '类别说明', status: 1 }];
   testContext.administrators = [{ id: 'admin-1', username: 'manager', real_name: '管理员', system_role: 'employee', status: 1, last_login_at: null, role_ids: ['role-1'], permissions: [] }];
   testContext.roles = [{ id: 'business-role-1', code: 'business_role', name: '角色基线', permissions: ['students:read'], status: 1, is_system: false }];
-  testContext.siteConfig = { logo_asset_id: 'logo-saved', banners: [{ asset_id: 'banner-saved', sort: 10 }] };
+  testContext.siteConfig = { logo_asset_id: '1001', banners: [{ asset_id: 'banner-saved', sort: 10 }] };
   testContext.profile = { real_name: '原姓名', phone: '13800000000', email: 'old@example.test', avatar_id: 'avatar-saved', source: 'institution', category_id: 'category-1' };
   fakeWindow.activeIntervals.clear();
   fakeWindow.clearedIntervals = [];
@@ -885,7 +885,7 @@ test('closing all confirms dirty routes once, stays atomic on cancel, and leaves
     { path: '/settings', title: '网站配置', closable: true },
     { path: '/other', title: '其它管理页', closable: true },
   ];
-  settings.setupState.form.logo_asset_id = 'logo-edited';
+  settings.setupState.form.logo_asset_id = '1002';
   await nextTick();
   const readsBeforeClose = testContext.settingsReads;
 
@@ -893,7 +893,7 @@ test('closing all confirms dirty routes once, stays atomic on cancel, and leaves
   await shell.setupState.onTabCommand('all');
   assert.equal(mounted.router.currentRoute.value.fullPath, '/settings');
   assert.deepEqual(shell.setupState.tabs.tabs.map((tab) => tab.path), ['/admin/dashboard', '/settings', '/other']);
-  assert.equal(settings.setupState.form.logo_asset_id, 'logo-edited');
+  assert.equal(settings.setupState.form.logo_asset_id, '1002');
   assert.equal(settings.setupState.dirty, true);
   assert.equal(testContext.confirmCalls.length, 1, 'bulk cancellation asks once and changes nothing');
 
@@ -902,7 +902,7 @@ test('closing all confirms dirty routes once, stays atomic on cancel, and leaves
   await flushUpdates();
   assert.equal(mounted.router.currentRoute.value.fullPath, '/admin/dashboard');
   assert.deepEqual(shell.setupState.tabs.tabs.map((tab) => tab.path), ['/admin/dashboard']);
-  assert.equal(settings.setupState.form.logo_asset_id, 'logo-saved');
+  assert.equal(settings.setupState.form.logo_asset_id, '1001');
   assert.equal(settings.setupState.dirty, false);
   assert.equal(testContext.confirmCalls.length, 2, 'the accepted bulk close also asks only once');
   assert.equal(testContext.settingsReads, readsBeforeClose, 'the closing page must not remount before navigation');
@@ -936,7 +936,7 @@ test('site settings previews its single logo without changing the saved binding'
   assert.ok(viewer);
   assert.deepEqual([...viewer.props['url-list']], ['/public/logo-saved']);
   assert.equal(viewer.props['initial-index'], 0);
-  assert.equal(settings.setupState.form.logo_asset_id, 'logo-saved');
+  assert.equal(settings.setupState.form.logo_asset_id, '1001');
   assert.equal(settings.setupState.dirty, false);
 });
 
@@ -1168,14 +1168,14 @@ test('site settings keeps edits on cancelled leave, then restores the saved base
   const mounted = await mountShell('/settings');
   const firstSettings = findInstance(mounted.app, 'saved');
   const firstState = firstSettings.setupState;
-  firstState.form.logo_asset_id = 'logo-edited';
+  firstState.form.logo_asset_id = '1002';
   await nextTick();
   assert.equal(firstState.dirty, true);
 
   testContext.confirmDecisions.push(false);
   await mounted.router.push('/other');
   assert.equal(mounted.router.currentRoute.value.fullPath, '/settings');
-  assert.equal(firstState.form.logo_asset_id, 'logo-edited');
+  assert.equal(firstState.form.logo_asset_id, '1002');
   assert.equal(firstState.dirty, true);
 
   testContext.confirmDecisions.push(true);
@@ -1184,7 +1184,7 @@ test('site settings keeps edits on cancelled leave, then restores the saved base
   await flushUpdates();
   const restoredSettings = findInstance(mounted.app, 'saved');
   assert.equal(restoredSettings.uid, firstSettings.uid, 'cacheable management page should be reused');
-  assert.equal(restoredSettings.setupState.form.logo_asset_id, 'logo-saved');
+  assert.equal(restoredSettings.setupState.form.logo_asset_id, '1001');
   assert.equal(restoredSettings.setupState.dirty, false);
 
   const shell = findInstance(mounted.app, 'profileVisible');
@@ -1192,7 +1192,7 @@ test('site settings keeps edits on cancelled leave, then restores the saved base
   await shell.setupState.onTabCommand('refresh');
   await waitFor(() => testContext.settingsReads > readsBeforeRefresh, 'site settings reload after refresh');
   const refreshedSettings = findInstance(mounted.app, 'saved');
-  assert.equal(refreshedSettings.setupState.form.logo_asset_id, 'logo-saved');
+  assert.equal(refreshedSettings.setupState.form.logo_asset_id, '1001');
   assert.equal(refreshedSettings.setupState.dirty, false);
 
   const confirmationsBeforeCleanLeave = testContext.confirmCalls.length;
@@ -1209,7 +1209,7 @@ test('profile and business dirty sources coexist; logout cancellation has zero s
   const settings = findInstance(mounted.app, 'saved');
 
   await shell.setupState.openProfile();
-  settings.setupState.form.logo_asset_id = 'logo-edited';
+  settings.setupState.form.logo_asset_id = '1002';
   shell.setupState.profile.real_name = '未保存姓名';
   await nextTick();
   assert.equal(settings.setupState.dirty, true);
@@ -1231,7 +1231,7 @@ test('profile and business dirty sources coexist; logout cancellation has zero s
   assert.equal(testContext.logoutCalls, 0);
   assert.equal(testContext.tabResetCalls, 0);
   assert.equal(mounted.router.currentRoute.value.fullPath, '/settings');
-  assert.equal(settings.setupState.form.logo_asset_id, 'logo-edited');
+  assert.equal(settings.setupState.form.logo_asset_id, '1002');
   assert.equal(shell.setupState.profile.real_name, '未保存姓名');
   assert.equal(settings.setupState.dirty, true);
   assert.equal(shell.setupState.profileDirty, true);
@@ -1241,7 +1241,7 @@ test('profile and business dirty sources coexist; logout cancellation has zero s
   assert.equal(testContext.logoutCalls, 1);
   assert.equal(testContext.tabResetCalls, 1);
   assert.equal(mounted.router.currentRoute.value.fullPath, '/login');
-  assert.equal(settings.setupState.form.logo_asset_id, 'logo-saved');
+  assert.equal(settings.setupState.form.logo_asset_id, '1001');
   assert.equal(shell.setupState.profile.real_name, '原姓名');
   assert.equal(settings.setupState.dirty, false);
   assert.equal(shell.setupState.profileDirty, false);
