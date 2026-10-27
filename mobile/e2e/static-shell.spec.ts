@@ -34,6 +34,7 @@ test('SMS form switches to sent state and accepts a complete fixture entry', asy
   await page.getByText('获取验证码', { exact: true }).click()
   await expect(page.getByText('验证码已发送，请留意手机短信')).toBeVisible()
   await page.getByRole('spinbutton').fill('268013')
+  await page.getByRole('checkbox', { name: '我已阅读并同意服务协议' }).click()
   await page.getByText('登录', { exact: true }).click()
   await expect(page.getByText('推荐课程', { exact: true })).toBeVisible()
 })

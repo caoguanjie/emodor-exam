@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { onLoad, onUnload } from '@dcloudio/uni-app'
+import { onHide, onLoad, onShow, onUnload } from '@dcloudio/uni-app'
 import AppTopBar from '@/components/common/AppTopBar.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import SmsLoginForm from '@/components/auth/SmsLoginForm.vue'
+import LoginConsent from '@/components/auth/LoginConsent.vue'
 import ConfirmSheet from '@/components/common/ConfirmSheet.vue'
 import { institution, platformSubtitle, smsHelp, useShellScenario, resolveShellScenario } from '@/fixtures/ui-scenarios/shell'
 import { ApiError } from '@/api/client'
@@ -22,18 +23,26 @@ const retryAt = ref(0)
 const clock = ref(Date.now())
 const sending = ref(false)
 const loggingIn = ref(false)
+const confirmingConsent = ref(false)
+const consent = ref<InstanceType<typeof LoginConsent>>()
+const previewForm = ref<InstanceType<typeof SmsLoginForm>>()
 const hasError = ref(false)
 const sent = ref(false)
 const feedback = ref('短信验证码用于验证你的身份')
 const session = useSessionStore()
 let ticker: ReturnType<typeof setInterval> | undefined
+let active = true
+let navigationRevision = 0
 
 onLoad(query => {
   preview.value = isStaticSessionPreview(query)
   loadScenario(query)
   if (!preview.value) ticker = setInterval(() => { clock.value = Date.now() }, 250)
 })
-onUnload(() => { if (ticker) clearInterval(ticker); challengeId.value = ''; code.value = '' })
+function deactivateLogin() { active = false; navigationRevision++; consent.value?.cancelPending(); previewForm.value?.cancelPending() }
+onHide(deactivateLogin)
+onShow(() => { active = true })
+onUnload(() => { deactivateLogin(); if (ticker) clearInterval(ticker); challengeId.value = ''; code.value = '' })
 
 const remaining = computed(() => Math.max(0, Math.ceil((retryAt.value - clock.value) / 1000)))
 const challengeExpired = computed(() => !!challengeId.value && challengeExpiresAt.value <= clock.value)
@@ -54,8 +63,8 @@ function setScenario(id: string) {
   if (preview.value) scenario.value = resolveShellScenario(id, 'login-default')
   else if (id === 'login-help') realHelpVisible.value = true
 }
-function openTerms() { uni.navigateTo({ url: '/pages/profile/terms' }) }
-function login() { uni.reLaunch({ url: preview.value ? '/pages/home/index?scenario=home-default' : '/pages/home/index' }) }
+function openTerms() { uni.navigateTo({ url: `/pages/profile/terms${preview.value ? '?scenario=terms-default' : ''}` }) }
+function login() { if (active) uni.reLaunch({ url: preview.value ? '/pages/home/index?scenario=home-default' : '/pages/home/index' }) }
 
 function showError(error: unknown) {
   hasError.value = true
@@ -83,14 +92,19 @@ async function sendCode() {
 }
 
 async function submitLogin() {
-  if (!canLogin.value) return
+  if (!canLogin.value || confirmingConsent.value || !active) return
+  const startedRevision = navigationRevision
+  confirmingConsent.value = true
+  const approved = await consent.value?.ensureConsent()
+  confirmingConsent.value = false
+  clock.value = Date.now()
+  if (!approved || !active || startedRevision !== navigationRevision || !canLogin.value) return
   loggingIn.value = true; hasError.value = false
   feedback.value = '正在验证身份，请稍候'
   try {
     await session.login({ phone: phone.value, challenge_id: challengeId.value, code: code.value })
-    challengeId.value = ''; code.value = ''
-    login()
-  } catch (error) { showError(error) }
+    if (active && startedRevision === navigationRevision) { challengeId.value = ''; code.value = ''; login() }
+  } catch (error) { if (active && startedRevision === navigationRevision) showError(error) }
   finally { loggingIn.value = false }
 }
 </script>
@@ -98,7 +112,7 @@ async function submitLogin() {
   <view class="login-page">
     <view class="login-page__hero"><AppTopBar title="学员登录" :back="false" action="帮助" light @action="setScenario('login-help')" /><view class="login-page__brand"><view class="login-page__logo"><image src="/static/brand-logo.png" mode="aspectFit" /></view><view class="login-page__brand-copy"><text class="login-page__institution">{{ institution }}</text><text class="login-page__subtitle">{{ platformSubtitle }}</text></view></view></view>
     <view class="login-page__body">
-      <SmsLoginForm v-if="preview" :scenario="scenario" @scenario="setScenario" @login="login" @terms="openTerms" />
+      <SmsLoginForm v-if="preview" ref="previewForm" :scenario="scenario" @scenario="setScenario" @login="login" @terms="openTerms" />
       <view v-else class="login-form">
         <text class="login-form__title">手机号验证码登录</text>
         <view class="login-form__fields">
@@ -106,8 +120,8 @@ async function submitLogin() {
           <view class="login-form__field"><text class="login-form__label">验证码</text><wd-input v-model="code" type="number" :maxlength="6" :disabled="loggingIn" :error="feedbackError" :placeholder="sent ? '请输入验证码' : '6位短信验证码'" custom-style="flex:1;min-width:0" /><wd-button button-id="mobile-sms-send" size="small" variant="soft" :disabled="!!remaining || sending || loggingIn" :loading="sending" custom-style="width:110px;padding:0;flex:none" @click="sendCode">{{ sendLabel }}</wd-button></view>
         </view>
         <view class="login-form__feedback" :class="{ 'login-form__feedback--error': feedbackError, 'login-form__feedback--sent': sent && !feedbackError }" role="status"><AppIcon :name="feedbackError ? 'circle-x' : 'info'" :size="14" :color="feedbackError ? '#ee0a24' : sent ? '#1989fa' : '#969799'" /><text>{{ message }}</text></view>
-        <wd-button button-id="mobile-sms-login" block :disabled="!canLogin" :loading="loggingIn" custom-style="--wot-button-height-medium:50px;--wot-button-radius-main:var(--app-radius-md);font-weight:600" @click="submitLogin">{{ loggingIn ? '正在登录' : '登录' }}</wd-button>
-        <view class="login-form__terms"><text>登录即表示你已阅读并同意</text><view><text class="login-form__link" role="button" @click="openTerms">《用户协议》</text><text>和</text><text class="login-form__link" role="button" @click="openTerms">《隐私政策》</text></view></view>
+        <wd-button button-id="mobile-sms-login" block :disabled="!canLogin || confirmingConsent" :loading="loggingIn" custom-style="--wot-button-height-medium:50px;--wot-button-radius-main:var(--app-radius-md);font-weight:600" @click="submitLogin">{{ loggingIn ? '正在登录' : '登录' }}</wd-button>
+        <LoginConsent ref="consent" :disabled="sending || loggingIn" :eligible="canLogin" :context-key="`${normalizeMobilePhone(phone)}|${challengeId}|${code}`" @terms="openTerms" />
       </view>
       <view class="login-page__help"><text role="button" @click="setScenario('login-help')">收不到验证码？</text><text class="login-page__help-note">请使用培训机构登记的手机号</text></view>
     </view>
@@ -139,7 +153,4 @@ async function submitLogin() {
 .login-form__feedback { min-height: 22px; display: flex; gap: 6px; align-items: center; color: var(--app-color-text-muted); font-size: 12px; }
 .login-form__feedback--error { color: var(--app-color-danger); }
 .login-form__feedback--sent { color: var(--app-color-primary); }
-.login-form__terms { display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--app-color-text-muted); font-size: 12px; }
-.login-form__terms > view { display: flex; gap: 4px; }
-.login-form__link { color: var(--app-color-primary); }
 </style>
