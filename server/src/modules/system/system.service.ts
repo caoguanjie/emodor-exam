@@ -14,6 +14,7 @@ import { AccessService } from '../access/access.service';
 import { isRegisteredPermission } from '../access/permission-catalog';
 import { MediaService, type ContentDescriptor } from '../media/media.service';
 import { CosDownloadUrlAdapter } from '../media/delivery/cos-download-url.adapter';
+import { defaultSiteAbout, normalizeSiteAbout, publicSiteAbout, type SiteAboutConfig } from './site-about-config';
 
 export const REGISTERED_ADMIN_ROUTES = new Set([
   '/admin/dashboard',
@@ -31,7 +32,8 @@ const FIXED_DICTIONARY_TYPES = new Set([
 ]);
 const DICTIONARY_TYPE_ORDER = `CASE dictionary.type ${[...FIXED_DICTIONARY_TYPES.keys()]
   .map((type, index) => `WHEN '${type}' THEN ${index}`).join(' ')} ELSE ${FIXED_DICTIONARY_TYPES.size} END`;
-const SITE_KEYS = ['logo_asset_id', 'banners'] as const;
+const SITE_MEDIA_KEYS = ['logo_asset_id', 'banners'] as const;
+const SITE_KEYS = [...SITE_MEDIA_KEYS, 'about'] as const;
 const SITE_OWNER_TYPE = 'site_config';
 
 type MenuType = 'directory' | 'menu' | 'button';
@@ -63,6 +65,7 @@ export interface DictionaryTypeInput {
 export interface PublicSiteConfig {
   logo_asset_id: string | null;
   banners: { asset_id: string; sort: number }[];
+  about: SiteAboutConfig;
 }
 
 type Actor = { id: string; name: string };
@@ -104,7 +107,10 @@ export function normalizeSiteConfig(input: Partial<PublicSiteConfig>): PublicSit
   });
   if (banners.length > 3) throw Errors.param('轮播图最多 3 张');
   if (new Set(banners.map((item) => item.asset_id)).size !== banners.length) throw Errors.param('轮播图不能重复');
-  return { logo_asset_id: logo, banners: banners.sort((a, b) => a.sort - b.sort || a.asset_id.localeCompare(b.asset_id)) };
+  return {
+    logo_asset_id: logo, banners: banners.sort((a, b) => a.sort - b.sort || a.asset_id.localeCompare(b.asset_id)),
+    about: input?.about === undefined ? defaultSiteAbout() : normalizeSiteAbout(input.about),
+  };
 }
 
 function menuView(menu: SysMenu) {
@@ -174,11 +180,11 @@ export class SystemService {
       allowedPurposes: ['branding'],
       authorizeRead: async (_actorId, settingId) => {
         const setting = await this.settingRepo.findOne({ where: { id: String(settingId) } });
-        return Boolean(setting && SITE_KEYS.includes(setting.key as typeof SITE_KEYS[number]));
+        return Boolean(setting && SITE_MEDIA_KEYS.includes(setting.key as typeof SITE_MEDIA_KEYS[number]));
       },
       validateBinding: async (manager, _asset, settingId) => {
         const setting = await manager.getRepository(SiteSetting).findOne({ where: { id: String(settingId) } });
-        if (!setting || !SITE_KEYS.includes(setting.key as typeof SITE_KEYS[number])) throw Errors.dataForbidden('站点配置归属无效');
+        if (!setting || !SITE_MEDIA_KEYS.includes(setting.key as typeof SITE_MEDIA_KEYS[number])) throw Errors.dataForbidden('站点配置归属无效');
       },
     });
   }
@@ -526,6 +532,7 @@ export class SystemService {
     return normalizeSiteConfig({
       logo_asset_id: values.get('logo_asset_id') as string | null | undefined,
       banners: values.get('banners') as PublicSiteConfig['banners'] | undefined,
+      about: publicSiteAbout(values.get('about')),
     });
   }
 
@@ -533,36 +540,58 @@ export class SystemService {
     return this.publicConfig();
   }
 
-  private async setting(manager: EntityManager, key: typeof SITE_KEYS[number], actorId: string) {
+  private async setting(manager: EntityManager, key: typeof SITE_KEYS[number], actorId: string, create: boolean) {
     const repo = manager.getRepository(SiteSetting);
     let row = await repo.findOne({ where: { key }, lock: { mode: 'pessimistic_write' } });
-    if (!row) row = await repo.save(repo.create({ key, value: key === 'banners' ? [] : null, updatedBy: actorId }));
+    if (!row) {
+      row = repo.create({ key, value: key === 'about' ? defaultSiteAbout() : key === 'banners' ? [] : null, updatedBy: actorId });
+      if (create) row = await repo.save(row);
+    }
     return row;
   }
 
   async updateSiteSettings(input: Partial<PublicSiteConfig>, actor: Actor, sourceIp: string | null) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)
+      || Object.keys(input).some(key => !SITE_KEYS.includes(key as typeof SITE_KEYS[number]))) throw Errors.param('网站配置请求非法');
+    const includesLogo = input.logo_asset_id !== undefined;
+    const includesBanners = input.banners !== undefined;
+    const includesAbout = input.about !== undefined;
+    if (!includesLogo && !includesBanners && !includesAbout) throw Errors.param('网站配置请求不能为空');
     const next = normalizeSiteConfig(input);
     try {
-      for (const assetId of [next.logo_asset_id, ...next.banners.map((banner) => banner.asset_id)].filter((id): id is string => Boolean(id))) {
+      const candidates = [includesLogo ? next.logo_asset_id : null, ...(includesBanners ? next.banners.map(banner => banner.asset_id) : [])];
+      for (const assetId of candidates.filter((id): id is string => Boolean(id))) {
         await this.media.assertPublicBrandingCandidate(assetId);
       }
       await this.dataSource.transaction(async (manager) => {
-        const logo = await this.setting(manager, 'logo_asset_id', actor.id);
-        const banners = await this.setting(manager, 'banners', actor.id);
+        const logo = await this.setting(manager, 'logo_asset_id', actor.id, includesLogo);
+        const banners = await this.setting(manager, 'banners', actor.id, includesBanners);
+        const about = await this.setting(manager, 'about', actor.id, includesAbout);
         const previous = normalizeSiteConfig({ logo_asset_id: logo.value as any, banners: banners.value as any });
-        if (next.logo_asset_id) await this.media.bind(manager, next.logo_asset_id, SITE_OWNER_TYPE, String(logo.id));
-        for (const banner of next.banners) await this.media.bind(manager, banner.asset_id, SITE_OWNER_TYPE, String(banners.id));
-        const nextLogo = new Set(next.logo_asset_id ? [next.logo_asset_id] : []);
-        const nextBanners = new Set(next.banners.map((banner) => banner.asset_id));
-        if (previous.logo_asset_id && !nextLogo.has(previous.logo_asset_id)) await this.media.unbind(manager, previous.logo_asset_id, SITE_OWNER_TYPE, String(logo.id));
-        for (const banner of previous.banners) if (!nextBanners.has(banner.asset_id)) await this.media.unbind(manager, banner.asset_id, SITE_OWNER_TYPE, String(banners.id));
-        logo.value = next.logo_asset_id;
-        logo.updatedBy = actor.id;
-        banners.value = next.banners;
-        banners.updatedBy = actor.id;
-        await manager.getRepository(SiteSetting).save([logo, banners]);
+        const changed: SiteSetting[] = [];
+        if (includesLogo) {
+          if (next.logo_asset_id) await this.media.bind(manager, next.logo_asset_id, SITE_OWNER_TYPE, String(logo.id));
+          if (previous.logo_asset_id && previous.logo_asset_id !== next.logo_asset_id) await this.media.unbind(manager, previous.logo_asset_id, SITE_OWNER_TYPE, String(logo.id));
+          logo.value = next.logo_asset_id;
+          logo.updatedBy = actor.id;
+          changed.push(logo);
+        } else next.logo_asset_id = previous.logo_asset_id;
+        if (includesBanners) {
+          for (const banner of next.banners) await this.media.bind(manager, banner.asset_id, SITE_OWNER_TYPE, String(banners.id));
+          const nextBanners = new Set(next.banners.map(banner => banner.asset_id));
+          for (const banner of previous.banners) if (!nextBanners.has(banner.asset_id)) await this.media.unbind(manager, banner.asset_id, SITE_OWNER_TYPE, String(banners.id));
+          banners.value = next.banners;
+          banners.updatedBy = actor.id;
+          changed.push(banners);
+        } else next.banners = previous.banners;
+        if (includesAbout) {
+          about.value = next.about;
+          about.updatedBy = actor.id;
+          changed.push(about);
+        } else next.about = publicSiteAbout(about.value);
+        await manager.getRepository(SiteSetting).save(changed);
       });
-      this.auditLog(actor, sourceIp, 'system.settings.update', 'site_setting', 'branding', { logo_asset_id: next.logo_asset_id, banner_count: next.banners.length }, 'success');
+      this.auditLog(actor, sourceIp, 'system.settings.update', 'site_setting', 'branding', { logo_asset_id: next.logo_asset_id, banner_count: next.banners.length, about_changed: includesAbout }, 'success');
       return next;
     } catch (error: any) {
       this.auditLog(actor, sourceIp, 'system.settings.update', 'site_setting', 'branding', { reason: error?.message || 'failed' }, 'failure');

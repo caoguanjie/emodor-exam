@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import assertStrict from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { proveMenuStructureSerialization } from './support/system-menu-concurrency-checks.mjs';
 import { randomStrongPassword } from './training-access.mjs';
@@ -77,7 +78,8 @@ async function uploadBranding(ctx, actor, filename) {
 export async function run(ctx) {
   const initialPublic = await ctx.request(null, 'GET', '/site-config');
   assert(initialPublic.status === 200, `public site config failed: ${initialPublic.status}`);
-  assert(JSON.stringify(Object.keys(initialPublic.data).sort()) === JSON.stringify(['banners', 'logo_asset_id']), 'public site config leaked keys');
+  assert(JSON.stringify(Object.keys(initialPublic.data).sort()) === JSON.stringify(['about', 'banners', 'logo_asset_id']), 'public site config leaked keys');
+  assert(initialPublic.data.about.institution_name === '海珠区安全教育培训中心', 'about defaults missing from fresh database');
 
   const concurrencyEvidence = await proveMenuStructureSerialization(ctx);
   console.log(`[training-system] menu serialization ${JSON.stringify(concurrencyEvidence)}`);
@@ -186,12 +188,63 @@ export async function run(ctx) {
 
   const publicConfig = await ctx.request(null, 'GET', '/site-config');
   assert(publicConfig.status === 200, `publicConfig failed: ${publicConfig.status}`);
-  assert(JSON.stringify(Object.keys(publicConfig.data).sort()) === JSON.stringify(['banners', 'logo_asset_id']), 'publicConfig leaked non-whitelist keys');
+  assert(JSON.stringify(Object.keys(publicConfig.data).sort()) === JSON.stringify(['about', 'banners', 'logo_asset_id']), 'publicConfig leaked non-whitelist keys');
   assert(publicConfig.data.logo_asset_id === logoId && publicConfig.data.banners?.[0]?.asset_id === bannerId, 'publicConfig saved values mismatch');
   const publicLogo = await ctx.request(null, 'GET', `/site-config/assets/${logoId}/content`);
   assert(publicLogo.status === 200, `configured public branding failed: ${publicLogo.status}`);
   const arbitraryMedia = await ctx.request(null, 'GET', `/site-config/assets/${unconfiguredId}/content`);
   assert(arbitraryMedia.status === 404, `unconfigured public media expected 404, got ${arbitraryMedia.status}`);
+
+  const about = {
+    institution_name: '配置回归培训中心', platform_subtitle: '学习与考试', version: '2.0.1',
+    contact_email: 'contact@example.com', wechat_account: '培训公众号', contact_phone: '020-12345678',
+    service_terms: { type: 'doc', content: [
+      { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: '服务条款' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: '测试条款正文', marks: [{ type: 'bold' }] }] },
+    ] },
+  };
+  const branding = { logo_asset_id: logoId, banners: [{ asset_id: bannerId, sort: 10 }] };
+  const anonymousSave = await ctx.request(null, 'PUT', '/admin/site-settings', { ...branding, about });
+  assert(anonymousSave.status === 401, 'anonymous about write must be denied');
+  const aboutSaved = await ctx.request(admin, 'PUT', '/admin/site-settings', { about });
+  assert(aboutSaved.status === 200, `about save failed: ${aboutSaved.status}/${aboutSaved.message}`);
+  const published = await ctx.request(null, 'GET', '/site-config');
+  assertStrict.deepEqual(published.data.about, about);
+  assertStrict.deepEqual({ logo_asset_id: published.data.logo_asset_id, banners: published.data.banners }, branding, 'about-only save must preserve branding');
+  const legacySave = await ctx.request(admin, 'PUT', '/admin/site-settings', branding);
+  assert(legacySave.status === 200, 'old branding-only request must remain supported');
+  const preserved = await ctx.request(admin, 'GET', '/admin/site-settings');
+  assertStrict.deepEqual(preserved.data.about, about, 'omitting about must not erase it');
+  const emptyRequest = await ctx.request(admin, 'PUT', '/admin/site-settings', {});
+  assert(emptyRequest.status === 400, 'empty patch must be rejected');
+  for (const badAbout of [
+    { ...about, contact_email: 'invalid-address' },
+    { ...about, contact_phone: 'not-a-number' },
+    { ...about, institution_name: '' },
+    { ...about, version: 'x'.repeat(33) },
+    { ...about, private_key: 'unusable-test-value' },
+    { ...about, qq_group: 'retired-field' },
+    { ...about, service_terms: '<script>alert(1)</script>' },
+    { ...about, service_terms: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'image', attrs: { asset_id: unconfiguredId } }] }] } },
+  ]) {
+    const rejected = await ctx.request(admin, 'PUT', '/admin/site-settings', { logo_asset_id: null, banners: [], about: badAbout });
+    assert(rejected.status === 400, `invalid about must fail atomically: ${rejected.status}`);
+    const unchanged = await ctx.request(null, 'GET', '/site-config');
+    assertStrict.deepEqual(unchanged.data, published.data, 'rejected about must not change branding or published text');
+  }
+  const blankContacts = { ...about, contact_email: '', wechat_account: '', contact_phone: '', service_terms: null };
+  const cleared = await ctx.request(admin, 'PUT', '/admin/site-settings', { about: blankContacts });
+  assert(cleared.status === 200, 'clearing contacts and terms should be supported');
+  assertStrict.deepEqual((await ctx.request(null, 'GET', '/site-config')).data.about, blankContacts);
+  const concurrentAbout = { ...blankContacts, version: '2.0.2' };
+  const concurrentBranding = { logo_asset_id: logoId, banners: [{ asset_id: bannerId, sort: 30 }] };
+  const concurrentResults = await Promise.all([
+    ctx.request(admin, 'PUT', '/admin/site-settings', { about: concurrentAbout }),
+    ctx.request(admin, 'PUT', '/admin/site-settings', concurrentBranding),
+  ]);
+  assert(concurrentResults.every(result => result.status === 200), 'independent card saves should both succeed');
+  const combined = await ctx.request(null, 'GET', '/site-config');
+  assertStrict.deepEqual(combined.data, { ...concurrentBranding, about: concurrentAbout }, 'concurrent card saves must merge without losing either update');
 
   const testPassword = `A5-secret-${randomBytes(8).toString('hex')}`;
   const failedLogin = await ctx.request(null, 'POST', '/auth/login', { username: 'admin', password: testPassword });

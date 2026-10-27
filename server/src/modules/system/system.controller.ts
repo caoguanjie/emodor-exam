@@ -1,10 +1,10 @@
 import {
   Body, Controller, Delete, Get, Inject, Param, Post, Put, Query, Req, Res,
 } from '@nestjs/common';
-import { Type, Transform } from 'class-transformer';
+import { Transform } from 'class-transformer';
 import {
-  ArrayMaxSize, IsArray, IsIn, IsInt, IsOptional, IsString, Matches,
-  Max, MaxLength, Min, MinLength, ValidateNested,
+  IsIn, IsInt, IsOptional, IsString, Matches,
+  Max, MaxLength, Min, MinLength,
 } from 'class-validator';
 import { Request, Response } from 'express';
 import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator';
@@ -16,6 +16,7 @@ import { SkipEnvelope } from '../../common/response.interceptor';
 import { AuditQueryService } from './audit-query.service';
 import { SystemService } from './system.service';
 import { sendMediaContent } from '../media/media-content.response';
+import { SiteSettingsValidationPipe, type SiteSettingsInput } from './site-settings.dto';
 
 const QueryNumber = () => Transform(({ value }) => (
   value === undefined || value === null || value === '' ? undefined : Number(value)
@@ -60,17 +61,6 @@ class DictionaryQueryDto {
   @IsOptional() @IsString() @MaxLength(64) type?: string;
   @IsOptional() @IsString() @MaxLength(128) keyword?: string;
   @IsOptional() @QueryNumber() @IsInt() @Min(0) @Max(1) status?: number;
-}
-
-class BannerDto {
-  @IsString() @Matches(/^[1-9]\d*$/) asset_id!: string;
-  @IsInt() @Min(0) @Max(100_000) sort!: number;
-}
-
-class SiteSettingsDto {
-  @IsOptional() @IsString() @Matches(/^[1-9]\d*$/) logo_asset_id?: string | null;
-  @IsArray() @ArrayMaxSize(3) @ValidateNested({ each: true }) @Type(() => BannerDto)
-  banners!: BannerDto[];
 }
 
 class AuditQueryDto {
@@ -231,11 +221,11 @@ export class SystemController {
   @Put('site-settings')
   @Permissions('system_settings:write')
   updateSiteSettings(
-    @Body(new StrictDtoValidationPipe(['logo_asset_id', 'banners'])) dto: SiteSettingsDto,
+    @Body(new SiteSettingsValidationPipe()) dto: SiteSettingsInput,
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
-    assertRequestKeys(req.body, ['logo_asset_id', 'banners'], '网站配置请求');
+    assertRequestKeys(req.body, ['logo_asset_id', 'banners', 'about'], '网站配置请求');
     const rawBanners = (req.body as { banners?: unknown })?.banners;
     if (Array.isArray(rawBanners)) {
       rawBanners.forEach((banner, index) => assertRequestKeys(banner, ['asset_id', 'sort'], `轮播项[${index}]`));

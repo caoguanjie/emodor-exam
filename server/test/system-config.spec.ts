@@ -413,7 +413,7 @@ describe('A5 system configuration safety contracts', () => {
     }
   });
 
-  it('normalizes a public site config to the exact two-key whitelist and at most three sorted banners', () => {
+  it('normalizes a public site config to the three-key whitelist and at most three sorted banners', () => {
     expect(normalizeSiteConfig({
       logo_asset_id: '17',
       banners: [{ asset_id: '22', sort: 20 }, { asset_id: '21', sort: 10 }],
@@ -421,6 +421,7 @@ describe('A5 system configuration safety contracts', () => {
     } as any)).toEqual({
       logo_asset_id: '17',
       banners: [{ asset_id: '21', sort: 10 }, { asset_id: '22', sort: 20 }],
+      about: expect.objectContaining({ institution_name: '海珠区安全教育培训中心' }),
     });
     expect(() => normalizeSiteConfig({
       logo_asset_id: null,
@@ -445,10 +446,11 @@ describe('A5 system configuration safety contracts', () => {
     );
 
     const result = await service.publicConfig();
-    expect(Object.keys(result).sort()).toEqual(['banners', 'logo_asset_id']);
+    expect(Object.keys(result).sort()).toEqual(['about', 'banners', 'logo_asset_id']);
     expect(result).toEqual({
       logo_asset_id: '31',
       banners: [{ asset_id: '32', sort: 1 }, { asset_id: '33', sort: 2 }],
+      about: expect.objectContaining({ institution_name: '海珠区安全教育培训中心' }),
     });
     expect(JSON.stringify(result)).not.toContain('private-key');
   });
