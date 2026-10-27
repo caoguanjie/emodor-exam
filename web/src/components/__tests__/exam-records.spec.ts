@@ -188,7 +188,7 @@ describe('readonly exam record detail', () => {
     expect(wrapper.text()).toContain('0 / 100 分'); expect(wrapper.text()).toContain('安全题干');
     expect(wrapper.get('.learner-profile').text()).toContain('学员甲');
     expect(wrapper.get('.learner-profile').text()).toContain('账号：learner9');
-    expect(wrapper.get('.profile-avatar').exists()).toBe(true);
+    expect(wrapper.find('.profile-avatar').exists()).toBe(true);
     expect(wrapper.get('.exam-times').text()).toContain('10 分 0 秒');
     expect(wrapper.get('.exam-extra').text()).toContain('时间均为北京时间');
     expect(wrapper.text()).not.toContain('可查看本次考试的成绩与逐题作答。');
