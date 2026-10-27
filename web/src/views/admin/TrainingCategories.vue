@@ -3,9 +3,9 @@
     <FitsTable>
       <template #search>
         <FitsListSearch @submit.prevent>
-          <el-form-item label="类别名称"><el-input v-model="query.keyword" clearable placeholder="类别名称" style="width:220px" @keyup.enter="load" /></el-form-item>
+          <el-form-item label="类别名称"><el-input v-model="query.keyword" clearable placeholder="类别名称" @keyup.enter="load" /></el-form-item>
           <el-form-item label="状态">
-            <el-select v-model="query.status" clearable placeholder="全部状态" style="width:140px" @change="load">
+            <el-select v-model="query.status" clearable placeholder="全部状态" @change="load">
               <el-option label="启用" :value="1" />
               <el-option label="停用" :value="0" />
             </el-select>

@@ -6,14 +6,14 @@
     <FitsTable>
       <template v-if="canRead" #search>
         <FitsListSearch @submit.prevent>
-          <el-form-item label="课程名称"><el-input v-if="canRead" v-model="query.keyword" clearable placeholder="课程名称" style="width:220px" @keyup.enter="search" /></el-form-item>
+          <el-form-item label="课程名称"><el-input v-if="canRead" v-model="query.keyword" clearable placeholder="课程名称" @keyup.enter="search" /></el-form-item>
           <el-form-item v-if="canRead && canWrite" label="培训类别">
-            <el-select v-if="canRead && canWrite" v-model="query.category_id" clearable filterable placeholder="培训类别" style="width:190px" @change="search">
+            <el-select v-if="canRead && canWrite" v-model="query.category_id" clearable filterable placeholder="培训类别" @change="search">
               <el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" />
             </el-select>
           </el-form-item>
           <el-form-item label="状态">
-            <el-select v-if="canRead" v-model="query.status" clearable placeholder="全部状态" style="width:140px" @change="search">
+            <el-select v-if="canRead" v-model="query.status" clearable placeholder="全部状态" @change="search">
               <el-option label="草稿" value="draft" />
               <el-option label="已上架" value="published" />
               <el-option label="已下架" value="offline" />
