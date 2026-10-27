@@ -17,6 +17,10 @@ export function getExamSummary(paper: string) {
   return request<LearnerExamSummary>({ url: `/me/exams/${id(paper)}` }).then(value => {
     if (!object(value) || value.paper_id !== paper || typeof value.title !== 'string' || typeof value.status !== 'string') throw contractError()
     if (value.learning !== undefined && (!object(value.learning) || !Array.isArray(value.learning.courses)
+      || !['required_learning_minutes', 'credited_seconds', 'remaining_seconds'].every(field => {
+        const amount = (value.learning as unknown as Record<string, unknown>)[field]
+        return amount === null || typeof amount === 'number' && Number.isFinite(amount) && amount >= 0
+      })
       || !value.learning.courses.every(course => object(course) && typeof course.id === 'string' && /^[1-9]\d*$/.test(course.id) && (course.title === null || typeof course.title === 'string') && typeof course.available === 'boolean'))) throw contractError()
     return value
   })
