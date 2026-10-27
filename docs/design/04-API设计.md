@@ -142,7 +142,7 @@
 | /admin/question-materials | 题库资料 | 现行 | 资料创建、列表/详情、版本上传、解析状态和重试；版本 `id` 为字符串 |
 | /admin/questions | 题库导入 | 现行 | 7 列Excel/TXT模板、旧9列及两种8列兼容、逐题预览、warnings和直接启用的幂等确认 |
 | /ai | AI 与题库 | 现行 | AI配置／旧任务读取、类别选项、三类客观题版本、人工录入与启停 |
-| /admin/papers | 试卷发布 | 现行 | 固定/随机卷配置、来源选项、候选、预览、发布、复制；撤回/归档写入口退场 |
+| /admin/papers | 试卷发布 | 现行 | 固定/随机卷配置、来源选项、候选、预览、发布、复制、草稿删除；撤回/归档写入口退场 |
 | /me | 本人/考试 | Gate H2已自动验证 | 本人资料/首页、考试列表、开考/状态恢复、主动整卷交卷、结果、历史和错题；无考试draft/heartbeat |
 | /media | 受控媒体 | 现行 | 头像、课程、视频、题目和品牌媒体；无答题图片 purpose |
 | /admin/courses、/me/courses | 课程 | 现行；视频增量见Task 12冻结契约 | 课程/章节/视频版本；启用学员可浏览全部已发布课程，来源/类别不额外阻断视频学习，开播须实名 |
@@ -550,14 +550,23 @@ proxy/local/实名场景的 `content_url` 为站内相对 URL，仅含短期票�
 | 13 | POST | /admin/papers/{id}/copy | `papers:write`；复制配置/固定题单为新 draft |
 | 14 | POST | /admin/papers/{id}/withdraw | 已退场，404；不再产生 withdrawn 状态 |
 | 15 | POST | /admin/papers/{id}/archive | 已退场，404；不再产生 archived 状态 |
+| 16 | DELETE | /admin/papers/{id} | `papers:write`；仅删除无发布/考试引用的 training 草稿，成功 `data:null` |
 
 **现行状态边界（2026-10-26）**：新写入流程仅 `draft → published`，发布后调整沿用复制新草稿。培训和 legacy 试卷的撤回/归档写入口均不再注册；旧状态的列表、详情、快照读取和开考限制仍保留，读取接口可继续按历史状态筛选，PC 日常筛选只提供草稿、已发布。不迁移或重写历史状态。
 
+**草稿删除（2026-10-27）**：`DELETE /admin/papers/{id}`在事务内取得`exam_paper`的`pessimistic_write`锁，锁后重新核对`business_scope=training`与`status=draft`；目标不存在或属于legacy返回40401，非草稿返回40970。只要`paper_release`、`exam_assignment`、`exam_record`任一表存在该`paper_id`引用，即使试卷仍标为draft也返回40970。仅删除该卷的`paper_question`及`exam_paper`，不删除共享题库、题目版本、课程、媒体、学习记录、发布快照或考试历史；不新增软删字段或迁移。删除不要求培训类别仍启用。提交成功后记录`training_paper.delete`审计，返回`{code:0,message:'success',data:null}`；重复删除已不存在的目标返回40401，客户端不自动重发。
+
+删除只锁试卷，发布沿用“类别→试卷”锁序，两者在同一试卷写锁下串行：删除先提交，发布锁后发现目标不存在，返回40401且不产生release；发布先提交，删除锁后发现已发布，返回40970并保留完整试卷、题单与快照。
+
 **创建/修改 DTO**：`title/mode/category_id` 为核心字段；`regulation_ids/course_ids` 是去重字符串 ID 数组，其中 regulation_ids 表示题库资料的内部来源 ID；`requires_learning` 默认 false；`sort_order` 可选且必须为0—2147483647整数，创建默认0、更新未传保持原值；`total_score` 创建默认100、更新未传保持原值，范围0.01～999.99且最多两位小数；及格分数大于0且不超过目标总分；及格分数/限时/次数/漏选比例默认 60/30/3/0.5。随机卷 `rules=[{type,count,score_cents}]` 最多三项且题型唯一，发布时满足 `Σ(count×score_cents)=round(total_score×100)`；固定题单发布时每题score_cents为正整数且合计等于目标总分币。固定草稿题单允许score_cents=0和未配齐，保存仍校验题目完整性及合法引用。固定草稿普通/答案预览同样允许0分和未配齐，返回目标总分及实际题目分值；只有发布执行正分与合计检查，已发布预览仍读冻结快照。来源选项允许“当前类别题目实际关联该 regulation”或“旧资料自身 category 直接匹配”；新资料不预绑类别，跨类别创建、更新或发布返回业务冲突。
+
+**基本修改题单保护（2026-10-27）**：仅`PUT /admin/papers/{id}`接受可选布尔`preserve_questions`，不接受NULL、字符串或数字；创建不允许该字段。列表基本修改固定传`true`。服务端取得试卷写锁后，在任何字段赋值或清题前检查：若本次变更培训类别或组卷模式，且事务内当前`paper_question`存在该卷题目，则返回40970，配置、题单和操作信息均不变，不写成功审计。弹框曾读到空题单不能替代此检查；锁内仍为空才允许变更。只改标题等基本配置不清题。未传或显式`false`保留设计器原有换类/换模式时清空题单的行为。该字段仅控制本次更新，不持久化、不进入发布快照或回包。
 
 **排序字段（2026-10-26 / 031）**：training列表项、创建回包、详情与更新回包均返回`sort_order:number`；复制新草稿继承源卷排序值。该字段仅为管理列表元数据，不进入`paper_release`，不影响题单顺序、学员开考、成绩统计或legacy `/ai/papers`的响应及排序。
 
 **操作信息（2026-10-26 / 032）**：`GET /admin/papers/{id}`以及training创建、配置更新、固定题单更新、复制回包在既有`created_at/updated_at`外返回`created_by_name:string|null`、`updated_by_name:string|null`。姓名按`sys_user.real_name`去空白后优先，否则回退`username`；用户已不存在或历史更新人未知返回NULL。详情对`created_by/updated_by`去重后一次查询至多两人，列表不返回姓名、不产生N+1。配置保存与题单全量替换即使值未变化也推进`updated_at`；首次发布写更新人/时间，重复发布保持幂等。客户端不得提交创建人、更新人或姓名字段。
+
+training新建和复制在保存边界显式将同一个应用时间写入`created_at/updated_at`，沿用驱动UTC序列化，避免数据库会话的本地`CURRENT_TIMESTAMP`再次被当作UTC；不依赖数据库会话时区。该修复只影响此后新记录，不改历史数据、驱动或数据库设置。
 
 **考前学习与备注（2026-10-26 / 030）**：增加`required_learning_minutes:number|null`与`remark:string|null`，在列表/详情回显。备注最多1000字符，空白归一NULL，未传更新保留原值；只作管理信息。唯一开关`requires_learning`关闭时，新写入`course_ids=[]`、分钟为NULL；开启时必须选择至少一门同类别published课程，并设置1—2147483647的整数分钟。部分更新先合并原配置再校验，不允许单独清空必填值绕过规则。PC新增/配置/设计器隐藏资料来源输入，开启“考前学习要求”才显示课程与分钟；新增采用既有次数3、漏选比例0.5。
 
@@ -678,15 +687,22 @@ AI通过模板接口purpose=ai下载七列参考格式；输入保留§3.5.2的�
 
 ### 3.7.2 管理端考试记录（只读）
 
-三个入口统一要求 `exam_records:read`。`ExamRecordsService` 只提供列表与详情投影；结果复用 `ExamHistoryService`，不复制评分逻辑。
+列表、筛选选项、详情与结果入口统一要求 `exam_records:read`，不额外依赖试卷、学员或统计管理权限。`ExamRecordsService` 提供选项、列表与详情投影；结果复用 `ExamHistoryService`，不复制评分逻辑。
 
 | 方法 | 路径 | 权限 | 请求与成功 data |
 |---|---|---|---|
-| GET | `/admin/exam-records` | `exam_records:read` | query `page/page_size/keyword/paper_id/source/difficulty/status/grading_state`；返回分页记录摘要 |
-| GET | `/admin/exam-records/{id}` | `exam_records:read` | 返回与列表同源的单条记录摘要；不返回题目答案或解析 |
+| GET | `/admin/exam-records` | `exam_records:read` | query `page/page_size/keyword/paper_id/user_id/category_id/difficulty/result_status/date_from/date_to`；兼容旧 `source/status/grading_state`；返回分页记录摘要 |
+| GET | `/admin/exam-records/options` | `exam_records:read` | `{papers:[{id,title}],categories:[{id,name}]}`；保留历史记录关联的停用/归档试卷和停用类别 |
+| GET | `/admin/exam-records/{id}` | `exam_records:read` | 返回与列表同源的单条记录摘要，额外返回学员当前头像 `avatar_id`（无头像为 null）；头像仍沿用受控媒体权限，不返回题目答案或解析 |
 | GET | `/admin/exam-records/{id}/result` | `exam_records:read` | 终态返回与本人接口同源的 `FinalResult`；进行中记录按结果 reader 的状态规则拒绝 |
 
 列表/详情摘要字段为 `record_id/paper_id/paper_title/user_id/username/name/source/category_id/difficulty/release_id/attempt_no/started_at/deadline_at/submitted_at/answered_count/total_count/status/grading_state/submission_method/score`。`source/difficulty` 只读该记录冻结值；submission_method为null包含新纯timeout未交卷或旧历史方式未知，不能由null推断legacy。接口不返回或派生 `last_heartbeat_at/connection_state/switch_count/device_summary`。主动评分终态与历史已评分timeout可按冻结结果读取题干/选项/解析图，新纯timeout不能读取题图，但不存在学员答案图片或人工评语。
+
+摘要补充 `category_name`、`total_score`、`result_status`。类别按记录冻结的 `category_id` 关联名称，缺失为 null；`total_score` 只取该次 `rule_snapshot.totalCents / 100`，无冻结满分时返回 null，不使用当前试卷配置回填。管理端 `result_status` 仅为 `in_progress/passed/failed/timeout`，与当前原始状态一致；不接受或派生 `legacy_pending/legacy_scored`。管理端列表排除旧 submitted 和已评分 timeout（finalized、分数非空、交卷时间非空），其摘要/结果详情返回不存在；共享旧制度、移动历史和统计读取逻辑保持独立，不删除或改写历史数据。
+
+`date_from/date_to` 使用有效 `YYYY-MM-DD`，筛选北京时间（Asia/Shanghai）的开考日期：开始日 00:00（含）至结束日次日 00:00（不含），允许单侧边界，无效日期和起日大于止日返回参数错误。学员/类别 ID 作为精确筛选，与其它条件取交集。
+
+PC 筛选平铺关键字、试卷名称、培训类别、难度、考试状态和考试日期；没有来源或“更多筛选”。考试状态仅显示进行中、已通过、未通过、超时未交卷。难度选项仅为简单/困难；中级、混合、未知继续由后端兼容读取，不提供界面筛选，旧界面链接不保留这些隐藏过滤。考试日期使用一个 Element Plus `daterange` 控件，完整范围选择/清除/URL恢复；旧单侧日期链接在界面不生效，不保留隐藏过滤（API 单侧边界能力保留）。界面不展示内部 ID 主列、实时作答进度或重复状态列，不提供通用刷新工具栏与时间说明，时间列直接标注“开考时间”；空状态使用公共列表的 `el-empty` 图示。只有已出分记录展示分数（保留真实零分）；未交卷即使原始 score 为零也显示无成绩。来源、题目计数和旧过滤参数仅作为兼容契约保留。
 
 ### 3.8 统计模块 /statistics（权限：制度管理）
 
@@ -726,7 +742,7 @@ AI通过模板接口purpose=ai下载七列参考格式；输入保留§3.5.2的�
 | GET | `/statistics/training/export` | `statistics:export` | 与 ranking 完全相同的筛选和分页；下载当前页 xlsx，并附独立“口径说明”Sheet |
 | GET | `/admin/dashboard` | 登录 | 返回 `{as_of,timezone:'Asia/Shanghai',metrics,exam_trend?}`；无权模块的指标键直接省略 |
 
-`TrainingExamOverviewRow={paper_id,title,category_id,category_name,status,release_id,total_score,duration_minutes,pass_score,participant_count,finalized_users,average_score}`。总览只列培训试卷；名称取当前试卷标题，类别和总分/时限/及格线优先使用最新发布版本及其冻结规则。无发布版本时规则与均分为 null、人数为 0，不把草稿规则伪装成正式成绩依据。总览参考人数按最新发布版本成功开考的学员去重；均分只取该版本、相同规则的 finalized 个人最高分，跨难度仅作描述汇总，不生成混合排名。
+`TrainingExamOverviewRow={paper_id,title,category_id,category_name,status,release_id,total_score,duration_minutes,pass_score,participant_count,finalized_users,average_score}`。总览仅列状态为published且存在发布版本的培训试卷，筛选在数据库分页计数前执行；名称取当前试卷标题，类别和总分/时限/及格线使用最新发布版本及其冻结规则。未发布草稿不进入考试分析列表；已发布但无人参考时人数为0、均分为null，总分仍展示冻结满分。总览参考人数按最新发布版本成功开考的学员去重；均分只取该版本、相同规则的 finalized 个人最高分，跨难度仅作描述汇总，不生成混合排名。
 
 `TrainingExamSummary` 固定包含：`exam`、`release_id:string|null`、`eligible_count/eligible_started_count/historical_started_count/historical_only_started_count/submitted_attempts/submitted_users/finalized_users`、`participation_rate:number|null`、`score_groups`、`difficulty_composition`、`course_completion`、`uncompleted_reasons`、`as_of`。`exam={paper_id,title,category_id,total_score,duration_minutes,pass_score,excellent_score:null}`；规则字段取发布快照，名称不声称冻结。分数分布按该组冻结总分的0%、60%、70%、80%、90%、100%划分五段，返回实际分数边界，最后一段包含满分；120分卷为[0,72)、[72,84)、[84,96)、[96,108)、[108,120]，历史100分卷保持原分段。`score_groups` 每项为 `{difficulty,finalized_users,average_score,highest_score,lowest_score,passed_users,average_duration_seconds,excellent_users:null,pass_rate,distribution:[{lower,upper,count}]}`。成绩指标统一使用同组个人最高分代表答卷，平均用时使用这些答卷的实际用时；无成绩时平均/最高/最低/平均用时为 null。当前没有优秀分规则，优秀分与人数均为 null，界面显示未设置/—，不将其当作 0。`RankRow={rank,user_id,name,gender,source,difficulty,score,duration_seconds,record_id}`，`gender='male'|'female'|null`，全部 ID 为字符串。
 
@@ -740,6 +756,16 @@ AI通过模板接口purpose=ai下载七列参考格式；输入保留§3.5.2的�
 - 课程完成率只统计当前应学的 institution 学员，按 published 课程必学课时的当前 `lesson_version` 与 B2 `video_learning_record.is_completed` 核算；external 不进入分母，零必学课时返回 null。未完成原因固定为 `learning_incomplete/not_started/not_passed`。
 
 首页指标逐项授权：`students:read` 才返回正常学员数，`questions:read` 才返回题目数，`papers:read` 才返回试卷数，`statistics:read` 才返回近 7 日考试记录趋势。不存在待阅卷指标。趋势以服务端 `started_at` 转换到 Asia/Shanghai 自然日；无权限不返回 0 占位。
+
+<a id="admin-dashboard-planned-aggregation"></a>
+
+#### 3.8.2 运营看板聚合增量（2026-10-27 已确认设计，待实现）
+
+功能模块以 [05 册 7.4.6「管理端运营看板」](05-模块设计.md#admin-operations-dashboard) 为准。上节仍描述当前接口：`metrics` 只有学员、题目、试卷三个总量；`exam_trend` 是近 7 日成功开考记录数，不是去重参考人数。
+
+实施时需要补充学员来源拆分、今日/近 7 日去重参考人数及开考人次、已启用题目数、已发布试卷数、按来源分组的 7/30 日去重趋势，以及按发布学习要求汇总的必修学时达标数据。最近考试可复用 `TrainingExamOverviewRow` 的人数/成绩口径，但首页的最近发布排序与条数还需对齐。不得把旧 `exam_trend.count` 直接改名为参考人数，也不得把 `course_completion.completion_rate` 直接改名为学时达标率。
+
+本节只登记所需聚合能力，不声明已存在新的请求参数、字段或接口。进入实现时，再同步具体 DTO、响应契约、逐项权限与验证证据；继续保持只读聚合、无权字段省略和空分母返回空值的边界。
 
 ### 3.9 B1 课程内容 /admin/courses、/me/courses、/me/home
 
@@ -1213,7 +1239,7 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | 40950 | 409 | 视频学习会话已结束或被替换 | 心跳指向已关闭、已被阅读/视频新会话取代或不属于当前活动所有者的会话 |
 | 40951 | 409 | 课程或视频版本当前不可学习 | 课程下架、课时当前版本替换，或会话后续范围检查失败；服务端先关闭活动视频所有权再返回 |
 | 40960 | 409 | 当前账号已完成实名认证 | POST 核验会话遇既有实名事实；data 固定含 status=verified、reason_code=null、clear_materials=[]，随后 GET 权威实名视图 |
-| 40970 | 409 | 试卷发布状态已变化 | 非 draft 修改/发布，或锁内类别/模式与预读不一致 |
+| 40970 | 409 | 试卷发布状态已变化 | 非 draft 修改/发布/删除，删除目标存在发布版本、个人题单或考试记录引用，锁内类别/模式与预读不一致，或preserve_questions=true时有题单却尝试换类/换模式 |
 | 40971 | 409 | 候选题池容量不足 | 新随机卷初级或高级任一题型的不重复 question_id 数小于 required；data.deficits 返回 type/required/available。既有 release 的冻结抽样规则只读保留 |
 | 40972 | 409 | 试卷规则不合法 | 发布题目分值合计与设定总分不符／零分／及格线越界、固定题存在重复question_id／停用题／非精确当前版本/越类别或制度筛选，或随机题型规则非法 |
 | 42201 | 422 | 文件格式不支持 | 上传非 pdf/docx（含魔法数不符） |
@@ -1280,6 +1306,7 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | DELETE /admin/courses/{id}/lessons/{lessonId} | 仅未上架课程；课时须属于路径课程；仅标记 deleted_at，保留历史事实 | 同事务先锁课程再锁课时，与发布/换版共用锁序 |
 | POST /admin/questions/ai-import-tasks | 5MB、50参考行；任务状态与批次owner隔离 | 参考正文仅任务内存；生成后选行确认前零题库写，原批次幂等对账 |
 | POST /admin/papers/{id}/publish | 重复发布已 published 卷返回现有 release_id；并发发布只生成一个版次 | 先锁培训类别、再写锁 exam_paper；uk_paper_release_version 兜底 |
+| DELETE /admin/papers/{id} | 仅无发布/考试引用的 training 草稿；成功 data:null，重复删除40401 | 事务内写锁 exam_paper，锁后核对范围/状态/三表引用；与发布互斥，只删本卷题单与试卷 |
 | POST /admin/papers/{id}/withdraw/archive | 已退场，404 | 不再注册状态写入路由；历史快照保留 |
 
 ### 6.3 传输与敏感信息
