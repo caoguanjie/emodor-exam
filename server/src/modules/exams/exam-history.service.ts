@@ -21,6 +21,7 @@ import { AttemptReaderService, attemptQuestionView, resultMediaIds, type Grading
 import { parseQuestionContent as questionContent } from '../questions/question-content-dispatch';
 import { expireExamRecord, isScoredLegacyTimeout } from './exam-state';
 import { assertContentCapability, requiredContentCapability } from './question-content-capability';
+import { projectExamRuleMetadata } from './learner-exam-summary';
 
 type ResultRecord = ExamRecord;
 
@@ -83,6 +84,7 @@ export function projectFinalResult(record: ResultRecord, snapshot: GradingSnapsh
     score: finalized && record.score !== null ? Number(record.score) : null,
     passed: finalized ? resultStatus === ExamStatus.PASSED : null,
     correct_rate: finalized ? (items.length ? fullScoreCount / items.length : null) : null,
+    ...resultMetadata(snapshot.rule),
     items,
   };
 }
@@ -91,9 +93,14 @@ function isLegacyContent(item: { contentSchemaVersion?: number }): boolean {
   return item.contentSchemaVersion !== 2 && item.contentSchemaVersion !== 3;
 }
 
+function resultMetadata(rule: unknown) {
+  const { total_score, pass_score, duration_minutes } = projectExamRuleMetadata(rule);
+  return { total_score, pass_score, duration_minutes };
+}
+
 function projectSnapshotlessLegacy(record: ResultRecord): FinalResult {
-  if (record.status === ExamStatus.TIMEOUT && !isScoredLegacyTimeout(record)) return { record_id: String(record.id), status: 'timeout', grading_state: 'not_submitted', submission_method: null, legacy: record.snapshotOrigin === 'legacy_start' || !record.assignmentId, submitted_at: null, graded_at: null, score: 0, passed: false, correct_rate: null, items: [] };
-  if (record.status === ExamStatus.SUBMITTED) return { record_id: String(record.id), status: 'submitted', grading_state: 'not_submitted', submission_method: null, legacy: true, submitted_at: iso(record.submittedAt), graded_at: null, score: null, passed: null, correct_rate: null, items: [] };
+  if (record.status === ExamStatus.TIMEOUT && !isScoredLegacyTimeout(record)) return { record_id: String(record.id), status: 'timeout', grading_state: 'not_submitted', submission_method: null, legacy: record.snapshotOrigin === 'legacy_start' || !record.assignmentId, submitted_at: null, graded_at: null, score: 0, passed: false, correct_rate: null, ...resultMetadata(record.ruleSnapshot), items: [] };
+  if (record.status === ExamStatus.SUBMITTED) return { record_id: String(record.id), status: 'submitted', grading_state: 'not_submitted', submission_method: null, legacy: true, submitted_at: iso(record.submittedAt), graded_at: null, score: null, passed: null, correct_rate: null, ...resultMetadata(record.ruleSnapshot), items: [] };
   if (!record.submittedAt) throw Errors.internal('历史考试结果缺少交卷时间');
   const finalized = record.gradingState === 'finalized' || (
     [ExamStatus.PASSED, ExamStatus.FAILED].includes(record.status as any) && record.score !== null
@@ -111,6 +118,7 @@ function projectSnapshotlessLegacy(record: ResultRecord): FinalResult {
       ? true
       : finalized && record.status === ExamStatus.FAILED ? false : null,
     correct_rate: null,
+    ...resultMetadata(record.ruleSnapshot),
     items: [],
   };
 }

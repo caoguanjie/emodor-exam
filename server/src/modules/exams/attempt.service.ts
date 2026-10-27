@@ -6,7 +6,7 @@ import { Errors, ExamStatus, PaperStatus, RegulationStatus } from '../../common/
 import { difficultyForSource } from '../../common/question-difficulty';
 import { RedisService } from '../../common/redis.service';
 import type {
-  AttemptView, Difficulty, ExamDifficulty, Id, LearnerSource, Page, PoolRule, QuestionOption, QuestionType, RuleSnapshot,
+  AttemptView, Difficulty, ExamDifficulty, Id, LearnerExamDetail, LearnerExamState, LearnerExamSummary, LearnerSource, Page, PoolRule, QuestionOption, QuestionType, RuleSnapshot,
 } from '../../common/training-contracts';
 import { ExamAssignment } from '../../entities/exam-assignment.entity';
 import { ExamPaper } from '../../entities/exam-paper.entity';
@@ -33,7 +33,8 @@ import { ShuffleService } from './shuffle.service';
 import { assertExamIdentity, expireExamRecord } from './exam-state';
 import { parseQuestionContent } from '../questions/question-content-dispatch';
 import { assertContentCapability, requiredContentCapability } from './question-content-capability';
-import { assertPaperLearningEligible } from './paper-learning';
+import { assertPaperLearningEligible, readPaperLearningSummary } from './paper-learning';
+import { readLearnerExamSummaries } from './learner-exam-summary';
 
 type AttemptRecordFact = { attemptNo: number; status: string };
 
@@ -486,7 +487,7 @@ export class AttemptService {
     return this.reader.forStudent(String(userId), String(recordId), contentVersion);
   }
 
-  async list(userId: Id, page = 1, pageSize = 20): Promise<Page<Record<string, unknown>>> {
+  private async visibleExamPapers(userId: Id) {
     const user = await this.userRepo.findOne({ where: { id: String(userId) } });
     if (!user) throw Errors.notFound('用户不存在');
     if (Number(user.status) !== 1) throw Errors.accountDisabled();
@@ -500,21 +501,38 @@ export class AttemptService {
     const assignedIds = assignments.map((assignment) => String(assignment.paperId));
     const assigned = assignedIds.length ? await this.paperRepo.find({ where: { id: In(assignedIds), businessScope: 'training' } }) : [];
     const byId = new Map([...published, ...assigned].map((paper) => [String(paper.id), paper]));
-    const all = [...byId.values()].sort((left, right) => BigInt(left.id) < BigInt(right.id) ? 1 : -1);
-    const items = all.slice((page - 1) * pageSize, page * pageSize).map((paper) => {
-      const assignment = assignments.find((item) => String(item.paperId) === String(paper.id));
-      return {
-        paper_id: String(paper.id),
-        title: paper.title,
-        mode: paper.mode,
-        status: paper.status,
-        source: assignment?.source ?? user.source,
-        category_id: assignment?.categoryId ?? (user.categoryId ? String(user.categoryId) : null),
-        difficulty: assignment?.difficulty ?? (paper.mode === 'random' && user.source
-          ? difficultyForSource(user.source)
-          : null),
-      };
+    const papers = [...byId.values()].sort((left, right) => BigInt(left.id) < BigInt(right.id) ? 1 : -1);
+    return { user, assignments, papers };
+  }
+
+  async list(userId: Id, page = 1, pageSize = 20, state: LearnerExamState = 'all'): Promise<Page<LearnerExamSummary>> {
+    const { user, assignments, papers } = await this.visibleExamPapers(userId);
+    const records = papers.length ? await this.recordRepo.find({
+      where: { userId: String(userId), paperId: In(papers.map(paper => String(paper.id))) },
+      select: ['id', 'paperId', 'status'],
+    }) : [];
+    const activeIds = new Set(records.filter(record => record.status === ExamStatus.IN_PROGRESS).map(record => String(record.paperId)));
+    const matching = papers.filter(paper => {
+      const active = activeIds.has(String(paper.id));
+      if (state === 'active') return active;
+      if (state === 'published') return !active && paper.status === PaperStatus.PUBLISHED;
+      if (state === 'ended') return !active && paper.status !== PaperStatus.PUBLISHED;
+      return true;
     });
-    return { items, total: all.length, page, page_size: pageSize };
+    const selected = matching.slice((page - 1) * pageSize, page * pageSize);
+    const summaries = await readLearnerExamSummaries(this.dataSource.manager, user, selected, assignments, records);
+    return { items: summaries.map(row => row.view), total: matching.length, page, page_size: pageSize };
+  }
+
+  async detail(userId: Id, paperId: Id): Promise<LearnerExamDetail> {
+    const { user, assignments, papers } = await this.visibleExamPapers(userId);
+    const paper = papers.find(row => String(row.id) === String(paperId));
+    if (!paper) throw Errors.notFound('考试不存在或不可见');
+    const records = await this.recordRepo.find({
+      where: { userId: String(userId), paperId: String(paperId) }, select: ['id', 'paperId', 'status'],
+    });
+    const [summary] = await readLearnerExamSummaries(this.dataSource.manager, user, [paper], assignments, records);
+    const learning = await readPaperLearningSummary(this.dataSource.manager, String(userId), summary.release);
+    return { ...summary.view, learning };
   }
 }

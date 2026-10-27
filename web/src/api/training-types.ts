@@ -890,6 +890,10 @@ export type FinalResultItem = FinalResultItemCanonical | LegacyFinalResultItem;
 
 export interface FinalResult {
   record_id: Id;
+  /** 本次冻结规则；旧结果缺失时不以当前试卷配置补值。 */
+  total_score?: number | null;
+  pass_score?: number | null;
+  duration_minutes?: number | null;
   status?: 'submitted' | 'passed' | 'failed' | 'timeout';
   grading_state: GradeState;
   submission_method: SubmissionMethod | null;

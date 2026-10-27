@@ -13,6 +13,7 @@ import { useSessionStore } from '@/stores/session'
 import { createVideoSessionClient } from '@/stores/video'
 const { scenario, loadScenario } = useShellScenario('course-video')
 const preview = ref(false), courseId = ref(''), lessonId = ref('')
+const fromExam = ref('')
 const course = useCourseStore(), session = useSessionStore()
 const panel = ref<{ play(): void; pause(): void; seek(positionMs: number): void } | null>(null)
 const video = createVideoSessionClient({
@@ -30,6 +31,7 @@ onLoad(query => {
   if (preview.value) return
   courseId.value = typeof query?.course_id === 'string' ? query.course_id : ''
   lessonId.value = typeof query?.lesson_id === 'string' ? query.lesson_id : ''
+  fromExam.value = typeof query?.from_exam === 'string' && /^[1-9]\d*$/.test(query.from_exam) ? query.from_exam : ''
   void reload()
 })
 async function reload() {
@@ -51,9 +53,10 @@ onUnload(() => { unobserve(); void video.dispose() })
 onBeforeUnmount(() => { unobserve(); void video.dispose() })
 watch(() => session.sessionEpoch, () => { void video.dispose() }, { flush: 'sync' })
 function identity() { uni.navigateTo({ url: '/pages/identity/index' }) }
+const backTarget = computed(() => preview.value ? `/pages/course/detail?scenario=${scenario.value.id}` : `/pages/course/detail?id=${encodeURIComponent(courseId.value)}${fromExam.value ? `&from_exam=${encodeURIComponent(fromExam.value)}` : ''}`)
 </script>
 <template>
-  <AppPage :title="title" :padded="false" :back-target="preview ? `/pages/course/detail?scenario=${scenario.id}` : `/pages/course/detail?id=${encodeURIComponent(courseId)}`">
+  <AppPage :title="title" :padded="false" :back-target="backTarget">
     <template v-if="preview"><VideoPanel :has-video="scenario.hasVideo" /><ChapterList :chapters="chapters" :collapsed-chapters="scenario.collapsedChapters" /></template>
     <template v-else>
       <view v-if="course.detailLoading" class="player-state">课程加载中…</view>

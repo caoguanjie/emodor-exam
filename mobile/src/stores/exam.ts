@@ -1,13 +1,13 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { ApiError } from '@/api/client'
-import { getAttempt, getExamHistory, getExamResult, getExams, getWrongQuestions, startExam, submitExam } from '@/api/exams'
+import { getAttempt, getExamHistory, getExamResult, getExamSummary, getExams, getWrongQuestions, startExam, submitExam } from '@/api/exams'
 import { getMediaTickets } from '@/api/media'
 import type { Page } from '@/api/courses'
 import { resolveMediaUrl } from '@/platform/media-url'
 import { clearDraft, loadDraft, saveDraft } from '@/utils/exam-draft'
 import { createServerClock } from '@/utils/server-clock'
-import { countAnswered, takeItem, toggleOption, type AttemptQuestionV2, type AttemptRecordViewV2, type ExamAnswers, type ExamHistoryItemV2, type ExamListItem, type FinalResultView, type SubmitAttemptRequest, type WrongItemV2 } from '@/types/exam'
+import { countAnswered, takeItem, toggleOption, type AttemptQuestionV2, type AttemptRecordViewV2, type ExamAnswers, type ExamHistoryItemV2, type ExamListItem, type ExamListState, type LearnerExamSummary, type FinalResultView, type SubmitAttemptRequest, type WrongItemV2 } from '@/types/exam'
 import { useSessionStore } from './session'
 
 type Phase = 'idle' | 'loading' | 'answering' | 'submitting' | 'uncertain' | 'expired' | 'terminal' | 'error'
@@ -29,21 +29,23 @@ export const useExamStore = defineStore('mobile-exam', () => {
   const list = ref(emptyPage<ExamListItem>()), history = ref(emptyPage<ExamHistoryItemV2>()), wrong = ref(emptyPage<WrongItemV2>())
   const listLoading = ref(false), historyLoading = ref(false), wrongLoading = ref(false)
   const listError = ref(''), historyError = ref(''), wrongError = ref('')
+  const summary = ref<LearnerExamSummary | null>(null), summaryLoading = ref(false), summaryError = ref(''), listState = ref<ExamListState>('all')
   const items = computed(() => questions.value.map(takeItem)), answered = computed(() => countAnswered(answers.value))
   const locked = computed(() => phase.value !== 'answering' || remaining.value <= 0)
   let revision = 0, persistRevision = 0, mediaRevision = 0, ownerUser = '', clock: ReturnType<typeof createServerClock> | null = null
   let frozenPayload: SubmitAttemptRequest | null = null, submitFlight: AttemptFlight | null = null, statusFlight: AttemptFlight | null = null
-  let expiredChecked = false, listRevision = 0, historyRevision = 0, wrongRevision = 0
+  let expiredChecked = false, listRevision = 0, historyRevision = 0, wrongRevision = 0, summaryRevision = 0
   const mediaFlights = new Map<string, Promise<void>>()
 
   function resetMemory() {
-    revision++; persistRevision++; mediaRevision++; listRevision++; historyRevision++; wrongRevision++
+    revision++; persistRevision++; mediaRevision++; listRevision++; historyRevision++; wrongRevision++; summaryRevision++
     attempt.value = null; questions.value = []; answers.value = {}; assets.value = {}; mediaErrors.value = {}; currentIndex.value = 0
     result.value = null; remaining.value = 0; phase.value = 'idle'; loadError.value = ''; submitError.value = ''; draftError.value = ''; savedAt.value = ''
     identityReason.value = ''; draftRestored.value = false; draftDiscarded.value = false; ownerUser = ''; clock = null; frozenPayload = null
     submitFlight = null; statusFlight = null; expiredChecked = false; mediaFlights.clear()
     list.value = emptyPage(); history.value = emptyPage(); wrong.value = emptyPage()
     listLoading.value = false; historyLoading.value = false; wrongLoading.value = false; listError.value = ''; historyError.value = ''; wrongError.value = ''
+    summary.value = null; summaryLoading.value = false; summaryError.value = ''; listState.value = 'all'
   }
   watch(() => session.sessionEpoch, resetMemory, { flush: 'sync' })
   async function ready() {
@@ -116,7 +118,16 @@ export const useExamStore = defineStore('mobile-exam', () => {
       throw error
     }
   }
-  const start = (paper: string) => open(() => startExam(paper))
+  async function start(paper: string) {
+    const epoch = session.sessionEpoch
+    try { await open(() => startExam(paper)) }
+    catch (error) {
+      if (epoch === session.sessionEpoch && error instanceof ApiError && error.code === 40901 && (error.data as { reason_code?: string } | null)?.reason_code === 'LEARNING_REQUIRED') {
+        try { await loadSummary(paper) } catch { /* The original rejection and refresh retry remain visible. */ }
+      }
+      throw error
+    }
+  }
   const recover = (record: string) => open(() => getAttempt(record))
 
   async function persistDraft() {
@@ -261,9 +272,20 @@ export const useExamStore = defineStore('mobile-exam', () => {
     })().finally(() => { if (mediaFlights.get(scope) === pending) mediaFlights.delete(scope) })
     mediaFlights.set(scope, pending); return pending
   }
-  async function loadList(page = 1) {
+  async function loadSummary(paper: string) {
+    const current = ++summaryRevision; summaryLoading.value = true; summaryError.value = ''; summary.value = null
+    let epoch = session.sessionEpoch
+    try {
+      await ready(); epoch = session.sessionEpoch; if (current !== summaryRevision) return
+      const value = await getExamSummary(paper)
+      if (current === summaryRevision && epoch === session.sessionEpoch) summary.value = value
+    } catch (error) { if (current === summaryRevision && epoch === session.sessionEpoch) summaryError.value = message(error); throw error }
+    finally { if (current === summaryRevision && epoch === session.sessionEpoch) summaryLoading.value = false }
+  }
+  async function loadList(page = 1, state: ExamListState = listState.value) {
+    if (state !== listState.value) { list.value = emptyPage(); listState.value = state; page = 1 }
     const current = ++listRevision; listLoading.value = true; listError.value = ''
-    try { await ready(); const value = await getExams(page); if (current === listRevision) list.value = { ...value, items: page === 1 ? value.items : [...list.value.items, ...value.items] } }
+    try { await ready(); const value = await getExams(page, state); if (current === listRevision) list.value = { ...value, items: page === 1 ? value.items : [...list.value.items, ...value.items] } }
     catch (error) { if (current === listRevision) listError.value = message(error); throw error }
     finally { if (current === listRevision) listLoading.value = false }
   }
@@ -284,6 +306,6 @@ export const useExamStore = defineStore('mobile-exam', () => {
     finally { if (current === wrongRevision) wrongLoading.value = false }
   }
   return { attempt, questions, items, answers, currentIndex, phase, remaining, result, loadError, submitError, draftError, savedAt, draftRestored, draftDiscarded, identityReason, assets, mediaErrors,
-    list, history, wrong, listLoading, historyLoading, wrongLoading, listError, historyError, wrongError, locked, answered,
-    start, recover, choose, jump, persistDraft, tick, queryStatus, submit, retrySubmission, loadResult, loadItemMedia, loadList, loadHistory, loadWrong }
+    list, history, wrong, listLoading, historyLoading, wrongLoading, listError, historyError, wrongError, summary, summaryLoading, summaryError, listState, locked, answered,
+    start, recover, choose, jump, persistDraft, tick, queryStatus, submit, retrySubmission, loadResult, loadItemMedia, loadSummary, loadList, loadHistory, loadWrong }
 })

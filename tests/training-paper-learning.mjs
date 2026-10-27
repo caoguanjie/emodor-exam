@@ -151,6 +151,18 @@ export async function run(ctx) {
 
     const learner = await examLearner(ctx, { categoryId });
     const otherLearner = await examLearner(ctx, { categoryId });
+    stage = 'read-only H5 exam summary uses frozen requirements';
+    const before = await ok(ctx, learner, 'GET', `/me/exams/${paperId}`);
+    assert.equal(before.total_score, 100);
+    assert.equal(before.pass_score, 60);
+    assert.equal(before.question_count, 1);
+    assert.equal(before.active_record_id, null);
+    assert.equal(before.latest_record_id, null);
+    assert.equal(before.learning.required_learning_minutes, 2);
+    assert.equal(before.learning.remaining_seconds, 120);
+    assert.deepEqual(before.learning.courses.map(course => course.id), [alpha.courseId, beta.courseId]);
+    assert.ok(before.learning.courses.every(course => course.available));
+    await assertNoAttempt(ctx, learner.userId, paperId);
     stage = 'no history and no assignment side effects';
     const noHistory = await ctx.request(learner, 'POST', `/me/exams/${paperId}/start`);
     assert.equal(noHistory.code, 40901);
@@ -174,6 +186,10 @@ export async function run(ctx) {
     await learning(ctx, learner.userId, removedVersion, '900000');
     await learning(ctx, learner.userId, alpha.versionId, '60000');
     await learning(ctx, learner.userId, beta.versionId, '59999');
+    const progress = await ok(ctx, learner, 'GET', `/me/exams/${paperId}`);
+    assert.equal(progress.learning.credited_seconds, 119);
+    assert.equal(progress.learning.remaining_seconds, 1);
+    await assertNoAttempt(ctx, learner.userId, paperId);
     const short = await ctx.request(learner, 'POST', `/me/exams/${paperId}/start`);
     assert.equal(short.code, 40901);
     assert.deepEqual(short.data, { reason_code: 'LEARNING_REQUIRED', required_learning_minutes: 2, credited_seconds: 119, remaining_seconds: 1, course_ids: [alpha.courseId, beta.courseId] });

@@ -339,6 +339,8 @@ describe('frozen assignment facts', () => {
     service.paperRepo = { find: async () => [{
       id: '11', title: '已冻结考试', mode: 'random', status: 'withdrawn', businessScope: 'training',
     }] };
+    service.recordRepo = { find: async () => [] };
+    service.dataSource = { manager: { getRepository: () => ({ find: async () => [] }) } };
 
     await expect(service.list('9')).resolves.toMatchObject({
       total: 1,

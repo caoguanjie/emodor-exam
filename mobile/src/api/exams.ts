@@ -2,7 +2,7 @@ import { ApiError, request } from './client'
 import { validateReadonlyDoc } from '@/types/content'
 import { validateRichDocV3 } from '@/types/content-v3'
 import type { Page } from './courses'
-import type { AttemptQuestionV2, AttemptRecordViewV2, ExamHistoryItemV2, ExamListItem, FinalResultView, SubmitAttemptRequest, WrongItemV2 } from '@/types/exam'
+import type { AttemptQuestionV2, AttemptRecordViewV2, ExamHistoryItemV2, ExamListItem, ExamListState, LearnerExamSummary, FinalResultView, SubmitAttemptRequest, WrongItemV2 } from '@/types/exam'
 
 const id = (value: string) => encodeURIComponent(value)
 export const QUESTION_CONTENT_HEADERS = { 'X-Question-Content-Version': '3' }
@@ -12,7 +12,15 @@ function upgradeMessage(error: unknown): never {
   }
   throw error
 }
-export function getExams(page = 1) { return request<Page<ExamListItem>>({ url: `/me/exams?page=${page}&page_size=10` }) }
+export function getExams(page = 1, state: ExamListState = 'all') { return request<Page<ExamListItem>>({ url: `/me/exams?page=${page}&page_size=10&state=${state}` }) }
+export function getExamSummary(paper: string) {
+  return request<LearnerExamSummary>({ url: `/me/exams/${id(paper)}` }).then(value => {
+    if (!object(value) || value.paper_id !== paper || typeof value.title !== 'string' || typeof value.status !== 'string') throw contractError()
+    if (value.learning !== undefined && (!object(value.learning) || !Array.isArray(value.learning.courses)
+      || !value.learning.courses.every(course => object(course) && typeof course.id === 'string' && /^[1-9]\d*$/.test(course.id) && (course.title === null || typeof course.title === 'string') && typeof course.available === 'boolean'))) throw contractError()
+    return value
+  })
+}
 export function startExam(paper: string) { return request<AttemptRecordViewV2>({ url: `/me/exams/${id(paper)}/start`, method: 'POST', data: {}, headers: QUESTION_CONTENT_HEADERS }).then(validateAttempt).then(value => { if (value.paper_id !== paper) throw contractError(); return value }).catch(upgradeMessage) }
 export function getAttempt(record: string) { return request<AttemptRecordViewV2>({ url: `/me/exam-records/${id(record)}`, headers: QUESTION_CONTENT_HEADERS }).then(validateAttempt).then(value => { if (value.record_id !== record) throw contractError(); return value }).catch(upgradeMessage) }
 export function submitExam(body: SubmitAttemptRequest) { return request<FinalResultView>({ url: `/me/exam-records/${id(body.record_id)}/submit`, method: 'POST', data: body, headers: QUESTION_CONTENT_HEADERS }).then(value => matchingResult(value, body.record_id)).catch(upgradeMessage) }

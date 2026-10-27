@@ -1,9 +1,10 @@
 import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
 import { AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { DtoValidationPipe } from '../../common/dto-validation.pipe';
 import { TRAINING_DEFAULTS } from '../../common/training-contracts';
+import type { LearnerExamState } from '../../common/training-contracts';
 import { Errors } from '../../common/errors';
 import { AttemptService } from './attempt.service';
 import { SubmissionService } from './submission.service';
@@ -11,12 +12,15 @@ import { ExamHistoryService } from './exam-history.service';
 import { HistoryPageDto } from './grading.dto';
 import { readContentCapability } from './question-content-capability';
 
-class AttemptPageDto {
+export class AttemptPageDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1)
   page?: number;
 
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(TRAINING_DEFAULTS.maxPageSize)
   page_size?: number;
+
+  @IsOptional() @IsIn(['all', 'active', 'published', 'ended'])
+  state?: LearnerExamState;
 }
 
 function mobileLearner(user: AuthUser): void { if (user.client !== 'mobile' || user.role !== 'employee') throw Errors.forbidden(); }
@@ -37,7 +41,14 @@ export class TrainingExamsController {
       String(user.id),
       query.page || 1,
       query.page_size || TRAINING_DEFAULTS.pageSize,
+      query.state || 'all',
     );
+  }
+
+  @Get('exams/:id')
+  detail(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    mobileLearner(user);
+    return this.attempts.detail(String(user.id), decimalId(id));
   }
 
   @Post('exams/:id/start')

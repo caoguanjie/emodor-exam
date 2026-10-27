@@ -136,8 +136,43 @@ export interface FinalResult {
   score: number | null;
   passed: boolean | null;
   correct_rate: number | null;
+  total_score: number | null;
+  pass_score: number | null;
+  duration_minutes: number | null;
   items: FinalResultItem[];
 }
+
+export interface LearnerExamMetadata {
+  total_score: number | null;
+  pass_score: number | null;
+  duration_minutes: number | null;
+  question_count: number | null;
+}
+
+export interface LearnerExamSummary extends LearnerExamMetadata {
+  paper_id: Id;
+  title: string;
+  mode: string;
+  status: string;
+  source: LearnerSource | null;
+  category_id: Id | null;
+  difficulty: ExamDifficulty | null;
+  active_record_id: Id | null;
+  latest_record_id: Id | null;
+}
+
+export interface LearnerExamLearning {
+  required_learning_minutes: number | null;
+  credited_seconds: number | null;
+  remaining_seconds: number | null;
+  courses: Array<{ id: Id; title: string | null; available: boolean }>;
+}
+
+export interface LearnerExamDetail extends LearnerExamSummary {
+  learning: LearnerExamLearning;
+}
+
+export type LearnerExamState = 'all' | 'active' | 'published' | 'ended';
 
 export interface ExamHistoryItem {
   record_id: Id;

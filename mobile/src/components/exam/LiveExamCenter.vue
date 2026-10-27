@@ -7,7 +7,9 @@ import { useExamStore } from '@/stores/exam'
 import { useLearnerStore } from '@/stores/learner'
 import { useSessionStore } from '@/stores/session'
 import { useIdentityStore } from '@/stores/identity'
-const store = useExamStore(), filter = ref('全部')
+import type { ExamListItem, ExamListState } from '@/types/exam'
+import { examEntry, examNumber, examStatusLabel } from '@/utils/exam-summary'
+const store = useExamStore(), filter = ref<ExamListState>('all')
 const learner = useLearnerStore(), session = useSessionStore(), identity = useIdentityStore()
 const prerequisitesLoading = ref(true)
 const guidance = computed(() => {
@@ -20,10 +22,10 @@ const guidance = computed(() => {
   if (identity.authority.status !== 'verified') return { message: '完成实名认证后即可参加新的考试。', action: '去实名认证', target: '/pages/identity/index' }
   return null
 })
-const labels: Record<string, string> = { published: '进行中', withdrawn: '已结束', draft: '待考试' }
-const rows = computed(() => store.list.items.filter(row => filter.value === '全部' || labels[row.status] === filter.value))
-async function load() { try { await store.loadList() } catch { /* Store owns the error. */ } }
-async function more() { try { await store.loadList(store.list.page + 1) } catch { /* Retry keeps prior rows. */ } }
+const tabs: { value: ExamListState; label: string }[] = [{ value: 'all', label: '全部' }, { value: 'active', label: '答题中' }, { value: 'published', label: '已发布' }, { value: 'ended', label: '已结束' }]
+async function load() { try { await store.loadList(1, filter.value) } catch { /* Store owns the error. */ } }
+async function more() { try { await store.loadList(store.list.page + 1, filter.value) } catch { /* Retry keeps prior rows. */ } }
+function selectFilter(state: ExamListState) { if (filter.value !== state) { filter.value = state; void load() } }
 let prerequisiteRevision = 0
 async function loadPrerequisites() {
   const revision = ++prerequisiteRevision, epoch = session.sessionEpoch
@@ -38,7 +40,7 @@ let mounted = false
 function refresh() { void load(); void loadPrerequisites() }
 onMounted(() => { mounted = true; refresh() })
 onShow(() => { if (mounted) refresh() })
-function open(paper: string) { uni.navigateTo({ url: `/pages/exam/instructions?paper_id=${encodeURIComponent(paper)}` }) }
+function open(exam: ExamListItem) { uni.navigateTo({ url: examEntry(exam).url }) }
 function followGuidance() { if (guidance.value?.target === 'refresh') void loadPrerequisites(); else if (guidance.value?.target) uni.navigateTo({ url: guidance.value.target }) }
 function openHistory() { uni.navigateTo({ url: '/pages/profile/exam-history' }) }
 </script>
@@ -46,15 +48,15 @@ function openHistory() { uni.navigateTo({ url: '/pages/profile/exam-history' }) 
   <AppPage tab="exam"><view class="center-heading"><view><text class="center-heading__title">考试</text><text class="center-heading__sub">选择考试后阅读须知并开始答题</text></view><text>{{ store.list.total }} 场</text></view>
     <view class="exam-guidance" v-if="guidance"><text>{{ guidance.message }}</text><wd-button v-if="guidance.action" size="small" variant="soft" @click="followGuidance">{{ guidance.action }}</wd-button></view>
     <wd-button size="small" variant="text" @click="openHistory">考试记录</wd-button>
-    <view class="center-tabs"><text v-for="tab in ['全部', '进行中', '待考试', '已结束']" :key="tab" :class="{ active: filter === tab }" role="button" @click="filter = tab">{{ tab }}</text></view>
+    <view class="center-tabs"><text v-for="tab in tabs" :key="tab.value" :class="{ active: filter === tab.value }" role="button" :aria-label="tab.label" :aria-pressed="filter === tab.value" @click="selectFilter(tab.value)">{{ tab.label }}</text></view>
     <text v-if="store.listLoading && !store.list.items.length">考试加载中…</text>
     <EmptyState v-else-if="store.listError && !store.list.items.length" title="考试加载失败" :description="store.listError"><wd-button @click="load">重新加载</wd-button></EmptyState>
-    <EmptyState v-else-if="!rows.length" title="暂无考试" description="考试发布后将显示在这里。" />
-    <view v-for="exam in rows" :key="exam.paper_id" class="exam-card"><text class="exam-card__status">{{ labels[exam.status] || exam.status }}</text><text class="exam-card__title">{{ exam.title }}</text><view class="exam-card__bottom"><text>{{ guidance && exam.status === 'published' ? guidance.message : '进入后核验本次考试资格' }}</text><wd-button size="small" @click="open(exam.paper_id)">查看须知 ›</wd-button></view></view>
+    <EmptyState v-else-if="!store.list.items.length" title="暂无考试" description="当前筛选下暂无考试。" />
+    <view v-for="exam in store.list.items" :key="exam.paper_id" class="exam-card"><text class="exam-card__status">{{ examStatusLabel(exam) }}</text><text class="exam-card__title">{{ exam.title }}</text><view class="exam-card__meta"><text>{{ examNumber(exam.duration_minutes) }} 分钟</text><text>{{ examNumber(exam.question_count) }} 题</text><text>满分 {{ examNumber(exam.total_score) }}</text></view><view class="exam-card__bottom"><text>{{ exam.active_record_id ? '继续原次作答，截止时间不延长' : exam.status !== 'published' ? '本试卷已结束，可查看本人记录' : guidance ? guidance.message : '开考前核验本次考试资格' }}</text><wd-button size="small" :variant="exam.status !== 'published' && !exam.active_record_id ? 'plain' : 'base'" @click="open(exam)">{{ examEntry(exam).label }}</wd-button></view></view>
     <view v-if="store.list.items.length && store.listError" class="list-error">{{ store.listError }}</view><wd-button v-if="store.list.items.length < store.list.total" block variant="soft" :loading="store.listLoading" @click="more">{{ store.listError ? '重试加载' : '加载更多' }}</wd-button>
   </AppPage>
 </template>
 <style scoped>
 .exam-guidance { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px; margin-bottom:12px; border-radius:var(--app-radius-md); background:var(--app-color-primary-soft); font-size:13px; line-height:1.6; }
-.center-heading { display:flex; align-items:center; justify-content:space-between; padding:12px 2px; font-size:12px; color:var(--app-color-text-muted); }.center-heading__title { display:block; font-size:28px; font-weight:700; color:var(--app-color-text); }.center-heading__sub { display:block; margin-top:6px; font-size:12px; }.center-tabs { display:flex; gap:22px; padding:8px 0 18px; color:var(--app-color-text-muted); font-size:14px; }.center-tabs .active { color:var(--app-color-primary); font-weight:600; }.exam-card { border:1px solid var(--app-color-border); background:var(--app-color-surface); border-radius:var(--app-radius-md); padding:16px; margin-bottom:12px; }.exam-card__status { font-size:11px; color:var(--app-color-primary); }.exam-card__title { display:block; margin:12px 0; font-size:16px; font-weight:600; }.exam-card__bottom { display:flex; justify-content:space-between; align-items:center; gap:10px; font-size:11px; color:var(--app-color-text-muted); }.list-error { color:var(--app-color-danger); padding:12px 0; font-size:12px; }
+.center-heading { display:flex; align-items:center; justify-content:space-between; padding:12px 2px; font-size:12px; color:var(--app-color-text-muted); }.center-heading__title { display:block; font-size:28px; font-weight:700; color:var(--app-color-text); }.center-heading__sub { display:block; margin-top:6px; font-size:12px; }.center-tabs { display:flex; gap:22px; padding:8px 0 18px; color:var(--app-color-text-muted); font-size:14px; }.center-tabs .active { color:var(--app-color-primary); font-weight:600; }.exam-card { border:1px solid var(--app-color-border); background:var(--app-color-surface); border-radius:var(--app-radius-md); padding:16px; margin-bottom:12px; }.exam-card__status { font-size:11px; color:var(--app-color-primary); }.exam-card__title { display:block; margin:12px 0; font-size:16px; font-weight:600; }.exam-card__meta { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:16px; color:var(--app-color-text-muted); font-size:11px; }.exam-card__bottom { display:flex; justify-content:space-between; align-items:center; gap:10px; font-size:11px; color:var(--app-color-text-muted); }.list-error { color:var(--app-color-danger); padding:12px 0; font-size:12px; }
 </style>

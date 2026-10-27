@@ -2,6 +2,7 @@ import { EntityManager, In } from 'typeorm';
 import { Errors } from '../../common/errors';
 import { TrainingCourse } from '../../entities/training-course.entity';
 import { VideoLearningRecord } from '../../entities/video-learning-record.entity';
+import type { LearnerExamLearning } from '../../common/training-contracts';
 
 type LearningConfig = {
   requiresLearning: boolean | number;
@@ -57,6 +58,42 @@ export async function getEffectiveLearningVersionIds(manager: EntityManager, cou
   return [...new Set(rows.map(row => String(row.version_id)))];
 }
 
+async function creditedLearningMs(manager: EntityManager, userId: string, courseIds: string[]): Promise<bigint> {
+  const versionIds = await getEffectiveLearningVersionIds(manager, courseIds);
+  const row = versionIds.length ? await manager.getRepository(VideoLearningRecord).createQueryBuilder('record')
+    .select('COALESCE(SUM(record.credited_ms), 0)', 'creditedMs')
+    .where('record.user_id = :userId', { userId: String(userId) })
+    .andWhere('record.lesson_version_id IN (:...versionIds)', { versionIds })
+    .getRawOne<{ creditedMs: string }>() : undefined;
+  return BigInt(row?.creditedMs || '0');
+}
+
+/** A read-only projection of the same millisecond threshold enforced at start. */
+export async function readPaperLearningSummary(
+  manager: EntityManager,
+  userId: string,
+  release: (LearningConfig & { businessScope: string }) | null,
+): Promise<LearnerExamLearning> {
+  if (!release || release.businessScope !== 'training' || !release.requiresLearning || release.requiredLearningMinutes == null) {
+    return { required_learning_minutes: null, credited_seconds: null, remaining_seconds: null, courses: [] };
+  }
+  const requirement = normalizePaperLearning(release);
+  const [creditedMs, courses] = await Promise.all([
+    creditedLearningMs(manager, userId, requirement.courseIds),
+    manager.getRepository(TrainingCourse).findBy({ id: In(requirement.courseIds) }),
+  ]);
+  const remainingMs = BigInt(requirement.requiredLearningMinutes!) * 60000n - creditedMs;
+  return {
+    required_learning_minutes: requirement.requiredLearningMinutes,
+    credited_seconds: Number(creditedMs / 1000n),
+    remaining_seconds: remainingMs > 0n ? Number((remainingMs + 999n) / 1000n) : 0,
+    courses: requirement.courseIds.map(id => {
+      const course = courses.find(row => String(row.id) === id);
+      return { id, title: course?.title ?? null, available: course?.status === 'published' };
+    }),
+  };
+}
+
 /** Use the existing effective-play clock, once per current video version. */
 export async function assertPaperLearningEligible(
   manager: EntityManager,
@@ -66,14 +103,8 @@ export async function assertPaperLearningEligible(
   // NULL identifies an old release: never invent or backfill a new requirement.
   if (release.businessScope !== 'training' || !release.requiresLearning || release.requiredLearningMinutes == null) return;
   const requirement = normalizePaperLearning(release);
-  const versionIds = await getEffectiveLearningVersionIds(manager, requirement.courseIds);
-  const row = versionIds.length ? await manager.getRepository(VideoLearningRecord).createQueryBuilder('record')
-    .select('COALESCE(SUM(record.credited_ms), 0)', 'creditedMs')
-    .where('record.user_id = :userId', { userId: String(userId) })
-    .andWhere('record.lesson_version_id IN (:...versionIds)', { versionIds })
-    .getRawOne<{ creditedMs: string }>() : undefined;
   // BIGINT sums remain exact even when old learning histories exceed JS integers.
-  const creditedMs = BigInt(row?.creditedMs || '0');
+  const creditedMs = await creditedLearningMs(manager, userId, requirement.courseIds);
   const remainingMs = BigInt(requirement.requiredLearningMinutes!) * 60000n - creditedMs;
   if (remainingMs <= 0n) return;
   const remainingMinutes = Number((remainingMs + 59999n) / 60000n);

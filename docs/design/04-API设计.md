@@ -699,6 +699,11 @@ AI通过模板接口下载与普通导入一致的中文五列参考格式，页
 | 5 | GET | /me/exam-records/{id}/result | 主动交卷结果、纯timeout或历史待确认结果 |
 | 6 | GET | /me/exam-records | 本人考试历史Page分页，保留timeout记录 |
 | 7 | GET | /me/wrong-questions | 本人finalized非满分题Page分页，新纯timeout无条目 |
+| 8 | GET | /me/exams/{id} | 本人可见考试的只读摘要与考前学习进度；不创建考试或收口记录 |
+
+**H5 考试摘要增量（2026-10-27）**：`GET /me/exams` 保留原字段，并返回 `total_score/pass_score/duration_minutes/question_count:number|null`、`active_record_id/latest_record_id:string|null`。分值、时限、题量优先本人 assignment 的冻结规则，未分配时读取最新 training release；旧快照不完整时为 null，不能使用当前试卷设置或固定100分补值。记录链接只来自本人记录；仍为 `in_progress` 的过期记录也返回 active，由既有恢复接口按截止规则收口。查询新增 `state=all|active|published|ended`（默认 all），筛选先于分页及 total 计算：active 为有进行中记录，published 为已发布且无进行中记录，ended 为非已发布且无进行中记录。保留按试卷ID降序；不使用管理端 `sort_order`。
+
+`GET /me/exams/{id}` 使用与列表相同的可见集合：当前学员类别已发布 training 卷，或本人已有 assignment 的 training 卷；不可见返回40401。返回同一摘要以及 `learning={required_learning_minutes:number|null,credited_seconds:number|null,remaining_seconds:number|null,courses:[{id:string,title:string|null,available:boolean}]}`。学习配置来自本人 assignment 指向的 release；未分配用最新 release，不读当前可变配置。未配置或旧版本无阈值时三数值为null、courses为空；配置有效时累计当前已上架课程、未删除视频课时当前版本的有效毫秒，已学秒向下取整、剩余秒向上取整且最小0，与开考门槛完全同源。课程保留冻结ID顺序；下架课程保留标题且available=false，不存在时title=null。详情只读，不创建assignment、不评分、不顺便过期记录；页面状态仅供展示，POST开考继续执行全部资格核验。
 
 `POST /me/exams/{id}/start` 的首次新开要求账号启用、试卷 published、启用培训类别、用户 category/source 必填且类别与 release 匹配。random 卷按 `institution → easy`、`external → hard` 抽取；fixed 卷按冻结题单得出单一难度或 `mixed`。首次同事务冻结 `release_id/source/category_id/difficulty/rule_snapshot/snapshot_origin`，补考沿用 assignment，不按用户新资料或题库当前内容重算。升级前旧 `exam_record` 同样计入 `max_attempts`，默认总次数 3 次（含首次）。
 
@@ -712,7 +717,7 @@ AI通过模板接口下载与普通导入一致的中文五列参考格式，页
 
 纯timeout原子写status=timeout、score=0、grading_state=not_submitted；submission_method/submitted_at/graded_at及active_assignment_id=NULL，draft_revision=0且其余draft元数据NULL。不调用评分、不创建exam_answer、不生成逐题得分；升级前active草稿行只做同record清理，历史终态不改。结果为passed=false、correct_rate=null、items=[]，展示“超时未交卷”，不开放解析、不进错题或finalized统计分母。
 
-`FinalResultV2`含status、record_id、grading_state、submission_method、legacy、可空submitted_at/graded_at、score、passed、correct_rate及items；题项用稳定selected_option_ids/correct_option_ids与受限analysis。历史submitted单独返回`LegacySubmittedResult`（score/passed/correct_rate=null、items=[]），展示“历史结果待确认”；历史已评分timeout保留既有分数/明细及timeout方式，按历史评分事实投影passed/failed。legacy由schema/快照与历史事实判定，不能用submission_method为空推断。完整DTO见§4.7.1。
+`FinalResultV2`含status、record_id、grading_state、submission_method、legacy、可空submitted_at/graded_at、score、passed、correct_rate及items；另含`total_score/pass_score/duration_minutes:number|null`，只读取本次 record/grading 冻结规则，历史缺失为null，不按当前试卷重算。题项用稳定selected_option_ids/correct_option_ids与受限analysis。历史submitted单独返回`LegacySubmittedResult`（score/passed/correct_rate=null、items=[]），展示“历史结果待确认”；历史已评分timeout保留既有分数/明细及timeout方式，按历史评分事实投影passed/failed。legacy由schema/快照与历史事实判定，不能用submission_method为空推断。完整DTO见§4.7.1。
 
 本人历史为`Page<ExamHistoryItemV2>`；错题为`Page<WrongItemV2>`，只读finalized非满分（含主动交卷未答和部分分）题。新纯timeout不进错题，旧finalized历史timeout保留事实。题图固定`exam_record_question/item_id`精确引用，签票/读取均重查归属和阶段：在考实名且未截止只开放prompt；passed/failed及历史已评分timeout按冻结结果允许题干/选项/解析图；仅新纯timeout拒绝题图。PC `exam_records:read` Bearer预览独立，不能签learner票据。
 
@@ -1213,6 +1218,9 @@ interface FinalResultV2 {
   score: number
   passed: boolean
   correct_rate: number | null
+  total_score: number | null
+  pass_score: number | null
+  duration_minutes: number | null
   items: FinalResultItemV2[]
 }
 interface LegacySubmittedResult {
@@ -1226,6 +1234,9 @@ interface LegacySubmittedResult {
   score: null
   passed: null
   correct_rate: null
+  total_score: number | null
+  pass_score: number | null
+  duration_minutes: number | null
   items: []
 }
 type FinalResultView = FinalResultV2 | LegacySubmittedResult
