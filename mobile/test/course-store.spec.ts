@@ -124,12 +124,20 @@ describe('authoritative learner profile', () => {
     expect(learner.profile?.category_id).toBe('9007199254740993')
   })
 
-  it('sends platform-compatible POST with editable fields only and never overwrites identity from the form', async () => {
+  it('sends an editable name but never accepts phone, source or category from the form', async () => {
     let sent: Wire | undefined
     install(options => { sent = options; return ok(profile) })
-    await useLearnerStore().updateProfile({ occupation: ' 电工 ', gender: 'male', birthday: '2000-01-01', real_name: '篡改', phone: '13800000000', source: 'institution', category_id: '3' } as never)
-    expect(sent).toMatchObject({ url: '/api/v1/me/profile', method: 'POST', data: { occupation: '电工', gender: 'male', birthday: '2000-01-01' } })
+    await useLearnerStore().updateProfile({ occupation: ' 电工 ', gender: 'male', birthday: '2000-01-01', real_name: ' 填写姓名 ', phone: '13800000000', source: 'institution', category_id: '3' } as never)
+    expect(sent).toMatchObject({ url: '/api/v1/me/profile', method: 'POST', data: { real_name: '填写姓名', occupation: '电工', gender: 'male', birthday: '2000-01-01' } })
     expect(useLearnerStore().profile?.real_name).toBe('服务端姓名')
+  })
+
+  it('rejects blank or oversized names before transport', async () => {
+    let calls = 0
+    install(() => { calls++; return ok(profile) })
+    await expect(useLearnerStore().updateProfile({ real_name: '   ' })).rejects.toMatchObject({ code: 40001 })
+    await expect(useLearnerStore().updateProfile({ real_name: '名'.repeat(65) })).rejects.toMatchObject({ code: 40001 })
+    expect(calls).toBe(0)
   })
 
   it('rejects invalid or future birthdays before sending and preserves server profile after a failed save', async () => {
