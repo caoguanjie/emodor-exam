@@ -7,7 +7,7 @@
             <el-input v-model="overviewFilters.keyword" clearable placeholder="请输入考试名称" @keyup.enter="searchOverview" />
           </el-form-item>
           <el-form-item label="考试类别">
-            <el-select v-model="overviewFilters.category_id" clearable placeholder="全部类别" style="width:180px">
+            <el-select v-model="overviewFilters.category_id" clearable placeholder="全部类别">
               <el-option v-for="category in options.categories" :key="category.id" :label="category.name" :value="category.id" />
             </el-select>
           </el-form-item>
@@ -17,19 +17,20 @@
           </template>
         </FitsListSearch>
       </template>
-      <p class="overview-note">参考人数为当前发布版本成功开考去重人数；均分为当前发布版本、相同冻结规则下跨难度每人最高分（每人只计一次）的描述性汇总，不用于跨难度排名。</p>
       <el-alert v-if="overviewError || optionsError" :title="overviewError || optionsError" type="error" show-icon :closable="false" class="scope-note">
         <el-button link @click="initialize">重试</el-button>
       </el-alert>
       <el-table v-loading="overviewLoading" :data="overview.items">
         <template #empty><el-empty v-if="!overviewLoading && !overviewError && !optionsError" description="暂无考试统计" /></template>
-        <el-table-column prop="title" label="考试名称" min-width="220" show-overflow-tooltip />
-        <el-table-column label="类别" min-width="140"><template #default="{ row }">{{ row.category_name || '未分类' }}</template></el-table-column>
-        <el-table-column prop="participant_count" label="参考人数" width="110" />
-        <el-table-column label="平均分" width="110"><template #default="{ row }">{{ row.average_score ?? '—' }}</template></el-table-column>
-        <el-table-column label="总分" width="100"><template #default="{ row }">{{ row.total_score ?? '—' }}</template></el-table-column>
-        <el-table-column label="操作" width="100" fixed="right">
-          <template #default="{ row }"><FitsTableActions><FitsTableAction @click="openAnalysis(row)">成绩分析</FitsTableAction></FitsTableActions></template>
+        <el-table-column header-align="left" align="left" prop="title" label="考试名称" min-width="220" show-overflow-tooltip>
+          <template #header><span class="overview-name-heading">考试名称<el-tooltip content="仅展示已发布试卷，总分取当前发布版本。参考人数按成功开考人数去重；平均分取该版本、相同评分规则下每人已评分最高分的平均值，无已评分成绩显示 —，不用于跨难度排名。" placement="top" :show-after="200"><span class="overview-help" tabindex="0">（统计口径<el-icon><QuestionFilled /></el-icon>）</span></el-tooltip></span></template>
+        </el-table-column>
+        <el-table-column header-align="center" align="center" label="培训类别" min-width="140"><template #default="{ row }">{{ row.category_name || '未分类' }}</template></el-table-column>
+        <el-table-column header-align="center" align="center" label="试卷总分" width="100"><template #default="{ row }">{{ row.total_score ?? '—' }}</template></el-table-column>
+        <el-table-column header-align="center" align="center" prop="participant_count" label="参考人数" width="110" />
+        <el-table-column header-align="center" align="center" label="平均分" width="110"><template #default="{ row }">{{ row.average_score ?? '—' }}</template></el-table-column>
+        <el-table-column header-align="center" align="center" label="操作" width="100" fixed="right">
+          <template #default="{ row }"><FitsTableActions style="justify-content: center"><FitsTableAction @click="openAnalysis(row)">成绩分析</FitsTableAction></FitsTableActions></template>
         </el-table-column>
       </el-table>
       <template #pagination>
@@ -182,6 +183,7 @@ import type {
   ExamDifficulty, LearnerSource, Page, RankRow, TrainingExamOverviewRow, TrainingExamSummary, TrainingStatisticsOptions,
   TrainingUncompletedReason,
 } from '../../api/training-types';
+import { QuestionFilled } from '@element-plus/icons-vue';
 import { useAuthStore } from '../../stores/auth';
 
 const auth = useAuthStore();
@@ -380,6 +382,6 @@ onActivated(() => {
 </script>
 
 <style scoped>
-.overview-note{margin:0 0 16px;font-size:12px;line-height:1.7;color:var(--re-text-3)}.analysis-navigation{margin-bottom:16px}.exam-facts{display:flex;flex-wrap:wrap;align-items:center;gap:12px 24px;margin-bottom:16px;padding:14px 16px;border:1px solid var(--re-border);border-radius:var(--re-radius)}.exam-facts strong{font-size:15px}.exam-facts span{font-size:13px;color:var(--re-text-2)}.supplementary-statistics{margin-top:14px}
+.overview-name-heading{display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px}.overview-help{display:inline-flex;align-items:center;gap:5px;cursor:help}.overview-note{margin:0 0 16px;font-size:12px;line-height:1.7;color:var(--re-text-3)}.analysis-navigation{margin-bottom:16px}.exam-facts{display:flex;flex-wrap:wrap;align-items:center;gap:12px 24px;margin-bottom:16px;padding:14px 16px;border:1px solid var(--re-border);border-radius:var(--re-radius)}.exam-facts strong{font-size:15px}.exam-facts span{font-size:13px;color:var(--re-text-2)}.supplementary-statistics{margin-top:14px}
 .scope-note{margin-bottom:16px}.filters{flex-wrap:wrap}.kpi-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.kpi{display:flex;flex-direction:column;gap:5px;padding:16px;border:1px solid var(--re-border);border-radius:var(--re-radius);background:#fff}.kpi span{font-size:12px;color:var(--re-text-2)}.kpi strong{font-size:26px;color:var(--re-text)}.kpi small,.panel-title span,.panel p,.as-of{font-size:11px;color:var(--re-text-3)}.detail-row{margin-top:14px}.panel{height:100%;padding:18px;border:1px solid var(--re-border);border-radius:var(--re-radius);background:#fff}.panel-title{font-weight:600;margin-bottom:14px}.panel-title span{font-weight:400;margin-left:8px}.course-value{font-size:34px;font-weight:700;color:var(--re-primary)}.reason-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.reason-grid>div{display:flex;justify-content:space-between;padding:14px;border-radius:8px;background:#f7f8fb}.reason-grid b{font-size:20px}.score-panel,.ranking-panel{margin-top:14px;height:auto}.composition{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:-2px 0 14px}.composition-label,.composition-empty{font-size:12px;color:var(--re-text-3);margin-right:2px}.bucket{display:inline-block;margin:3px 8px 3px 0;padding:3px 7px;border-radius:5px;background:#f1f3f8;font-size:11px}.as-of{text-align:right;margin:14px 0 0}@media(max-width:1280px){.kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 </style>

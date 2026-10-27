@@ -1,0 +1,161 @@
+{
+  "overview": {
+    "items": [
+      {
+        "paper_id": "9",
+        "title": "【统计测试】考试分析功能验收-20261027",
+        "category_id": "3",
+        "category_name": "统计测试-20261027",
+        "status": "published",
+        "release_id": "1",
+        "total_score": 100,
+        "duration_minutes": 30,
+        "pass_score": 60,
+        "participant_count": 5,
+        "finalized_users": 4,
+        "average_score": 70
+      }
+    ],
+    "total": 1,
+    "page": 1,
+    "page_size": 20
+  },
+  "summary": {
+    "release_id": "1",
+    "eligible_count": 6,
+    "eligible_started_count": 5,
+    "historical_started_count": 5,
+    "historical_only_started_count": 0,
+    "submitted_attempts": 5,
+    "submitted_users": 4,
+    "finalized_users": 4,
+    "participation_rate": 0.8333,
+    "score_groups": [
+      {
+        "difficulty": "easy",
+        "finalized_users": 4,
+        "average_score": 70,
+        "highest_score": 100,
+        "lowest_score": 40,
+        "passed_users": 3,
+        "average_duration_seconds": 600,
+        "excellent_users": null,
+        "pass_rate": 0.75,
+        "distribution": [
+          {
+            "lower": 0,
+            "upper": 60,
+            "count": 1
+          },
+          {
+            "lower": 60,
+            "upper": 70,
+            "count": 1
+          },
+          {
+            "lower": 70,
+            "upper": 80,
+            "count": 0
+          },
+          {
+            "lower": 80,
+            "upper": 90,
+            "count": 1
+          },
+          {
+            "lower": 90,
+            "upper": 100,
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "difficulty_composition": [
+      {
+        "difficulty": "easy",
+        "users": 5
+      }
+    ],
+    "course_completion": {
+      "eligible_users": 6,
+      "required_lessons": 0,
+      "completed_users": 0,
+      "completion_rate": null
+    },
+    "uncompleted_reasons": [
+      {
+        "reason": "learning_incomplete",
+        "users": 0
+      },
+      {
+        "reason": "not_started",
+        "users": 1
+      },
+      {
+        "reason": "not_passed",
+        "users": 2
+      }
+    ],
+    "as_of": "2026-10-27T03:36:01.373Z",
+    "exam": {
+      "paper_id": "9",
+      "title": "【统计测试】考试分析功能验收-20261027",
+      "category_id": "3",
+      "total_score": 100,
+      "duration_minutes": 30,
+      "pass_score": 60,
+      "excellent_score": null
+    }
+  },
+  "ranking": {
+    "items": [
+      {
+        "rank": 1,
+        "user_id": "5",
+        "name": "统计测试学员01",
+        "gender": null,
+        "source": "institution",
+        "difficulty": "easy",
+        "score": 100,
+        "duration_seconds": 600,
+        "record_id": "3"
+      },
+      {
+        "rank": 2,
+        "user_id": "6",
+        "name": "统计测试学员02",
+        "gender": null,
+        "source": "institution",
+        "difficulty": "easy",
+        "score": 80,
+        "duration_seconds": 600,
+        "record_id": "5"
+      },
+      {
+        "rank": 3,
+        "user_id": "7",
+        "name": "统计测试学员03",
+        "gender": null,
+        "source": "institution",
+        "difficulty": "easy",
+        "score": 60,
+        "duration_seconds": 600,
+        "record_id": "6"
+      },
+      {
+        "rank": 4,
+        "user_id": "8",
+        "name": "统计测试学员04",
+        "gender": null,
+        "source": "institution",
+        "difficulty": "easy",
+        "score": 40,
+        "duration_seconds": 600,
+        "record_id": "7"
+      }
+    ],
+    "total": 4,
+    "page": 1,
+    "page_size": 20
+  }
+}

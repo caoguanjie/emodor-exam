@@ -212,8 +212,8 @@ async function assertTrainingOverviewAndSorting(ctx, admin, adminId, readOnlyAct
   const overviewQuery = `/statistics/training/overview?keyword=${encodeURIComponent(tag)}`;
   const overview = await ctx.request(admin.actor, 'GET', `${overviewQuery}&page=1&page_size=100`);
   assert.equal(overview.status, 200, JSON.stringify(overview));
-  assert.equal(overview.data.total, 4, 'overview must exclude regulation papers');
-  assert.equal(overview.data.items.length, 4);
+  assert.equal(overview.data.total, 2, 'overview must exclude regulation papers, drafts and archived papers');
+  assert.equal(overview.data.items.length, 2);
   const row = overview.data.items.find((item) => item.paper_id === paper.id);
   assert.deepEqual(row, {
     paper_id: paper.id, title: paper.title, category_id: categories[0].id, category_name: categories[0].name,
@@ -221,27 +221,23 @@ async function assertTrainingOverviewAndSorting(ctx, admin, adminId, readOnlyAct
     participant_count: 5, finalized_users: 3, average_score: 72,
   }, 'overview must count latest-release starters, then average one best score per user across difficulties');
   const draftRow = overview.data.items.find((item) => item.paper_id === draft.id);
-  assert.deepEqual({
-    release: draftRow.release_id, total: draftRow.total_score, duration: draftRow.duration_minutes,
-    pass: draftRow.pass_score, participants: draftRow.participant_count,
-    finalized: draftRow.finalized_users, average: draftRow.average_score,
-  }, { release: null, total: null, duration: null, pass: null, participants: 0, finalized: 0, average: null }, 'unreleased drafts must not reuse old records or mutable rules');
+  assert.equal(draftRow, undefined, 'unreleased drafts must stay in paper management');
   const emptyRow = overview.data.items.find((item) => item.paper_id === empty.id);
   assert.deepEqual([emptyRow.participant_count, emptyRow.finalized_users, emptyRow.average_score], [1, 0, null], 'pure timeout is a starter but not a scored result');
-  assert.equal(overview.data.items.find((item) => item.paper_id === archived.id).status, 'archived');
+  assert.equal(overview.data.items.find((item) => item.paper_id === archived.id), undefined);
 
   const categoryOverview = await ctx.request(admin.actor, 'GET', `${overviewQuery}&category_id=${categories[0].id}`);
   assert.equal(categoryOverview.status, 200);
-  assert.equal(categoryOverview.data.total, 2);
-  assert.deepEqual(new Set(categoryOverview.data.items.map((item) => item.paper_id)), new Set([paper.id, draft.id]), 'category filter must follow the latest release');
+  assert.equal(categoryOverview.data.total, 1);
+  assert.deepEqual(new Set(categoryOverview.data.items.map((item) => item.paper_id)), new Set([paper.id]), 'category filter must follow the latest release');
   const pages = [];
   for (const page of [1, 2]) {
-    const result = await ctx.request(admin.actor, 'GET', `${overviewQuery}&page=${page}&page_size=2`);
+    const result = await ctx.request(admin.actor, 'GET', `${overviewQuery}&page=${page}&page_size=1`);
     assert.equal(result.status, 200);
-    assert.deepEqual([result.data.total, result.data.page, result.data.page_size, result.data.items.length], [4, page, 2, 2]);
+    assert.deepEqual([result.data.total, result.data.page, result.data.page_size, result.data.items.length], [2, page, 1, 1]);
     pages.push(...result.data.items.map((item) => item.paper_id));
   }
-  assert.equal(new Set(pages).size, 4, 'overview pagination must neither repeat nor skip papers');
+  assert.equal(new Set(pages).size, 2, 'overview pagination must neither repeat nor skip papers');
   const noMatch = await ctx.request(admin.actor, 'GET', `${overviewQuery}不存在&page=1&page_size=20`);
   assert.equal(noMatch.status, 200);
   assert.deepEqual([noMatch.data.total, noMatch.data.items], [0, []]);

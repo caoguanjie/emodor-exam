@@ -386,6 +386,8 @@ describe('TrainingStatisticsService', () => {
         total_score: 100, duration_minutes: 30, pass_score: 60, participant_count: 5, finalized_users: 3, average_score: 72 }],
       total: 3, page: 2, page_size: 1,
     });
+    expect(query.andWhere).toHaveBeenCalledWith('paper.status = :status', { status: 'published' });
+    expect(query.andWhere).toHaveBeenCalledWith('release.id IS NOT NULL');
     expect(query.skip).toHaveBeenCalledWith(1);
     expect(query.take).toHaveBeenCalledWith(1);
     expect(query.andWhere).toHaveBeenCalledWith(expect.any(String), { keyword: '%安全%' });
@@ -393,18 +395,18 @@ describe('TrainingStatisticsService', () => {
     expect(recordFind).toHaveBeenCalledWith(expect.objectContaining({ where: { releaseId: expect.anything() } }));
   });
 
-  it('returns null rules and zero overview counts for an unpublished draft without borrowing historical records', async () => {
+  it('keeps frozen totals for published exams without participants', async () => {
     const { service } = serviceFixture();
     const query: any = {};
     for (const key of ['leftJoinAndMapOne', 'where', 'andWhere', 'orderBy', 'skip', 'take']) query[key] = () => query;
-    query.getManyAndCount = async () => [[{ id: '10', title: '草稿', categoryId: '7', status: 'draft', statisticsRelease: null }], 1];
+    query.getManyAndCount = async () => [[{ id: '10', title: '已发布试卷', totalScore: '80.00', categoryId: '7', status: 'published', statisticsRelease: {id:'20',categoryId:'7',ruleSnapshot:RULE} }], 1];
     Object.assign(service, {
       paperRepo: { createQueryBuilder: () => query },
-      recordRepo: { find: async () => { throw new Error('draft has no release to query'); } },
+      recordRepo: { find: async () => [] },
     });
     const result = await service.overview({ page: 1, pageSize: 20 });
     expect(result.items[0]).toMatchObject({
-      release_id: null, total_score: null, duration_minutes: null, pass_score: null,
+      release_id: '20', total_score: 100, duration_minutes: 30, pass_score: 60,
       participant_count: 0, finalized_users: 0, average_score: null,
     });
   });

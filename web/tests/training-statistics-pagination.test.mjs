@@ -195,7 +195,7 @@ test('uses the emitted pagination page only through v-model and applies the page
   const root = { type: 'root', props: {}, children: [], parent: null, text: '' };
   const app = host.createApp(TrainingStatistics);
   for (const name of [
-    'el-alert', 'el-button', 'el-col', 'el-empty', 'el-option', 'el-pagination', 'el-progress',
+    'el-tooltip', 'el-icon', 'el-alert', 'el-button', 'el-col', 'el-empty', 'el-option', 'el-pagination', 'el-progress',
     'el-row', 'el-select', 'el-table', 'el-table-column', 'el-tag', 'el-form', 'el-form-item', 'el-input', 'el-collapse', 'el-collapse-item',
   ]) {
     app.component(name, passthrough(name === 'el-pagination' ? 'pagination' : name, ['default', 'title']));

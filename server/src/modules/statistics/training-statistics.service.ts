@@ -102,7 +102,9 @@ export class TrainingStatisticsService {
       .leftJoinAndMapOne('paper.statisticsRelease', PaperRelease, 'release',
         'release.paperId = paper.id AND release.versionNo = '
         + '(SELECT MAX(latest.version_no) FROM paper_release latest WHERE latest.paper_id = paper.id)')
-      .where('paper.businessScope = :scope', { scope: 'training' });
+      .where('paper.businessScope = :scope', { scope: 'training' })
+      .andWhere('paper.status = :status', { status: 'published' })
+      .andWhere('release.id IS NOT NULL');
     const keyword = filter.keyword?.trim();
     if (keyword) query.andWhere('paper.title LIKE :keyword', { keyword: `%${keyword}%` });
     if (filter.categoryId) {

@@ -117,7 +117,7 @@ const Column = {
   setup(_props, { attrs, slots }) {
     const table = inject('statistics-test-table');
     return () => h('el-table-column', attrs, [
-      h('label', {}, attrs.label || ''),
+      h('label', {}, slots.header?.() || attrs.label || ''),
       ...(table.data || []).map((row) => h('cell', {}, slots.default?.({ row }) || String(row[attrs.prop] ?? ''))),
     ]);
   },
@@ -134,7 +134,7 @@ async function mount({ realPagination = false } = {}) {
   const host = createHost();
   const root = { type: 'root', props: {}, children: [], parent: null, text: '' };
   const app = host.createApp(TrainingStatistics);
-  for (const name of ['el-alert', 'el-button', 'el-col', 'el-collapse', 'el-collapse-item', 'el-empty', 'el-form', 'el-form-item', 'el-input', 'el-option', 'el-pagination', 'el-progress', 'el-row', 'el-select', 'el-tag']) {
+  for (const name of ['el-tooltip', 'el-icon', 'el-alert', 'el-button', 'el-col', 'el-collapse', 'el-collapse-item', 'el-empty', 'el-form', 'el-form-item', 'el-input', 'el-option', 'el-pagination', 'el-progress', 'el-row', 'el-select', 'el-tag']) {
     if (realPagination && name === 'el-pagination') {
       // Keep the real page-count watcher and pager; omit only the DOM-dependent size select.
       app.component(name, { inheritAttrs: false, setup(_props, { attrs }) { return () => h(ElPagination, { ...attrs, layout: 'total, prev, pager, next' }); } });
@@ -168,6 +168,13 @@ test('默认展示有筛选分页的考试总览，返回列表保留查询和�
   assert.equal(context.calls.some(({ path }) => path.endsWith('/summary')), false);
   assert.match(textContent(root), /安全培训考试/);
   assert.match(textContent(root), /参考人数/);
+  const columns = findNodes(root, node => node.type === 'el-table-column');
+  assert.deepEqual(columns.map(node => node.props.label), ['考试名称','培训类别','试卷总分','参考人数','平均分','操作']);
+  assert.equal(columns[0].props['header-align'], 'left');
+  assert.equal(columns[0].props.align, 'left');
+  assert.ok(columns.slice(1).every(node => node.props['header-align'] === 'center'));
+  assert.ok(columns.slice(1).every(node => node.props.align === 'center'));
+  assert.ok(findNodes(root, node => node.type === 'el-tooltip' && String(node.props.content).includes('仅展示已发布试卷')).length);
   state.overviewFilters.keyword = '安全'; state.overviewFilters.category_id = 'category-1'; state.overviewFilters.page = 3;
   await state.loadOverview();
   assert.deepEqual(context.calls.at(-1).params, { keyword: '安全', category_id: 'category-1', page: 3, page_size: 20 });
