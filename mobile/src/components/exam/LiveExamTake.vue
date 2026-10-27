@@ -7,14 +7,19 @@ import AnswerCard from './AnswerCard.vue'
 import ExamTimer from './ExamTimer.vue'
 import { useExamStore } from '@/stores/exam'
 import { protectExamNavigation } from '@/platform/navigation'
+import { nativeNavigationStyle } from '@/platform/native-layout'
+import { watchNativeExamExitPrompt } from '@/platform/native-exam-exit'
 const props = defineProps<{ recordId: string }>(), store = useExamStore()
-const card = ref(false), dialog = ref<'submit' | 'exit' | ''>(''), leaving = ref(false)
+const card = ref(false), dialog = ref<'submit' | 'exit' | ''>(''), leaving = ref(false), pageVisible = ref(true)
+const nativeStyle = nativeNavigationStyle()
+const stopNativeExitPrompt = watchNativeExamExitPrompt(computed(() => pageVisible.value && !leaving.value && store.questions.length > 0 && store.phase === 'answering' && !store.locked))
 const item = computed(() => store.items[store.currentIndex])
 const savedLabel = computed(() => store.draftError || (store.savedAt ? `草稿已保存 ${new Date(store.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '本机草稿尚未保存'))
 let interval: ReturnType<typeof setInterval> | null = null, unprotect = () => {}, disposed = false
 function back() { if (leaving.value || store.phase === 'terminal' || !store.questions.length) return false; dialog.value = 'exit'; return true }
-function hide() { void store.persistDraft() }
-function dispose() { if (disposed) return; disposed = true; hide(); if (interval) clearInterval(interval); unprotect() }
+function show() { if (!disposed) pageVisible.value = true }
+function hide() { pageVisible.value = false; void store.persistDraft() }
+function dispose() { if (disposed) return; disposed = true; stopNativeExitPrompt(); hide(); if (interval) clearInterval(interval); unprotect() }
 onBeforeUnmount(dispose)
 onMounted(async () => {
   unprotect = protectExamNavigation(() => !leaving.value && store.questions.length > 0 && store.phase !== 'terminal', () => { dialog.value = 'exit' })
@@ -31,10 +36,10 @@ function confirmSubmit() { dialog.value = ''; card.value = false; void store.sub
 function submit() { if (!store.locked) { card.value = false; dialog.value = 'submit' } }
 function identity() { uni.navigateTo({ url: '/pages/identity/index' }) }
 async function query() { try { await store.queryStatus() } catch { /* Error remains visible. */ } }
-defineExpose({ hide, dispose, back })
+defineExpose({ show, hide, dispose, back })
 </script>
 <template>
-  <view class="take-page"><view class="take-header"><view class="take-header__bar"><view role="button" aria-label="退出答题" class="take-header__exit" @click="dialog = 'exit'"><AppIcon name="chevron-left" :size="22" /><text>退出</text></view><ExamTimer :remaining-seconds="store.remaining" /><text role="button" aria-label="交卷" class="take-header__submit" :aria-disabled="store.locked" @click="submit">交卷</text></view><view class="take-progress"><view :style="{ width: `${store.questions.length ? store.answered / store.questions.length * 100 : 0}%` }" /></view><view class="take-header__meta"><text>已答 {{ store.answered }} / {{ store.questions.length }}</text><text :class="{ danger: store.draftError }">{{ savedLabel }}</text></view></view>
+  <view class="take-page" :style="nativeStyle"><view class="take-header"><view class="take-header__bar"><view role="button" aria-label="退出答题" class="take-header__exit" @click="dialog = 'exit'"><AppIcon name="chevron-left" :size="22" /><text>退出</text></view><ExamTimer :remaining-seconds="store.remaining" /><text role="button" aria-label="交卷" class="take-header__submit" :aria-disabled="store.locked" @click="submit">交卷</text></view><view class="take-progress"><view :style="{ width: `${store.questions.length ? store.answered / store.questions.length * 100 : 0}%` }" /></view><view class="take-header__meta"><text>已答 {{ store.answered }} / {{ store.questions.length }}</text><text :class="{ danger: store.draftError }">{{ savedLabel }}</text></view></view>
     <view class="take-body"><text v-if="store.phase === 'loading'">题目加载中…</text><EmptyState v-else-if="store.loadError || !item" :title="store.identityReason ? '实名认证' : '题目加载失败'" :description="store.loadError || '请联网从考试中心进入本次考试。'"><wd-button v-if="store.identityReason" @click="identity">{{ store.identityReason === 'IDENTITY_PENDING' ? '查看实名状态' : '去实名认证' }}</wd-button><wd-button v-else @click="reload">重新加载</wd-button></EmptyState><template v-else><text v-if="store.draftRestored" class="take-notice">已恢复本人本机草稿，考试截止时间不变</text><text v-if="store.draftError" class="take-notice danger" role="alert" @click="store.persistDraft">{{ store.draftError }} · 点击重试</text><QuestionView :item="item" :number="store.currentIndex + 1" :total="store.items.length" :selected="store.answers[item.id] || []" :disabled="store.locked" :assets="store.assets[item.id] || {}" @retry-image="store.loadItemMedia(item.id)" @select="store.choose(item.id, $event)" /><view v-if="store.mediaErrors[item.id]" class="take-notice danger"><text>题目图片加载失败</text><text role="button" @click="store.loadItemMedia(item.id)">重试图片</text></view></template></view>
     <view v-if="item" class="take-footer"><wd-button variant="plain" type="info" round :disabled="store.locked || store.currentIndex === 0" @click="store.jump(store.currentIndex - 1)">‹ 上一题</wd-button><view class="take-footer__card" role="button" aria-label="打开答题卡" @click="!store.locked && (card = true)"><text>▦ 答题卡</text><text>{{ store.answered }}/{{ store.questions.length }}</text></view><wd-button round :disabled="store.locked || store.currentIndex === store.items.length - 1" @click="store.jump(store.currentIndex + 1)">下一题 ›</wd-button></view>
     <AnswerCard v-if="item" v-model="card" :items="store.items" :answers="store.answers" :current-id="item.id" @select="store.jump(store.items.findIndex(row => row.id === $event))" @submit="submit" />
@@ -44,4 +49,5 @@ defineExpose({ hide, dispose, back })
 </template>
 <style scoped>
 .take-page { min-height:100vh; padding-top:var(--app-safe-area-top); display:flex; flex-direction:column; background:var(--app-color-background); }.take-header { background:var(--app-color-surface); padding:0 16px 12px; }.take-header__bar { height:48px; display:flex; align-items:center; justify-content:space-between; }.take-header__exit { display:flex; align-items:center; width:80px; font-size:14px; }.take-header__submit { width:80px; text-align:right; color:var(--app-color-primary); font-weight:600; font-size:15px; }.take-progress { margin-top:2px; height:4px; border-radius:2px; overflow:hidden; background:var(--app-color-background); }.take-progress > view { height:100%; background:var(--app-color-primary); }.take-header__meta { display:flex; justify-content:space-between; gap:8px; padding-top:8px; font-size:11px; color:var(--app-color-text-muted); }.take-body { flex:1; padding:24px 16px 110px; }.take-notice { display:block; margin-bottom:16px; color:var(--app-color-text-muted); font-size:12px; }.danger { color:var(--app-color-danger); }.take-footer { position:fixed; z-index:3; bottom:0; left:0; right:0; display:flex; align-items:center; gap:10px; padding:10px 16px calc(12px + var(--app-safe-area-bottom)); background:var(--app-color-surface); border-top:1px solid var(--app-color-border); }.take-footer :deep(.wd-button) { width:96px; padding:0 10px; font-size:14px; --wot-button-height-medium:44px; }.take-footer__card { display:flex; align-items:center; justify-content:center; gap:6px; flex:1; min-width:0; height:44px; border-radius:22px; background:var(--app-color-background); font-size:14px; font-weight:600; }.take-footer__card > text:last-child { font:11px monospace; color:var(--app-color-text-muted); }.exam-dialog { padding:26px 22px; text-align:center; }.exam-dialog__title { display:block; font-size:20px; font-weight:600; margin-bottom:14px; }.exam-dialog__message { font-size:13px; color:var(--app-color-text-secondary); line-height:1.7; }.exam-dialog__warning { display:block; margin-top:16px; padding:10px; color:var(--app-color-danger); background:var(--app-color-danger-soft); border-radius:var(--app-radius-sm); font-size:12px; }.exam-dialog__actions { display:flex; gap:10px; margin-top:24px; }.exam-dialog__actions :deep(.wd-button) { flex:1; }
+.take-header__bar { height: var(--app-native-nav-height, 48px); padding-right: var(--app-native-menu-inset, 0px); }
 </style>

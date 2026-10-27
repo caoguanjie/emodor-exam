@@ -8,6 +8,10 @@ const questions = [
   { item_id: '104', type: 'single', score: 25, stem: doc('接口图片题'), options: [{ id: 'image-option-7', content: { type: 'doc', content: [{ type: 'image', attrs: { asset_id: '901' } }] } }, { id: 'image-option-3', content: { type: 'doc', content: [{ type: 'image', attrs: { asset_id: '902' } }] } }] },
 ]
 const envelope = (data: unknown) => ({ code: 0, message: 'ok', data })
+type TicketItem = { asset_id: string; owner_type: string; owner_id: string }
+function batchTickets(items: TicketItem[], url: (item: TicketItem) => string) {
+  return items.map((item, index) => ({ ...item, index, ticket: { content_url: url(item), expires_at: new Date(Date.now() + 300000).toISOString() }, error: null }))
+}
 type SetupOptions = { identity?: string; deadlineMs?: number; submit?: 'lost-success' | 'unknown' | 'legacy'; offlineRead?: boolean }
 async function setup(page: Page, options: SetupOptions = {}) {
   const calls: { path: string; method: string; data: any }[] = []
@@ -42,14 +46,14 @@ async function setup(page: Page, options: SetupOptions = {}) {
     if (path.endsWith('/81/result')) return route.fulfill({ json: envelope(result()) })
     if (path.endsWith('/me/exam-records')) return route.fulfill({ json: envelope({ items: [{ record_id: '81', paper_id: '41', paper_title: '接口安全培训考试', attempt_no: 1, status: 'timeout', grading_state: 'not_submitted', submission_method: null, legacy: false, source: 'external', difficulty: 'easy', score: 0, started_at: new Date().toISOString(), submitted_at: null, graded_at: null }], total: 1, page: 1, page_size: 10 }) })
     if (path.endsWith('/me/wrong-questions')) return route.fulfill({ json: envelope({ items: [{ ...questions[0], record_id: '81', submitted_at: new Date().toISOString(), legacy: false, selected_option_ids: ['stable-a'], correct_option_ids: ['stable-b'], analysis: doc('错题冻结解析'), gained_score: 0 }], total: 1, page: 1, page_size: 10 }) })
-    if (/\/media\/90[12]\/tickets$/.test(path)) return route.fulfill({ json: envelope({ content_url: `/api/v1/media/tickets/item-${path.includes('901') ? '901' : '902'}/content`, expires_at: new Date(Date.now() + 300000).toISOString() }) })
+    if (path.endsWith('/media/tickets/batch')) return route.fulfill({ json: envelope(batchTickets(data.items, item => `/api/v1/media/tickets/item-${item.asset_id}/content`)) })
     if (path.endsWith('/content')) return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><rect width="200" height="120" fill="blue"/></svg>' })
     return route.fulfill({ status: 404, json: { code: 40401, message: 'unexpected request', data: null } })
   })
   return { calls, setOfflineRead(value: boolean) { offlineRead = value }, expire() { deadline = new Date(Date.now() - 1000).toISOString() } }
 }
 async function jump(page: Page, number: number) { await page.getByRole('button', { name: '打开答题卡', exact: true }).click(); await page.getByRole('button', { name: `跳转第 ${number} 题`, exact: true }).click() }
-async function enter(page: Page) { await page.goto('/#/pages/exam/index'); await page.getByText('查看须知 ›', { exact: true }).click(); await page.getByText('开始答题', { exact: true }).click(); await expect(page.getByText('接口单选题', { exact: true })).toBeVisible() }
+async function enter(page: Page) { await page.goto('/#/pages/exam/index'); await page.getByText('进入考试', { exact: true }).click(); await page.getByText('开始答题', { exact: true }).click(); await expect(page.getByText('接口单选题', { exact: true })).toBeVisible() }
 async function submit(page: Page) { await page.getByRole('button', { name: '交卷', exact: true }).click(); await page.getByText('确定交卷', { exact: true }).click() }
 
 test('real pages use stable IDs for single/multiple/judgment/image choices and submit every item including blanks', async ({ page }) => {
@@ -58,7 +62,7 @@ test('real pages use stable IDs for single/multiple/judgment/image choices and s
   await jump(page, 2); await page.getByRole('checkbox', { name: '选项 A', exact: true }).click(); await page.getByRole('checkbox', { name: '选项 B', exact: true }).click(); await page.getByRole('checkbox', { name: '选项 A', exact: true }).click()
   await jump(page, 3); await expect(page.getByRole('radio', { name: '选项 ✓', exact: true })).toBeVisible()
   await jump(page, 4); await expect(page.locator('.readonly-content__image').first()).toBeVisible()
-  expect(calls.filter(c => c.path.endsWith('/tickets')).map(c => c.data)).toEqual([{ owner_type: 'exam_record_question', owner_id: '104' }, { owner_type: 'exam_record_question', owner_id: '104' }])
+  expect(calls.filter(c => c.path.endsWith('/tickets/batch')).map(c => c.data)).toEqual([{ items: [{ asset_id: '901', owner_type: 'exam_record_question', owner_id: '104' }, { asset_id: '902', owner_type: 'exam_record_question', owner_id: '104' }] }])
   await page.getByRole('radio', { name: '选项 A', exact: true }).click(); await submit(page)
   await expect(page.getByText('75', { exact: true })).toBeVisible()
   expect(calls.find(c => c.path.endsWith('/submit'))?.data).toEqual({ record_id: '81', answers: [{ item_id: '101', option_ids: ['stable-a'] }, { item_id: '102', option_ids: ['choice-x'] }, { item_id: '103', option_ids: [] }, { item_id: '104', option_ids: ['image-option-7'] }] })
@@ -73,7 +77,7 @@ test('page-local offline answers save, exit requires confirmation, and same reco
   await context.setOffline(false)
   await page.getByRole('button', { name: '退出答题', exact: true }).click(); await expect(page.getByText('确定退出答题？')).toBeVisible(); await page.getByText('继续答题', { exact: true }).click()
   await page.goBack(); await expect(page.getByText('确定退出答题？')).toBeVisible(); await page.getByText('退出', { exact: true }).last().click()
-  await page.getByText('查看须知 ›', { exact: true }).click(); await page.getByText('开始答题', { exact: true }).click()
+  await page.getByText('进入考试', { exact: true }).click(); await page.getByText('开始答题', { exact: true }).click()
   await expect(page.getByText('已恢复本人本机草稿', { exact: false })).toBeVisible()
   await expect(page.getByRole('checkbox', { name: '选项 B', exact: true })).toHaveAttribute('aria-checked', 'true')
   await jump(page, 1); await expect(page.getByRole('radio', { name: '选项 B', exact: true })).toHaveAttribute('aria-checked', 'true')
@@ -131,7 +135,7 @@ test('history distinguishes an already graded legacy timeout and opens its autho
 test('a failed exam image visibly offers a fresh per-item ticket retry', async ({ page }) => {
   await setup(page)
   let tickets = 0
-  await page.route('**/api/v1/media/901/tickets', route => route.fulfill({ json: envelope({ content_url: `/api/v1/media/tickets/retry-${++tickets}/content`, expires_at: new Date(Date.now() + 300000).toISOString() }) }))
+  await page.route('**/api/v1/media/tickets/batch', route => route.fulfill({ json: envelope(batchTickets(route.request().postDataJSON().items, item => item.asset_id === '901' ? `/api/v1/media/tickets/retry-${++tickets}/content` : `/api/v1/media/tickets/item-${item.asset_id}/content`)) }))
   await page.route('**/api/v1/media/tickets/retry-1/content', route => route.abort('failed'))
   await enter(page); await jump(page, 4)
   await page.getByRole('button', { name: '图片加载失败，点击重试', exact: true }).click()
@@ -153,7 +157,7 @@ for (const location of ['stem', 'option', 'analysis'] as const) {
     const item = { ...questions[0], stem: location === 'stem' ? imageDoc : doc('复盘题面'), options: location === 'option' ? [{ id: 'stable-b', content: imageDoc }, questions[0].options[1]] : questions[0].options, selected_option_ids: ['stable-b'], correct_option_ids: ['stable-b'], analysis: location === 'analysis' ? imageDoc : doc('复盘解析'), gained_score: 25 }
     await page.route('**/api/v1/me/exam-records/81/result', route => route.fulfill({ json: envelope({ record_id: '81', status: 'passed', grading_state: 'finalized', submission_method: 'manual', legacy: false, submitted_at: new Date().toISOString(), graded_at: new Date().toISOString(), score: 25, passed: true, correct_rate: 1, items: [item] }) }))
     let tickets = 0
-    await page.route('**/api/v1/media/901/tickets', route => route.fulfill({ json: envelope({ content_url: `/api/v1/media/tickets/review-${location}-${++tickets}/content`, expires_at: new Date(Date.now() + 300000).toISOString() }) }))
+    await page.route('**/api/v1/media/tickets/batch', route => route.fulfill({ json: envelope(batchTickets(route.request().postDataJSON().items, () => `/api/v1/media/tickets/review-${location}-${++tickets}/content`)) }))
     await page.route(`**/api/v1/media/tickets/review-${location}-1/content`, route => route.abort('failed'))
     await page.goto('/#/pages/exam/review?record_id=81')
     await page.getByRole('button', { name: '图片加载失败，点击重试', exact: true }).click()

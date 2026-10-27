@@ -31,7 +31,7 @@ async function start() {
     await store.start(props.paperId)
     const attempt = store.attempt
     if (attempt) uni.redirectTo({ url: `/pages/exam/${attempt.status === 'in_progress' ? 'take' : 'result'}?record_id=${encodeURIComponent(attempt.record_id)}` })
-  } catch (error) { actionError.value = error instanceof Error ? error.message : '暂时无法开始考试，请重试' }
+  } catch (error) { actionError.value = store.loadError || (error instanceof Error ? error.message : '暂时无法开始考试，请重试') }
   finally { starting.value = false }
 }
 function identity() { uni.navigateTo({ url: '/pages/identity/index' }) }

@@ -1,6 +1,6 @@
 import type { RouteScenario } from '../types'
 export const examRouteCatalog: RouteScenario[] = [
-  { path: '/pages/exam/index', scenario: 'exam-center', pencilBoard: 'JDheF', expectedText: '2 场进行中 · 1 份未交卷草稿' },
+  { path: '/pages/exam/index', scenario: 'exam-center', pencilBoard: 'JDheF', expectedText: '进入考试' },
   { path: '/pages/exam/index', scenario: 'exam-center-empty', pencilBoard: 'Xgjck', expectedText: '暂无考试' },
   { path: '/pages/exam/index', scenario: 'exam-not-started', pencilBoard: 'Xgjck', expectedText: '考试尚未开始' },
   { path: '/pages/exam/instructions', scenario: 'exam-instructions', pencilBoard: 'rMONE', expectedText: '题型构成' },
