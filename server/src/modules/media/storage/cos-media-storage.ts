@@ -1,4 +1,5 @@
 import COS from 'cos-nodejs-sdk-v5';
+import { isSharedBrandingLocator } from '../shared-branding';
 import { createReadStream } from 'node:fs';
 import { stat as fileStat } from 'node:fs/promises';
 import { PassThrough, type Readable } from 'node:stream';
@@ -99,6 +100,8 @@ export class CosMediaStorage implements MediaStoragePort, CosUploadPort {
 
   async remove(locator: StorageLocator): Promise<void> {
     const target = this.target(locator);
+    // Also covers migration rollback/cleanup, which bypasses MediaService.
+    if (isSharedBrandingLocator(locator)) return;
     try { await this.sdk.deleteObject(target); }
     catch (error) { if (!missing(error)) throw failure('删除', error); }
   }

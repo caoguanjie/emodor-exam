@@ -46,6 +46,17 @@ describe('local media storage', () => {
 });
 
 describe('COS media storage', () => {
+  it('retains shared defaults even when migration cleanup calls the storage adapter directly', async () => {
+    const del = vi.fn(async () => ({}));
+    const storage = new CosMediaStorage({ ...config(), bucket: 'emodor-education-1256460867', keyPrefix: 'ruleexam/dev/' }, { deleteObject: del } as any);
+    const locator: StorageLocator = { provider: 'cos', bucket: 'emodor-education-1256460867', region: 'ap-guangzhou',
+      key: 'ruleexam/dev/media/migration/6/de77ed07-6aba-420d-8bc8-5c12aa9051ec.png', versionId: null };
+    await storage.remove(locator);
+    expect(del).not.toHaveBeenCalled();
+    await storage.remove({ ...locator, key: 'ruleexam/dev/media/migration/6/unshared.png' });
+    expect(del).toHaveBeenCalledOnce();
+  });
+
   it('pins stat/open/delete to the exact version and streams Range without buffering', async () => {
     const head=vi.fn(async () => ({headers:{'content-length':'10','content-type':'video/mp4','x-cos-hash-crc64ecma':'123'},ETag:'"etag"',VersionId:'version-7'}));
     const get=vi.fn((params:any,done:any) => { queueMicrotask(() => { params.Output.end('2345'); done(null,{}); }); });

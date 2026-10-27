@@ -62,6 +62,35 @@ async function fixture() {
 }
 
 describe('media storage integration', () => {
+  it.each([
+    { cosBucket: 'other-1234567890' }, { cosRegion: 'ap-other' },
+    { storageKey: 'ruleexam/dev/media/migration/6/other.png' },
+  ])('still deletes ordinary objects that only partially match a default locator: %j', async (overrides) => {
+    const f = await fixture();
+    const asset = { id: '99', ownerId: '7', purpose: 'branding', mediaKind: 'image', status: 'ready',
+      storageKey: 'ruleexam/dev/media/migration/6/de77ed07-6aba-420d-8bc8-5c12aa9051ec.png',
+      storageProvider: 'cos', cosBucket: 'emodor-education-1256460867', cosRegion: 'ap-guangzhou', cosVersionId: null,
+      updatedAt: new Date(0), ...overrides };
+    f.assets.set('99', asset);
+    f.objects.set(asset.storageKey, Buffer.from('ordinary object'));
+    await f.media.remove('7', '99');
+    expect(f.assets.has('99')).toBe(false);
+    expect(f.objects.has(asset.storageKey)).toBe(false);
+  });
+
+  it.each(['remove', 'cleanupOrphans'] as const)('preserves shared default COS bytes when %s reclaims an unreferenced local record', async (method) => {
+    const f = await fixture();
+    const key = 'ruleexam/dev/media/migration/6/de77ed07-6aba-420d-8bc8-5c12aa9051ec.png';
+    f.objects.set(key, Buffer.from('shared logo'));
+    f.assets.set('99', { id: '99', ownerId: '7', purpose: 'branding', mediaKind: 'image', status: 'ready',
+      storageKey: key, storageProvider: 'cos', cosBucket: 'emodor-education-1256460867', cosRegion: 'ap-guangzhou', cosVersionId: null,
+      updatedAt: new Date(0) });
+    if (method === 'remove') await f.media.remove('7', '99');
+    else await f.media.cleanupOrphans();
+    expect(f.assets.has('99')).toBe(false);
+    expect(f.objects.get(key)?.toString()).toBe('shared logo');
+  });
+
   it('cos_upload_preserves_owner_and_probe and publishes the actual private bytes', async () => {
     const f = await fixture(); const bytes = Buffer.from('controlled-image');
     const result = await f.media.upload('7', 'avatar', { buffer: bytes, originalname: 'name.png', mimetype: 'image/jpeg' } as any, '9');

@@ -82,6 +82,10 @@ DB_PASSWORD=<.env 中的口令> ADMIN_INITIAL_PASSWORD=<自定义初始口令> \
   docker compose exec api node dist/seed.js   # 或在宿主机：node database/seed.mjs
 ```
 
+新库 `init.sql` 已包含现有 Logo 和三张轮播图的 COS 媒体记录、配置及引用，不需要重新上传；`seed.mjs` 仍负责创建管理员。重复初始化不会覆盖已有网站配置（包括手工清空）。
+
+复用默认图需配置 `MEDIA_STORAGE_PROVIDER=cos`、`MEDIA_DELIVERY_MODE=cos-signed`，以及对应桶的读取凭据：`COS_BUCKET=emodor-education-1256460867`、`COS_REGION=ap-guangzhou`、`COS_KEY_PREFIX=ruleexam/dev/`。凭据只在运行环境注入；若使用其它桶或不覆盖原对象路径的前缀，应在后台上传并配置自己的图片。访问 `/api/v1/site-config/assets/:id/content` 时按新库资源 ID 签发最新短链，不在 SQL 中保存临时 URL。共享这四张默认图的环境都需要使用带默认资源删除保护的新服务版本。仅使用本地存储时，也需在后台替换这些云端默认图。
+
 ### 方式二：本地开发
 
 ```bash

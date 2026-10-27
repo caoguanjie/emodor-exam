@@ -109,6 +109,7 @@ export async function verifyCosMediaSchema({ mysql = require('mysql2/promise'), 
     // partial columns and foreign-key drift are never adopted as completed.
     const sessionState = await open('sessions', true);
     try {
+      const [[initialAssets]] = await sessionState.connection.query('SELECT COUNT(*) count FROM media_asset');
       const values = [
         '00112233-4455-4677-8899-aabbccddeeff', 9, 9,
         '10112233-4455-4677-8899-aabbccddeeff', 'a'.repeat(64), 'video',
@@ -121,7 +122,7 @@ export async function verifyCosMediaSchema({ mysql = require('mysql2/promise'), 
       const [[session]] = await sessionState.connection.query('SELECT state,finalize_attempts,asset_id,receipt FROM media_upload_session ORDER BY id LIMIT 1');
       assert.deepEqual(session, { state: 'uploading', finalize_attempts: 0, asset_id: null, receipt: null });
       const [[assets]] = await sessionState.connection.query('SELECT COUNT(*) count FROM media_asset');
-      assert.equal(Number(assets.count), 0, 'declaring an upload must not require a fake media SHA row');
+      assert.equal(Number(assets.count), Number(initialAssets.count), 'declaring an upload must not create a fake media SHA row');
       await sessionState.connection.query("UPDATE media_upload_session SET state='expired',original_name=NULL,staging_locator=NULL,candidate_objects=NULL,receipt=NULL WHERE id='00112233-4455-4677-8899-aabbccddeeff'");
       await assert.rejects(() => sessionState.connection.execute(insert, ['40112233-4455-4677-8899-aabbccddeeff', ...values.slice(1)]), { code: 'ER_DUP_ENTRY' });
       const [[foreignKeys]] = await sessionState.connection.query("SELECT COUNT(*) count FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME IN ('media_asset','media_upload_session')");

@@ -862,10 +862,67 @@ INSERT INTO `sys_dictionary` (`type`, `code`, `label`, `sort`, `status`, `is_sys
   ('exam_status','timeout','超时交卷',50,1,1,'业务固定枚举')
 ON DUPLICATE KEY UPDATE `label` = VALUES(`label`), `sort` = VALUES(`sort`), `status` = 1, `is_system` = 1, `remark` = VALUES(`remark`);
 
+-- 新环境默认品牌：复用已存在的私有 COS 原件，不保存签名 URL，也不上传文件。
+-- 仅在两项网站配置均不存在时导入；重复执行保留已有配置（包括主动清空）。
+-- owner/uploaded_by=1 对应 seed.mjs 创建的超级管理员。媒体 ID 由当前库分配。
+-- 这四个共享对象由服务端 shared-branding.ts 保护，不随任一环境的孤儿清理删除。
+START TRANSACTION;
+SET @ruleexam_seed_branding = NOT EXISTS (
+  SELECT 1 FROM site_setting WHERE setting_key IN ('logo_asset_id', 'banners')
+);
+INSERT INTO media_asset
+  (owner_id, uploaded_by, purpose, media_kind, original_name, mime_type, storage_key,
+   storage_provider, cos_bucket, cos_region, cos_version_id, etag, crc64, size_bytes, sha256, status)
+SELECT 1, 1, 'branding', 'image', '20261021-132657.png', 'image/png',
+  'ruleexam/dev/media/migration/6/de77ed07-6aba-420d-8bc8-5c12aa9051ec.png',
+  'cos', 'emodor-education-1256460867', 'ap-guangzhou', NULL,
+  '"ab004dc1b3c9a1a205b1afd267872689"', '14933730799509822929', 4885, '3ce402964440b8b023717e57dbe0e29a5a4965c4910c4c37953f8d3d80ddbbc4', 'ready'
+WHERE @ruleexam_seed_branding;
+SET @ruleexam_branding_0 = IF(@ruleexam_seed_branding, CAST(LAST_INSERT_ID() AS CHAR), NULL);
+INSERT INTO media_asset
+  (owner_id, uploaded_by, purpose, media_kind, original_name, mime_type, storage_key,
+   storage_provider, cos_bucket, cos_region, cos_version_id, etag, crc64, size_bytes, sha256, status)
+SELECT 1, 1, 'branding', 'image', 'safety-learning-center-banner-02-practice-asian-text.png', 'image/png',
+  'ruleexam/dev/media/migration/9/6583438b-1b8f-4b61-b0cd-66eebfd467f4.png',
+  'cos', 'emodor-education-1256460867', 'ap-guangzhou', NULL,
+  '"c69bb43c5ed6fd47c1b16d4110a19ce0"', '15376269084034903082', 2086985, '144f9554515c0e65e664f388152f06b76abfff7db671c53fef419fd59efe7761', 'ready'
+WHERE @ruleexam_seed_branding;
+SET @ruleexam_branding_1 = IF(@ruleexam_seed_branding, CAST(LAST_INSERT_ID() AS CHAR), NULL);
+INSERT INTO media_asset
+  (owner_id, uploaded_by, purpose, media_kind, original_name, mime_type, storage_key,
+   storage_provider, cos_bucket, cos_region, cos_version_id, etag, crc64, size_bytes, sha256, status)
+SELECT 1, 1, 'branding', 'image', 'safety-learning-center-banner-03-digital-asian-text.png', 'image/png',
+  'ruleexam/dev/media/migration/7/c08dc7f0-8e36-4c5b-8239-0b69164d86e6.png',
+  'cos', 'emodor-education-1256460867', 'ap-guangzhou', NULL,
+  '"6a73c62632b44c59ae0d8c4130e02d41"', '8676200681849415163', 1960732, 'b2567c1052e25a2bfb41f008e851f6f4f99301f9475291b2cf01e30a7b0a1ed9', 'ready'
+WHERE @ruleexam_seed_branding;
+SET @ruleexam_branding_2 = IF(@ruleexam_seed_branding, CAST(LAST_INSERT_ID() AS CHAR), NULL);
+INSERT INTO media_asset
+  (owner_id, uploaded_by, purpose, media_kind, original_name, mime_type, storage_key,
+   storage_provider, cos_bucket, cos_region, cos_version_id, etag, crc64, size_bytes, sha256, status)
+SELECT 1, 1, 'branding', 'image', 'safety-learning-center-banner-01-classroom-asian-text.png', 'image/png',
+  'ruleexam/dev/media/migration/10/e243e889-ab54-46d0-9136-75fa6c76fc5f.png',
+  'cos', 'emodor-education-1256460867', 'ap-guangzhou', NULL,
+  '"5182fe6ed0282635e20e9b44ed4926a4"', '4658398708199412860', 2016193, 'd363370a581fb967ddd866ece45b43f18f2509d30739698934e84c8badbbbd45', 'ready'
+WHERE @ruleexam_seed_branding;
+SET @ruleexam_branding_3 = IF(@ruleexam_seed_branding, CAST(LAST_INSERT_ID() AS CHAR), NULL);
+
 INSERT INTO `site_setting` (`id`, `setting_key`, `value_json`, `updated_by`) VALUES
-  (1,'logo_asset_id',NULL,NULL),
-  (2,'banners','[]',NULL)
+  (1,'logo_asset_id',IF(@ruleexam_seed_branding, JSON_QUOTE(@ruleexam_branding_0), NULL),NULL),
+  (2,'banners',IF(@ruleexam_seed_branding, JSON_ARRAY(
+    JSON_OBJECT('asset_id', @ruleexam_branding_1, 'sort', 10),
+    JSON_OBJECT('asset_id', @ruleexam_branding_2, 'sort', 20),
+    JSON_OBJECT('asset_id', @ruleexam_branding_3, 'sort', 30)
+  ), JSON_ARRAY()),NULL)
 ON DUPLICATE KEY UPDATE `id` = `id`;
+
+INSERT INTO media_reference (asset_id, owner_type, owner_id)
+SELECT id, 'site_config', IF(CAST(id AS CHAR) = @ruleexam_branding_0, 1, 2)
+FROM media_asset
+WHERE @ruleexam_seed_branding AND CAST(id AS CHAR) IN (
+  @ruleexam_branding_0, @ruleexam_branding_1, @ruleexam_branding_2, @ruleexam_branding_3
+);
+COMMIT;
 
 INSERT INTO `sys_permission` (`code`, `name`) VALUES
   ('exam_records:read', '查看考试记录')

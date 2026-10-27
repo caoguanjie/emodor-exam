@@ -1,3 +1,4 @@
+import { isSharedBrandingObject } from './shared-branding';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomUUID } from 'node:crypto';
@@ -707,6 +708,7 @@ export class MediaService {
 
   private async removeStoredAsset(asset: MediaAsset): Promise<void> {
     if (this.activeAssetIds.has(String(asset.id))) throw Errors.serviceUnavailable('媒体仍在处理中');
+    if (isSharedBrandingObject(asset)) return;
     let locator = this.assetLocator(asset);
     const adapter = this.storage.forLocator(locator);
     if (locator.provider === 'cos' && locator.versionId === null) {
