@@ -77,6 +77,83 @@ describe('learner exam summaries', () => {
     expect(f.noWrite).not.toHaveBeenCalled();
   });
 
+  it('returns unused release limits in both list and detail before the first successful start', async () => {
+    const f = fixture();
+    expect((await f.service.list('9')).items.find((row: any) => row.paper_id === '12')).toMatchObject({
+      attempts_used: 0, max_attempts: 3, attempts_remaining: 3,
+    });
+    expect(await f.service.detail('9', '12')).toMatchObject({ attempts_used: 0, max_attempts: 3, attempts_remaining: 3 });
+    expect(f.recordRepo.find).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ userId: '9' }) }));
+    expect(f.noWrite).not.toHaveBeenCalled();
+  });
+
+  it('counts timeout and pre-assignment records as successful starts, independently of attempt ordinals', async () => {
+    const f = fixture();
+    f.papers[2].status = 'published';
+    Object.assign(f.records[0], { status: 'timeout', attemptNo: 17, assignmentId: null });
+    f.records.push({ id: '44', paperId: '11', userId: '9', status: 'failed', attemptNo: 21 });
+    expect((await f.service.list('9')).items.find((row: any) => row.paper_id === '11')).toMatchObject({
+      attempts_used: 2, max_attempts: 3, attempts_remaining: 1, active_record_id: null, latest_record_id: '44',
+    });
+    expect(await f.service.detail('9', '11')).toMatchObject({ attempts_used: 2, max_attempts: 3, attempts_remaining: 1 });
+    expect(await f.service.detail('9', '12')).toMatchObject({ attempts_used: 0, attempts_remaining: 3 });
+    expect(f.noWrite).not.toHaveBeenCalled();
+  });
+
+  it('keeps the remaining quota after a pass instead of treating passing as exhaustion', async () => {
+    const f = fixture();
+    f.papers[2].status = 'published';
+    f.records[0].status = 'passed';
+    expect((await f.service.list('9')).items.find((row: any) => row.paper_id === '11')).toMatchObject({
+      attempts_used: 1, max_attempts: 3, attempts_remaining: 2, active_record_id: null,
+    });
+    expect(await f.service.detail('9', '11')).toMatchObject({ attempts_used: 1, max_attempts: 3, attempts_remaining: 2 });
+  });
+
+  it('prefers the assignment limit across republication and uses the latest release only for unassigned learners', async () => {
+    const f = fixture();
+    f.assignments[0].ruleSnapshot.maxAttempts = 2;
+    f.releases[0].ruleSnapshot.maxAttempts = 9;
+    f.releases[1].ruleSnapshot.maxAttempts = 7;
+    f.releases.push({ ...f.releases[2], id: '25', versionNo: 2, ruleSnapshot: { ...rule, maxAttempts: 5 } });
+    const result = await f.service.list('9');
+    expect(result.items.find((row: any) => row.paper_id === '11')).toMatchObject({ attempts_used: 1, max_attempts: 2, attempts_remaining: 1 });
+    expect(result.items.find((row: any) => row.paper_id === '12')).toMatchObject({ attempts_used: 0, max_attempts: 5, attempts_remaining: 5 });
+    expect(await f.service.detail('9', '11')).toMatchObject({ max_attempts: 2 });
+    expect(f.assignments[0].ruleSnapshot.maxAttempts).toBe(2);
+    expect(f.noWrite).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the assigned release limit when an old assignment omits it', async () => {
+    const f = fixture();
+    delete f.assignments[0].ruleSnapshot.maxAttempts;
+    f.releases[0].ruleSnapshot.maxAttempts = 9;
+    f.releases[1].ruleSnapshot.maxAttempts = 4;
+    expect(await f.service.detail('9', '11')).toMatchObject({ attempts_used: 1, max_attempts: 4, attempts_remaining: 3 });
+  });
+
+  it('counts the active last attempt while clamping an over-limit history to zero remaining', async () => {
+    const f = fixture();
+    for (const id of ['44', '45']) f.records.push({ id, paperId: '11', userId: '9', status: 'timeout' });
+    expect(await f.service.detail('9', '11')).toMatchObject({ attempts_used: 3, max_attempts: 3, attempts_remaining: 0, active_record_id: '41' });
+    f.records.push({ id: '46', paperId: '11', userId: '9', status: 'failed' });
+    expect(await f.service.detail('9', '11')).toMatchObject({ attempts_used: 4, max_attempts: 3, attempts_remaining: 0, active_record_id: '41' });
+    expect(f.noWrite).not.toHaveBeenCalled();
+  });
+
+  it('does not count or link another learner records for the same paper', async () => {
+    const f = fixture();
+    f.records.push({ id: '999', paperId: '11', userId: '99', status: 'in_progress', deadlineAt: new Date(nowMs + 60_000) });
+    expect(await f.service.detail('9', '11')).toMatchObject({ attempts_used: 1, max_attempts: 3, attempts_remaining: 2, active_record_id: '41', latest_record_id: '41' });
+    expect(f.recordRepo.find).toHaveBeenCalledWith(expect.objectContaining({ select: expect.arrayContaining(['userId']) }));
+  });
+
+  it('returns explicit null limits for unknown historical rules without reading mutable paper defaults', async () => {
+    const f = fixture();
+    f.papers[0].maxAttempts = 3;
+    expect(await f.service.detail('9', '13')).toMatchObject({ attempts_used: 1, max_attempts: null, attempts_remaining: null });
+  });
+
   it('filters the available set before pagination, including legacy state queries', async () => {
     const f = fixture();
     expect(await f.service.list('9', 1, 1, 'active')).toMatchObject({ total: 1, items: [{ paper_id: '11', active_record_id: '41' }] });

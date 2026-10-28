@@ -169,6 +169,11 @@ export interface LearnerExamSummary extends LearnerExamMetadata {
   source: LearnerSource | null;
   category_id: Id | null;
   difficulty: ExamDifficulty | null;
+  /** Successful starts for this learner and paper, including active and timeout records. */
+  attempts_used: number;
+  /** Null only when neither frozen assignment nor release has a known limit. */
+  max_attempts: number | null;
+  attempts_remaining: number | null;
   active_record_id: Id | null;
   latest_record_id: Id | null;
 }

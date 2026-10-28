@@ -516,10 +516,10 @@ export class AttemptService {
     const { user, assignments, papers } = await this.visibleExamPapers(userId);
     const records = papers.length ? await this.recordRepo.find({
       where: { userId: String(userId), paperId: In(papers.map(paper => String(paper.id))) },
-      select: ['id', 'paperId', 'status', 'deadlineAt'],
+      select: ['id', 'userId', 'paperId', 'status', 'deadlineAt'],
     }) : [];
     const nowMs = Date.now();
-    const activeIds = new Set(records.filter(record => isActiveExamRecord(record, nowMs)).map(record => String(record.paperId)));
+    const activeIds = new Set(records.filter(record => String(record.userId) === String(userId) && isActiveExamRecord(record, nowMs)).map(record => String(record.paperId)));
     const matching = papers.filter(paper => {
       const active = activeIds.has(String(paper.id));
       if (paper.status !== PaperStatus.PUBLISHED && !active) return false;
@@ -538,7 +538,7 @@ export class AttemptService {
     const paper = papers.find(row => String(row.id) === String(paperId));
     if (!paper) throw Errors.notFound('考试不存在或不可见');
     const records = await this.recordRepo.find({
-      where: { userId: String(userId), paperId: String(paperId) }, select: ['id', 'paperId', 'status', 'deadlineAt'],
+      where: { userId: String(userId), paperId: String(paperId) }, select: ['id', 'userId', 'paperId', 'status', 'deadlineAt'],
     });
     const [summary] = await readLearnerExamSummaries(this.dataSource.manager, user, [paper], assignments, records);
     const learning = await readPaperLearningSummary(this.dataSource.manager, String(userId), summary.release);

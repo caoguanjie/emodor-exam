@@ -5,7 +5,7 @@ import AppPage from '@/components/common/AppPage.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { useExamStore } from '@/stores/exam'
-import { examNumber, examEntry } from '@/utils/exam-summary'
+import { examAttemptsLabel, examNumber, examEntry } from '@/utils/exam-summary'
 import { questionTypeLabels } from '@/types/exam'
 import { useSessionStore } from '@/stores/session'
 import { useLearnerStore } from '@/stores/learner'
@@ -76,7 +76,7 @@ function identity() {
   uni.navigateTo({ url: '/pages/identity/index' })
 }
 function study(course: { id: string; available: boolean }) { if (course.available) uni.navigateTo({ url: `/pages/course/detail?id=${encodeURIComponent(course.id)}&from_exam=${encodeURIComponent(props.paperId)}` }) }
-const actionLabel = computed(() => entry.value?.kind === 'resume' ? '继续答题' : entry.value?.kind === 'records' ? '查看记录' : needsLearning.value ? '刷新学习进度' : '开始答题')
+const actionLabel = computed(() => entry.value && entry.value.kind !== 'instructions' ? entry.value.label : needsLearning.value ? '刷新学习进度' : '开始答题')
 </script>
 <template>
   <AppPage title="考试须知" back-target="/pages/exam/index" :padded="false">
@@ -84,7 +84,7 @@ const actionLabel = computed(() => entry.value?.kind === 'resume' ? '继续答�
       <view v-if="store.summaryLoading" class="paper-loading">考试信息加载中…</view>
       <EmptyState v-else-if="!paperId || store.summaryError || !paper" title="考试信息加载失败" :description="store.summaryError || '未找到考试，请从考试中心重新进入。'"><wd-button v-if="paperId" @click="reload">重新加载</wd-button></EmptyState>
       <template v-else>
-        <view class="paper-intro"><text class="paper-intro__title">{{ paper.title }}</text></view>
+        <view class="paper-intro"><text class="paper-intro__title">{{ paper.title }}</text><text v-if="examAttemptsLabel(paper)" class="paper-intro__attempts">{{ examAttemptsLabel(paper) }}</text></view>
         <view class="paper-stats">
           <view class="paper-stat"><view class="paper-stat__value"><text class="paper-stat__number">{{ examNumber(paper.duration_minutes) }}</text><text class="paper-stat__unit">分钟</text></view><text class="paper-stat__label">时长</text></view>
           <view class="paper-stat"><view class="paper-stat__value"><text class="paper-stat__number">{{ examNumber(paper.question_count) }}</text><text class="paper-stat__unit">道</text></view><text class="paper-stat__label">题量</text></view>
@@ -116,7 +116,7 @@ const actionLabel = computed(() => entry.value?.kind === 'resume' ? '继续答�
         <EmptyState v-if="actionError" :title="store.identityReason ? '实名认证' : '暂时无法开始考试'" :description="actionError"><wd-button v-if="store.identityReason" @click="identity">{{ store.identityReason === 'IDENTITY_PENDING' ? '查看实名状态' : '去实名认证' }}</wd-button></EmptyState>
       </template>
     </view>
-    <template #footer><view class="paper-footer"><wd-button block custom-style="font-weight:600" :disabled="!paper || store.summaryLoading" :loading="starting" @click="start">{{ actionLabel }}</wd-button><text>{{ entry?.kind === 'resume' ? '继续原次考试，截止时间不会延长' : entry?.kind === 'records' ? '本试卷已结束，可查看本人考试记录' : needsLearning ? '学习达标后再开始，不消耗考试次数' : '开始后计时不会暂停' }}</text></view></template>
+    <template #footer><view class="paper-footer"><wd-button block custom-style="font-weight:600" :disabled="!paper || store.summaryLoading" :loading="starting" @click="start">{{ actionLabel }}</wd-button><text>{{ entry?.kind === 'resume' ? '继续原次考试，截止时间不会延长' : entry?.kind === 'records' ? paper?.attempts_remaining === 0 ? '考试次数已用完，可查看本试卷最近一次考试结果' : '本试卷已结束，可查看本人考试记录' : needsLearning ? '学习达标后再开始，不消耗考试次数' : '开始后计时不会暂停' }}</text></view></template>
   </AppPage>
 </template>
 <style scoped>
@@ -124,6 +124,7 @@ const actionLabel = computed(() => entry.value?.kind === 'resume' ? '继续答�
 .paper-loading { padding:32px 0; text-align:center; color:var(--app-color-text-muted); font-size:13px; }
 .paper-intro { display:flex; flex-direction:column; gap:6px; }
 .paper-intro__title { display:block; font-size:22px; line-height:1.3; font-weight:700; overflow-wrap:break-word; }
+.paper-intro__attempts { color:var(--app-color-text-secondary); font-size:14px; line-height:1.5; }
 .paper-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); padding:14px 0; background:linear-gradient(120deg,var(--app-color-primary),var(--app-color-primary-deep)); border-radius:18px; color:var(--app-color-surface); }
 .paper-stat { flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; gap:4px; border-right:1px solid rgba(255,255,255,.2); }
 .paper-stat:last-child { border-right:0; }

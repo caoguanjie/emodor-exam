@@ -7,7 +7,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import { useExamStore } from '@/stores/exam'
 import { useSessionStore } from '@/stores/session'
 import type { ExamListItem } from '@/types/exam'
-import { examEntry, examNumber } from '@/utils/exam-summary'
+import { examAttemptsLabel, examEntry, examNumber } from '@/utils/exam-summary'
 import { clearExamEntryIntent, readExamEntryIntent } from '@/utils/exam-entry-intent'
 const store = useExamStore()
 const session = useSessionStore()
@@ -42,6 +42,7 @@ function open(exam: ExamListItem) { uni.navigateTo({ url: examEntry(exam).url })
           <view class="exam-card__metric"><AppIcon name="timer" :size="16" color="#969799" /><text>{{ examNumber(exam.duration_minutes) }} 分钟</text></view>
           <view class="exam-card__metric"><AppIcon name="list-ordered" :size="16" color="#969799" /><text>{{ examNumber(exam.question_count) }} 题</text></view>
           <view class="exam-card__metric"><AppIcon name="award" :size="16" color="#969799" /><text>满分 {{ examNumber(exam.total_score) }} 分</text></view>
+          <text v-if="examAttemptsLabel(exam)">{{ examAttemptsLabel(exam) }}</text>
         </view>
         <view class="exam-card__action"><wd-button size="small" variant="text" custom-style="height:auto;min-height:44px;min-width:0;padding:4px 0;font-size:16px;font-weight:600;line-height:1.35" @click.stop="open(exam)"><view class="exam-card__button-content"><text>{{ examEntry(exam).kind === 'instructions' ? '进入考试' : examEntry(exam).label }}</text><AppIcon name="chevron-right" :size="16" color="#1989fa" /></view></wd-button></view>
       </view>

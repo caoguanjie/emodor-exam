@@ -79,14 +79,16 @@ export async function readLearnerExamSummaries(
   });
   return papers.map(paper => {
     const paperId = String(paper.id);
-    const assignment = assignments.find(row => String(row.paperId) === paperId);
+    const assignment = assignments.find(row => String(row.paperId) === paperId && String(row.userId) === String(user.id));
     const candidates = releaseRows.filter(row => String(row.paperId) === paperId && row.businessScope === 'training');
     const release = assignment
       ? candidates.find(row => String(row.id) === String(assignment.releaseId)) || null
       : candidates.reduce<PaperRelease | null>((latest, row) => !latest || row.versionNo > latest.versionNo ? row : latest, null);
-    const ownedRecords = records.filter(row => String(row.paperId) === paperId);
+    const ownedRecords = records.filter(row => String(row.paperId) === paperId && String(row.userId) === String(user.id));
     const latest = latestExamRecord(ownedRecords);
     const active = latestExamRecord(ownedRecords.filter(row => isActiveExamRecord(row, nowMs)));
+    const limit = assignment?.ruleSnapshot?.maxAttempts ?? release?.ruleSnapshot?.maxAttempts;
+    const maxAttempts = typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
     return {
       release,
       view: {
@@ -96,6 +98,9 @@ export async function readLearnerExamSummaries(
         category_id: assignment ? assignment.categoryId : release?.categoryId ?? paper.categoryId ?? null,
         difficulty: assignment?.difficulty ?? (paper.mode === 'random' && (user.source === 'institution' || user.source === 'external') ? difficultyForSource(user.source) : null),
         ...projectExamRuleMetadata(assignment ? assignment.ruleSnapshot : release?.ruleSnapshot),
+        attempts_used: ownedRecords.length,
+        max_attempts: maxAttempts,
+        attempts_remaining: maxAttempts === null ? null : Math.max(0, maxAttempts - ownedRecords.length),
         active_record_id: active ? String(active.id) : null,
         latest_record_id: latest ? String(latest.id) : null,
       },
