@@ -82,3 +82,19 @@ describe('dashboard recent exams and shared scoring', () => {
     expect(f.query).toHaveBeenCalledTimes(1);
   });
 });
+
+
+it('filters formal recent exams before LIMIT and only uses frozen formal record scores', async () => {
+  const { AdminDashboardService } = await import('../src/modules/statistics/admin-dashboard.service');
+  const f = await dashboardQueryFixture(['statistics:read']);
+  f.query.mockImplementation(async sql => sql.includes('FROM exam_paper') ? [{ paper_id: '11', title: '正式', status: 'published', release_id: '21', pool_scope: 'public', category_id: null, rule_snapshot: RULE, released_at: new Date('2026-10-27T01:00:00Z') }] : []);
+  const read = vi.spyOn(f.source.getRepository(ExamRecord), 'find').mockResolvedValue([
+    record({ score: 60 }), record({ id: '2', score: 100, examPurpose: 'practice' }), record({ id: '3', userId: '2', score: 100, examPurpose: 'practice' }),
+  ]);
+  expect(await new AdminDashboardService(f.source, f.access as any).recentExams('9')).toMatchObject({ items: [{ participant_count: 1, average_score: 60 }] });
+  const sql = f.query.mock.calls[0][0];
+  expect(sql.indexOf("paper.exam_purpose = 'formal'")).toBeGreaterThan(-1);
+  expect(sql.indexOf("publication.exam_purpose = 'formal'")).toBeGreaterThan(-1);
+  expect(sql.indexOf("publication.exam_purpose = 'formal'")).toBeLessThan(sql.indexOf('LIMIT 4'));
+  expect(read.mock.calls[0][0]?.where).toMatchObject({ examPurpose: 'formal' });
+});

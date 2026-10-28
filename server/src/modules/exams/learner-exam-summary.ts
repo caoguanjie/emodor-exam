@@ -1,4 +1,5 @@
 import { EntityManager, In } from 'typeorm';
+import { examPurposeOf, resolveAttemptLimit } from './exam-purpose';
 import { difficultyForSource } from '../../common/question-difficulty';
 import type { LearnerExamMetadata, LearnerExamQuestionType, LearnerExamSummary, QuestionType } from '../../common/training-contracts';
 import { ExamAssignment } from '../../entities/exam-assignment.entity';
@@ -74,30 +75,37 @@ export async function readLearnerExamSummaries(
   if (!papers.length) return [];
   const releaseRows = await manager.getRepository(PaperRelease).find({
     where: { paperId: In(papers.map(paper => String(paper.id))) },
-    select: ['id', 'paperId', 'versionNo', 'businessScope', 'poolScope', 'categoryId', 'ruleSnapshot', 'requiresLearning', 'requiredLearningMinutes', 'courseIds'],
+    select: ['id', 'paperId', 'versionNo', 'businessScope', 'examPurpose', 'poolScope', 'categoryId', 'ruleSnapshot', 'requiresLearning', 'requiredLearningMinutes', 'courseIds'],
     order: { versionNo: 'DESC', id: 'DESC' },
   });
   return papers.map(paper => {
     const paperId = String(paper.id);
     const assignment = assignments.find(row => String(row.paperId) === paperId && String(row.userId) === String(user.id));
     const candidates = releaseRows.filter(row => String(row.paperId) === paperId && row.businessScope === 'training');
-    const release = assignment
-      ? candidates.find(row => String(row.id) === String(assignment.releaseId)) || null
-      : candidates.reduce<PaperRelease | null>((latest, row) => !latest || row.versionNo > latest.versionNo ? row : latest, null);
+    const purpose = examPurposeOf(paper.examPurpose);
     const ownedRecords = records.filter(row => String(row.paperId) === paperId && String(row.userId) === String(user.id));
     const latest = latestExamRecord(ownedRecords);
     const active = latestExamRecord(ownedRecords.filter(row => isActiveExamRecord(row, nowMs)));
-    const limit = assignment?.ruleSnapshot?.maxAttempts ?? release?.ruleSnapshot?.maxAttempts;
-    const maxAttempts = typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
+    const pinnedReleaseId = purpose === 'practice' ? active?.releaseId : assignment?.releaseId;
+    const release = pinnedReleaseId != null
+      ? candidates.find(row => String(row.id) === String(pinnedReleaseId)) || null
+      : purpose === 'formal' && assignment ? null
+      : candidates.reduce<PaperRelease | null>((latest, row) => !latest || row.versionNo > latest.versionNo ? row : latest, null);
+    const rule = purpose === 'practice' ? (active ? active.ruleSnapshot : release?.ruleSnapshot) : assignment ? assignment.ruleSnapshot : release?.ruleSnapshot;
+    const frozenLimit = purpose === 'formal' && assignment?.ruleSnapshot?.maxAttempts !== undefined
+      ? assignment.ruleSnapshot.maxAttempts : rule?.maxAttempts ?? release?.ruleSnapshot?.maxAttempts;
+    const limit = resolveAttemptLimit(purpose, frozenLimit);
+    const maxAttempts = limit.maxAttempts;
     return {
       release,
       view: {
+        exam_purpose: purpose, release_id: release ? String(release.id) : null, attempt_limit_kind: limit.kind,
         paper_id: paperId, title: paper.title, mode: paper.mode, status: paper.status,
         pool_scope: release?.poolScope ?? paper.poolScope ?? 'category',
         source: assignment ? assignment.source : user.source,
         category_id: assignment ? assignment.categoryId : release?.categoryId ?? paper.categoryId ?? null,
         difficulty: assignment?.difficulty ?? (paper.mode === 'random' && (user.source === 'institution' || user.source === 'external') ? difficultyForSource(user.source) : null),
-        ...projectExamRuleMetadata(assignment ? assignment.ruleSnapshot : release?.ruleSnapshot),
+        ...projectExamRuleMetadata(rule),
         attempts_used: ownedRecords.length,
         max_attempts: maxAttempts,
         attempts_remaining: maxAttempts === null ? null : Math.max(0, maxAttempts - ownedRecords.length),

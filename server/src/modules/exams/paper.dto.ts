@@ -5,7 +5,7 @@ import {
   IsString, Matches, Max, MaxLength, Min, MinLength, Validate, ValidateIf, ValidateNested,
   ValidationArguments, ValidatorConstraint, ValidatorConstraintInterface,
 } from 'class-validator';
-import type { Difficulty, PoolScope, QuestionType } from '../../common/training-contracts';
+import type { Difficulty, ExamPurpose, PoolScope, QuestionType } from '../../common/training-contracts';
 import type { DesignerLayoutV1 } from '../../common/question-authoring';
 import { Errors } from '../../common/errors';
 import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
@@ -97,7 +97,26 @@ class PaperPoolScopeValidator implements ValidatorConstraintInterface {
   defaultMessage(): string { return '公共题池仅支持随机卷，培训类别必须为空'; }
 }
 
+@ValidatorConstraint({ name: 'practicePaperScope', async: false })
+class PracticePaperScopeValidator implements ValidatorConstraintInterface {
+  validate(value: unknown, args: ValidationArguments): boolean {
+    const input = args.object as CreateTrainingPaperDto;
+    return value !== 'practice' || (input.mode === 'random' && input.pool_scope === 'public' && input.category_id == null);
+  }
+  defaultMessage(): string { return '模拟考仅支持公共随机培训卷'; }
+}
+
+@ValidatorConstraint({ name: 'paperMaxAttempts', async: false })
+class PaperMaxAttemptsValidator implements ValidatorConstraintInterface {
+  validate(value: unknown, args: ValidationArguments): boolean {
+    const input = args.object as CreateTrainingPaperDto;
+    return input.exam_purpose === 'practice' ? value === null : typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 100;
+  }
+  defaultMessage(): string { return '正式次数须为1—100次，模拟考次数必须为空'; }
+}
+
 export class CreateTrainingPaperDto {
+  @ValidateIf((_object, value) => value !== undefined) @IsIn(['formal', 'practice']) @Validate(PracticePaperScopeValidator) exam_purpose?: ExamPurpose;
   @IsString() @MinLength(1) @MaxLength(128) title!: string;
   @IsIn(['fixed', 'random']) mode!: 'fixed' | 'random';
   @ValidateIf((_object, value) => value !== undefined) @IsIn(['category', 'public']) @Validate(PaperPoolScopeValidator) pool_scope?: PoolScope;
@@ -111,7 +130,7 @@ export class CreateTrainingPaperDto {
   @ValidateIf((_object, value) => value !== undefined) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(999.99) total_score?: number;
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(999.99) pass_score?: number;
   @IsOptional() @IsInt() @Min(1) @Max(1440) duration_minutes?: number;
-  @IsOptional() @IsInt() @Min(1) @Max(100) max_attempts?: number;
+  @ValidateIf((_object, value) => value !== undefined) @Validate(PaperMaxAttemptsValidator) max_attempts?: number | null;
   @IsOptional() @IsNumber() @Min(0) @Max(1) partial_credit_ratio?: number;
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => PaperRuleDto) rules?: PaperRuleDto[];
   @ValidateIf((_object, value) => value !== undefined) @Validate(DesignerLayoutValidator) designer_layout?: DesignerLayoutV1;
@@ -132,7 +151,7 @@ export class UpdateTrainingPaperDto {
   @ValidateIf((_object, value) => value !== undefined) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(999.99) total_score?: number;
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Max(999.99) pass_score?: number;
   @IsOptional() @IsInt() @Min(1) @Max(1440) duration_minutes?: number;
-  @IsOptional() @IsInt() @Min(1) @Max(100) max_attempts?: number;
+  @ValidateIf((_object, value) => value != null) @IsInt() @Min(1) @Max(100) max_attempts?: number | null;
   @IsOptional() @IsNumber() @Min(0) @Max(1) partial_credit_ratio?: number;
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => PaperRuleDto) rules?: PaperRuleDto[];
   @ValidateIf((_object, value) => value !== undefined) @Validate(DesignerLayoutValidator) designer_layout?: DesignerLayoutV1;
@@ -149,6 +168,7 @@ export class SetTrainingQuestionsDto {
 }
 
 export class TrainingPaperListQueryDto {
+  @IsOptional() @IsIn(['formal', 'practice']) exam_purpose?: ExamPurpose;
   @IsOptional() @QueryNumber() @IsInt() @Min(1) page?: number;
   @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
   @IsOptional() @IsString() @MaxLength(128) keyword?: string;
@@ -176,12 +196,12 @@ export class PaperPreviewQueryDto {
 }
 
 export const PAPER_CREATE_KEYS = [
-  'title', 'mode', 'pool_scope', 'category_id', 'regulation_ids', 'course_ids', 'requires_learning',
+  'exam_purpose', 'title', 'mode', 'pool_scope', 'category_id', 'regulation_ids', 'course_ids', 'requires_learning',
   'required_learning_minutes', 'remark', 'sort_order',
   'total_score', 'pass_score', 'duration_minutes', 'max_attempts', 'partial_credit_ratio', 'rules', 'designer_layout',
 ] as const;
-export const PAPER_UPDATE_KEYS = [...PAPER_CREATE_KEYS, 'preserve_questions'] as const;
-export const PAPER_LIST_KEYS = ['page', 'page_size', 'keyword', 'category_id', 'mode', 'status'] as const;
+export const PAPER_UPDATE_KEYS = [...PAPER_CREATE_KEYS.filter((key) => key !== 'exam_purpose'), 'preserve_questions'] as const;
+export const PAPER_LIST_KEYS = ['page', 'page_size', 'keyword', 'category_id', 'mode', 'status', 'exam_purpose'] as const;
 export const PAPER_CANDIDATE_KEYS = ['type', 'difficulty', 'page', 'page_size'] as const;
 export const PAPER_OPTION_KEYS = ['category_id', 'pool_scope', 'page', 'page_size'] as const;
 export const PAPER_PREVIEW_KEYS = ['difficulty'] as const;

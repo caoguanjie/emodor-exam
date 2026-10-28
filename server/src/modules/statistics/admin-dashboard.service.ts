@@ -5,6 +5,7 @@ import type { AdminDashboard, DashboardExamTrend, DashboardLearningOptions, Dash
 import { ExamRecord } from '../../entities/exam-record.entity';
 import { AccessService } from '../access/access.service';
 import { applyVisibleExamRecordScope } from '../exams/exam-record-visibility';
+import { examPurposeOf } from '../exams/exam-purpose';
 import { getEffectiveLearningVersionIds } from '../exams/paper-learning';
 import { dashboardDates, dashboardPeriod } from './dashboard-time';
 import { statisticsRecordView, summarizeReleaseRecords } from './ranking';
@@ -14,6 +15,7 @@ const LEARNING_CANDIDATE_FROM = `FROM exam_paper paper
   INNER JOIN paper_release publication ON publication.paper_id = paper.id
     AND publication.version_no = (SELECT MAX(latest.version_no) FROM paper_release latest WHERE latest.paper_id = paper.id)
   WHERE paper.business_scope = 'training' AND paper.status = 'published'
+    AND paper.exam_purpose = 'formal' AND publication.exam_purpose = 'formal'
     AND publication.business_scope = 'training' AND publication.requires_learning = 1
     AND publication.required_learning_minutes BETWEEN 1 AND 2147483647
     AND JSON_TYPE(publication.course_ids) = 'ARRAY' AND JSON_LENGTH(publication.course_ids) > 0
@@ -92,7 +94,7 @@ export class AdminDashboardService {
     `, ['question_count', 'enabled_question_count']));
     if (permissions.has('papers:read')) tasks.push(aggregate(`
       SELECT COUNT(*) AS paper_count, COALESCE(SUM(status = 'published'), 0) AS published_paper_count
-      FROM exam_paper WHERE business_scope = 'training'
+      FROM exam_paper WHERE business_scope = 'training' AND exam_purpose = 'formal'
     `, ['paper_count', 'published_paper_count']));
     if (permissions.has('statistics:read')) tasks.push((async () => {
       const query = applyVisibleExamRecordScope(manager.getRepository(ExamRecord).createQueryBuilder('record'))
@@ -100,6 +102,7 @@ export class AdminDashboardService {
         .addSelect('COUNT(CASE WHEN record.started_at >= :todayStart THEN 1 END)', 'today_attempt_count')
         .addSelect('COUNT(DISTINCT record.user_id)', 'last_7_days_participant_count')
         .addSelect('COUNT(*)', 'last_7_days_attempt_count')
+        .andWhere('record.examPurpose = :examPurpose', { examPurpose: 'formal' })
         .andWhere('record.started_at >= :periodStart', { periodStart: week.startUtc })
         .andWhere('record.started_at < :periodEnd', { periodEnd: week.endUtc })
         .setParameter('todayStart', today.startUtc);
@@ -110,7 +113,7 @@ export class AdminDashboardService {
       // Compatibility: raw starts, including historical statuses, remain the old seven-day metric.
       const legacyRows = await manager.query(`SELECT
         DATE_FORMAT(DATE_ADD(started_at, INTERVAL 8 HOUR), '%Y-%m-%d') AS date, COUNT(*) AS count
-        FROM exam_record WHERE started_at >= ? GROUP BY date`, [week.startUtc]);
+        FROM exam_record WHERE exam_purpose = 'formal' AND started_at >= ? GROUP BY date`, [week.startUtc]);
       const counts = new Map<string, number>(legacyRows.map(row => [String(row.date), Number(row.count)]));
       response.exam_trend = dashboardDates(week.date_from, 7).map(date => ({ date, count: counts.get(date) || 0 }));
     })());
@@ -127,6 +130,7 @@ export class AdminDashboardService {
       .select(date, 'date')
       .addSelect('record.source', 'source')
       .addSelect(`ROW_NUMBER() OVER (PARTITION BY ${date}, record.user_id ORDER BY record.started_at ASC, record.id ASC)`, 'ordinal')
+      .andWhere('record.examPurpose = :examPurpose', { examPurpose: 'formal' })
       .andWhere('record.started_at >= :periodStart', { periodStart: period.startUtc })
       .andWhere('record.started_at < :periodEnd', { periodEnd: period.endUtc });
     const [firstSql, parameters] = first.getQueryAndParameters();
@@ -183,13 +187,13 @@ export class AdminDashboardService {
     const now = new Date();
     return this.dataSource.transaction('REPEATABLE READ', async manager => {
       const [release] = await manager.query(`SELECT paper.id AS paper_id, paper.title, paper.status,
-        paper.business_scope AS paper_scope, publication.id AS release_id, publication.paper_id AS release_paper_id,
+        paper.business_scope AS paper_scope, paper.exam_purpose AS paper_purpose, publication.exam_purpose AS release_purpose, publication.id AS release_id, publication.paper_id AS release_paper_id,
         publication.business_scope AS release_scope, publication.version_no, publication.category_id,
         publication.requires_learning, publication.required_learning_minutes, publication.course_ids, publication.released_at,
         (SELECT MAX(latest.version_no) FROM paper_release latest WHERE latest.paper_id = paper.id) AS latest_version_no
         FROM exam_paper paper LEFT JOIN paper_release publication ON publication.id = ? AND publication.paper_id = paper.id
-        WHERE paper.id = ?`, [releaseId, paperId]);
-      if (!release || release.paper_scope !== 'training' || !release.release_id
+        WHERE paper.id = ? AND paper.exam_purpose = 'formal' AND publication.exam_purpose = 'formal'`, [releaseId, paperId]);
+      if (!release || release.paper_scope !== 'training' || examPurposeOf(release.paper_purpose) !== 'formal' || examPurposeOf(release.release_purpose) !== 'formal' || !release.release_id
         || String(release.release_paper_id) !== paperId) throw Errors.notFound('培训或发布版本不存在');
       const selectedCourseIds = courseIds(release.course_ids);
       const minutes = Number(release.required_learning_minutes);
@@ -230,21 +234,21 @@ export class AdminDashboardService {
       publication.id AS release_id, publication.pool_scope, publication.category_id, publication.rule_snapshot, publication.released_at
       FROM exam_paper paper INNER JOIN paper_release publication ON publication.paper_id = paper.id
         AND publication.version_no = (SELECT MAX(latest.version_no) FROM paper_release latest WHERE latest.paper_id = paper.id)
-      WHERE paper.business_scope = 'training'
+      WHERE paper.business_scope = 'training' AND paper.exam_purpose = 'formal' AND publication.exam_purpose = 'formal'
       ORDER BY publication.released_at DESC, publication.id DESC LIMIT 4`);
     if (!exams.length) return { as_of: now.toISOString(), limit: 4, items: [] };
     const releaseIds = exams.map(row => String(row.release_id));
     const categoryIds = [...new Set<string>(exams.filter(row => row.category_id != null).map(row => String(row.category_id)))];
     const [rawRecords, categories] = await Promise.all([
       manager.getRepository(ExamRecord).find({
-        where: { releaseId: In(releaseIds) },
-        select: ['id', 'paperId', 'releaseId', 'userId', 'categoryId', 'source', 'difficulty', 'ruleSnapshot',
+        where: { releaseId: In(releaseIds), examPurpose: 'formal' },
+        select: ['id', 'examPurpose', 'paperId', 'releaseId', 'userId', 'categoryId', 'source', 'difficulty', 'ruleSnapshot',
           'status', 'gradingState', 'score', 'startedAt', 'submittedAt', 'deadlineAt', 'submissionMethod', 'gradedAt'],
       }),
       categoryIds.length ? manager.query(`SELECT id, name FROM training_category WHERE id IN (${categoryIds.map(() => '?').join(',')})`, categoryIds)
         : Promise.resolve([]),
     ]);
-    const records = rawRecords.map(statisticsRecordView);
+    const records = rawRecords.filter(row => examPurposeOf(row.examPurpose) === 'formal').map(statisticsRecordView);
     const names = new Map<string, string>(categories.map(row => [String(row.id), row.name]));
     return {
       as_of: now.toISOString(), limit: 4,

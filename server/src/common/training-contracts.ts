@@ -11,6 +11,8 @@ export type Difficulty = 'easy' | 'medium' | 'hard';
 export type ExamDifficulty = Difficulty | 'mixed' | 'unknown';
 export type QuestionType = 'single' | 'multiple' | 'judgment';
 export type PoolScope = 'category' | 'public';
+export type ExamPurpose = 'formal' | 'practice';
+export type AttemptLimitKind = 'limited' | 'unlimited' | 'unknown';
 
 export interface Page<T> {
   items: T[];
@@ -40,7 +42,7 @@ export interface RuleSnapshot {
   totalCents: number;
   passCents: number;
   durationMinutes: number;
-  maxAttempts: number;
+  maxAttempts: number | null;
   partialCreditRatio: number;
   rules: PoolRule[];
 }
@@ -110,6 +112,7 @@ export interface AttemptQuestion<Capability extends 2 | 3 = 2> {
 }
 
 export interface AttemptView<Capability extends 2 | 3 = 2> {
+  exam_purpose?: ExamPurpose;
   status: 'in_progress' | 'submitted' | 'passed' | 'failed' | 'timeout';
   record_id: Id;
   paper_id: Id;
@@ -127,6 +130,8 @@ export interface FinalResultItem extends AttemptQuestion<2 | 3> {
 }
 
 export interface FinalResult {
+  exam_purpose?: ExamPurpose;
+  paper_id?: Id;
   status: 'submitted' | 'passed' | 'failed' | 'timeout';
   record_id: Id;
   grading_state: GradeState;
@@ -160,6 +165,9 @@ export interface LearnerExamMetadata {
 }
 
 export interface LearnerExamSummary extends LearnerExamMetadata {
+  exam_purpose?: ExamPurpose;
+  release_id?: Id | null;
+  attempt_limit_kind?: AttemptLimitKind;
   paper_id: Id;
   title: string;
   mode: string;
@@ -171,7 +179,7 @@ export interface LearnerExamSummary extends LearnerExamMetadata {
   difficulty: ExamDifficulty | null;
   /** Successful starts for this learner and paper, including active and timeout records. */
   attempts_used: number;
-  /** Null only when neither frozen assignment nor release has a known limit. */
+  /** Null for unlimited practice or unknown historical formal limits; inspect attempt_limit_kind. */
   max_attempts: number | null;
   attempts_remaining: number | null;
   active_record_id: Id | null;
@@ -192,6 +200,7 @@ export interface LearnerExamDetail extends LearnerExamSummary {
 export type LearnerExamState = 'all' | 'active' | 'published' | 'ended';
 
 export interface ExamHistoryItem {
+  exam_purpose?: ExamPurpose;
   record_id: Id;
   paper_id: Id;
   paper_title: string | null;
@@ -209,6 +218,9 @@ export interface ExamHistoryItem {
 }
 
 export interface WrongItem extends FinalResultItem {
+  exam_purpose?: ExamPurpose;
+  paper_id?: Id;
+  paper_title?: string | null;
   legacy: boolean;
   record_id: Id;
   submitted_at: string;
@@ -391,3 +403,11 @@ export const TRAINING_DEFAULTS = Object.freeze({
   videoPositionToleranceSeconds: 2,
   videoCompletionPercent: 95,
 });
+
+export interface PracticePaperTemplate {
+  title: string; exam_purpose: 'practice'; mode: 'random'; pool_scope: 'public'; category_id: null;
+  rules: Array<{ type: QuestionType; count: number; score_cents: number }>;
+  total_score: number; pass_score: number; duration_minutes: number; partial_credit_ratio: number;
+  max_attempts: null; requires_learning: boolean; required_learning_minutes: number | null;
+  course_ids: Id[]; regulation_ids: []; remark: null; sort_order: 0;
+}

@@ -23,7 +23,13 @@ import { expireExamRecord, isScoredLegacyTimeout } from './exam-state';
 import { assertContentCapability, requiredContentCapability } from './question-content-capability';
 import { projectExamRuleMetadata } from './learner-exam-summary';
 
+import { examPurposeOf } from './exam-purpose';
+
 type ResultRecord = ExamRecord;
+
+function resultIdentity(record: ResultRecord) {
+  return { exam_purpose: examPurposeOf(record.examPurpose), paper_id: String(record.paperId) };
+}
 
 function iso(value: Date | string | null | undefined): string | null {
   return value ? new Date(value).toISOString() : null;
@@ -74,6 +80,7 @@ export function projectFinalResult(record: ResultRecord, snapshot: GradingSnapsh
     return Math.round(Number(row?.gainedScore || 0) * 100) === Number(item.scoreCents);
   }).length;
   return {
+    ...resultIdentity(record),
     record_id: String(record.id),
     status: resultStatus as FinalResult['status'],
     grading_state: record.gradingState || (record.score === null ? 'not_submitted' : 'finalized'),
@@ -99,13 +106,14 @@ function resultMetadata(rule: unknown) {
 }
 
 function projectSnapshotlessLegacy(record: ResultRecord): FinalResult {
-  if (record.status === ExamStatus.TIMEOUT && !isScoredLegacyTimeout(record)) return { record_id: String(record.id), status: 'timeout', grading_state: 'not_submitted', submission_method: null, legacy: record.snapshotOrigin === 'legacy_start' || !record.assignmentId, submitted_at: null, graded_at: null, score: 0, passed: false, correct_rate: null, ...resultMetadata(record.ruleSnapshot), items: [] };
-  if (record.status === ExamStatus.SUBMITTED) return { record_id: String(record.id), status: 'submitted', grading_state: 'not_submitted', submission_method: null, legacy: true, submitted_at: iso(record.submittedAt), graded_at: null, score: null, passed: null, correct_rate: null, ...resultMetadata(record.ruleSnapshot), items: [] };
+  if (record.status === ExamStatus.TIMEOUT && !isScoredLegacyTimeout(record)) return { ...resultIdentity(record), record_id: String(record.id), status: 'timeout', grading_state: 'not_submitted', submission_method: null, legacy: record.snapshotOrigin === 'legacy_start' || !record.assignmentId, submitted_at: null, graded_at: null, score: 0, passed: false, correct_rate: null, ...resultMetadata(record.ruleSnapshot), items: [] };
+  if (record.status === ExamStatus.SUBMITTED) return { ...resultIdentity(record), record_id: String(record.id), status: 'submitted', grading_state: 'not_submitted', submission_method: null, legacy: true, submitted_at: iso(record.submittedAt), graded_at: null, score: null, passed: null, correct_rate: null, ...resultMetadata(record.ruleSnapshot), items: [] };
   if (!record.submittedAt) throw Errors.internal('历史考试结果缺少交卷时间');
   const finalized = record.gradingState === 'finalized' || (
     [ExamStatus.PASSED, ExamStatus.FAILED].includes(record.status as any) && record.score !== null
   );
   return {
+    ...resultIdentity(record),
     record_id: String(record.id),
     status: record.status as FinalResult['status'],
     grading_state: finalized ? 'finalized' : record.gradingState,
@@ -231,6 +239,7 @@ export class ExamHistoryService {
     const itemRows = recordIds.length ? await this.itemRepo.find({ where: { recordId: In(recordIds) } }) : [];
     return {
       items: rows.map((record) => ({
+        ...resultIdentity(record),
         record_id: String(record.id),
         paper_id: String(record.paperId),
         paper_title: titleById.get(String(record.paperId)) || null,
@@ -258,6 +267,7 @@ export class ExamHistoryService {
     return this.dataSource.transaction('REPEATABLE READ', async (manager) => {
       const base = manager.getRepository(ExamRecordQuestion).createQueryBuilder('item')
         .innerJoin(ExamRecord, 'record', 'record.id = item.record_id')
+        .leftJoin(ExamPaper, 'paper', 'paper.id = record.paper_id')
         .leftJoin(ExamAnswer, 'answer', 'answer.exam_record_id = record.id AND answer.record_question_id = item.id')
         .where('record.user_id = :userId', { userId: String(userId) })
         .andWhere('record.grading_state = :state', { state: 'finalized' })
@@ -267,11 +277,12 @@ export class ExamHistoryService {
       const idRows = await base.clone()
         .select('item.id', 'item_id')
         .addSelect('record.id', 'record_id')
+        .addSelect('paper.title', 'paper_title')
         .orderBy('record.id', 'DESC')
         .addOrderBy('item.position', 'ASC')
         .offset((safePage - 1) * safePageSize)
         .limit(safePageSize)
-        .getRawMany<{ item_id: string; record_id: string }>();
+        .getRawMany<{ item_id: string; record_id: string; paper_title: string | null }>();
       const itemIds = idRows.map((row) => String(row.item_id));
       const recordIds = [...new Set(idRows.map((row) => String(row.record_id)))];
       const itemPromise: Promise<ExamRecordQuestion[]> = itemIds.length
@@ -290,6 +301,7 @@ export class ExamHistoryService {
         .map((answer) => [`${answer.examRecordId}:${answer.recordQuestionId}`, answer]));
       const pageRows: Array<{
         record: ExamRecord;
+        paperTitle: string | null;
         submittedAt: string;
         item: GradingSnapshotItem;
         answer: ExamAnswer | undefined;
@@ -307,6 +319,7 @@ export class ExamHistoryService {
         };
         pageRows.push({
           record,
+          paperTitle: idRow.paper_title ?? null,
           submittedAt: new Date(record.submittedAt).toISOString(),
           item: snapshot,
           answer: answerByItem.get(`${record.id}:${itemRow.id}`),
@@ -314,8 +327,10 @@ export class ExamHistoryService {
       }
       assertContentCapability(requiredContentCapability(pageRows.map((row) => row.item)), contentVersion);
       await this.ensureResultMediaReferences(manager, pageRows.map((row) => row.item));
-      const result: WrongItem[] = pageRows.map(({ record, submittedAt, item, answer }) => ({
+      const result: WrongItem[] = pageRows.map(({ record, paperTitle, submittedAt, item, answer }) => ({
+        paper_title: paperTitle,
         legacy: isLegacyContent(item),
+        ...resultIdentity(record),
         record_id: String(record.id),
         submitted_at: submittedAt,
         ...projectResultItem(item, String(record.id), answer, contentVersion),

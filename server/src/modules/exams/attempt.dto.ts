@@ -8,6 +8,7 @@ import {
   IsString,
   Matches,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 
@@ -37,4 +38,9 @@ export class SubmitAttemptDto {
   // Validated after ownership, the record lock and terminal/deadline arbitration.
   // A controller-level validation pipe would break terminal idempotent replays.
   answers!: Array<{ item_id: string; option_ids: string[] }>;
+}
+
+export class StartAttemptDto {
+  @ValidateIf((_object, value) => value !== undefined) @IsString() @Matches(/^[1-9]\d*$/)
+  expected_release_id?: string;
 }

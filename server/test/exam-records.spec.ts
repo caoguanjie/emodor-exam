@@ -39,6 +39,7 @@ describe('ExamRecordsService pure record projection', () => {
     const result = recordSummaryView(ROW);
 
     expect(result).toEqual({
+      exam_purpose: 'formal',
       record_id: '41', paper_id: '11', paper_title: '安全培训考试', user_id: '9',
       username: 'student9', name: '张三', source: 'institution', category_id: '7', category_name: '安全培训', difficulty: 'medium',
       pool_scope: 'category',
@@ -298,4 +299,32 @@ describe('ExamAdminController retained read-only result route', () => {
     await expect(controller.result('41', { id: 8 } as any)).rejects.toMatchObject({ code: 40401 });
     expect(history.adminResult).not.toHaveBeenCalled();
   });
+});
+
+
+describe('practice administrator record purpose', () => {
+  it('returns trusted frozen purpose, defaults old rows to formal, and filters before count and pagination', async () => {
+    const f = serviceFixture({ ...ROW, exam_purpose: 'practice' });
+    expect(recordSummaryView(ROW)).toMatchObject({ exam_purpose: 'formal' });
+    expect(await f.service.list('1', { exam_purpose: 'practice' } as any)).toMatchObject({ total: 1, items: [{ exam_purpose: 'practice' }] });
+    const condition = f.calls.findIndex(row => row.method === 'andWhere' && row.args[0] === 'record.exam_purpose = :examPurpose');
+    expect(condition).toBeGreaterThan(-1);
+    expect(f.calls[condition].args[1]).toEqual({ examPurpose: 'practice' });
+    expect(f.builder.getCount.mock.invocationCallOrder[0]).toBeGreaterThan(f.builder.andWhere.mock.invocationCallOrder.at(-1)!);
+    expect(f.calls.some(row => row.method === 'addSelect' && row.args[0] === 'record.exam_purpose' && row.args[1] === 'exam_purpose')).toBe(true);
+  });
+});
+
+
+it('filters record options by the requested purpose while retaining default options', async () => {
+  const builders: any[] = [0, 1].map(() => {
+    const qb: any = {};
+    for (const method of ['withDeleted', 'select', 'addSelect', 'where', 'andWhere', 'orderBy', 'addOrderBy']) qb[method] = vi.fn(() => qb);
+    qb.getRawMany = vi.fn(async () => []);
+    return qb;
+  });
+  const service = new ExamRecordsService({ manager: { getRepository: (entity: unknown) => ({ createQueryBuilder: () => builders[entity === ExamPaper ? 0 : 1] }) } } as any);
+  await service.options('1', 'practice');
+  expect(builders[0].andWhere).toHaveBeenCalledWith('paper.exam_purpose = :examPurpose', { examPurpose: 'practice' });
+  expect(builders[1].andWhere).toHaveBeenCalledWith(expect.stringContaining('historical_record.exam_purpose = :examPurpose'), { examPurpose: 'practice' });
 });

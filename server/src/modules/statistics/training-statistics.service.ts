@@ -22,6 +22,8 @@ import {
   ruleKey, statisticsRecordView, summarizeReleaseRecords, type StatisticsRecord,
 } from './ranking';
 
+import { examPurposeOf } from '../exams/exam-purpose';
+
 const DIFFICULTIES: ExamDifficulty[] = ['easy', 'medium', 'hard', 'mixed', 'unknown'];
 
 function id(value: unknown, label: string): string {
@@ -76,6 +78,8 @@ export class TrainingStatisticsService {
         + '(SELECT MAX(latest.version_no) FROM paper_release latest WHERE latest.paper_id = paper.id)')
       .where('paper.businessScope = :scope', { scope: 'training' })
       .andWhere('paper.status = :status', { status: 'published' })
+      .andWhere('paper.examPurpose = :examPurpose', { examPurpose: 'formal' })
+      .andWhere('release.examPurpose = :examPurpose', { examPurpose: 'formal' })
       .andWhere('release.id IS NOT NULL');
     const keyword = filter.keyword?.trim();
     if (keyword) query.andWhere('paper.title LIKE :keyword', { keyword: `%${keyword}%` });
@@ -91,11 +95,12 @@ export class TrainingStatisticsService {
     const categoryIds = [...new Set(papers.map((paper) => examInfo(paper, paper.statisticsRelease || null).category_id)
       .filter((categoryId): categoryId is string => categoryId !== null))];
     const [rawRecords, categories] = await Promise.all([
-      releaseIds.length ? this.recordRepo.find({ where: { releaseId: In(releaseIds) } }) : Promise.resolve([]),
+      releaseIds.length ? this.recordRepo.find({ where: { releaseId: In(releaseIds), examPurpose: 'formal' } }) : Promise.resolve([]),
       categoryIds.length ? this.categoryRepo.find({ where: { id: In(categoryIds) } }) : Promise.resolve([]),
     ]);
     const recordsByRelease = new Map<string, StatisticsRecord[]>();
     for (const row of rawRecords) {
+      if (examPurposeOf(row.examPurpose) !== 'formal') continue;
       const record = statisticsRecordView(row);
       if (!record.releaseId || !releaseIds.includes(record.releaseId)) continue;
       if (filter.categoryId && record.categoryId !== String(filter.categoryId)) continue;
@@ -138,8 +143,9 @@ export class TrainingStatisticsService {
   private async context(filter: StatsFilter) {
     const paperId = id(filter.paperId, '试卷');
     const paper = await this.paperRepo.findOne({ where: { id: paperId } });
-    if (!paper) throw Errors.notFound('试卷不存在');
+    if (!paper || examPurposeOf(paper.examPurpose) !== 'formal') throw Errors.notFound('试卷不存在');
     const release = await this.releaseRepo.findOne({ where: { paperId }, order: { versionNo: 'DESC' } });
+    if (release && examPurposeOf(release.examPurpose) !== 'formal') throw Errors.notFound('试卷不存在');
     const releaseQuestions = release
       ? await this.releaseQuestionRepo.find({ where: { releaseId: String(release.id) } })
       : [];
@@ -150,7 +156,7 @@ export class TrainingStatisticsService {
 
     const [userRows, rawRecords] = await Promise.all([
       this.userRepo.find(),
-      this.recordRepo.find({ where: { paperId }, order: { id: 'ASC' } }),
+      this.recordRepo.find({ where: { paperId, examPurpose: 'formal' }, order: { id: 'ASC' } }),
     ]);
     const currentCategory = release ? release.categoryId : paper.categoryId || null;
     const publicPool = examInfo(paper, release).pool_scope === 'public';
@@ -169,7 +175,7 @@ export class TrainingStatisticsService {
       return !filter.difficulty
         || this.expectedDifficulty(paper, release, fixedDifficulty, user.source) === filter.difficulty;
     });
-    const records = rawRecords.map(statisticsRecordView).filter((record) => {
+    const records = rawRecords.filter(row => examPurposeOf(row.examPurpose) === 'formal').map(statisticsRecordView).filter((record) => {
       if (filter.categoryId && String(record.categoryId || '') !== String(filter.categoryId)) return false;
       if (filter.source && record.source !== filter.source) return false;
       if (filter.difficulty && difficulty(record.difficulty) !== filter.difficulty) return false;
@@ -313,9 +319,9 @@ export class TrainingStatisticsService {
   async invalidate(_paperId: string): Promise<void> {}
 
   async options(): Promise<TrainingStatisticsOptions> {
-    const [papers, categories] = await Promise.all([this.paperRepo.find(), this.categoryRepo.find()]);
+    const [papers, categories] = await Promise.all([this.paperRepo.find({ where: { businessScope: 'training', examPurpose: 'formal' } }), this.categoryRepo.find()]);
     return {
-      papers: papers.filter((paper) => paper.businessScope === 'training').map((paper) => ({
+      papers: papers.filter((paper) => paper.businessScope === 'training' && examPurposeOf(paper.examPurpose) === 'formal').map((paper) => ({
         id: String(paper.id), title: paper.title, category_id: paper.categoryId ? String(paper.categoryId) : null,
         pool_scope: paper.poolScope === 'public' ? 'public' : 'category',
         status: paper.status,

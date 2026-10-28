@@ -14,7 +14,15 @@ const QueryNumber = () => Transform(({ value }) => (
   value === undefined || value === null || value === '' ? undefined : Number(value)
 ));
 
+export class ExamRecordPurposeQueryDto {
+  @IsOptional() @IsIn(['formal', 'practice'])
+  exam_purpose?: import('../../common/training-contracts').ExamPurpose;
+}
+
 export class ExamRecordListQueryDto {
+  @IsOptional() @IsIn(['formal', 'practice'])
+  exam_purpose?: import('../../common/training-contracts').ExamPurpose;
+
   @IsOptional() @QueryNumber() @IsInt() @Min(1)
   page?: number;
 
@@ -57,7 +65,7 @@ export class ExamRecordListQueryDto {
 
 const RECORD_QUERY_KEYS = [
   'page', 'page_size', 'keyword', 'paper_id', 'source', 'difficulty', 'status', 'grading_state',
-  'user_id', 'category_id', 'result_status', 'date_from', 'date_to',
+  'exam_purpose', 'user_id', 'category_id', 'result_status', 'date_from', 'date_to',
 ] as const;
 
 function assertQueryKeys(request: Request, allowed: readonly string[], label: string): void {
@@ -91,8 +99,8 @@ export class ExamAdminController {
 
   @Get('exam-records/options')
   @Permissions('exam_records:read')
-  options(@CurrentUser() user: AuthUser) {
-    return this.recordsService.options(String(user.id));
+  options(@CurrentUser() user: AuthUser, @Query(new StrictDtoValidationPipe(['exam_purpose'])) query: ExamRecordPurposeQueryDto = {}) {
+    return this.recordsService.options(String(user.id), query.exam_purpose);
   }
 
   @Get('exam-records/:id')

@@ -9,6 +9,9 @@ export class ExamRecord {
   @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })
   id: string;
 
+  @Column({ name: 'exam_purpose', type: 'varchar', length: 16, default: 'formal' })
+  examPurpose?: import('../common/training-contracts').ExamPurpose;
+
   @Column({ name: 'paper_id', type: 'bigint', unsigned: true })
   paperId: string;
 

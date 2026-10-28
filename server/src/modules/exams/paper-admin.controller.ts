@@ -125,6 +125,12 @@ export class PaperAdminController {
     return this.papers.createTraining(dto, this.actor(user), req.ip || null);
   }
 
+  @Get(':id/practice-template')
+  @Permissions('papers:read')
+  practiceTemplate(@Param('id') paperId: string) {
+    return this.papers.practiceTemplate(id(paperId, 'paper_id'));
+  }
+
   @Get(':id')
   @Permissions('papers:read')
   detail(@Param('id') paperId: string) {

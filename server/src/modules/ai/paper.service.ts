@@ -14,7 +14,7 @@ import { PaperRelease } from '../../entities/paper-release.entity';
 import { Errors, PaperStatus } from '../../common/errors';
 import { activeDifficulties, assertActiveDifficulty } from '../../common/question-difficulty';
 import { AuditService } from '../../common/audit.service';
-import type { Difficulty, PoolRule, QuestionType, RuleSnapshot } from '../../common/training-contracts';
+import type { Difficulty, ExamPurpose, PoolRule, PracticePaperTemplate, QuestionType, RuleSnapshot } from '../../common/training-contracts';
 import { CategoryService } from '../training/category.service';
 import { QuestionVersionService, type QuestionVersionSnapshot } from '../questions/question-version.service';
 import { defaultDesignerLayout, parseDesignerLayout, type CreateTrainingPaperDto, type UpdateTrainingPaperDto } from '../exams/paper.dto';
@@ -22,6 +22,7 @@ import { PaperReleaseService } from '../exams/paper-release.service';
 import { assertPaperLearningCourses, normalizePaperLearning, normalizePaperRemark } from '../exams/paper-learning';
 import { MAX_PAPER_SCORE_CENTS, paperScoreRule } from '../exams/paper-score';
 import { paperPoolConfig } from '../exams/paper-pool';
+import { examPurposeOf } from '../exams/exam-purpose';
 
 type PaperActor = { id: string | number; name: string };
 type FixedQuestionInput = { question_version_id: string; score_cents: number };
@@ -206,14 +207,14 @@ export class PaperService {
     return this.paperView(p);
   }
 
-  private validateStrategy(patch: { pass_score?: number; duration_minutes?: number; max_attempts?: number; partial_credit_ratio?: number }) {
+  private validateStrategy(patch: { pass_score?: number; duration_minutes?: number; max_attempts?: number | null; partial_credit_ratio?: number }) {
     if (patch.pass_score !== undefined && !(patch.pass_score > 0 && patch.pass_score <= 100)) {
       throw Errors.param('pass_score 取值范围 (0, 100]');
     }
     if (patch.duration_minutes !== undefined && (!Number.isInteger(patch.duration_minutes) || patch.duration_minutes < 1)) {
       throw Errors.param('duration_minutes 须为 ≥ 1 的整数');
     }
-    if (patch.max_attempts !== undefined && (!Number.isInteger(patch.max_attempts) || patch.max_attempts < 1)) {
+    if (patch.max_attempts !== undefined && (typeof patch.max_attempts !== 'number' || !Number.isInteger(patch.max_attempts) || patch.max_attempts < 1)) {
       throw Errors.param('max_attempts 须为 ≥ 1 的整数');
     }
     if (patch.partial_credit_ratio !== undefined && !(patch.partial_credit_ratio >= 0 && patch.partial_credit_ratio <= 1)) {
@@ -371,7 +372,7 @@ export class PaperService {
   }
 
   private trainingRule(
-    strategy: { totalScore: string | number; passScore: string | number; durationMinutes: number; maxAttempts: number; partialCreditRatio: string | number },
+    strategy: { totalScore: string | number; passScore: string | number; durationMinutes: number; maxAttempts: number | null; partialCreditRatio: string | number; examPurpose?: ExamPurpose },
     rules: Array<{ type: QuestionType; count: number; score_cents?: number; scoreCents?: number }>,
     requireComplete: boolean,
     requireUniqueTypes = requireComplete,
@@ -394,7 +395,7 @@ export class PaperService {
     }
     const { totalCents, passCents } = paperScoreRule(strategy.totalScore, strategy.passScore);
     if (!Number.isInteger(strategy.durationMinutes) || strategy.durationMinutes < 1 || strategy.durationMinutes > 1440
-      || !Number.isInteger(strategy.maxAttempts) || strategy.maxAttempts < 1 || strategy.maxAttempts > 100) {
+      || (examPurposeOf(strategy.examPurpose) === 'practice' ? strategy.maxAttempts !== null : (typeof strategy.maxAttempts !== 'number' || !Number.isInteger(strategy.maxAttempts) || strategy.maxAttempts < 1 || strategy.maxAttempts > 100))) {
       throw Errors.paperRuleInvalid('考试时长须为1—1440分钟，作答次数须为1—100次');
     }
     const total = normalized.reduce((sum, item) => sum + item.count * item.scoreCents, 0);
@@ -403,7 +404,7 @@ export class PaperService {
       totalCents,
       passCents,
       durationMinutes: Number(strategy.durationMinutes),
-      maxAttempts: Number(strategy.maxAttempts),
+      maxAttempts: strategy.maxAttempts,
       partialCreditRatio: Number(strategy.partialCreditRatio),
       rules: normalized,
     };
@@ -414,6 +415,7 @@ export class PaperService {
       id: String(paper.id),
       title: paper.title,
       business_scope: 'training' as const,
+      exam_purpose: examPurposeOf(paper.examPurpose),
       mode: paper.mode as 'fixed' | 'random',
       pool_scope: paper.poolScope ?? 'category',
       category_id: paper.categoryId ? String(paper.categoryId) : null,
@@ -430,7 +432,7 @@ export class PaperService {
       total_score: Number(paper.totalScore),
       pass_score: Number(paper.passScore),
       duration_minutes: Number(paper.durationMinutes),
-      max_attempts: Number(paper.maxAttempts),
+      max_attempts: paper.maxAttempts,
       partial_credit_ratio: Number(paper.partialCreditRatio),
       status: paper.status,
       created_at: paper.createdAt,
@@ -477,7 +479,7 @@ export class PaperService {
   }
 
   async listTraining(query: {
-    page?: number; page_size?: number; keyword?: string; category_id?: string; mode?: string; status?: string;
+    page?: number; page_size?: number; keyword?: string; category_id?: string; mode?: string; status?: string; exam_purpose?: ExamPurpose;
   }) {
     const page = Math.max(1, Number(query.page || 1));
     const pageSize = Math.min(100, Math.max(1, Number(query.page_size || 20)));
@@ -486,6 +488,7 @@ export class PaperService {
     if (query.category_id) qb.andWhere('paper.category_id = :categoryId', { categoryId: String(query.category_id) });
     if (query.mode) qb.andWhere('paper.mode = :mode', { mode: query.mode });
     if (query.status) qb.andWhere('paper.status = :status', { status: query.status });
+    if (query.exam_purpose) qb.andWhere('paper.exam_purpose = :purpose', { purpose: query.exam_purpose });
     qb.orderBy('paper.sort_order', 'ASC').addOrderBy('paper.id', 'DESC');
     const [rows, total] = await qb.skip((page - 1) * pageSize).take(pageSize).getManyAndCount();
     return { items: rows.map((item) => this.trainingPaperView(item)), total, page, page_size: pageSize };
@@ -524,8 +527,38 @@ export class PaperService {
     };
   }
 
+  async practiceTemplate(id: string): Promise<PracticePaperTemplate> {
+    return this.dataSource.transaction(async (manager) => {
+      const paper = await manager.getRepository(ExamPaper).findOne({ where: { id: String(id) }, lock: { mode: 'pessimistic_read' } });
+      this.assertTrainingPaper(paper);
+      if (examPurposeOf(paper.examPurpose) !== 'formal' || paper.mode !== 'random' || paper.poolScope !== 'public') {
+        throw Errors.paperRuleInvalid('仅正式公共随机卷可以带入模拟配置');
+      }
+      const release = paper.status === 'published' ? await this.releaseService.latestForPaper(String(id), manager) : null;
+      if (paper.status === 'published' && (!release || release.businessScope !== 'training' || release.mode !== 'random' || release.poolScope !== 'public' || examPurposeOf(release.examPurpose) !== 'formal')) {
+        throw Errors.paperReleaseConflict('正式试卷发布版本无效');
+      }
+      const rule = release?.rule ?? paper.ruleConfig;
+      if (!rule) throw Errors.paperRuleInvalid('源试卷缺少随机规则');
+      return {
+        title: Array.from(`模拟考 · ${paper.title}`).slice(0, PAPER_TITLE_MAX_CODE_POINTS).join(''),
+        exam_purpose: 'practice', mode: 'random', pool_scope: 'public', category_id: null,
+        rules: rule.rules.map(item => ({ type: item.type, count: item.count, score_cents: item.scoreCents })),
+        total_score: rule.totalCents / 100, pass_score: rule.passCents / 100,
+        duration_minutes: rule.durationMinutes, partial_credit_ratio: rule.partialCreditRatio, max_attempts: null,
+        requires_learning: release ? release.requiresLearning : Boolean(paper.requiresLearning),
+        required_learning_minutes: release ? release.requiredLearningMinutes : paper.requiredLearningMinutes ?? null,
+        course_ids: [...(release ? release.courseIds : paper.courseIds ?? [])].map(String),
+        regulation_ids: [], remark: null, sort_order: 0,
+      };
+    });
+  }
+
   async createTraining(input: CreateTrainingPaperDto, actor: PaperActor, ip: string | null) {
-    this.validateStrategy({ ...input, pass_score: undefined });
+    this.validateStrategy({ ...input, pass_score: undefined, max_attempts: undefined });
+    if (input.exam_purpose !== undefined && !['formal', 'practice'].includes(input.exam_purpose)) throw Errors.param('考试用途无效');
+    const purpose = examPurposeOf(input.exam_purpose);
+    if (purpose === 'practice' && (input.mode !== 'random' || input.pool_scope !== 'public' || input.category_id != null || input.max_attempts != null)) throw Errors.paperRuleInvalid('模拟考仅支持公共随机卷，且次数必须为空');
     const scores = paperScoreRule(input.total_score, input.pass_score);
     const designerLayout = input.designer_layout === undefined ? null : parseDesignerLayout(input.designer_layout);
     const { poolScope, categoryId } = paperPoolConfig({
@@ -546,6 +579,7 @@ export class PaperService {
       const draft = repo.create({
         regulationId: null,
         businessScope: 'training',
+        examPurpose: purpose,
         mode: input.mode,
         poolScope,
         categoryId,
@@ -560,7 +594,7 @@ export class PaperService {
         totalScore: (scores.totalCents / 100).toFixed(2),
         passScore: (scores.passCents / 100).toFixed(2),
         durationMinutes: input.duration_minutes ?? 30,
-        maxAttempts: input.max_attempts ?? 3,
+        maxAttempts: purpose === 'practice' ? null : input.max_attempts === undefined ? 3 : input.max_attempts,
         partialCreditRatio: String(input.partial_credit_ratio ?? 0.5),
         status: 'draft',
         createdBy: String(actor.id),
@@ -579,7 +613,8 @@ export class PaperService {
   }
 
   async updateTraining(id: string, patch: UpdateTrainingPaperDto, actor: PaperActor, ip: string | null) {
-    this.validateStrategy({ ...patch, pass_score: undefined });
+    this.validateStrategy({ ...patch, pass_score: undefined, max_attempts: undefined });
+    if (Object.prototype.hasOwnProperty.call(patch, 'exam_purpose')) throw Errors.param('创建后不可更改考试用途');
     const designerLayout = patch.designer_layout === undefined ? undefined : parseDesignerLayout(patch.designer_layout);
     const current = await this.paperRepo.findOne({ where: { id: String(id) } });
     this.assertTrainingPaper(current);
@@ -838,7 +873,8 @@ export class PaperService {
       await this.assertEnabledPaperLinks(manager, links);
       const now = new Date();
       const created = await paperRepo.save(paperRepo.create({
-        regulationId: null, businessScope: 'training', mode: locked.mode, poolScope: sourcePool.poolScope, categoryId: locked.categoryId,
+        regulationId: null, businessScope: 'training',
+        examPurpose: examPurposeOf(locked.examPurpose), mode: locked.mode, poolScope: sourcePool.poolScope, categoryId: locked.categoryId,
         requiresLearning: locked.requiresLearning, regulationIds: cloneJson(locked.regulationIds || []),
         requiredLearningMinutes: locked.requiredLearningMinutes ?? null, remark: locked.remark ?? null,
         sortOrder: locked.sortOrder ?? 0,

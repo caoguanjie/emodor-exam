@@ -97,3 +97,19 @@ describe('dashboard mandatory learning aggregation', () => {
     await expect(new AdminDashboardService(f.source, f.access as any).learningOptions('9', { pageSize: 101 })).rejects.toMatchObject({ code: 40001 });
   });
 });
+
+
+it.each([{ paper_purpose: 'practice' }, { release_purpose: 'practice' }])('returns 404 for a direct practice learning summary: %j', async patch => {
+  const f = await fixture(patch);
+  await expect(f.service.learningSummary('9', '11', '21')).rejects.toMatchObject({ code: 40401 });
+  expect(f.query).toHaveBeenCalledTimes(1);
+});
+
+it('applies identical formal paper and release conditions to learning option count and page', async () => {
+  const f = await fixture();
+  await f.service.learningOptions('9', { page: 1, pageSize: 1 });
+  for (const [sql] of f.query.mock.calls) {
+    expect(sql).toContain("paper.exam_purpose = 'formal'");
+    expect(sql).toContain("publication.exam_purpose = 'formal'");
+  }
+});

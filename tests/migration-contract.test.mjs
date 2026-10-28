@@ -519,7 +519,7 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
       '039_site_about_settings',
       '040_paper_withdraw_metadata',
       '041_training_withdraw_to_draft',
-      '042_public_random_paper',
+      '042_public_random_paper', '043_practice_random_exam',
     ]);
 
     await conn.query("INSERT INTO sys_department (name, sort, status) VALUES ('完整升级保留数据', 917, 0)");
@@ -543,7 +543,7 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
     const [[columns]] = await conn.query(
       "SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'exam_record'",
     );
-    assert.equal(Number(columns.count), 26);
+    assert.equal(Number(columns.count), 27);
     const [[indexes]] = await conn.query(
       "SELECT COUNT(DISTINCT INDEX_NAME) AS count FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'exam_record'",
     );

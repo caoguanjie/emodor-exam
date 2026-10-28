@@ -162,3 +162,37 @@ describe('ExamHistoryService result media repair', () => {
     ]);
   });
 });
+
+
+describe('practice results and wrong-book projection', () => {
+  it('returns frozen practice identity and per-record scoring facts across versions', async () => {
+    const { service } = serviceFor({ manager: {} });
+    for (const [releaseId, total, score] of [['21', 10000, '80.00'], ['22', 12000, '96.00']] as const) {
+      const record = terminalRecord({ paperId: '11', examPurpose: 'practice', releaseId, score, ruleSnapshot: { totalCents: total, passCents: total * 0.6, durationMinutes: 30, maxAttempts: null } });
+      const snapshot: any = { recordId: '41', rule: record.ruleSnapshot, items: [{ itemId: '501', questionId: '101', position: 0, type: 'single', scoreCents: total, stem: '冻结'+releaseId, options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }], answer: [0], analysis: '冻结解析'+releaseId, displayToOriginal: [0, 1] }] };
+      expect(await service.resultInTransaction({} as any, record, snapshot, [{ recordQuestionId: '501', selected: [], gainedScore: score }] as any)).toMatchObject({ exam_purpose: 'practice', paper_id: '11', total_score: total / 100, score: Number(score), items: [{ gained_score: Number(score) }] });
+    }
+    expect(await service.resultInTransaction({} as any, terminalRecord({ paperId: '11', examPurpose: 'practice', status: 'timeout', gradingState: 'not_submitted', submittedAt: null }), { items: [] } as any)).toMatchObject({ exam_purpose: 'practice', paper_id: '11', status: 'timeout', items: [] });
+  });
+  it('retains both formal and practice in history with explicit purpose', async () => {
+    const rows = [terminalRecord({ paperId: '11', examPurpose: 'practice' }), terminalRecord({ id: '42', paperId: '12' })];
+    const service = new ExamHistoryService({ findAndCount: async () => [rows, 2] } as any, {} as any, { find: async () => [] } as any, { find: async () => [{ id: '11', title: '模拟卷' }, { id: '12', title: '正式卷' }] } as any, {} as any, {} as any, {} as any, {} as any);
+    expect(await service.history('7', 1, 20)).toMatchObject({ total: 2, items: [{ exam_purpose: 'practice', paper_id: '11', paper_title: '模拟卷' }, { exam_purpose: 'formal', paper_id: '12' }] });
+  });
+  it('keeps repeated partial-credit and unanswered mistakes with per-record purpose and paper source', async () => {
+    const builder = queryBuilder([{ item_id: '501', record_id: '41', paper_title: '模拟卷' }, { item_id: '502', record_id: '42', paper_title: '模拟卷' }] as any);
+    const records = [terminalRecord({ paperId: '11', examPurpose: 'practice' }), terminalRecord({ id: '42', paperId: '11', examPurpose: 'practice' })];
+    const items = records.map((record, i) => ({ id: String(501 + i), recordId: record.id, questionId: '101', scoreCents: 10000, position: 0, displayToOriginal: [0, 1], snapshotJson: { type: 'multiple', stem: '冻结题干'+record.id, options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }], answer: [0, 1], analysis: '冻结解析', scoreCents: 10000 } }));
+    const manager = { getRepository(entity: unknown) {
+      if (entity === ExamRecordQuestion) return { createQueryBuilder: () => builder, find: async () => items };
+      if (entity === ExamRecord) return { find: async () => records };
+      if (entity === ExamAnswer) return { find: async () => [{ examRecordId: '41', recordQuestionId: '501', selected: [0], gainedScore: '50.00' }] };
+      throw new Error('unexpected repository');
+    } };
+    const { service } = serviceFor({ manager });
+    const wrong = await service.wrongItems('7', 1, 20);
+    expect(wrong).toMatchObject({ total: 2, items: [{ exam_purpose: 'practice', paper_id: '11', paper_title: '模拟卷', record_id: '41', gained_score: 50 }, { exam_purpose: 'practice', paper_id: '11', paper_title: '模拟卷', record_id: '42', gained_score: 0 }] });
+    expect(builder.andWhere.mock.calls.map((call: any[]) => call[0])).toContain('ROUND(COALESCE(answer.gained_score, 0) * 100) < item.score_cents');
+    expect(builder.andWhere.mock.calls.map((call: any[]) => call[0]).join(' ')).not.toContain('formal');
+  });
+});

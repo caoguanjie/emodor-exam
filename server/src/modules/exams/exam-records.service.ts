@@ -1,15 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
-import { Page, TRAINING_DEFAULTS } from '../../common/training-contracts';
+import { ExamPurpose, Page, TRAINING_DEFAULTS } from '../../common/training-contracts';
 import { Errors } from '../../common/errors';
 import { ExamPaper } from '../../entities/exam-paper.entity';
 import { ExamRecord } from '../../entities/exam-record.entity';
 import { PaperRelease } from '../../entities/paper-release.entity';
 import { TrainingCategory } from '../../entities/training-category.entity';
+import { examPurposeOf } from './exam-purpose';
 import { applyVisibleExamRecordScope } from './exam-record-visibility';
 
 interface RecordProjectionRow {
+  exam_purpose?: ExamPurpose;
   record_id: string;
   paper_id: string;
   paper_title: string;
@@ -39,6 +41,7 @@ interface RecordProjectionRow {
 export type ExamRecordResultStatus = 'in_progress' | 'passed' | 'failed' | 'timeout';
 
 export interface ExamRecordListFilters {
+  exam_purpose?: ExamPurpose;
   page?: number;
   page_size?: number;
   keyword?: string;
@@ -76,6 +79,7 @@ export function recordSummaryView(row: RecordProjectionRow) {
   const totalCents = row.total_score_cents === null || row.total_score_cents === undefined
     ? NaN : Number(row.total_score_cents);
   return {
+    exam_purpose: examPurposeOf(row.exam_purpose),
     record_id: String(row.record_id),
     paper_id: String(row.paper_id),
     paper_title: row.paper_title,
@@ -119,6 +123,7 @@ export class ExamRecordsService {
       .leftJoin(PaperRelease, 'release', 'release.id = record.release_id')
       .select('record.id', 'record_id')
       .addSelect('record.paper_id', 'paper_id')
+      .addSelect('record.exam_purpose', 'exam_purpose')
       .addSelect('paper.title', 'paper_title')
       .addSelect('record.user_id', 'user_id')
       .addSelect('learner.username', 'username')
@@ -162,6 +167,7 @@ export class ExamRecordsService {
         keyword: `%${keyword}%`,
       });
     }
+    if (filters.exam_purpose) query.andWhere('record.exam_purpose = :examPurpose', { examPurpose: filters.exam_purpose });
     if (filters.paper_id) query.andWhere('record.paper_id = :paperId', { paperId: String(filters.paper_id) });
     if (filters.user_id) query.andWhere('record.user_id = :userId', { userId: String(filters.user_id) });
     if (filters.category_id) query.andWhere('record.category_id = :categoryId', { categoryId: String(filters.category_id) });
@@ -178,23 +184,25 @@ export class ExamRecordsService {
     return { items: rows.map(recordSummaryView), total, page, page_size: pageSize };
   }
 
-  async options(actorId: string) {
+  async options(actorId: string, purpose?: ExamPurpose) {
     void actorId;
+    const papersQuery = this.recordRepo.manager.getRepository(ExamPaper).createQueryBuilder('paper').withDeleted()
+      .select('paper.id', 'id').addSelect('paper.title', 'title')
+      .where('(paper.status IN (:...activeStatuses) OR EXISTS (SELECT 1 FROM exam_record historical_record WHERE historical_record.paper_id = paper.id))', {
+        activeStatuses: ['draft', 'published'],
+      });
+    const categoriesQuery = this.recordRepo.manager.getRepository(TrainingCategory).createQueryBuilder('category').withDeleted()
+      .select('category.id', 'id').addSelect('category.name', 'name')
+      .where('(category.status = :activeStatus OR EXISTS (SELECT 1 FROM exam_record historical_record WHERE historical_record.category_id = category.id))', {
+        activeStatus: 1,
+      });
+    if (purpose) {
+      papersQuery.andWhere('paper.exam_purpose = :examPurpose', { examPurpose: purpose });
+      categoriesQuery.andWhere('EXISTS (SELECT 1 FROM exam_record historical_record WHERE historical_record.category_id = category.id AND historical_record.exam_purpose = :examPurpose)', { examPurpose: purpose });
+    }
     const [papers, categories] = await Promise.all([
-      this.recordRepo.manager.getRepository(ExamPaper).createQueryBuilder('paper').withDeleted()
-        .select('paper.id', 'id').addSelect('paper.title', 'title')
-        .where('(paper.status IN (:...activeStatuses) OR EXISTS (SELECT 1 FROM exam_record historical_record WHERE historical_record.paper_id = paper.id))', {
-          activeStatuses: ['draft', 'published'],
-        })
-        .orderBy('paper.title', 'ASC').addOrderBy('paper.id', 'ASC')
-        .getRawMany<{ id: string; title: string }>(),
-      this.recordRepo.manager.getRepository(TrainingCategory).createQueryBuilder('category').withDeleted()
-        .select('category.id', 'id').addSelect('category.name', 'name')
-        .where('(category.status = :activeStatus OR EXISTS (SELECT 1 FROM exam_record historical_record WHERE historical_record.category_id = category.id))', {
-          activeStatus: 1,
-        })
-        .orderBy('category.name', 'ASC').addOrderBy('category.id', 'ASC')
-        .getRawMany<{ id: string; name: string }>(),
+      papersQuery.orderBy('paper.title', 'ASC').addOrderBy('paper.id', 'ASC').getRawMany<{ id: string; title: string }>(),
+      categoriesQuery.orderBy('category.name', 'ASC').addOrderBy('category.id', 'ASC').getRawMany<{ id: string; name: string }>(),
     ]);
     return {
       papers: papers.map(paper => ({ id: String(paper.id), title: paper.title })),

@@ -6,7 +6,7 @@ import { Errors, ExamStatus, PaperStatus, RegulationStatus } from '../../common/
 import { difficultyForSource } from '../../common/question-difficulty';
 import { RedisService } from '../../common/redis.service';
 import type {
-  AttemptView, Difficulty, ExamDifficulty, Id, LearnerExamDetail, LearnerExamState, LearnerExamSummary, LearnerSource, Page, PoolRule, QuestionOption, QuestionType, RuleSnapshot,
+  AttemptView, Difficulty, ExamDifficulty, ExamPurpose, Id, LearnerExamDetail, LearnerExamState, LearnerExamSummary, LearnerSource, Page, PoolRule, QuestionOption, QuestionType, RuleSnapshot,
 } from '../../common/training-contracts';
 import { ExamAssignment } from '../../entities/exam-assignment.entity';
 import { ExamPaper } from '../../entities/exam-paper.entity';
@@ -36,13 +36,16 @@ import { assertContentCapability, requiredContentCapability } from './question-c
 import { assertPaperLearningEligible, readPaperLearningSummary } from './paper-learning';
 import { isActiveExamRecord, readLearnerExamSummaries } from './learner-exam-summary';
 
+import { examPurposeOf, resolveAttemptLimit } from './exam-purpose';
+
 type AttemptRecordFact = { attemptNo: number; status: string };
 
 export function decideAttemptTransition(input: {
   nowMs: number;
   active: { recordId: string; deadlineAt: Date } | null;
   records: AttemptRecordFact[];
-  maxAttempts: number;
+  maxAttempts: number | null | undefined;
+  examPurpose?: ExamPurpose;
   allowPassedRetakes?: boolean;
 }): { kind: 'recover'; recordId: string } | { kind: 'create'; attemptNo: number } {
   if (input.active) {
@@ -51,12 +54,14 @@ export function decideAttemptTransition(input: {
     }
     throw Errors.examInProgress('考试已到期，请刷新查看状态');
   }
-  if (!input.allowPassedRetakes && input.records.some((record) => record.status === ExamStatus.PASSED)) throw Errors.alreadyPassed();
+  if (input.examPurpose !== 'practice' && !input.allowPassedRetakes && input.records.some((record) => record.status === ExamStatus.PASSED)) throw Errors.alreadyPassed();
   if (input.records.some((record) => record.status === ExamStatus.SUBMITTED)) {
     throw Errors.examInProgress('考试正在等待批改，暂不能补考');
   }
   const attemptNo = input.records.reduce((max, record) => Math.max(max, Number(record.attemptNo) || 0), 0) + 1;
-  if (attemptNo > Number(input.maxAttempts)) throw Errors.attemptsExhausted();
+  const limit = resolveAttemptLimit(input.examPurpose ?? 'formal', input.maxAttempts);
+  if (limit.kind === 'unknown') throw Errors.paperReleaseConflict('考试次数配置缺失，请联系管理员');
+  if (limit.kind === 'limited' && typeof limit.maxAttempts === 'number' && attemptNo > limit.maxAttempts) throw Errors.attemptsExhausted();
   return { kind: 'create', attemptNo };
 }
 
@@ -260,9 +265,9 @@ export class AttemptService {
     }
   }
 
-  start(userId: Id, paperId: Id, mobile?: boolean, contentVersion?: 2): Promise<AttemptView>;
-  start(userId: Id, paperId: Id, mobile: boolean, contentVersion: 2 | 3): Promise<AttemptView<2 | 3>>;
-  async start(userId: Id, paperId: Id, mobile = false, contentVersion: 2 | 3 = 2): Promise<AttemptView<2 | 3>> {
+  start(userId: Id, paperId: Id, mobile?: boolean, contentVersion?: 2, expectedReleaseId?: Id): Promise<AttemptView>;
+  start(userId: Id, paperId: Id, mobile: boolean, contentVersion: 2 | 3, expectedReleaseId?: Id): Promise<AttemptView<2 | 3>>;
+  async start(userId: Id, paperId: Id, mobile = false, contentVersion: 2 | 3 = 2, expectedReleaseId?: Id): Promise<AttemptView<2 | 3>> {
     const outcome = await this.dataSource.transaction(async (manager) => {
       const user = await manager.getRepository(SysUser).findOne({
         where: { id: String(userId) }, lock: { mode: 'pessimistic_write' },
@@ -306,6 +311,7 @@ export class AttemptService {
       if (mobile && paper.businessScope !== 'training') throw Errors.contentInvisible('请使用培训考试入口');
       if (paper.status !== PaperStatus.PUBLISHED) throw Errors.contentInvisible('考试未发布或已撤回');
 
+      const purpose = examPurposeOf(paper.examPurpose);
       let release: PublishedPaper | null = null;
       let pool: PublishedQuestionSnapshot[] | null = null;
       let rule: RuleSnapshot;
@@ -314,7 +320,24 @@ export class AttemptService {
       let difficulty: ExamDifficulty;
       let snapshotOrigin: 'release' | 'legacy_start';
 
-      if (assignment) {
+      if (purpose === 'practice') {
+        if (paper.businessScope !== 'training' || paper.mode !== 'random' || paper.poolScope !== 'public') throw Errors.paperReleaseConflict('模拟考配置无效');
+        release = await this.releases.latestForPaper(String(paper.id), manager);
+        if (!release || release.businessScope !== 'training' || release.mode !== 'random' || release.poolScope !== 'public'
+          || examPurposeOf(release.examPurpose) !== 'practice' || String(release.paperId) !== String(paper.id) || release.rule.maxAttempts !== null) {
+          throw Errors.paperReleaseConflict('模拟考试发布版本无效');
+        }
+        if (!expectedReleaseId || String(expectedReleaseId) !== String(release.id)) {
+          throw Errors.paperReleaseConflict('模拟考试配置已更新，请刷新须知后再开始');
+        }
+        source = assignment ? assignment.source : user.source;
+        if (source !== 'institution' && source !== 'external') throw Errors.param('学员来源未配置或无效，请联系管理员');
+        categoryId = assignment ? assignment.categoryId : null;
+        difficulty = assignment ? assignment.difficulty : resolveAttemptDifficulty(source, release);
+        if (categoryId !== null || (difficulty !== 'easy' && difficulty !== 'hard')) throw Errors.paperReleaseConflict('模拟考试首次归属无效');
+        rule = deepClone(release.rule);
+        snapshotOrigin = 'release';
+      } else if (assignment) {
         rule = deepClone(assignment.ruleSnapshot);
         source = assignment.source;
         categoryId = assignment.categoryId;
@@ -382,7 +405,7 @@ export class AttemptService {
       assertContentCapability(requiredContentCapability(actualPool), contentVersion);
 
       const transition = decideAttemptTransition({
-        nowMs: Date.now(), active: null, records, maxAttempts: Number(rule.maxAttempts), allowPassedRetakes: paper.businessScope === 'training',
+        nowMs: Date.now(), active: null, records, maxAttempts: rule.maxAttempts, examPurpose: purpose, allowPassedRetakes: paper.businessScope === 'training',
       });
       if (transition.kind !== 'create') throw Errors.examInProgress();
 
@@ -413,16 +436,15 @@ export class AttemptService {
       const recordRepo = manager.getRepository(ExamRecord);
       const record = await recordRepo.save(recordRepo.create({
         paperId: String(paper.id),
+        examPurpose: purpose,
         regulationId: paper.regulationId ? String(paper.regulationId) : null,
         userId: String(user.id),
         assignmentId: String(assignment.id),
         activeAssignmentId: String(assignment.id),
-        releaseId: assignment.releaseId ? String(assignment.releaseId) : null,
-        source: assignment.source,
-        categoryId: assignment.categoryId,
-        difficulty: assignment.difficulty,
-        ruleSnapshot: deepClone(assignment.ruleSnapshot),
-        snapshotOrigin: assignment.snapshotOrigin,
+        releaseId: purpose === 'practice' ? String(release!.id) : assignment.releaseId ? String(assignment.releaseId) : null,
+        source, categoryId, difficulty,
+        ruleSnapshot: deepClone(rule),
+        snapshotOrigin,
         attemptNo: transition.attemptNo,
         status: ExamStatus.IN_PROGRESS,
         score: null,
@@ -516,7 +538,7 @@ export class AttemptService {
     const { user, assignments, papers } = await this.visibleExamPapers(userId);
     const records = papers.length ? await this.recordRepo.find({
       where: { userId: String(userId), paperId: In(papers.map(paper => String(paper.id))) },
-      select: ['id', 'userId', 'paperId', 'status', 'deadlineAt'],
+      select: ['id', 'userId', 'paperId', 'status', 'deadlineAt', 'examPurpose', 'releaseId', 'ruleSnapshot'],
     }) : [];
     const nowMs = Date.now();
     const activeIds = new Set(records.filter(record => String(record.userId) === String(userId) && isActiveExamRecord(record, nowMs)).map(record => String(record.paperId)));
@@ -538,7 +560,7 @@ export class AttemptService {
     const paper = papers.find(row => String(row.id) === String(paperId));
     if (!paper) throw Errors.notFound('考试不存在或不可见');
     const records = await this.recordRepo.find({
-      where: { userId: String(userId), paperId: String(paperId) }, select: ['id', 'userId', 'paperId', 'status', 'deadlineAt'],
+      where: { userId: String(userId), paperId: String(paperId) }, select: ['id', 'userId', 'paperId', 'status', 'deadlineAt', 'examPurpose', 'releaseId', 'ruleSnapshot'],
     });
     const [summary] = await readLearnerExamSummaries(this.dataSource.manager, user, [paper], assignments, records);
     const learning = await readPaperLearningSummary(this.dataSource.manager, String(userId), summary.release);

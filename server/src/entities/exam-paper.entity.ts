@@ -8,6 +8,9 @@ export class ExamPaper {
   @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })
   id: string;
 
+  @Column({ name: 'exam_purpose', type: 'varchar', length: 16, default: 'formal' })
+  examPurpose?: import('../common/training-contracts').ExamPurpose;
+
   @Column({ name: 'regulation_id', type: 'bigint', unsigned: true, nullable: true })
   regulationId: string | null;
 
@@ -64,8 +67,8 @@ export class ExamPaper {
   durationMinutes: number;
 
   /** 最大作答次数（含首次），默认 3 */
-  @Column({ name: 'max_attempts', type: 'int', default: 3 })
-  maxAttempts: number;
+  @Column({ name: 'max_attempts', type: 'int', nullable: true, default: 3 })
+  maxAttempts: number | null;
 
   /** 多选漏选部分分比例 [0.00, 1.00]，默认 0.50 */
   @Column({ name: 'partial_credit_ratio', type: 'decimal', precision: 4, scale: 2, default: 0.5 })

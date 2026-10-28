@@ -5,8 +5,9 @@ import { AuditService } from '../../common/audit.service';
 import { BizError, Errors } from '../../common/errors';
 import { assertPaperLearningCourses, normalizePaperLearning } from './paper-learning';
 import { MAX_PAPER_SCORE_CENTS, paperScoreRule } from './paper-score';
-import type { Difficulty, PoolRule, PoolScope, QuestionContentV2, QuestionOption, QuestionType, RuleSnapshot } from '../../common/training-contracts';
+import type { Difficulty, ExamPurpose, PoolRule, PoolScope, QuestionContentV2, QuestionOption, QuestionType, RuleSnapshot } from '../../common/training-contracts';
 import { paperPoolConfig } from './paper-pool';
+import { examPurposeOf } from './exam-purpose';
 import { ExamPaper } from '../../entities/exam-paper.entity';
 import { PaperQuestion } from '../../entities/paper-question.entity';
 import { PaperRelease } from '../../entities/paper-release.entity';
@@ -49,6 +50,7 @@ export interface ReleaseQuestionSnapshot {
 }
 
 interface PublishedPaperBase {
+  examPurpose?: ExamPurpose;
   id: string;
   paperId: string;
   poolScope?: PoolScope;
@@ -227,21 +229,22 @@ export class PaperReleaseService implements OnModuleInit {
     const rule: RuleSnapshot = {
       ...paperScoreRule(paper.businessScope === 'regulation' ? 100 : paper.totalScore, paper.passScore),
       durationMinutes: Number(paper.durationMinutes),
-      maxAttempts: Number(paper.maxAttempts),
+      maxAttempts: paper.maxAttempts,
       partialCreditRatio: Number(paper.partialCreditRatio),
       rules: rules.map((item) => ({ ...item })),
     };
-    this.assertRule(rule, requireComplete);
+    if (examPurposeOf(paper.examPurpose) === 'practice' && (paper.businessScope !== 'training' || paper.mode !== 'random' || paper.poolScope !== 'public')) throw Errors.paperRuleInvalid('模拟考仅支持公共随机培训卷');
+    this.assertRule(rule, requireComplete, examPurposeOf(paper.examPurpose));
     return rule;
   }
 
-  private assertRule(rule: RuleSnapshot, requireComplete = true): void {
+  private assertRule(rule: RuleSnapshot, requireComplete = true, purpose: ExamPurpose = 'formal'): void {
     if (!Number.isInteger(rule.totalCents) || rule.totalCents < 1 || rule.totalCents > MAX_PAPER_SCORE_CENTS) throw Errors.paperRuleInvalid('试卷总分必须为 0.01～999.99 分');
     if (!Number.isInteger(rule.passCents) || rule.passCents <= 0 || rule.passCents > rule.totalCents) {
       throw Errors.paperRuleInvalid('及格分数必须大于 0 且不超过试卷总分');
     }
     if (!Number.isInteger(rule.durationMinutes) || rule.durationMinutes < 1 || rule.durationMinutes > 1440) throw Errors.paperRuleInvalid('考试时长必须为1—1440分钟');
-    if (!Number.isInteger(rule.maxAttempts) || rule.maxAttempts < 1 || rule.maxAttempts > 100) throw Errors.paperRuleInvalid('作答次数必须为1—100次');
+    if (purpose === 'practice' ? rule.maxAttempts !== null : (typeof rule.maxAttempts !== 'number' || !Number.isInteger(rule.maxAttempts) || rule.maxAttempts < 1 || rule.maxAttempts > 100)) throw Errors.paperRuleInvalid('作答次数必须为1—100次');
     if (!Number.isFinite(rule.partialCreditRatio) || rule.partialCreditRatio < 0 || rule.partialCreditRatio > 1) {
       throw Errors.paperRuleInvalid('多选漏选比例必须在 0—1 之间');
     }
@@ -463,6 +466,7 @@ export class PaperReleaseService implements OnModuleInit {
         paperId: String(paper.id),
         versionNo: Number(previous?.versionNo || 0) + 1,
         businessScope: paper.businessScope,
+        examPurpose: examPurposeOf(paper.examPurpose),
         mode: paper.mode,
         poolScope: poolConfig.poolScope,
         categoryId: paper.categoryId ? String(paper.categoryId) : null,
@@ -536,6 +540,7 @@ export class PaperReleaseService implements OnModuleInit {
     const base = {
       id: String(release.id),
       paperId: String(release.paperId),
+      examPurpose: examPurposeOf(release.examPurpose),
       poolScope: release.poolScope ?? 'category',
       rule: deepClone(release.ruleSnapshot),
       requiresLearning: Boolean(release.requiresLearning),
@@ -606,6 +611,7 @@ export class PaperReleaseService implements OnModuleInit {
       : pool;
     return {
       paper_id: String(paper.id),
+      exam_purpose: examPurposeOf(paper.examPurpose),
       release_id: releaseId,
       mode: paper.mode as PaperMode,
       sample_kind: paper.mode === 'random' ? 'random_example' as const : 'fixed_paper' as const,

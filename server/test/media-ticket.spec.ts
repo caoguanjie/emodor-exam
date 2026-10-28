@@ -6,6 +6,7 @@ import { MediaService } from '../src/modules/media/media.service';
 import { MediaAsset } from '../src/entities/media-asset.entity';
 import { MediaReference } from '../src/entities/media-reference.entity';
 import { IdentityVerificationSession } from '../src/entities/identity-verification-session.entity';
+import { AttemptReaderService } from '../src/modules/exams/attempt-reader.service';
 import { SysUser } from '../src/entities/sys-user.entity';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -148,4 +149,24 @@ describe('short lived media tickets', () => {
       expect([...references]).toEqual(['2', '3', '4']);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
+});
+
+
+it('authorizes practice v1 and v2 images from each frozen record after republication, with no cross-account grant', async () => {
+  const records: any[] = ['21', '22'].map((releaseId, i) => ({ id: String(41 + i), paperId: '11', userId: '9', releaseId, examPurpose: 'practice', status: 'passed', gradingState: 'finalized', submittedAt: new Date() }));
+  const items = records.map((record, i) => ({ id: String(501 + i), recordId: record.id, snapshotJson: { type: 'single', stem: `<img data-media-id="${801 + i}">`, options: [{ key: 'A', text: '甲' }, { key: 'B', text: '乙' }], answer: [0], analysis: `<img data-media-id="${803 + i}">` } }));
+  let policy: any;
+  const service = new AttemptReaderService({ findOne: async ({ where }: any) => records.find(row => row.id === where.id) } as any, { findOne: async ({ where }: any) => items.find(row => row.id === where.id) } as any, {} as any,
+    { registerOwnerPolicy: (_owner: string, value: any) => { policy = value; } } as any,
+    { getRepository: (entity: unknown) => {
+      if (entity !== SysUser) throw new Error('media authorization must use frozen record facts');
+      return { findOne: async ({ where }: any) => ({ id: where.id, role: 'employee', status: 1 }) };
+    } } as any, { permissions: async () => [] } as any);
+  service.onModuleInit();
+  for (let i = 0; i < 2; i++) {
+    expect(await policy.authorizeTicket('9', String(501 + i), String(801 + i))).toBe(true);
+    expect(await policy.authorizeTicket('9', String(501 + i), String(803 + i))).toBe(true);
+    expect(await policy.authorizeTicket('8', String(501 + i), String(801 + i))).toBe(false);
+    expect(await policy.authorizeTicket('9', String(501 + i), String(802 - i))).toBe(false);
+  }
 });

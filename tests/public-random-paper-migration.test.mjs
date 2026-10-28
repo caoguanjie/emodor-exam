@@ -56,7 +56,8 @@ test('042 defaults historical pools to category, preserves facts, matches init a
     for (const table of ['exam_paper', 'paper_release']) {
       const [rows] = await state.connection.query(`SELECT * FROM ${table}`);
       assert.equal(rows[0].pool_scope, 'category');
-      assert.deepEqual(rows.map(({ pool_scope, ...row }) => row), before[table]);
+      assert.equal(rows[0].exam_purpose, 'formal');
+      assert.deepEqual(rows.map(({ pool_scope, exam_purpose, ...row }) => row), before[table]);
       assert.deepEqual(await columns(state.connection, table), await columns(installed.connection, table));
     }
     assert.deepEqual((await state.connection.query('SELECT * FROM exam_assignment'))[0], before.exam_assignment);

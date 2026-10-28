@@ -477,7 +477,7 @@ describe('TrainingStatisticsService', () => {
     expect(query.take).toHaveBeenCalledWith(1);
     expect(query.andWhere).toHaveBeenCalledWith(expect.any(String), { keyword: '%安全%' });
     expect(query.andWhere).toHaveBeenCalledWith(expect.stringContaining('release.categoryId'), { categoryId: '7' });
-    expect(recordFind).toHaveBeenCalledWith(expect.objectContaining({ where: { releaseId: expect.anything() } }));
+    expect(recordFind).toHaveBeenCalledWith(expect.objectContaining({ where: { releaseId: expect.anything(), examPurpose: 'formal' } }));
   });
 
   it('keeps frozen totals for published exams without participants', async () => {
@@ -565,5 +565,51 @@ describe('TrainingStatisticsController', () => {
 
     expect(decodeURIComponent(headers.get('Content-Disposition') || '')).toContain('培训考试成绩排名.xlsx');
     expect(response.end).toHaveBeenCalledWith(Buffer.from('xlsx'));
+  });
+});
+
+
+describe('formal statistics exclude practice at every entry', () => {
+  it('preserves formal summary, ranking and export after higher and more recent practice results', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-28T00:00:00Z'));
+    try {
+      const { service } = serviceFixture();
+      const rows: any[] = [record({ id: '701', userId: '1', difficulty: 'easy', score: 60 })];
+      Object.assign(service, { recordRepo: repository(rows) });
+      const filter = { paperId: '10', difficulty: 'easy' as const, page: 1, pageSize: 20 };
+      const before = await service.examSummary(filter), ranking = await service.ranking(filter);
+      rows.push({ ...record({ id: '702', userId: '1', difficulty: 'easy', score: 100 }), examPurpose: 'practice' },
+        { ...record({ id: '703', userId: '2', difficulty: 'easy', score: 100 }), examPurpose: 'practice' });
+      expect(await service.examSummary(filter)).toEqual(before);
+      expect(await service.ranking(filter)).toEqual(ranking);
+      const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(await service.export(filter));
+      expect(workbook.getWorksheet('成绩排名')!.getRow(2).getCell(6).value).toBe(60);
+      expect(workbook.getWorksheet('成绩排名')!.rowCount).toBe(2);
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(['examSummary', 'ranking', 'export'] as const)('rejects a direct practice paper ID for %s', async method => {
+    const { service } = serviceFixture();
+    Object.assign(service, { paperRepo: repository([{ id: '10', businessScope: 'training', examPurpose: 'practice' }]) });
+    await expect(service[method]({ paperId: '10', difficulty: 'easy', page: 1, pageSize: 20 })).rejects.toMatchObject({ code: 40401 });
+  });
+  it('rejects practice releases and excludes practice from options', async () => {
+    const { service } = serviceFixture();
+    Object.assign(service, { paperRepo: repository([{ id: '10', title: '正式', businessScope: 'training' }, { id: '11', title: '模拟', businessScope: 'training', examPurpose: 'practice' }]) });
+    expect((await service.options()).papers.map(row => row.id)).toEqual(['10']);
+    Object.assign(service, { releaseRepo: repository([{ id: '20', paperId: '10', examPurpose: 'practice' }]) });
+    await expect(service.examSummary({ paperId: '10' } as any)).rejects.toMatchObject({ code: 40401 });
+  });
+  it('filters purpose before overview count and pagination and excludes practice record scores', async () => {
+    const { service } = serviceFixture(); const query: any = {};
+    for (const method of ['leftJoinAndMapOne', 'where', 'andWhere', 'orderBy', 'skip', 'take']) query[method] = vi.fn(() => query);
+    query.getManyAndCount = vi.fn(async () => [[{ id: '10', title: '正式', status: 'published', statisticsRelease: { id: '20', ruleSnapshot: RULE } }], 1]);
+    Object.assign(service, { paperRepo: { createQueryBuilder: () => query }, recordRepo: repository([
+      record({ id: '701', userId: '1', difficulty: 'easy', score: 60 }),
+      { ...record({ id: '702', userId: '1', difficulty: 'easy', score: 100 }), examPurpose: 'practice' },
+    ]) });
+    expect(await service.overview({ page: 1, pageSize: 1 })).toMatchObject({ total: 1, items: [{ average_score: 60, participant_count: 1 }] });
+    expect(query.andWhere).toHaveBeenCalledWith('paper.examPurpose = :examPurpose', { examPurpose: 'formal' });
+    expect(query.andWhere).toHaveBeenCalledWith('release.examPurpose = :examPurpose', { examPurpose: 'formal' });
+    expect(query.andWhere.mock.invocationCallOrder.at(-1)).toBeLessThan(query.skip.mock.invocationCallOrder[0]);
   });
 });

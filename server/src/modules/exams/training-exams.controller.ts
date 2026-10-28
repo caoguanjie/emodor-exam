@@ -2,7 +2,7 @@ import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/comm
 import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
 import { AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
-import { DtoValidationPipe } from '../../common/dto-validation.pipe';
+import { DtoValidationPipe, StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { TRAINING_DEFAULTS } from '../../common/training-contracts';
 import type { LearnerExamState } from '../../common/training-contracts';
 import { Errors } from '../../common/errors';
@@ -10,6 +10,7 @@ import { AttemptService } from './attempt.service';
 import { SubmissionService } from './submission.service';
 import { ExamHistoryService } from './exam-history.service';
 import { HistoryPageDto } from './grading.dto';
+import { StartAttemptDto } from './attempt.dto';
 import { readContentCapability } from './question-content-capability';
 
 export class AttemptPageDto {
@@ -52,9 +53,9 @@ export class TrainingExamsController {
   }
 
   @Post('exams/:id/start')
-  start(@Param('id') id: string, @CurrentUser() user: AuthUser, @Headers('x-question-content-version') header?: unknown) {
+  start(@Param('id') id: string, @CurrentUser() user: AuthUser, @Headers('x-question-content-version') header?: unknown, @Body(new StrictDtoValidationPipe(['expected_release_id'])) dto?: StartAttemptDto) {
     mobileLearner(user);
-    return this.attempts.start(String(user.id), decimalId(id), true, readContentCapability(header));
+    return this.attempts.start(String(user.id), decimalId(id), true, readContentCapability(header), dto?.expected_release_id);
   }
 
   @Get('exam-records')

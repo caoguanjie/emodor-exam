@@ -12,6 +12,7 @@ import type { PublishedQuestionSnapshot } from './paper-release.service';
 import { collectContentAssetIds, parseQuestionContent, projectStudentContent } from '../questions/question-content-dispatch';
 import { assertExamIdentity, expireExamRecord, isScoredLegacyTimeout } from './exam-state';
 import { SysUser } from '../../entities/sys-user.entity';
+import { examPurposeOf } from './exam-purpose';
 import { assertContentCapability, requiredContentCapability } from './question-content-capability';
 
 export type GradingSnapshotItem = PublishedQuestionSnapshot & {
@@ -167,7 +168,7 @@ export class AttemptReaderService implements OnModuleInit {
       if (!record) throw Errors.notFound('考试记录不存在');
       if (String(record.userId) !== String(userId)) throw Errors.dataForbidden();
       if (record.status === ExamStatus.IN_PROGRESS && new Date(record.deadlineAt).getTime() <= Date.now()) record = await expireExamRecord(manager, record);
-      const base = { status: record.status as AttemptView['status'], record_id: String(record.id), paper_id: String(record.paperId), release_id: record.releaseId ? String(record.releaseId) : null, deadline_at: new Date(record.deadlineAt).toISOString(), server_now: new Date().toISOString() };
+      const base = { exam_purpose: examPurposeOf(record.examPurpose), status: record.status as AttemptView['status'], record_id: String(record.id), paper_id: String(record.paperId), release_id: record.releaseId ? String(record.releaseId) : null, deadline_at: new Date(record.deadlineAt).toISOString(), server_now: new Date().toISOString() };
       if (record.status !== ExamStatus.IN_PROGRESS) return { ...base, questions: [] };
       if (!record.regulationId) await assertExamIdentity(manager, String(userId));
       if (!record.assignmentId || !record.ruleSnapshot || !record.difficulty) {

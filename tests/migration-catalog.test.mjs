@@ -8,12 +8,12 @@ test('every shipped migration is accepted by the real runner before database acc
   const migrations = await listMigrations();
   assert.ok(migrations.length > 0);
   for (const migration of migrations) assert.ok(migration.steps.length > 0, migration.id);
-  assert.deepEqual(migrations.slice(-10).map((migration) => migration.id), [
+  assert.deepEqual(migrations.slice(-11).map((migration) => migration.id), [
     '033_cos_media_storage', '034_administrator_soft_delete',
     '035_role_management', '036_role_menu_button_permissions',
     '037_dictionary_types', '038_remove_administrator_role_assignment',
     '039_site_about_settings', '040_paper_withdraw_metadata',
-    '041_training_withdraw_to_draft', '042_public_random_paper',
+    '041_training_withdraw_to_draft', '042_public_random_paper', '043_practice_random_exam',
   ]);
   const lifecycle = migrations.find((migration) => migration.id === '026_question_lifecycle_slimming');
   assert.equal(lifecycle.steps[0].replacesCheck, '025_question_bank_without_scores/question_score_nullable');

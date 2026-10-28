@@ -77,3 +77,17 @@ describe('AdminDashboardService overview and trend', () => {
     expect(f.query).not.toHaveBeenCalled();
   });
 });
+
+
+it('restricts all dashboard paper and record aggregates to formal before aggregation', async () => {
+  const { AdminDashboardService } = await import('../src/modules/statistics/admin-dashboard.service');
+  const f = await dashboardQueryFixture(['papers:read', 'statistics:read']);
+  const service = new AdminDashboardService(f.source, f.access as any);
+  await service.overview('9', NOW); await service.examTrend('9', 7, NOW);
+  const calls = f.query.mock.calls;
+  expect(calls.find(([sql]) => sql.includes('FROM exam_paper'))![0]).toContain("exam_purpose = 'formal'");
+  expect(calls.find(([sql]) => sql.includes('FROM exam_record WHERE'))![0]).toContain("exam_purpose = 'formal'");
+  for (const [sql, params] of calls.filter(([sql]) => sql.includes('today_participant_count') || sql.includes('ROW_NUMBER()'))) {
+    expect(sql).toContain('`record`.`exam_purpose`'); expect(params).toContain('formal');
+  }
+});
