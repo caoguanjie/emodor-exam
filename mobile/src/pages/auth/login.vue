@@ -13,6 +13,8 @@ import { isStaticSessionPreview } from '@/platform/session'
 import { useSessionStore } from '@/stores/session'
 import { learnerLandingUrl } from '@/utils/learner-onboarding'
 import { nativeNavigationStyle } from '@/platform/native-layout'
+import { useSiteConfig } from '@/composables/useSiteConfig'
+import { resolvePublicBrandingUrl } from '@/platform/media-url'
 
 const nativeStyle = nativeNavigationStyle()
 const { scenario, loadScenario } = useShellScenario('login-default')
@@ -33,6 +35,8 @@ const hasError = ref(false)
 const sent = ref(false)
 const feedback = ref('短信验证码用于验证你的身份')
 const session = useSessionStore()
+const { config, load, invalidate } = useSiteConfig()
+const logo = computed(() => preview.value ? '/static/brand-logo.png' : resolvePublicBrandingUrl(config.value?.logo_asset_id))
 let ticker: ReturnType<typeof setInterval> | undefined
 let active = true
 let navigationRevision = 0
@@ -42,9 +46,9 @@ onLoad(query => {
   loadScenario(query)
   if (!preview.value) ticker = setInterval(() => { clock.value = Date.now() }, 250)
 })
-function deactivateLogin() { active = false; navigationRevision++; consent.value?.cancelPending(); previewForm.value?.cancelPending() }
+function deactivateLogin() { active = false; navigationRevision++; invalidate(); consent.value?.cancelPending(); previewForm.value?.cancelPending() }
 onHide(deactivateLogin)
-onShow(() => { active = true })
+onShow(() => { active = true; if (!preview.value) void load() })
 onUnload(() => { deactivateLogin(); if (ticker) clearInterval(ticker); challengeId.value = ''; code.value = '' })
 
 const remaining = computed(() => Math.max(0, Math.ceil((retryAt.value - clock.value) / 1000)))
@@ -113,7 +117,7 @@ async function submitLogin() {
 </script>
 <template>
   <view class="login-page" :style="nativeStyle">
-    <view class="login-page__hero"><AppTopBar title="学员登录" :back="false" light /><view class="login-page__brand"><view class="login-page__logo"><image src="/static/brand-logo.png" mode="aspectFit" /></view><view class="login-page__brand-copy"><text class="login-page__institution">{{ institution }}</text><text class="login-page__subtitle">{{ platformSubtitle }}</text></view></view></view>
+    <view class="login-page__hero"><AppTopBar title="学员登录" :back="false" light /><view class="login-page__brand"><view v-if="logo" class="login-page__logo"><image :src="logo" mode="aspectFit" /></view><view class="login-page__brand-copy"><text class="login-page__institution">{{ institution }}</text><text class="login-page__subtitle">{{ platformSubtitle }}</text></view></view></view>
     <view class="login-page__body">
       <SmsLoginForm v-if="preview" ref="previewForm" :scenario="scenario" @scenario="setScenario" @login="login" @terms="openTerms" />
       <view v-else class="login-form">

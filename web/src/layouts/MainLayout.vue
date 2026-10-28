@@ -2,7 +2,7 @@
   <el-container class="shell">
     <el-aside :width="sidebarCollapsed ? '68px' : '232px'" class="aside" :class="{ 'is-collapsed': sidebarCollapsed }">
       <div class="logo">
-        <img class="logo-badge" :src="logoSrc" alt="海珠区安全教育培训中心 Logo" />
+        <img v-if="logoSrc" class="logo-badge" :src="logoSrc" alt="海珠区安全教育培训中心 Logo" />
         <div class="logo-text"><span class="logo-name">海珠区安全教育培训中心</span><span class="logo-sub">安全教育培训与考试平台</span></div>
       </div>
       <el-scrollbar class="nav-scroll">
@@ -107,7 +107,6 @@ import { useAuthStore } from '../stores/auth';
 import { useTabsStore } from '../stores/tabs';
 import { invalidateTabCache, tabCacheKey, type TabCacheVersions } from '../stores/tab-cache';
 import { defaultHomePath, routeAccessAllowed } from '../router/access';
-import defaultBrandLogo from '../assets/brand-logo.png';
 
 interface NavigationNode { id:string; name:string; type:'directory'|'menu'|'button'; route_path:string|null; permission_code:string|null; icon:string|null; status:number; children:NavigationNode[] }
 interface NavigationItem { name:string; path:string; icon:string|null }
@@ -129,7 +128,7 @@ const iconMap:Record<string,Component>={AlarmClock,CollectionTag,Cpu,DataAnalysi
 const iconFor=(name:string|null)=>name?iconMap[name]||Setting:null;
 const roleLabel=computed(()=>auth.user?.role==='super_admin'?'超级管理员':auth.user?.role==='regulation_admin'||auth.user?.permissions?.length?'业务管理员':'学员');
 const avatarChar=computed(()=>(auth.user?.real_name||'用').slice(0,1));
-const logoSrc=computed(()=>siteConfig.logo_asset_id?resolvePublicBranding(siteConfig.logo_asset_id):defaultBrandLogo);
+const logoSrc=computed(()=>resolvePublicBranding(siteConfig.logo_asset_id));
 const defaultOpeneds=computed(()=>adminGroups.value.filter(group=>!group.path&&group.name!=='系统设置').map(group=>group.id));
 const homePath=computed(()=>defaultHomePath(auth.isAdmin));
 
@@ -162,7 +161,7 @@ async function loadNavigation(){
     adminGroups.value=roots.filter(root=>root.status).map(root=>{const directPath=root.type==='menu'&&root.route_path&&routeAllowed(root.route_path)?root.route_path:null;return{id:String(root.id),name:root.name,path:directPath,icon:root.icon,items:directPath?[]:flattenMenus(root.children||[])}}).filter(group=>!!group.path||group.items.length>0);
   }catch{if(currentNavigation(request))adminGroups.value=[]}
 }
-async function loadSiteConfig(){try{const value=await http.get('/site-config') as SiteConfig;siteConfig.logo_asset_id=value.logo_asset_id||null}catch{/* bundled logo remains */}}
+async function loadSiteConfig(){try{const value=await http.get('/site-config') as SiteConfig;siteConfig.logo_asset_id=value.logo_asset_id||null}catch{siteConfig.logo_asset_id=null}}
 function toggleSidebar(){sidebarCollapsed.value=!sidebarCollapsed.value;try{window.localStorage?.setItem(SIDEBAR_STORAGE_KEY,sidebarCollapsed.value?'1':'0')}catch{/* layout preference stays in memory */}}
 
 watch(()=>route.fullPath,()=>{tabs.visit(route.fullPath,String(route.meta.title||'未命名页面'))},{immediate:true});

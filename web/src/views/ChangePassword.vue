@@ -2,7 +2,7 @@
   <div class="login-wrap">
     <div class="pwd-card page-enter">
       <div class="pwd-head">
-        <img class="pwd-logo" :src="brandLogo" alt="海珠区安全教育培训中心 Logo" />
+        <img v-if="logoSrc" class="pwd-logo" :src="logoSrc" alt="海珠区安全教育培训中心 Logo" />
         <div>
           <div class="pwd-brand-name">海珠区安全教育培训中心</div>
           <h3>首次登录，请修改密码</h3>
@@ -22,11 +22,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { postAuthPath } from '../router/access';
-import brandLogo from '../assets/brand-logo.png';
+import http from '../api/http';
+import { resolvePublicBranding } from '../services/media-content';
 
 const router = useRouter();
 const route = useRoute();
@@ -35,6 +36,14 @@ const oldPwd = ref('');
 const newPwd = ref('');
 const newPwd2 = ref('');
 const loading = ref(false);
+const logoSrc = ref('');
+
+async function loadLogo() {
+  try {
+    const value = await http.get('/site-config') as { logo_asset_id?: string | null };
+    logoSrc.value = resolvePublicBranding(value.logo_asset_id);
+  } catch { logoSrc.value = ''; }
+}
 
 async function onChange() {
   loading.value = true;
@@ -45,6 +54,8 @@ async function onChange() {
     loading.value = false;
   }
 }
+
+onMounted(() => { loadLogo().catch(() => undefined); });
 </script>
 
 <style scoped>

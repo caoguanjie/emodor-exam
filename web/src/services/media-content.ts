@@ -43,7 +43,8 @@ export async function resolvePcMediaSource(assetId: string): Promise<string> {
   return (await resolvePcMedia(assetId)).content_url;
 }
 
-export function resolvePublicBranding(assetId: string): string {
+export function resolvePublicBranding(assetId: string | null | undefined): string {
+  if (assetId === null || assetId === undefined || assetId === '') return '';
   if (!/^[1-9]\d{0,19}$/.test(assetId)) throw new Error('品牌媒体标识无效');
   return `/api/v1/site-config/assets/${assetId}/content`;
 }

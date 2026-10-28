@@ -3,7 +3,7 @@
     <!-- 左侧品牌叙事：公文藏蓝 + 品牌 Logo -->
     <aside class="brand-pane">
       <div class="brand-top">
-        <img class="brand-logo" :src="brandLogo" alt="海珠区安全教育培训中心 Logo" />
+        <img v-if="logoSrc" class="brand-logo" :src="logoSrc" alt="海珠区安全教育培训中心 Logo" />
         <span class="brand-name">海珠区安全教育培训中心</span>
       </div>
       <h1 class="brand-title re-display">让每一次安全培训<br />都真正落到实处</h1>
@@ -29,7 +29,7 @@
     <main class="form-pane">
       <div class="form-card page-enter">
         <div class="form-brand-sm">
-          <img class="brand-logo-sm" :src="brandLogo" alt="海珠区安全教育培训中心 Logo" />
+          <img v-if="logoSrc" class="brand-logo-sm" :src="logoSrc" alt="海珠区安全教育培训中心 Logo" />
           <span>海珠区安全教育培训中心</span>
         </div>
         <h2>登录</h2>
@@ -71,7 +71,7 @@ import { User, Lock, Key, Reading, EditPen } from '@element-plus/icons-vue';
 import { useAuthStore } from '../stores/auth';
 import http from '../api/http';
 import { defaultHomePath, validPostAuthRedirect } from '../router/access';
-import brandLogo from '../assets/brand-logo.png';
+import { resolvePublicBranding } from '../services/media-content';
 
 const router = useRouter();
 const route = useRoute();
@@ -81,6 +81,7 @@ const password = ref('');
 const captchaId = ref('');
 const captchaImage = ref('');
 const captchaCode = ref('');
+const logoSrc = ref('');
 const loading = ref(false);
 const captchaLoading = ref(false);
 
@@ -103,6 +104,13 @@ async function loadCaptcha() {
   }
 }
 
+async function loadLogo() {
+  try {
+    const value = await http.get('/site-config') as { logo_asset_id?: string | null };
+    logoSrc.value = resolvePublicBranding(value.logo_asset_id);
+  } catch { logoSrc.value = ''; }
+}
+
 async function onLogin() {
   if (loading.value || captchaLoading.value || !captchaId.value || !username.value || !password.value) return;
   loading.value = true;
@@ -121,7 +129,7 @@ async function onLogin() {
   }
 }
 
-onMounted(() => { loadCaptcha().catch(() => undefined); });
+onMounted(() => { loadCaptcha().catch(() => undefined); loadLogo().catch(() => undefined); });
 </script>
 
 <style scoped>

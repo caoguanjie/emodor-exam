@@ -18,10 +18,11 @@ const about = computed(() => preview.value ? {
 } : config.value?.about)
 const dialNumber = computed(() => about.value?.contact_phone?.replace(/[^\d+]/g, '') || '')
 const logo = computed(() => {
-    if (!preview.value && config.value?.logo_asset_id && !logoFailed.value) {
-        try { return resolvePublicBrandingUrl(config.value.logo_asset_id) } catch { /* Use the bundled logo when unavailable. */ }
+    if (preview.value) return '/static/brand-logo.png'
+    if (config.value?.logo_asset_id && !logoFailed.value) {
+        try { return resolvePublicBrandingUrl(config.value.logo_asset_id) } catch { /* Hide the brand slot when unavailable. */ }
     }
-    return '/static/brand-logo.png'
+    return ''
 })
 
 onLoad(query => { preview.value = isStaticSessionPreview(query); loadScenario(query) })
@@ -43,7 +44,7 @@ function callContactPhone() {
         <EmptyState v-else-if="!preview && error" title="关于我们加载失败" :description="error"><wd-button size="small" @click="load">重新加载</wd-button></EmptyState>
         <template v-else-if="about">
             <view class="about-brand">
-                <image class="about-brand__logo" :src="logo" mode="aspectFit" @error="logoFailed = true" />
+                <image v-if="logo" class="about-brand__logo" :src="logo" mode="aspectFit" @error="logoFailed = true" />
                 <text class="about-brand__title">{{ about.institution_name }}</text>
                 <text class="about-brand__subtitle">{{ about.platform_subtitle }}</text>
             </view>

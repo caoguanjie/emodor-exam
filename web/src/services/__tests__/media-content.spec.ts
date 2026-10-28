@@ -52,6 +52,7 @@ describe('controlled PC media addresses', () => {
     expect(resolvePublicBranding('25')).toBe('/api/v1/site-config/assets/25/content');
     vi.stubEnv('VITE_MEDIA_ORIGIN', 'https://media.example.test');
     expect(resolvePublicBranding('25')).toBe('/api/v1/site-config/assets/25/content');
+    expect(resolvePublicBranding('')).toBe('');
     expect(() => resolvePublicBranding('../25')).toThrow();
   });
 });

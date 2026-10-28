@@ -43,7 +43,8 @@ export function resolveMediaUrl(url: string): string {
 }
 
 /** Public branding has a separate fixed route; it never accepts arbitrary media URLs. */
-export function resolvePublicBrandingUrl(assetId: string): string {
+export function resolvePublicBrandingUrl(assetId: string | null | undefined): string {
+  if (assetId === null || assetId === undefined || assetId === '') return ''
   if (typeof assetId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(assetId)) throw new MediaUrlError('公开品牌资源地址无效')
   return platformUrl(`/api/v1/site-config/assets/${assetId}/content`)
 }
