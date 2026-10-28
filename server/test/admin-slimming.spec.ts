@@ -275,7 +275,7 @@ describe('training demo admin slimming', () => {
     expect(routes).not.toEqual(expect.arrayContaining(['generate-questions', 'questions/:id/regenerate', 'questions/:id/review', 'question-concepts', 'question-concept-options']));
   });
 
-  it('retires paper withdrawal and archive routes while retaining publish and copy', () => {
+  it('restores training withdrawal while retiring archive and legacy withdrawal', () => {
     const paths = (controller: { prototype: object }) => Object.getOwnPropertyNames(controller.prototype).flatMap((name) => {
       const handler = (controller.prototype as Record<string, unknown>)[name];
       const path = Reflect.getMetadata('path', handler as object);
@@ -283,12 +283,13 @@ describe('training demo admin slimming', () => {
     });
 
     const trainingRoutes = paths(PaperAdminController);
-    expect(trainingRoutes).toEqual(expect.arrayContaining([':id/publish', ':id/copy']));
-    expect(trainingRoutes).not.toEqual(expect.arrayContaining([':id/withdraw', ':id/archive']));
+    expect(trainingRoutes).toEqual(expect.arrayContaining([':id/publish', ':id/copy', ':id/withdraw']));
+    expect(trainingRoutes).not.toContain(':id/archive');
 
     const legacyRoutes = paths(AiController);
     expect(legacyRoutes).toEqual(expect.arrayContaining(['papers/:id/publish', 'papers/:id/copy']));
     expect(legacyRoutes).not.toContain('papers/:id/archive');
+    expect(legacyRoutes).not.toContain('papers/:id/withdraw');
   });
 
   it('exposes material source names and no removed rubric in reviewed question views', async () => {

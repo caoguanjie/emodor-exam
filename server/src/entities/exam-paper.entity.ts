@@ -68,7 +68,7 @@ export class ExamPaper {
   @Column({ name: 'partial_credit_ratio', type: 'decimal', precision: 4, scale: 2, default: 0.5 })
   partialCreditRatio: string;
 
-  /** 新流程 draft / published；withdrawn / archived 仅历史只读兼容。 */
+  /** 培训流程 draft / published，撤回回到 draft；withdrawn / archived 历史兼容，legacy 不开放撤回。 */
   @Column({ type: 'varchar', length: 16, default: 'draft' })
   status: string;
 

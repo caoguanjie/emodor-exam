@@ -202,6 +202,12 @@ export class PaperAdminController {
     return { release_id: result.releaseId };
   }
 
+  @Post(':id/withdraw')
+  @Permissions('papers:publish')
+  withdraw(@Param('id') paperId: string, @CurrentUser() user: AuthUser) {
+    return this.releases.withdraw(id(paperId, 'paper_id'), String(user.id));
+  }
+
   @Post(':id/copy')
   @Permissions('papers:write')
   copy(@Param('id') paperId: string, @CurrentUser() user: AuthUser, @Req() req: Request) {

@@ -70,6 +70,7 @@ const ACTION_LABELS: Record<string, string> = {
   'paper.publish': '发布试卷',
   'paper.copy': '复制试卷',
   'paper.release.publish': '发布试卷版本',
+  'paper.release.withdraw': '撤回试卷发布',
   'training_paper.create': '新增培训试卷',
   'training_paper.update': '修改培训试卷',
   'training_paper.questions.set': '调整培训试卷题目',

@@ -491,6 +491,30 @@ export class PaperReleaseService implements OnModuleInit {
     return result;
   }
 
+  async withdraw(paperId: string, actorId: string): Promise<{ paper_id: string; status: 'draft' }> {
+    const changed = await this.dataSource.transaction(async (manager) => {
+      const paperRepo = manager.getRepository(ExamPaper);
+      // New attempts take the same paper lock before checking published status.
+      const paper = await paperRepo.findOne({ where: { id: String(paperId) }, lock: { mode: 'pessimistic_write' } });
+      if (!paper || paper.businessScope !== 'training') throw Errors.notFound('培训试卷不存在');
+      if (paper.status === 'draft' && await manager.getRepository(PaperRelease).existsBy({ paperId: String(paperId) })) return false;
+      if (paper.status !== 'published' && paper.status !== 'withdrawn') throw Errors.paperReleaseConflict('只有已发布试卷可以撤回');
+
+      paper.status = 'draft';
+      paper.updatedBy = String(actorId);
+      paper.updatedAt = new Date();
+      await paperRepo.save(paper);
+      return true;
+    });
+    if (changed) {
+      this.audit.log({
+        actor_id: Number(actorId), actor_name: String(actorId), action: 'paper.release.withdraw',
+        object_type: 'exam_paper', object_id: String(paperId), detail: { paper_id: String(paperId) }, result: 'success', source_ip: null,
+      });
+    }
+    return { paper_id: String(paperId), status: 'draft' };
+  }
+
   async get(releaseId: string, manager?: EntityManager): Promise<PublishedPaper> {
     const releaseRepo = manager ? manager.getRepository(PaperRelease) : this.releaseRepo;
     const releaseQuestionRepo = manager ? manager.getRepository(PaperReleaseQuestion) : this.releaseQuestionRepo;
@@ -544,7 +568,7 @@ export class PaperReleaseService implements OnModuleInit {
     let releaseId: string | null = null;
     let rule: RuleSnapshot;
     let pool: ScoredQuestionVersionSnapshot[];
-    const published = await this.latestForPaper(paperId);
+    const published = paper.status === 'draft' ? null : await this.latestForPaper(paperId);
     if (published) {
       if (published.businessScope !== 'training') throw Errors.paperReleaseConflict('试卷发布版本业务范围不一致');
       releaseId = published.id;

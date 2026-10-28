@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { randomStrongPassword } from './training-access.mjs';
+import { assertAttemptView, examLearner, wholeAnswers } from './support/exam-mobile-fixtures.mjs';
 import {
   provePaperReleaseSingleConnectionPools,
   proveTrainingCategoryChangeConflicts,
   proveDisableWinsPublication,
   provePaperDeletePublicationOrdering,
+  proveTrainingStartWithdrawOrdering,
 } from './support/paper-release-concurrency-checks.mjs';
 
 const require = createRequire(new URL('../server/package.json', import.meta.url));
@@ -1147,22 +1149,198 @@ async function runPublishing(ctx) {
   assert.equal(Array.from(copied.data.title).length, 128);
   const [trainingCopySource] = await ctx.queryTestDb('SELECT title FROM exam_paper WHERE id = ?', [fixedId]);
   assert.equal(trainingCopySource.title, maxTrainingCopyTitle, 'training copy must not mutate the source title');
-  const retiredWithdraw = await ctx.request(admin.actor, 'POST', `/admin/papers/${randomId}/withdraw`);
-  assert.equal(retiredWithdraw.status, 404, 'retired withdraw URL must be unreachable');
-  const [stillPublishedAfterWithdraw] = await ctx.queryTestDb('SELECT status FROM exam_paper WHERE id = ?', [randomId]);
-  assert.equal(stillPublishedAfterWithdraw.status, 'published', 'retired withdraw URL must not change paper state');
 
-  await ctx.queryTestDb('UPDATE exam_paper SET status = ? WHERE id = ?', ['withdrawn', randomId]);
-  const withdrawnList = await ctx.request(admin.actor, 'GET', `/admin/papers?page=1&page_size=100&status=withdrawn`);
+  const draftWithdraw = await ctx.request(admin.actor, 'POST', `/admin/papers/${copied.data.id}/withdraw`);
+  assert.equal(draftWithdraw.status, 409, JSON.stringify(draftWithdraw));
+  assert.equal(draftWithdraw.code, 40970, 'draft paper cannot be withdrawn');
+  await ctx.queryTestDb('UPDATE exam_paper SET status = ? WHERE id = ?', ['archived', copied.data.id]);
+  const archivedWithdraw = await ctx.request(admin.actor, 'POST', `/admin/papers/${copied.data.id}/withdraw`);
+  assert.equal(archivedWithdraw.status, 409, JSON.stringify(archivedWithdraw));
+  assert.equal(archivedWithdraw.code, 40970, 'archived paper cannot be withdrawn');
+
+  stage = 'training withdraw preserves active attempt, release and score history';
+  const activeLearner = await examLearner(ctx, { categoryId });
+  const activeStart = await ctx.request(activeLearner, 'POST', `/me/exams/${randomId}/start`);
+  assert.equal(activeStart.status, 200, JSON.stringify(activeStart));
+  assertAttemptView(activeStart.data);
+  const [factsBeforeWithdraw] = await ctx.queryTestDb(
+    `SELECT p.status,p.updated_by,p.updated_at,
+      (SELECT COUNT(*) FROM paper_release WHERE paper_id=p.id) AS releases,
+      (SELECT COUNT(*) FROM paper_release_question rq JOIN paper_release r ON r.id=rq.release_id WHERE r.paper_id=p.id) AS release_questions,
+      (SELECT COUNT(*) FROM exam_assignment WHERE paper_id=p.id) AS assignments,
+      (SELECT COUNT(*) FROM exam_record WHERE paper_id=p.id) AS records,
+      (SELECT COUNT(*) FROM exam_answer a JOIN exam_record r ON r.id=a.exam_record_id WHERE r.paper_id=p.id) AS answers
+     FROM exam_paper p WHERE p.id=?`,
+    [randomId],
+  );
+  const releaseBeforeWithdraw = await ctx.queryTestDb(
+    `SELECT r.version_no,r.business_scope,r.mode,r.category_id,r.rule_snapshot,
+        rq.question_id,rq.question_version_id,rq.type,rq.difficulty,rq.score_cents,rq.position,rq.snapshot_json
+     FROM paper_release r LEFT JOIN paper_release_question rq ON rq.release_id=r.id
+     WHERE r.paper_id=? ORDER BY r.version_no,rq.position`, [randomId],
+  );
+  const forbiddenWithdraw = await ctx.request(paperExporter.actor, 'POST', `/admin/papers/${randomId}/withdraw`);
+  assert.equal(forbiddenWithdraw.status, 403, JSON.stringify(forbiddenWithdraw));
+  assert.equal(forbiddenWithdraw.code, 40301, 'papers:read/export must not authorize withdrawal');
+
+  const retiredWithdraw = await ctx.request(admin.actor, 'POST', `/admin/papers/${randomId}/withdraw`);
+  assert.equal(retiredWithdraw.status, 200, JSON.stringify(retiredWithdraw));
+  assert.deepEqual(retiredWithdraw.data, { paper_id: randomId, status: 'draft' });
+  const [stillPublishedAfterWithdraw] = await ctx.queryTestDb(
+    `SELECT p.status,p.updated_by,p.updated_at,
+      (SELECT COUNT(*) FROM paper_release WHERE paper_id=p.id) AS releases,
+      (SELECT COUNT(*) FROM paper_release_question rq JOIN paper_release r ON r.id=rq.release_id WHERE r.paper_id=p.id) AS release_questions,
+      (SELECT COUNT(*) FROM exam_assignment WHERE paper_id=p.id) AS assignments,
+      (SELECT COUNT(*) FROM exam_record WHERE paper_id=p.id) AS records,
+      (SELECT COUNT(*) FROM exam_answer a JOIN exam_record r ON r.id=a.exam_record_id WHERE r.paper_id=p.id) AS answers
+     FROM exam_paper p WHERE p.id=?`, [randomId],
+  );
+  assert.equal(stillPublishedAfterWithdraw.status, 'draft', 'withdraw must change only the paper lifecycle state');
+  assert.equal(String(stillPublishedAfterWithdraw.updated_by), String(admin.id));
+  for (const field of ['releases', 'release_questions', 'assignments', 'records', 'answers']) {
+    assert.equal(Number(stillPublishedAfterWithdraw[field]), Number(factsBeforeWithdraw[field]), field);
+  }
+  const repeatWithdraw = await ctx.request(admin.actor, 'POST', `/admin/papers/${randomId}/withdraw`);
+  assert.equal(repeatWithdraw.status, 200, JSON.stringify(repeatWithdraw));
+  assert.deepEqual(repeatWithdraw.data, retiredWithdraw.data, 'repeated withdraw is idempotent');
+  const [afterRepeatWithdraw] = await ctx.queryTestDb(
+    'SELECT status,updated_by,updated_at FROM exam_paper WHERE id=?', [randomId],
+  );
+  assert.equal(afterRepeatWithdraw.status, 'draft');
+  assert.equal(String(afterRepeatWithdraw.updated_by), String(stillPublishedAfterWithdraw.updated_by));
+  assert.equal(new Date(afterRepeatWithdraw.updated_at).getTime(), new Date(stillPublishedAfterWithdraw.updated_at).getTime(),
+    'idempotent withdraw must not rewrite paper metadata');
+  const releaseAfterWithdraw = await ctx.queryTestDb(
+    `SELECT r.version_no,r.business_scope,r.mode,r.category_id,r.rule_snapshot,
+        rq.question_id,rq.question_version_id,rq.type,rq.difficulty,rq.score_cents,rq.position,rq.snapshot_json
+     FROM paper_release r LEFT JOIN paper_release_question rq ON rq.release_id=r.id
+     WHERE r.paper_id=? ORDER BY r.version_no,rq.position`, [randomId],
+  );
+  assert.deepEqual(releaseAfterWithdraw, releaseBeforeWithdraw, 'withdraw must preserve release snapshots');
+
+  const recoveredAfterWithdraw = await ctx.request(activeLearner, 'POST', `/me/exams/${randomId}/start`);
+  assert.equal(recoveredAfterWithdraw.status, 200, JSON.stringify(recoveredAfterWithdraw));
+  assertAttemptView(recoveredAfterWithdraw.data);
+  assert.equal(recoveredAfterWithdraw.data.record_id, activeStart.data.record_id);
+  const submittedAfterWithdraw = await ctx.request(
+    activeLearner, 'POST', `/me/exam-records/${activeStart.data.record_id}/submit`, wholeAnswers(activeStart.data, { single: ['A'] }),
+  );
+  assert.equal(submittedAfterWithdraw.status, 200, JSON.stringify(submittedAfterWithdraw));
+  assert.ok(submittedAfterWithdraw.data.submitted_at);
+  const [scoreAfterWithdraw] = await ctx.queryTestDb(
+    'SELECT status,score,submitted_at,graded_at,grading_state,submission_method FROM exam_record WHERE id=?',
+    [activeStart.data.record_id],
+  );
+  assert.ok(['passed', 'failed'].includes(scoreAfterWithdraw.status));
+  assert.equal(scoreAfterWithdraw.grading_state, 'finalized');
+  const retryAfterWithdraw = await ctx.request(activeLearner, 'POST', `/me/exams/${randomId}/start`);
+  assert.equal(retryAfterWithdraw.status, 404, JSON.stringify(retryAfterWithdraw));
+  assert.equal(retryAfterWithdraw.code, 40402, 'completed learner cannot open a new attempt after withdraw');
+  const freshLearner = await examLearner(ctx, { categoryId });
+  const freshStartAfterWithdraw = await ctx.request(freshLearner, 'POST', `/me/exams/${randomId}/start`);
+  assert.equal(freshStartAfterWithdraw.status, 404, JSON.stringify(freshStartAfterWithdraw));
+  assert.equal(freshStartAfterWithdraw.code, 40402, 'new learner cannot open a withdrawn paper');
+  const [scoreAfterRetry] = await ctx.queryTestDb(
+    'SELECT status,score,submitted_at,graded_at,grading_state,submission_method FROM exam_record WHERE id=?',
+    [activeStart.data.record_id],
+  );
+  assert.deepEqual(scoreAfterRetry, scoreAfterWithdraw, 'withdraw retries must not change a frozen score');
+
+  stage = 'real MySQL start/withdraw paper-row lock ordering';
+  const raceLearner = await examLearner(ctx, { categoryId });
+  const race = await proveTrainingStartWithdrawOrdering(ctx, {
+    paperId: weightedFixedId, learner: raceLearner,
+  }, admin.id);
+  assert.equal(new Set(race.connection_ids).size, 2);
+  assert.ok(Number(race.waits_before_start) >= 1);
+  assert.ok(Number(race.waits_after_start) >= 2);
+
+  const withdrawnList = await ctx.request(admin.actor, 'GET', `/admin/papers?page=1&page_size=100&status=draft`);
   assert.equal(withdrawnList.status, 200, JSON.stringify(withdrawnList));
-  assert.ok(withdrawnList.data.items.some((item) => item.id === randomId && item.status === 'withdrawn'));
+  assert.ok(withdrawnList.data.items.some((item) => item.id === randomId && item.status === 'draft'));
   const previewAfterWithdraw = await ctx.request(admin.actor, 'GET', `/admin/papers/${randomId}/preview?difficulty=hard`);
-  assert.equal(previewAfterWithdraw.status, 200, 'historical withdrawn state must preserve the immutable release for history/active attempts');
+  assert.equal(previewAfterWithdraw.status, 200, 'restored draft must preview its current editable rules');
+
+  assert.equal(previewAfterWithdraw.data.release_id, null, 'restored draft preview cannot reuse its previous release');
+
+  stage = 'withdraw to draft, edit questions and republish without changing existing attempts';
+  const cycleQuestion = await createQuestion(ctx, admin.actor, questionDraft(categoryId, 'single', 'easy', `撤回修订前 ${suffix}`));
+  const cyclePaper = await ctx.request(admin.actor, 'POST', '/admin/papers', {
+    title: `撤回再发布 ${suffix}`, mode: 'fixed', category_id: categoryId,
+  });
+  assert.equal(cyclePaper.status, 200, JSON.stringify(cyclePaper));
+  const cycleId = String(cyclePaper.data.id);
+  const firstQuestions = await ctx.request(admin.actor, 'PUT', `/admin/papers/${cycleId}/questions`, {
+    items: [{ question_version_id: cycleQuestion.versionId, score_cents: 10000 }],
+  });
+  assert.equal(firstQuestions.status, 200, JSON.stringify(firstQuestions));
+  const cycleRelease1 = await ctx.request(admin.actor, 'POST', `/admin/papers/${cycleId}/publish`);
+  assert.equal(cycleRelease1.status, 200, JSON.stringify(cycleRelease1));
+  const cycleOldLearner = await examLearner(ctx, { categoryId });
+  const cycleAttempt1 = await ctx.request(cycleOldLearner, 'POST', `/me/exams/${cycleId}/start`);
+  assert.equal(cycleAttempt1.status, 200, JSON.stringify(cycleAttempt1));
+  const frozenCycleRows = await ctx.queryTestDb('SELECT * FROM paper_release_question WHERE release_id=? ORDER BY position', [cycleRelease1.data.release_id]);
+  const cycleWithdraw = await ctx.request(admin.actor, 'POST', `/admin/papers/${cycleId}/withdraw`);
+  assert.equal(cycleWithdraw.status, 200, JSON.stringify(cycleWithdraw));
+  assert.equal(cycleWithdraw.data.status, 'draft');
+  const protectedDelete = await ctx.request(admin.actor, 'DELETE', `/admin/papers/${cycleId}`);
+  assert.equal(protectedDelete.status, 409, 'restored draft must preserve releases and active/history references');
+  // The paper designer saves an edited bound question as a new question/version,
+  // then rebinds this draft's link; the live bank identity remains protected.
+  const cycleRevised = await createQuestion(ctx, admin.actor, questionDraft(categoryId, 'single', 'easy', `撤回修订后 ${suffix}`));
+  const cycleNewVersion = cycleRevised.versionId;
+  const cycleModified = await ctx.request(admin.actor, 'PUT', `/admin/papers/${cycleId}`, {
+    title: `撤回修订新版 ${suffix}`, duration_minutes: 45, total_score: 120, pass_score: 72,
+  });
+  assert.equal(cycleModified.status, 200, JSON.stringify(cycleModified));
+  const cycleChangedQuestions = await ctx.request(admin.actor, 'PUT', `/admin/papers/${cycleId}/questions`, {
+    items: [{ question_version_id: cycleNewVersion, score_cents: 12000 }],
+  });
+  assert.equal(cycleChangedQuestions.status, 200, JSON.stringify(cycleChangedQuestions));
+  const cycleDraftPreview = await ctx.request(admin.actor, 'GET', `/admin/papers/${cycleId}/preview`);
+  assert.equal(cycleDraftPreview.status, 200, JSON.stringify(cycleDraftPreview));
+  assert.equal(cycleDraftPreview.data.release_id, null);
+  assert.equal(cycleDraftPreview.data.rule.total_cents, 12000);
+  assert.equal(cycleDraftPreview.data.questions[0].question_version_id, cycleNewVersion);
+  assert.match(cycleDraftPreview.data.questions[0].stem, /撤回修订后/);
+  assert.equal(Object.hasOwn(cycleDraftPreview.data.questions[0], 'answer'), false);
+  const cycleAnswersPreview = await ctx.request(admin.actor, 'GET', `/admin/papers/${cycleId}/preview/answers`);
+  assert.equal(cycleAnswersPreview.status, 200, JSON.stringify(cycleAnswersPreview));
+  assert.equal(cycleAnswersPreview.data.questions[0].question_version_id, cycleNewVersion);
+  assert.equal(Object.hasOwn(cycleAnswersPreview.data.questions[0], 'answer'), true);
+  const cycleRelease2 = await ctx.request(admin.actor, 'POST', `/admin/papers/${cycleId}/publish`);
+  assert.equal(cycleRelease2.status, 200, JSON.stringify(cycleRelease2));
+  assert.notEqual(cycleRelease2.data.release_id, cycleRelease1.data.release_id);
+  assert.deepEqual((await ctx.queryTestDb('SELECT version_no FROM paper_release WHERE paper_id=? ORDER BY version_no', [cycleId])).map(row => Number(row.version_no)), [1, 2]);
+  assert.deepEqual(await ctx.queryTestDb('SELECT * FROM paper_release_question WHERE release_id=? ORDER BY position', [cycleRelease1.data.release_id]), frozenCycleRows);
+  const cycleResumed = await ctx.request(cycleOldLearner, 'POST', `/me/exams/${cycleId}/start`);
+  assert.equal(cycleResumed.status, 200, JSON.stringify(cycleResumed));
+  for (const field of ['record_id', 'release_id', 'deadline_at', 'questions']) {
+    assert.deepEqual(cycleResumed.data[field], cycleAttempt1.data[field], `old attempt must retain ${field}`);
+  }
+  const cycleFreshLearner = await examLearner(ctx, { categoryId });
+  const cycleFreshAttempt = await ctx.request(cycleFreshLearner, 'POST', `/me/exams/${cycleId}/start`);
+  assert.equal(cycleFreshAttempt.status, 200, JSON.stringify(cycleFreshAttempt));
+  assert.equal(cycleFreshAttempt.data.release_id, cycleRelease2.data.release_id);
+  assert.equal(cycleFreshAttempt.data.questions[0].score, 120);
+  assert.match(JSON.stringify(cycleFreshAttempt.data.questions[0].stem), /撤回修订后/);
+  const cycleOldSubmit = await ctx.request(cycleOldLearner, 'POST', `/me/exam-records/${cycleAttempt1.data.record_id}/submit`, wholeAnswers(cycleAttempt1.data));
+  assert.equal(cycleOldSubmit.status, 200, JSON.stringify(cycleOldSubmit));
+  const oldCycleResult = await ctx.request(cycleOldLearner, 'GET', `/me/exam-records/${cycleAttempt1.data.record_id}/result`);
+  assert.equal(oldCycleResult.status, 200, JSON.stringify(oldCycleResult));
+  assert.equal(oldCycleResult.data.total_score, 100);
+  assert.equal(oldCycleResult.data.items[0].score, 100);
+  assert.doesNotMatch(JSON.stringify(oldCycleResult.data.items[0].stem), /撤回修订后/);
+  const cycleOldRetry = await ctx.request(cycleOldLearner, 'POST', `/me/exams/${cycleId}/start`);
+  assert.equal(cycleOldRetry.status, 200, JSON.stringify(cycleOldRetry));
+  assert.equal(cycleOldRetry.data.release_id, cycleRelease1.data.release_id, 'existing assignment keeps its original version on a later attempt');
+  const unchangedCycleResult = await ctx.request(cycleOldLearner, 'GET', `/me/exam-records/${cycleAttempt1.data.record_id}/result`);
+  assert.deepEqual(unchangedCycleResult.data, oldCycleResult.data);
 
   const retiredArchive = await ctx.request(admin.actor, 'POST', `/admin/papers/${randomId}/archive`);
   assert.equal(retiredArchive.status, 404, 'retired archive URL must be unreachable');
   const [stillWithdrawnAfterArchive] = await ctx.queryTestDb('SELECT status FROM exam_paper WHERE id = ?', [randomId]);
-  assert.equal(stillWithdrawnAfterArchive.status, 'withdrawn', 'retired archive URL must not change paper state');
+  assert.equal(stillWithdrawnAfterArchive.status, 'draft', 'retired archive URL must not change paper state');
 
   await ctx.queryTestDb('UPDATE exam_paper SET status = ? WHERE id = ?', ['archived', randomId]);
   const archivedList = await ctx.request(admin.actor, 'GET', `/admin/papers?page=1&page_size=100&status=archived`);
@@ -1204,6 +1382,9 @@ async function runPublishing(ctx) {
   assert.ok(legacyList.data.list.some((item) => String(item.id) === preupgradeId
     && item.release_id === null && item.rules_locked === false));
   assert.equal(Object.hasOwn(legacyList.data, 'items'), false, 'legacy list shape must not change');
+  const legacyThroughTrainingWithdraw = await ctx.request(admin.actor, 'POST', `/admin/papers/${legacyPaperId}/withdraw`);
+  assert.equal(legacyThroughTrainingWithdraw.status, 404, JSON.stringify(legacyThroughTrainingWithdraw));
+  assert.equal(legacyThroughTrainingWithdraw.code, 40401, 'training withdraw must not expose legacy papers');
   const trainingThroughLegacy = await ctx.request(admin.actor, 'GET', `/ai/papers/${fixedId}`);
   assert.equal(trainingThroughLegacy.status, 404, 'release-backed training papers stay outside the legacy write surface');
   } catch (error) {

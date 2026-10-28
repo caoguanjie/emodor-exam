@@ -33,6 +33,7 @@
           <FitsTableAction type="primary" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'preview')">预览/打印</FitsTableAction>
           <FitsTableAction v-if="row.mode === 'fixed' && auth.can('papers:write')" type="primary" :loading="busyActions.has(`copy:${row.id}`)" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'copy')">复制</FitsTableAction>
           <FitsTableAction v-if="row.status === 'draft' && auth.can('papers:publish')" type="success" :loading="busyActions.has(`publish:${row.id}`)" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'publish')">发布</FitsTableAction>
+          <FitsTableAction v-if="canWithdraw(row)" type="warning" :loading="busyActions.has(`withdraw:${row.id}`)" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'withdraw')">撤回发布</FitsTableAction>
           <FitsTableAction v-if="row.status === 'draft' && auth.can('papers:write')" type="danger" :loading="busyActions.has(`delete:${row.id}`)" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'delete')">删除</FitsTableAction>
         </FitsTableActions></template></el-table-column>
       </el-table>
@@ -119,7 +120,8 @@ const editDialog = ref<InstanceType<typeof PaperEditDialog> | null>(null);
 const busyActions = reactive(new Set<string>());
 function canEdit(row: TrainingPaperSummary) { return row.mode === 'fixed' && row.status === 'draft' && auth.can('papers:write') && auth.can('questions:read'); }
 function canModify(row: TrainingPaperSummary) { return row.mode === 'fixed' && row.status === 'draft' && auth.can('papers:write'); }
-function isRowBusy(row: TrainingPaperSummary) { return ['copy', 'publish', 'delete'].some(action => busyActions.has(`${action}:${row.id}`)); }
+function canWithdraw(row: TrainingPaperSummary) { return row.business_scope === 'training' && row.status === 'published' && auth.can('papers:publish'); }
+function isRowBusy(row: TrainingPaperSummary) { return ['copy', 'publish', 'withdraw', 'delete'].some(action => busyActions.has(`${action}:${row.id}`)); }
 async function editPaper(row: TrainingPaperSummary) { if (canModify(row) && !isRowBusy(row)) await editDialog.value?.open(row); }
 function handlePaperAction(row: TrainingPaperSummary, command: string) {
   if (isRowBusy(row) || !viewActive || viewDestroyed) return;
@@ -128,6 +130,7 @@ function handlePaperAction(row: TrainingPaperSummary, command: string) {
   else if (command === 'preview') void previewDialog.value?.open(row, false);
   else if (command === 'copy') void copyPaper(row);
   else if (command === 'publish') void publishPaper(row);
+  else if (command === 'withdraw') void withdrawPaper(row);
   else if (command === 'delete') void deletePaper(row);
 }
 async function copyPaper(row: TrainingPaperSummary) {
@@ -153,6 +156,24 @@ async function publishPaper(row: TrainingPaperSummary) {
     await http.post(`/admin/papers/${row.id}/publish`);
     if (context === viewContext && viewActive && !viewDestroyed) { ElMessage.success('试卷已发布'); await loadTraining(); }
   } catch { /* Cancellation is harmless; HTTP errors are handled centrally. */ }
+  finally { busyActions.delete(key); }
+}
+async function withdrawPaper(row: TrainingPaperSummary) {
+  const key = `withdraw:${row.id}`;
+  if (!canWithdraw(row) || isRowBusy(row) || !viewActive || viewDestroyed) return;
+  busyActions.add(key);
+  const context = viewContext; const actionRoute = route.fullPath;
+  const nextStep = row.mode === 'fixed' ? '可修改试题和试卷内容，再重新发布' : '可重新发布';
+  const isCurrent = () => context === viewContext && actionRoute === route.fullPath && viewActive && !viewDestroyed;
+  try {
+    const prompt = `确认撤回试卷“${row.title}”的发布并转为草稿？撤回后${nextStep}`;
+    await ElMessageBox.confirm(`${prompt}；重新发布前禁止新开考，进行中的考试可继续，历史成绩保留。`, '撤回发布', { type: 'warning', confirmButtonText: '撤回发布', cancelButtonText: '取消' });
+    if (!isCurrent() || !canWithdraw(row)) return;
+    await http.post(`/admin/papers/${row.id}/withdraw`);
+    if (!isCurrent()) return;
+    ElMessage.success(`试卷已撤回为草稿，${row.mode === 'fixed' ? '可修改后重新发布' : '可重新发布'}`);
+    await loadTraining();
+  } catch { /* Cancellation and request failures must never trigger another withdrawal. */ }
   finally { busyActions.delete(key); }
 }
 async function deletePaper(row: TrainingPaperSummary) {

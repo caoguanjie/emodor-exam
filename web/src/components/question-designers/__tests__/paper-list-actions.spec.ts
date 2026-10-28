@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent } from 'vue';
+import { defineComponent, h, KeepAlive, reactive } from 'vue';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
-import ElementPlus, { ElMessageBox } from 'element-plus';
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus';
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import Papers from '../../../views/admin/Papers.vue';
 import PaperPreviewDialog from '../../PaperPreviewDialog.vue';
@@ -25,6 +25,10 @@ const draft = {
 };
 const random = { ...draft, id: '3', title: '历史随机卷', mode: 'random' };
 const published = { ...draft, id: '4', title: '发布试卷', status: 'published' };
+const publishedRandom = { ...published, id: '6', title: '已发布随机卷', mode: 'random' };
+const withdrawn = { ...draft, id: '7', title: '已撤回固定卷', status: 'withdrawn' };
+const withdrawnRandom = { ...withdrawn, id: '8', title: '已撤回随机卷', mode: 'random' };
+const archived = { ...draft, id: '9', title: '已归档试卷', status: 'archived' };
 function previewData(id = '2') {
   return {
     paper_id: id, release_id: null, mode: 'fixed', sample_kind: 'fixed_paper', note: '预览', difficulty: 'easy',
@@ -34,7 +38,7 @@ function previewData(id = '2') {
 }
 beforeEach(() => {
   transport.calls = [];
-  transport.permissions = new Set(['papers:read', 'papers:write', 'papers:publish', 'questions:read']);
+  transport.permissions = reactive(new Set(['papers:read', 'papers:write', 'papers:publish', 'questions:read']));
   transport.respond = async (_method, path) => {
     if (path === '/admin/papers/category-options') return { items: [{ id: '1', name: '产业工人' }], total: 1 };
     if (path === '/admin/papers') return { items: [draft, random, published], total: 3 };
@@ -43,10 +47,13 @@ beforeEach(() => {
   };
 });
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks(); document.body.innerHTML = ''; });
-async function list() {
+async function list(cached = false) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/admin/papers', component: Papers }, { path: '/admin/papers/:id', component: { template: '<div />' } }] });
   await router.push('/admin/papers'); await router.isReady();
-  const wrapper = mount(RouterView, { attachTo: document.body, global: { plugins: [ElementPlus, router] } });
+  const host = cached ? defineComponent({ setup: () => () => h(RouterView, null, {
+    default: ({ Component }: { Component: any }) => h(KeepAlive, null, { default: () => Component }),
+  }) }) : RouterView;
+  const wrapper = mount(host, { attachTo: document.body, global: { plugins: [ElementPlus, router] } });
   wrappers.push(wrapper); await flushPromises();
   return { wrapper, router, state: (wrapper.getComponent(Papers).vm.$ as any).setupState };
 }
@@ -59,7 +66,7 @@ async function preview(realQuestion = false) {
   return { wrapper, state: (wrapper.vm.$ as any).setupState };
 }
 function rowActions(wrapper: VueWrapper, title: string) {
-  const id = ({ 草稿试卷: '2', 历史随机卷: '3', 发布试卷: '4' } as Record<string, string>)[title];
+  const id = ({ 草稿试卷: '2', 历史随机卷: '3', 发布试卷: '4', 已发布随机卷: '6', 已撤回固定卷: '7', 已撤回随机卷: '8', 已归档试卷: '9' } as Record<string, string>)[title];
   return wrapper.getComponent(Papers).get(`[data-paper-id="${id}"]`);
 }
 async function choose(wrapper: VueWrapper, title: string, label: string) {
@@ -68,6 +75,17 @@ async function choose(wrapper: VueWrapper, title: string, label: string) {
   await button!.trigger('click'); await flushPromises();
 }
 const requests = (method: string, path: string) => transport.calls.filter(c => c.method === method && c.path === path);
+function showPapers(items: typeof draft[]) {
+  const original = transport.respond;
+  transport.respond = async (method, path, payload) => method === 'get' && path === '/admin/papers'
+    ? { items, total: items.length } : original(method, path, payload);
+}
+function deferred<T = any>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => { resolve = onResolve; reject = onReject; });
+  return { promise, resolve, reject };
+}
 
 describe('paper list operations', () => {
   it('renders seven management columns without exposing learning requirements in a row', async () => {
@@ -82,7 +100,7 @@ describe('paper list operations', () => {
     const labels = (title: string) => rowActions(wrapper, title).findAll('button').map(item => item.text());
     expect(labels('草稿试卷')).toEqual(['试卷管理', '修改', '预览/打印', '复制', '发布', '删除']);
     expect(labels('历史随机卷')).toEqual(['预览/打印', '发布', '删除']);
-    expect(labels('发布试卷')).toEqual(['预览/打印', '复制']);
+    expect(labels('发布试卷')).toEqual(['预览/打印', '复制', '撤回发布']);
   });
   it('opens ordinary preview from its row button without requesting answers', async () => {
     const { wrapper } = await list();
@@ -178,6 +196,182 @@ describe('paper list operations', () => {
     await router.push('/admin/papers/4'); complete(null); await pending; await flushPromises();
     expect(requests('get', '/admin/papers')).toHaveLength(1);
     expect(router.currentRoute.value.fullPath).toBe('/admin/papers/4');
+  });
+});
+
+describe('paper publication withdrawal', () => {
+  it('offers withdrawal for both published modes and keeps withdrawn papers read-only', async () => {
+    showPapers([draft, published, publishedRandom, withdrawn, withdrawnRandom, archived]);
+    const { wrapper, state } = await list();
+    const labels = (title: string) => rowActions(wrapper, title).findAll('button').map(item => item.text());
+    expect(labels('发布试卷')).toEqual(['预览/打印', '复制', '撤回发布']);
+    expect(labels('已发布随机卷')).toEqual(['预览/打印', '撤回发布']);
+    expect(labels('已撤回固定卷')).toEqual(['预览/打印', '复制']);
+    expect(labels('已撤回随机卷')).toEqual(['预览/打印']);
+    expect(labels('已归档试卷')).toEqual(['预览/打印', '复制']);
+    await state.publishPaper(withdrawn); await state.editPaper(withdrawn);
+    expect(transport.calls.filter(call => call.method !== 'get')).toEqual([]);
+    state.trainingQuery.status = 'withdrawn'; await state.searchTraining();
+    expect(requests('get', '/admin/papers').at(-1)?.payload.params.status).toBe('withdrawn');
+  });
+
+  it('uses publish permission independently of write permission', async () => {
+    showPapers([published, publishedRandom]);
+    transport.permissions = new Set(['papers:read', 'papers:publish']);
+    const { wrapper } = await list();
+    expect(wrapper.findAll('.fits-table-action').map(button => button.text())).toEqual(['预览/打印', '撤回发布', '预览/打印', '撤回发布']);
+  });
+
+  it('returns the withdrawn paper to a real editable draft and restores its management actions', async () => {
+    let status = 'published'; const original = transport.respond;
+    transport.respond = async (method, path, payload) => {
+      if (path === '/admin/papers') return { items: [{ ...published, status }], total: 1 };
+      if (method === 'post' && path === '/admin/papers/4/withdraw') { status = 'draft'; return { paper_id: '4', status: 'draft' }; }
+      return original(method, path, payload);
+    };
+    const confirmation = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any);
+    const success = vi.spyOn(ElMessage, 'success');
+    const { wrapper, router } = await list();
+    await choose(wrapper, '发布试卷', '撤回发布');
+    const message = String(confirmation.mock.calls[0]?.[0]);
+    expect(message).toContain('发布试卷'); expect(message).toContain('禁止新开考');
+    expect(message).toMatch(/草稿/); expect(message).toMatch(/修改.*重新发布/);
+    expect(message).toMatch(/进行中的考试.*继续/); expect(message).toMatch(/历史成绩.*保留/);
+    expect(requests('post', '/admin/papers/4/withdraw')).toHaveLength(1);
+    expect(requests('get', '/admin/papers')).toHaveLength(2); expect(success).toHaveBeenCalledTimes(1);
+    expect(success).toHaveBeenCalledWith('试卷已撤回为草稿，可修改后重新发布');
+    expect(rowActions(wrapper, '发布试卷').findAll('button').map(button => button.text())).toEqual(['试卷管理', '修改', '预览/打印', '复制', '发布', '删除']);
+    const row = wrapper.findAll('.el-table__body tr').find(item => item.text().includes('发布试卷'))!;
+    expect(row.get('.el-tag').text()).toBe('草稿');
+    expect(rowActions(wrapper, '发布试卷').text()).not.toContain('撤回发布');
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
+  });
+
+  it('restores draft actions according to current permissions after a withdrawal', async () => {
+    let status = 'published'; const original = transport.respond;
+    transport.respond = async (method, path, payload) => {
+      if (path === '/admin/papers') return { items: [{ ...published, status }], total: 1 };
+      if (method === 'post' && path === '/admin/papers/4/withdraw') { status = 'draft'; return { paper_id: '4', status: 'draft' }; }
+      return original(method, path, payload);
+    };
+    transport.permissions = new Set(['papers:read', 'papers:publish']);
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any);
+    const { wrapper } = await list();
+    await choose(wrapper, '发布试卷', '撤回发布');
+    expect(rowActions(wrapper, '发布试卷').findAll('button').map(button => button.text())).toEqual(['预览/打印', '发布']);
+  });
+
+  it('does not promise a question editor for a historical random paper', async () => {
+    showPapers([publishedRandom]);
+    const confirmation = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any);
+    const success = vi.spyOn(ElMessage, 'success');
+    const { wrapper } = await list();
+    await choose(wrapper, '已发布随机卷', '撤回发布');
+    expect(String(confirmation.mock.calls[0]?.[0])).toContain('可重新发布');
+    expect(String(confirmation.mock.calls[0]?.[0])).not.toContain('修改');
+    expect(success).toHaveBeenCalledWith('试卷已撤回为草稿，可重新发布');
+  });
+
+  it.each(['cancel', 'close'])('does not write when the confirmation is dismissed with %s', async action => {
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(action);
+    const success = vi.spyOn(ElMessage, 'success');
+    const { wrapper, state } = await list();
+    await choose(wrapper, '发布试卷', '撤回发布');
+    expect(requests('post', '/admin/papers/4/withdraw')).toHaveLength(0);
+    expect(requests('get', '/admin/papers')).toHaveLength(1); expect(success).not.toHaveBeenCalled();
+    expect(state.isRowBusy(published)).toBe(false);
+  });
+
+  it('holds one row lock through confirmation and the pending request for a random paper', async () => {
+    showPapers([publishedRandom]);
+    const confirmation = deferred(); const receipt = deferred(); const original = transport.respond;
+    vi.spyOn(ElMessageBox, 'confirm').mockImplementation(() => confirmation.promise as any);
+    transport.respond = (method, path, payload) => path === '/admin/papers/6/withdraw' ? receipt.promise : original(method, path, payload);
+    const { wrapper, state } = await list();
+    expect(rowActions(wrapper, '已发布随机卷').text()).toContain('撤回发布');
+    const pending = state.withdrawPaper(publishedRandom); await flushPromises(); await state.withdrawPaper(publishedRandom);
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1); expect(requests('post', '/admin/papers/6/withdraw')).toHaveLength(0);
+    expect(rowActions(wrapper, '已发布随机卷').findAll('button').every(button => button.attributes('disabled') !== undefined)).toBe(true);
+    expect(rowActions(wrapper, '已发布随机卷').findAll('button').find(button => button.text() === '撤回发布')!.classes()).toContain('is-loading');
+    confirmation.resolve('confirm'); await flushPromises(); await state.withdrawPaper(publishedRandom);
+    expect(requests('post', '/admin/papers/6/withdraw')).toHaveLength(1);
+    receipt.resolve({ paper_id: '6', status: 'draft' }); await pending; await flushPromises();
+    expect(state.isRowBusy(publishedRandom)).toBe(false); expect(requests('get', '/admin/papers')).toHaveLength(2);
+  });
+
+  it('releases busy state without retrying a failed network request', async () => {
+    const original = transport.respond;
+    transport.respond = async (method, path, payload) => {
+      if (path === '/admin/papers/4/withdraw') throw new Error('network unavailable');
+      return original(method, path, payload);
+    };
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any);
+    const success = vi.spyOn(ElMessage, 'success');
+    const { wrapper, state } = await list();
+    await choose(wrapper, '发布试卷', '撤回发布'); await flushPromises();
+    expect(requests('post', '/admin/papers/4/withdraw')).toHaveLength(1);
+    expect(requests('get', '/admin/papers')).toHaveLength(1); expect(success).not.toHaveBeenCalled();
+    expect(state.isRowBusy(published)).toBe(false);
+  });
+
+  it('rejects calls without permission, published status, or training scope', async () => {
+    const confirmation = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any);
+    const { wrapper, state } = await list();
+    expect(rowActions(wrapper, '发布试卷').text()).toContain('撤回发布');
+    for (const row of [draft, withdrawn, archived, { ...published, business_scope: 'regulation' }]) await state.withdrawPaper(row);
+    transport.permissions.delete('papers:publish'); await state.withdrawPaper(published);
+    await wrapper.vm.$nextTick();
+    expect(rowActions(wrapper, '发布试卷').text()).not.toContain('撤回发布');
+    expect(confirmation).not.toHaveBeenCalled(); expect(transport.calls.filter(call => call.method !== 'get')).toEqual([]);
+  });
+
+  it.each(['permission', 'status'])('rechecks %s after a pending confirmation', async changed => {
+    const confirmation = deferred();
+    vi.spyOn(ElMessageBox, 'confirm').mockImplementation(() => confirmation.promise as any);
+    const { wrapper, state } = await list();
+    expect(rowActions(wrapper, '发布试卷').text()).toContain('撤回发布');
+    const row = { ...published }; const pending = state.withdrawPaper(row); await flushPromises();
+    if (changed === 'permission') transport.permissions.delete('papers:publish'); else row.status = 'withdrawn';
+    confirmation.resolve('confirm'); await pending;
+    expect(requests('post', '/admin/papers/4/withdraw')).toHaveLength(0); expect(state.isRowBusy(published)).toBe(false);
+  });
+
+  it.each([false, true])('ignores a confirmation after leaving the list (cached: %s)', async cached => {
+    const confirmation = deferred();
+    vi.spyOn(ElMessageBox, 'confirm').mockImplementation(() => confirmation.promise as any);
+    const { wrapper, state, router } = await list(cached);
+    expect(rowActions(wrapper, '发布试卷').text()).toContain('撤回发布');
+    const pending = state.withdrawPaper(published); await flushPromises(); await router.push('/admin/papers/4');
+    if (cached) { await router.push('/admin/papers'); await flushPromises(); }
+    confirmation.resolve('confirm'); await pending;
+    expect(requests('post', '/admin/papers/4/withdraw')).toHaveLength(0);
+  });
+
+  it('ignores a pending confirmation after navigating to another list filter', async () => {
+    const confirmation = deferred();
+    vi.spyOn(ElMessageBox, 'confirm').mockImplementation(() => confirmation.promise as any);
+    const { wrapper, state, router } = await list();
+    expect(rowActions(wrapper, '发布试卷').text()).toContain('撤回发布');
+    const pending = state.withdrawPaper(published); await flushPromises(); await router.push('/admin/papers?status=withdrawn');
+    confirmation.resolve('confirm'); await pending;
+    expect(requests('post', '/admin/papers/4/withdraw')).toHaveLength(0);
+  });
+
+  it.each([false, true])('does not refresh or show success for a receipt after leaving (cached: %s)', async cached => {
+    const receipt = deferred(); const original = transport.respond;
+    transport.respond = (method, path, payload) => path === '/admin/papers/4/withdraw' ? receipt.promise : original(method, path, payload);
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any);
+    const success = vi.spyOn(ElMessage, 'success');
+    const { wrapper, state, router } = await list(cached);
+    expect(rowActions(wrapper, '发布试卷').text()).toContain('撤回发布');
+    const pending = state.withdrawPaper(published); await flushPromises();
+    expect(requests('post', '/admin/papers/4/withdraw')).toHaveLength(1);
+    await router.push('/admin/papers/4');
+    if (cached) { await router.push('/admin/papers'); await flushPromises(); }
+    const loads = requests('get', '/admin/papers').length;
+    receipt.resolve({ paper_id: '4', status: 'draft' }); await pending; await flushPromises();
+    expect(requests('get', '/admin/papers')).toHaveLength(loads); expect(success).not.toHaveBeenCalled();
+    expect(router.currentRoute.value.fullPath).toBe(cached ? '/admin/papers' : '/admin/papers/4');
   });
 });
 

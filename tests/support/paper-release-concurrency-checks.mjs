@@ -183,6 +183,96 @@ export async function provePaperReleaseSingleConnectionPools(ctx, paperIds, acto
   }
 }
 
+async function waitForDataLockWait(queryTestDb, minimum, message, timeoutMs = 8_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await queryTestDb('SELECT COUNT(*) AS count FROM performance_schema.data_lock_waits');
+    if (Number(rows[0]?.count || 0) >= minimum) return Number(rows[0].count);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(message);
+}
+
+/**
+ * A real paper-row lock serializes a real withdraw service and the HTTP start
+ * path.  The withdraw request is deliberately queued first, so the learner
+ * start must observe draft and leave no assignment/record behind.
+ */
+export async function proveTrainingStartWithdrawOrdering(ctx, input, actorId) {
+  const paperId = String(input?.paperId);
+  const learner = input?.learner;
+  const learnerActor = learner?.actor || learner;
+  const learnerId = String(learner?.userId || learnerActor?.userId || '');
+  assert(/^\d+$/.test(paperId), 'one training paper id is required');
+  assert(learnerActor?.accessToken && /^\d+$/.test(learnerId), 'one authenticated learner is required');
+
+  const pair = await createPair(ctx);
+  const blockerEntered = deferred();
+  const allowCommit = deferred();
+  const withdrawLockEntered = deferred();
+  let blocker;
+  let withdrawing;
+  let starting;
+  try {
+    blocker = capture(pair.dataSourceA.transaction(async (manager) => {
+      const paper = await manager.getRepository(ExamPaper).findOne({
+        where: { id: paperId }, lock: { mode: 'pessimistic_write' },
+      });
+      assert(paper?.businessScope === 'training' && paper.status === 'published',
+        'start/withdraw race requires a published training paper');
+      blockerEntered.resolve();
+      await allowCommit.promise;
+    }));
+    await withTimeout(blockerEntered.promise, 8_000, 'paper blocker did not acquire its row lock');
+
+    const withdraw = pair.serviceB.withdraw || pair.serviceB.withdrawTraining;
+    assert(typeof withdraw === 'function', 'PaperReleaseService has no training withdraw method');
+    pair.serviceB.dataSource = observeWriteLock(pair.dataSourceB, withdrawLockEntered, ExamPaper);
+    withdrawing = capture(withdraw.call(pair.serviceB, paperId, String(actorId)));
+    await withTimeout(withdrawLockEntered.promise, 8_000, 'withdraw did not reach the paper row lock');
+    const waitsBeforeStart = await waitForDataLockWait(
+      ctx.queryTestDb, 1, 'withdraw did not wait on the held paper row lock',
+    );
+
+    starting = capture(ctx.request(learnerActor, 'POST', `/me/exams/${paperId}/start`));
+    const waits = await waitForDataLockWait(
+      ctx.queryTestDb, 2, 'HTTP start did not join the held paper row lock',
+    );
+    allowCommit.resolve();
+    const [withdrawResult, startResult] = await withTimeout(
+      Promise.all([withdrawing, starting]), 10_000, 'start/withdraw row-lock race stalled',
+    );
+    assert(withdrawResult.status === 'fulfilled', `withdraw failed: ${withdrawResult.reason?.message || withdrawResult.reason}`);
+    assert(startResult.status === 'fulfilled' && startResult.value.status === 404 && startResult.value.code === 40402,
+      `start crossed withdraw without observing draft: ${JSON.stringify(startResult)}`);
+
+    const [state] = await pair.dataSourceA.query(
+      `SELECT p.status,
+        (SELECT COUNT(*) FROM paper_release WHERE paper_id=p.id) AS releases,
+        (SELECT COUNT(*) FROM paper_release_question rq JOIN paper_release r ON r.id=rq.release_id WHERE r.paper_id=p.id) AS release_questions,
+        (SELECT COUNT(*) FROM exam_assignment WHERE paper_id=p.id AND user_id=?) AS assignments,
+        (SELECT COUNT(*) FROM exam_record WHERE paper_id=p.id AND user_id=?) AS records
+       FROM exam_paper p WHERE p.id=?`,
+      [learnerId, learnerId, paperId],
+    );
+    assert(state.status === 'draft' && Number(state.releases) === 1 && Number(state.release_questions) > 0,
+      'withdraw changed the lifecycle without preserving its release snapshot');
+    assert(Number(state.assignments) === 0 && Number(state.records) === 0,
+      'start created an attempt after withdraw committed');
+    return {
+      connection_ids: pair.connectionIds,
+      waits_before_start: waitsBeforeStart,
+      waits_after_start: waits,
+      withdraw: withdrawResult.value,
+      start: { status: startResult.value.status, code: startResult.value.code },
+    };
+  } finally {
+    allowCommit.resolve();
+    await Promise.allSettled([blocker, withdrawing, starting].filter(Boolean));
+    for (const source of [pair.dataSourceA, pair.dataSourceB]) if (source.isInitialized) await source.destroy();
+  }
+}
+
 /** Disable commits after publication has begun, but before its identity lock. */
 export async function proveDisableWinsPublication(ctx, paperId, questionId, actorId) {
   const pair = await createPair(ctx);

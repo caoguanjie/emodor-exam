@@ -851,6 +851,7 @@ INSERT INTO `sys_dictionary` (`type`, `code`, `label`, `sort`, `status`, `is_sys
   ('regulation_status','archived','已归档',30,1,1,'业务固定枚举'),
   ('paper_status','draft','草稿',10,1,1,'业务固定枚举'),
   ('paper_status','published','已发布',20,1,1,'业务固定枚举'),
+  ('paper_status','withdrawn','已撤回',25,1,1,'业务固定枚举'),
   ('paper_status','archived','已归档',30,1,1,'业务固定枚举'),
   ('question_status','pending','待审核',10,1,1,'业务固定枚举'),
   ('question_status','approved','已通过',20,1,1,'业务固定枚举'),

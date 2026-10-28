@@ -637,7 +637,7 @@ export class PaperService {
       if (await manager.getRepository(PaperRelease).existsBy({ paperId })
         || await manager.getRepository(ExamAssignment).existsBy({ paperId })
         || await manager.getRepository(ExamRecord).existsBy({ paperId })) {
-        throw Errors.paperReleaseConflict('试卷已有发布或考试记录，不能删除');
+        throw Errors.paperReleaseConflict('试卷有已发布版本或考试记录，不能删除；可修改草稿后重新发布');
       }
       await manager.getRepository(PaperQuestion).delete({ paperId });
       await repo.delete({ id: paperId });
