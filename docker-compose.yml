@@ -17,6 +17,7 @@ services:
       args:
         VITE_COS_MEDIA_ORIGIN: ${VITE_COS_MEDIA_ORIGIN:-}
         VITE_COS_MEDIA_PREFIX: ${VITE_COS_MEDIA_PREFIX:-}
+        VITE_PUBLIC_H5_BASE_URL: ${VITE_PUBLIC_H5_BASE_URL:-}
         COS_BUCKET: ${COS_BUCKET:-}
         COS_REGION: ${COS_REGION:-}
         COS_KEY_PREFIX: ${COS_KEY_PREFIX:-ruleexam/dev/}

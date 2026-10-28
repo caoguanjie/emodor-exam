@@ -35,11 +35,11 @@ export type PaperQuestionBinding =
 /** Only existing fixed-paper settings; identity always belongs to the current draft. */
 export type DesignerPaper = Pick<TrainingPaperSummary, 'id' | 'title'> & Partial<Pick<
   TrainingPaperSummary,
-  | 'category_id' | 'mode' | 'requires_learning' | 'regulation_ids' | 'course_ids'
+  | 'mode' | 'requires_learning' | 'regulation_ids' | 'course_ids'
   | 'required_learning_minutes' | 'remark' | 'sort_order'
   | 'created_by_name' | 'updated_by_name' | 'created_at' | 'updated_at'
   | 'rules' | 'total_score' | 'pass_score' | 'duration_minutes' | 'max_attempts' | 'partial_credit_ratio'
->>;
+>> & { category_id?: Id };
 
 export interface PaperQuestionSet {
   document: QuestionAuthoringDocument;

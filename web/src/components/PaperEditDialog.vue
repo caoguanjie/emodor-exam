@@ -3,18 +3,25 @@
     <div v-if="loading" v-loading="true" class="paper-edit-loading" aria-label="正在加载试卷配置" />
     <el-form v-if="loaded" label-width="120px" label-position="left" :disabled="loading || saving" @submit.prevent>
       <el-form-item label="试卷名称" required><el-input v-model="form.title" maxlength="128" /></el-form-item>
+      <el-form-item label="组卷方式">{{ loadedMode === 'random' ? '随机试卷' : '固定试卷' }}（不可变更）</el-form-item>
       <el-form-item label="考试时间" required>
         <el-input v-model.number="form.duration_minutes" class="paper-value-input" type="number" inputmode="numeric" :min="1" :max="1440" :step="1" placeholder="请输入考试时间"><template #append>分钟</template></el-input>
       </el-form-item>
-      <el-form-item label="培训类别" required>
+      <el-form-item v-if="!publicRandom" label="培训类别" required>
         <el-select v-model="form.category_id" :disabled="categoryLocked" filterable style="width:100%" @change="onCategoryChange"><el-option v-for="item in categories" :key="item.id" :label="item.name" :value="item.id" /></el-select>
         <div v-if="categoryLocked" class="hint">已有试题，培训类别不可修改</div>
       </el-form-item>
+      <el-form-item v-else label="题池范围">公共题库（跨培训类别）</el-form-item>
       <el-form-item label="试卷总分" required>
         <el-input v-model.number="form.total_score" class="paper-value-input" type="number" inputmode="decimal" :min="0.01" :max="999.99" :step="0.01" placeholder="请输入试卷总分"><template #append>分</template></el-input>
       </el-form-item>
       <el-form-item label="及格分数" required>
         <el-input v-model.number="form.pass_score" class="paper-value-input" type="number" inputmode="decimal" :min="0.01" :max="form.total_score" :step="0.01" placeholder="请输入及格分数"><template #append>分</template></el-input>
+      </el-form-item>
+      <el-form-item v-if="loadedMode === 'random'" label="随机抽题规则" required><RandomPaperRules v-model="form.rules" :total-score="form.total_score" :disabled="loading || saving" /></el-form-item>
+      <el-form-item label="最多考试次数" required>
+        <el-input v-model.number="form.max_attempts" class="paper-value-input" type="number" inputmode="numeric" :min="1" :max="100" :step="1"><template #append>次</template></el-input>
+        <div class="hint">成功开考即占一次，超时未交卷也计次。已有考试归属沿用首次开考时冻结的次数上限。</div>
       </el-form-item>
       <el-form-item label="考前学习要求"><el-switch v-model="form.requires_learning" /></el-form-item>
       <template v-if="form.requires_learning">
@@ -34,16 +41,19 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onDeactivated, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onDeactivated, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import http from '../api/http';
-import type { Id, Page, TrainingPaperDetail } from '../api/training-types';
+import type { Id, Page, PaperMode, PaperRuleInput, PoolScope, TrainingPaperDetail } from '../api/training-types';
+import RandomPaperRules from './RandomPaperRules.vue';
+import { selectedRandomRules, validateRandomRules } from '../utils/random-paper-rules';
 import { useUnsavedChanges } from '../composables/useUnsavedChanges';
 import { useAuthStore } from '../stores/auth';
 
 interface BasicConfiguration {
-  title: string; category_id: Id | ''; duration_minutes: number; total_score: number; pass_score: number;
+  title: string; category_id: Id | '' | null; duration_minutes: number; total_score: number; pass_score: number;
   requires_learning: boolean; course_ids: Id[]; required_learning_minutes: number | null; remark: string;
+  rules: PaperRuleInput[]; max_attempts: number;
 }
 const props = defineProps<{ categories: Array<{ id: Id; name: string }> }>();
 const emit = defineEmits<{ saved: [] }>();
@@ -53,12 +63,15 @@ const loaded = ref(false);
 const loading = ref(false);
 const saving = ref(false);
 const categoryLocked = ref(false);
+const loadedMode = ref<PaperMode>('fixed');
+const loadedPoolScope = ref<PoolScope>('category');
+const publicRandom = computed(() => loadedMode.value === 'random' && loadedPoolScope.value === 'public');
 const paperId = ref<Id | null>(null);
 const courses = ref<Array<{ id: Id; title: string }>>([]);
 const form = reactive<BasicConfiguration>(emptyForm());
 const dirty = ref(false);
 let baseline = emptyForm();
-let loadedCategory: Id | '' = '';
+let loadedCategory: Id | '' | null = '';
 let session = 0;
 let openRequest = 0;
 let courseRequest = 0;
@@ -70,7 +83,7 @@ const unsaved = useUnsavedChanges(dirty, {
   onBlocked: () => ElMessage.warning('正在保存，请等待请求完成'),
 });
 function emptyForm(): BasicConfiguration {
-  return { title: '', category_id: '', duration_minutes: 30, total_score: 100, pass_score: 60, requires_learning: false, course_ids: [], required_learning_minutes: null, remark: '' };
+  return { title: '', category_id: '', duration_minutes: 30, total_score: 100, pass_score: 60, max_attempts: 3, rules: [], requires_learning: false, course_ids: [], required_learning_minutes: null, remark: '' };
 }
 function snapshot(): BasicConfiguration { return JSON.parse(JSON.stringify(form)); }
 function isCurrent(operation: number) { return !destroyed && visible.value && operation === session; }
@@ -79,6 +92,7 @@ function invalidateSession() {
   session += 1; courseRequest += 1;
   visible.value = false; loading.value = false; saving.value = false; loaded.value = false;
   categoryLocked.value = false; loadedCategory = '';
+  loadedMode.value = 'fixed'; loadedPoolScope.value = 'category';
   paperId.value = null; courses.value = []; dirty.value = false;
 }
 function close() { openRequest += 1; invalidateSession(); }
@@ -91,7 +105,7 @@ async function requestClose(): Promise<boolean> {
 }
 async function beforeClose(done: () => void) { if (await requestClose() && !visible.value) done(); }
 async function open(row: { id: Id; mode?: string; status?: string }) {
-  if (destroyed || !canWrite() || row.mode !== 'fixed' || row.status !== 'draft' || saving.value) return;
+  if (destroyed || !canWrite() || !['fixed', 'random'].includes(row.mode || '') || row.status !== 'draft' || saving.value) return;
   const request = ++openRequest;
   if (!await unsaved.confirmDiscard(() => request === openRequest && !destroyed)) return;
   if (request !== openRequest || destroyed || !canWrite()) return;
@@ -101,15 +115,17 @@ async function open(row: { id: Id; mode?: string; status?: string }) {
   try {
     const detail = await http.get(`/admin/papers/${row.id}`) as TrainingPaperDetail;
     if (!isCurrent(operation)) return;
-    if (!canWrite() || detail.status !== 'draft' || detail.mode !== 'fixed') {
+    if (!canWrite() || detail.status !== 'draft' || detail.mode !== row.mode || (detail.pool_scope === 'public' && detail.mode !== 'random')) {
       ElMessage.warning('当前试卷已不可修改，请刷新列表'); close(); return;
     }
     loadedCategory = detail.category_id;
-    categoryLocked.value = detail.questions.length > 0;
+    loadedMode.value = detail.mode; loadedPoolScope.value = detail.pool_scope || 'category';
+    categoryLocked.value = detail.mode === 'fixed' && detail.questions.length > 0;
     hydrating = true;
     Object.assign(form, {
       title: detail.title, category_id: detail.category_id, duration_minutes: Number(detail.duration_minutes),
       total_score: Number(detail.total_score), pass_score: Number(detail.pass_score),
+      max_attempts: Number(detail.max_attempts), rules: detail.rules.map(rule => ({ ...rule })),
       requires_learning: detail.requires_learning,
       course_ids: detail.requires_learning ? [...detail.course_ids] : [],
       required_learning_minutes: detail.requires_learning ? detail.required_learning_minutes : null,
@@ -123,11 +139,12 @@ async function open(row: { id: Id; mode?: string; status?: string }) {
 }
 async function loadCourses(operation = session) {
   const request = ++courseRequest; const categoryId = form.category_id;
+  const isPublic = publicRandom.value;
   courses.value = [];
-  if (!isCurrent(operation) || !loaded.value || !form.requires_learning || !categoryId) return;
+  if (!isCurrent(operation) || !loaded.value || !form.requires_learning || (!isPublic && !categoryId)) return;
   try {
-    const data = await http.get('/admin/papers/course-options', { params: { category_id: categoryId, page: 1, page_size: 100 } }) as Page<{ id: Id; title: string }>;
-    if (!isCurrent(operation) || request !== courseRequest || form.category_id !== categoryId || !form.requires_learning) return;
+    const data = await http.get('/admin/papers/course-options', { params: { ...(isPublic ? { pool_scope: 'public' } : { category_id: categoryId }), page: 1, page_size: 100 } }) as Page<{ id: Id; title: string }>;
+    if (!isCurrent(operation) || request !== courseRequest || publicRandom.value !== isPublic || form.category_id !== categoryId || !form.requires_learning) return;
     courses.value = data.items;
   } catch { /* The shared interceptor reports failures; retain the current user input. */ }
 }
@@ -145,11 +162,13 @@ watch(() => form.requires_learning, enabled => {
 }, { flush: 'sync' });
 function validPoints(value: number) { return Number.isFinite(value) && value > 0 && value <= 999.99 && Math.abs(value * 100 - Math.round(value * 100)) < 1e-7; }
 function validate(): boolean {
-  if (!form.title.trim() || !form.category_id) { ElMessage.warning('请填写试卷名称并选择培训类别'); return false; }
+  if (!form.title.trim() || (!publicRandom.value && !form.category_id)) { ElMessage.warning('请填写试卷名称，类别题池须选择培训类别'); return false; }
   if (Array.from(form.title).length > 128) { ElMessage.warning('试卷名称最多 128 个字符'); return false; }
   if (!Number.isInteger(form.duration_minutes) || form.duration_minutes < 1 || form.duration_minutes > 1440) { ElMessage.warning('考试时间须为 1–1440 的整数分钟'); return false; }
   if (!validPoints(form.total_score)) { ElMessage.warning('试卷总分须为 0.01～999.99 分，最多两位小数'); return false; }
   if (!validPoints(form.pass_score) || form.pass_score > form.total_score) { ElMessage.warning('及格分数须大于 0，且不能超过试卷总分，最多两位小数'); return false; }
+  if (!Number.isInteger(form.max_attempts) || form.max_attempts < 1 || form.max_attempts > 100) { ElMessage.warning('最多考试次数须为 1–100 的整数'); return false; }
+  if (loadedMode.value === 'random') { const error = validateRandomRules(form.rules, form.total_score); if (error) { ElMessage.warning(error); return false; } }
   if (form.requires_learning && !form.course_ids.length) { ElMessage.warning('请至少选择一门关联课程'); return false; }
   const minutes = form.required_learning_minutes;
   if (form.requires_learning && (minutes === null || !Number.isInteger(minutes) || minutes < 1 || minutes > 2147483647)) { ElMessage.warning('累计学习时长须为 1–2147483647 的整数分钟'); return false; }
@@ -163,13 +182,14 @@ async function save() {
   saving.value = true;
   try {
     await http.put(`/admin/papers/${id}`, {
-      title: submitted.title.trim(), category_id: submitted.category_id, duration_minutes: submitted.duration_minutes,
+      title: submitted.title.trim(), category_id: publicRandom.value ? null : submitted.category_id, duration_minutes: submitted.duration_minutes,
       total_score: submitted.total_score, pass_score: submitted.pass_score,
+      max_attempts: submitted.max_attempts,
+      ...(loadedMode.value === 'random' ? { pool_scope: loadedPoolScope.value, rules: selectedRandomRules(submitted.rules) } : { preserve_questions: true }),
       requires_learning: submitted.requires_learning,
       course_ids: submitted.requires_learning ? [...submitted.course_ids] : [],
       required_learning_minutes: submitted.requires_learning ? submitted.required_learning_minutes : null,
       remark: submitted.remark.trim() || null,
-      preserve_questions: true,
     });
     if (!isCurrent(operation)) return;
     unsaved.markClean(); close(); ElMessage.success('试卷已修改'); emit('saved');

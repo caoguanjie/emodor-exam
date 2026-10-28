@@ -100,6 +100,7 @@ export interface ExamRecordOptions {
 }
 
 export interface ExamRecordSummary {
+  pool_scope?: PoolScope;
   record_id: Id;
   paper_id: Id;
   paper_title: string;
@@ -157,6 +158,7 @@ export interface TrainingCourseCompletion {
 export type TrainingUncompletedReason = 'learning_incomplete' | 'not_started' | 'not_passed';
 
 export interface TrainingExamOverviewRow {
+  pool_scope?: PoolScope;
   paper_id: Id;
   title: string;
   category_id: Id | null;
@@ -173,6 +175,7 @@ export interface TrainingExamOverviewRow {
 
 export interface TrainingExamSummary {
   exam: Pick<TrainingExamOverviewRow, 'paper_id' | 'title' | 'category_id' | 'total_score' | 'duration_minutes' | 'pass_score'> & {
+    pool_scope?: PoolScope;
     mode: 'fixed' | 'random';
     excellent_score: null;
   };
@@ -205,7 +208,7 @@ export interface RankRow {
 }
 
 export interface TrainingStatisticsOptions {
-  papers: Array<{ id: Id; title: string; category_id: Id | null; status: string }>;
+  papers: Array<{ id: Id; title: string; category_id: Id | null; status: string; pool_scope?: PoolScope }>;
   categories: Array<{ id: Id; name: string }>;
 }
 
@@ -713,6 +716,7 @@ export interface QuestionConcept {
 }
 
 export type PaperMode = 'fixed' | 'random';
+export type PoolScope = 'category' | 'public';
 export type TrainingPaperStatus = 'draft' | 'published' | 'withdrawn' | 'archived';
 
 export interface PaperRuleInput {
@@ -729,7 +733,8 @@ export interface TrainingPaperSummary {
   title: string;
   business_scope: 'training';
   mode: PaperMode;
-  category_id: Id;
+  pool_scope?: PoolScope;
+  category_id: Id | null;
   requires_learning: boolean;
   required_learning_minutes: number | null;
   remark: string | null;

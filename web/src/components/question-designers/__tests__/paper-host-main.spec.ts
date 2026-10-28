@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
-import ElementPlus, { ElMessageBox, ElOption, ElSelect } from 'element-plus';
+import ElementPlus, { ElFormItem, ElMessageBox, ElOption, ElRadioGroup, ElSelect } from 'element-plus';
 import { defineComponent, h, KeepAlive } from 'vue';
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import PaperDetail from '../../../views/admin/PaperDetail.vue';
@@ -9,6 +9,7 @@ import PaperDesigner from '../PaperDesigner.vue';
 import QuestionDocumentEditor from '../QuestionDocumentEditor.vue';
 import QuestionProperties from '../QuestionProperties.vue';
 import PaperLibrarySidebar from '../PaperLibrarySidebar.vue';
+import PaperEditDialog from '../../PaperEditDialog.vue';
 import { confirmUnsavedRoutes } from '../../../composables/useUnsavedChanges';
 import type { AuthoringBundle } from '../../../api/question-document-types';
 import { paperFixture, copy } from './paper-designer-fixtures';
@@ -60,6 +61,20 @@ async function show(component: typeof PaperDetail | typeof Papers, url: string) 
 }
 
 describe('main fixed paper entry', () => {
+  it('opens configuration for a random draft from a direct detail URL without loading the fixed designer', async () => {
+    const fallback = transport.respond;
+    transport.respond = async (method, path, body, config) => path === '/admin/papers/100'
+      ? detail({ mode: 'random', pool_scope: 'public', category_id: null, rules: [{ type: 'single', count: 100, score_cents: 100 }], questions: [] })
+      : fallback(method, path, body, config);
+    transport.permissions.delete('questions:read');
+    const { wrapper } = await show(PaperDetail, '/admin/papers/100?scope=training&designer=1');
+    expect(wrapper.findComponent(PaperDesigner).exists()).toBe(false);
+    const edit = wrapper.findAll('button').find(button => button.text() === '修改随机规则');
+    expect(edit).toBeDefined(); await edit!.trigger('click'); await flushPromises();
+    const state = (wrapper.getComponent(PaperEditDialog).vm.$ as any).setupState;
+    expect(state.visible).toBe(true); expect(state.form.category_id).toBeNull(); expect(state.form.max_attempts).toBe(3);
+    expect(transport.calls.some(call => call.path === '/admin/question-documents/assemble' || call.path === '/admin/questions/authoring-options')).toBe(false);
+  });
   it('opens a dashboard create once and protects the consumed URL when leaving or refreshing is cancelled', async () => {
     const { wrapper, state, router } = await show(Papers, '/admin/papers?entry=dashboard&create=1');
     expect(state.trainingCreateVisible).toBe(true);
@@ -183,28 +198,30 @@ describe('main fixed paper entry', () => {
     expect(creates[0].body).not.toHaveProperty('rules');
     expect(router.currentRoute.value.fullPath).toBe('/admin/papers/101?scope=training&designer=1');
   });
-  it('forces fixed creation without rules even if internal create state is tampered with', async () => {
+  it('honors random creation and returns to the list without a fixed designer', async () => {
     const { state, router } = await show(Papers, '/admin/papers');
     state.openTrainingCreate();
-    state.trainingCreate.title = '被篡改的创建草稿';
+    state.trainingCreate.title = '新的随机卷';
     state.trainingCreate.mode = 'random';
     state.trainingCreate.rules = [{ type: 'single', count: 1, score_cents: 10000 }];
     await state.createTraining(); await flushPromises();
     const request = transport.calls.find((call) => call.method === 'post' && call.path === '/admin/papers')!;
-    expect(request.body).toMatchObject({ title: '被篡改的创建草稿', mode: 'fixed' });
-    expect(request.body).not.toHaveProperty('rules');
-    expect(router.currentRoute.value.fullPath).toBe('/admin/papers/101?scope=training&designer=1');
+    expect(request.body).toMatchObject({ title: '新的随机卷', mode: 'random', pool_scope: 'public', category_id: null, rules: [{ type: 'single', count: 1, score_cents: 10000 }] });
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
   });
-  it('removes mode and rule entry controls from the paper list and create dialog', async () => {
+  it('shows random controls only in the selected creation mode and keeps the compact list columns', async () => {
     const { wrapper, state } = await show(Papers, '/admin/papers');
     const visibleLabels = () => wrapper.findAll('.el-form-item__label').map((label) => label.text().trim());
     const tableHeaders = () => wrapper.findAll('.el-table__header-wrapper .cell').map((cell) => cell.text().trim());
-    expect(visibleLabels()).not.toContain('组卷模式');
+    expect(visibleLabels()).not.toContain('组卷方式');
     expect(tableHeaders()).not.toContain('模式');
     expect(tableHeaders()).not.toContain('规则');
     state.openTrainingCreate(); await flushPromises();
-    expect(visibleLabels()).not.toContain('组卷模式');
-    expect(visibleLabels()).not.toContain('随机规则');
+    expect(visibleLabels()).toContain('组卷方式');
+    expect(visibleLabels()).not.toContain('随机抽题规则');
+    const mode = wrapper.findAllComponents(ElFormItem).find(item => item.props('label') === '组卷方式')!;
+    mode.getComponent(ElRadioGroup).vm.$emit('update:modelValue', 'random'); await flushPromises();
+    expect(visibleLabels()).toContain('随机抽题规则');
   });
   it('opens the designer directly and returns to the list after a successful save', async () => {
     const { wrapper, router } = await show(PaperDetail, '/admin/papers/100?scope=training&designer=1');

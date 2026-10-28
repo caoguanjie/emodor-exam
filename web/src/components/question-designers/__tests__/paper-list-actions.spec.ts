@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, KeepAlive, reactive } from 'vue';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
-import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus';
+import ElementPlus, { ElDialog, ElFormItem, ElMessage, ElMessageBox, ElRadioGroup } from 'element-plus';
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import Papers from '../../../views/admin/Papers.vue';
 import PaperPreviewDialog from '../../PaperPreviewDialog.vue';
@@ -39,14 +39,14 @@ function previewData(id = '2') {
 beforeEach(() => {
   transport.calls = [];
   transport.permissions = reactive(new Set(['papers:read', 'papers:write', 'papers:publish', 'questions:read']));
-  transport.respond = async (_method, path) => {
+  transport.respond = async (method, path, payload) => {
     if (path === '/admin/papers/category-options') return { items: [{ id: '1', name: '产业工人' }], total: 1 };
-    if (path === '/admin/papers') return { items: [draft, random, published], total: 3 };
+    if (path === '/admin/papers') return method === 'post' ? { ...draft, ...payload, id: '5' } : { items: [draft, random, published], total: 3 };
     if (path.includes('/preview')) return previewData();
     return { id: '5' };
   };
 });
-afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks(); document.body.innerHTML = ''; });
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.restoreAllMocks(); vi.unstubAllEnvs(); document.body.innerHTML = ''; });
 async function list(cached = false) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/admin/papers', component: Papers }, { path: '/admin/papers/:id', component: { template: '<div />' } }] });
   await router.push('/admin/papers'); await router.isReady();
@@ -88,6 +88,87 @@ function deferred<T = any>() {
 }
 
 describe('paper list operations', () => {
+  it('loads public learning courses without a category and ignores their late response after returning to fixed mode', async () => {
+    const publicCourses = deferred(); const original = transport.respond;
+    transport.respond = async (method, path, payload) => path === '/admin/papers/course-options'
+      ? payload.params.pool_scope === 'public' ? publicCourses.promise : { items: [{ id: '10', title: '类别课程' }], total: 1 }
+      : original(method, path, payload);
+    const { state } = await list(); state.openTrainingCreate(); state.trainingCreate.requires_learning = true; await flushPromises();
+    state.trainingCreate.course_ids = ['10']; state.trainingCreate.mode = 'random'; await flushPromises();
+    expect(requests('get', '/admin/papers/course-options').at(-1)?.payload.params).toEqual({ pool_scope: 'public', page: 1, page_size: 100 });
+    expect(state.trainingCreate.category_id).toBeNull(); expect(state.trainingCreate.course_ids).toEqual([]);
+    state.trainingCreate.mode = 'fixed'; await flushPromises();
+    publicCourses.resolve({ items: [{ id: '20', title: '迟到公共课程' }], total: 1 }); await flushPromises();
+    expect(state.trainingCreate.category_id).toBe('1'); expect(state.createCourses).toEqual([{ id: '10', title: '类别课程' }]);
+  });
+  it('gives two published papers exactly the same local QR entry without starting an attempt', async () => {
+    vi.stubEnv('VITE_PUBLIC_H5_BASE_URL', 'https://exam.example/mobile/'); showPapers([published, publishedRandom]);
+    const { wrapper } = await list(); await choose(wrapper, '发布试卷', '考试入口二维码');
+    const first = document.querySelector<HTMLImageElement>('.exam-entry-qr-dialog img')!.src;
+    const qr = wrapper.findAllComponents(ElDialog).find(dialog => dialog.props('title') === '考试入口二维码')!;
+    expect(qr.text()).toContain('https://exam.example/mobile/#/pages/exam/index');
+    qr.vm.$emit('update:modelValue', false); await flushPromises();
+    await choose(wrapper, '已发布随机卷', '考试入口二维码');
+    expect(document.querySelector<HTMLImageElement>('.exam-entry-qr-dialog img')!.src).toBe(first);
+    expect(transport.calls.filter(call => call.method !== 'get')).toEqual([]);
+    expect(qr.text()).not.toContain('paper_id');
+  });
+  it('keeps a failed random create editable and does not retry its write automatically', async () => {
+    const original = transport.respond;
+    transport.respond = async (method, path, payload) => { if (method === 'post') throw new Error('request failed'); return original(method, path, payload); };
+    const { state } = await list(); state.openTrainingCreate();
+    Object.assign(state.trainingCreate, { mode: 'random', title: '保留随机草稿' }); await flushPromises();
+    await state.createTraining('save');
+    expect(requests('post', '/admin/papers')).toHaveLength(1); expect(state.trainingCreateVisible).toBe(true);
+    expect(state.trainingCreate.title).toBe('保留随机草稿'); expect(state.creating).toBe(false); expect(state.trainingCreateDirty).toBe(true);
+  });
+  it('creates a public random paper with 100 questions, 100 points and three attempts without entering the fixed designer', async () => {
+    const { wrapper, state, router } = await list(); state.openTrainingCreate(); await flushPromises();
+    const mode = wrapper.findAllComponents(ElFormItem).find(item => item.props('label') === '组卷方式');
+    expect(mode, 'creation must offer fixed and random modes').toBeDefined();
+    mode!.getComponent(ElRadioGroup).vm.$emit('update:modelValue', 'random'); await flushPromises();
+    state.trainingCreate.title = '公共随机卷';
+    await state.createTraining('save'); await flushPromises();
+    expect(requests('post', '/admin/papers')[0]?.payload).toMatchObject({
+      mode: 'random', pool_scope: 'public', category_id: null, total_score: 100, pass_score: 60,
+      duration_minutes: 30, max_attempts: 3, rules: [{ type: 'single', count: 100, score_cents: 100 }],
+    });
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
+  });
+  it.each([1, 100])('accepts %i attempts and an 80 question random paper worth 100 points', async maxAttempts => {
+    const { state, router } = await list(); state.openTrainingCreate();
+    Object.assign(state.trainingCreate, { title: '八十题', mode: 'random', category_id: null, max_attempts: maxAttempts, rules: [
+      { type: 'single', count: 60, score_cents: 100 }, { type: 'multiple', count: 10, score_cents: 300 }, { type: 'judgment', count: 10, score_cents: 100 },
+    ] });
+    await flushPromises(); await state.createTraining('design');
+    expect(requests('post', '/admin/papers')[0]?.payload).toMatchObject({ mode: 'random', max_attempts: maxAttempts, total_score: 100 });
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
+  });
+  it.each([
+    { max_attempts: 0 }, { max_attempts: 101 }, { max_attempts: 1.5 }, { total_score: 99 },
+    { rules: [{ type: 'single', count: 501, score_cents: 1 }] }, { rules: [{ type: 'single', count: 100, score_cents: 100.1 }] },
+  ])('blocks invalid random configuration before creating %j', async patch => {
+    const { state } = await list(); state.openTrainingCreate();
+    Object.assign(state.trainingCreate, { title: '无效随机卷', mode: 'random', max_attempts: 3, rules: [{ type: 'single', count: 100, score_cents: 100 }], ...patch });
+    await state.createTraining('save');
+    expect(requests('post', '/admin/papers')).toHaveLength(0);
+    expect(state.trainingCreateVisible).toBe(true);
+  });
+  it('does not add random rules to fixed creation and preserves the fixed designer entry', async () => {
+    const { state, router } = await list(); state.openTrainingCreate(); state.trainingCreate.title = '固定卷';
+    await state.createTraining('design'); await flushPromises();
+    expect(requests('post', '/admin/papers')[0]?.payload).toMatchObject({ mode: 'fixed', category_id: '1', max_attempts: 3 });
+    expect(requests('post', '/admin/papers')[0]?.payload).not.toHaveProperty('rules');
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers/5?scope=training&designer=1');
+  });
+  it('shows public pool labels for null categories and never offers the fixed designer for random drafts', async () => {
+    showPapers([{ ...random, pool_scope: 'public', category_id: null } as any]);
+    const { wrapper, state, router } = await list();
+    expect(wrapper.text()).toContain('公共题库');
+    expect(rowActions(wrapper, '历史随机卷').text()).toContain('修改');
+    await state.handlePaperAction(random, 'manage');
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
+  });
   it('renders seven management columns without exposing learning requirements in a row', async () => {
     const { wrapper } = await list();
     expect(wrapper.findAll('.el-table__header th').map(h => h.text())).toEqual(['试卷名称', '培训类别', '考试时间', '状态', '备注', '创建时间', '操作']);
@@ -99,8 +180,8 @@ describe('paper list operations', () => {
     const { wrapper } = await list();
     const labels = (title: string) => rowActions(wrapper, title).findAll('button').map(item => item.text());
     expect(labels('草稿试卷')).toEqual(['试卷管理', '修改', '预览/打印', '复制', '发布', '删除']);
-    expect(labels('历史随机卷')).toEqual(['预览/打印', '发布', '删除']);
-    expect(labels('发布试卷')).toEqual(['预览/打印', '复制', '撤回发布']);
+    expect(labels('历史随机卷')).toEqual(['修改', '预览/打印', '发布', '删除']);
+    expect(labels('发布试卷')).toEqual(['预览/打印', '复制', '考试入口二维码', '撤回发布']);
   });
   it('opens ordinary preview from its row button without requesting answers', async () => {
     const { wrapper } = await list();
@@ -119,7 +200,7 @@ describe('paper list operations', () => {
   it('blocks writes for read-only access and allows basic editing without question access', async () => {
     transport.permissions = new Set(['papers:read']);
     const { wrapper, state } = await list();
-    expect(wrapper.findAll('.fits-table-action').map(i => i.text())).toEqual(['预览/打印', '预览/打印', '预览/打印']);
+    expect(wrapper.findAll('.fits-table-action').map(i => i.text())).toEqual(['预览/打印', '预览/打印', '预览/打印', '考试入口二维码']);
     await state.copyPaper(draft); await state.publishPaper(draft); await state.deletePaper(draft); await state.editPaper(draft);
     expect(transport.calls.filter(c => c.method !== 'get')).toEqual([]);
     transport.permissions.add('papers:write');
@@ -204,8 +285,8 @@ describe('paper publication withdrawal', () => {
     showPapers([draft, published, publishedRandom, withdrawn, withdrawnRandom, archived]);
     const { wrapper, state } = await list();
     const labels = (title: string) => rowActions(wrapper, title).findAll('button').map(item => item.text());
-    expect(labels('发布试卷')).toEqual(['预览/打印', '复制', '撤回发布']);
-    expect(labels('已发布随机卷')).toEqual(['预览/打印', '撤回发布']);
+    expect(labels('发布试卷')).toEqual(['预览/打印', '复制', '考试入口二维码', '撤回发布']);
+    expect(labels('已发布随机卷')).toEqual(['预览/打印', '考试入口二维码', '撤回发布']);
     expect(labels('已撤回固定卷')).toEqual(['预览/打印', '复制']);
     expect(labels('已撤回随机卷')).toEqual(['预览/打印']);
     expect(labels('已归档试卷')).toEqual(['预览/打印', '复制']);
@@ -219,7 +300,7 @@ describe('paper publication withdrawal', () => {
     showPapers([published, publishedRandom]);
     transport.permissions = new Set(['papers:read', 'papers:publish']);
     const { wrapper } = await list();
-    expect(wrapper.findAll('.fits-table-action').map(button => button.text())).toEqual(['预览/打印', '撤回发布', '预览/打印', '撤回发布']);
+    expect(wrapper.findAll('.fits-table-action').map(button => button.text())).toEqual(['预览/打印', '考试入口二维码', '撤回发布', '预览/打印', '考试入口二维码', '撤回发布']);
   });
 
   it('returns the withdrawn paper to a real editable draft and restores its management actions', async () => {
@@ -261,15 +342,16 @@ describe('paper publication withdrawal', () => {
     expect(rowActions(wrapper, '发布试卷').findAll('button').map(button => button.text())).toEqual(['预览/打印', '发布']);
   });
 
-  it('does not promise a question editor for a historical random paper', async () => {
+  it('offers random rule editing after withdrawal and explains frozen attempts without promising a fixed question editor', async () => {
     showPapers([publishedRandom]);
     const confirmation = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as any);
     const success = vi.spyOn(ElMessage, 'success');
     const { wrapper } = await list();
     await choose(wrapper, '已发布随机卷', '撤回发布');
-    expect(String(confirmation.mock.calls[0]?.[0])).toContain('可重新发布');
-    expect(String(confirmation.mock.calls[0]?.[0])).not.toContain('修改');
-    expect(success).toHaveBeenCalledWith('试卷已撤回为草稿，可重新发布');
+    expect(String(confirmation.mock.calls[0]?.[0])).toContain('可修改抽题规则后重新发布');
+    expect(String(confirmation.mock.calls[0]?.[0])).toContain('不重置次数');
+    expect(String(confirmation.mock.calls[0]?.[0])).not.toContain('修改试题');
+    expect(success).toHaveBeenCalledWith('试卷已撤回为草稿，可修改后重新发布');
   });
 
   it.each(['cancel', 'close'])('does not write when the confirmation is dismissed with %s', async action => {

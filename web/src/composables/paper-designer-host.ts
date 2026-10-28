@@ -1,7 +1,7 @@
 import { ref } from 'vue';
 import http from '../api/http';
 import type { AuthoringBundle, AuthoringCommitRequest, AuthoringReceipt, DesignerLayoutV1, DesignerSession } from '../api/question-document-types';
-import type { Page, QuestionView, TrainingPaperDetail, TrainingPaperSummary } from '../api/training-types';
+import type { Id, Page, QuestionView, TrainingPaperDetail, TrainingPaperSummary } from '../api/training-types';
 import type { DesignerPaper, PaperDesignerValue, PaperLibrarySource, QuestionLibrarySource, SaveContext, SaveOutcome } from '../components/question-designers/contracts';
 import { applyAuthoringReceipt, applyQuestionCommitResult, planPaperSave, preflightPaper, questionFingerprint, toAuthoringBundle, validateDesignerLayout } from '../components/question-designers/paper-designer-state';
 
@@ -12,6 +12,10 @@ export interface PaperDesignerHostApi {
 }
 export interface PaperDesignerAccess { read: boolean; write: boolean; questionsRead: boolean; questionsWrite: boolean }
 type MainPaperDetail = TrainingPaperDetail & { designer_layout?: DesignerLayoutV1 | null };
+function isFixedCategoryPaper(paper: TrainingPaperSummary): paper is TrainingPaperSummary & { mode: 'fixed'; category_id: Id } {
+  return paper.mode === 'fixed' && (paper.pool_scope ?? 'category') === 'category'
+    && typeof paper.category_id === 'string' && /^[1-9]\d*$/.test(paper.category_id);
+}
 type SavePhase = 'unsubmitted' | 'question_receipt_known' | 'config_saved' | 'questions_saved';
 interface SaveAttempt {
   phase: SavePhase;
@@ -95,6 +99,7 @@ export function createPaperDesignerHost(options: { api?: PaperDesignerHostApi; p
   function assertSession(ticket: number) { if (disposed || ticket !== serial) throw new Error('试卷编辑会话已失效'); }
   async function assemble(data: MainPaperDetail): Promise<PaperDesignerValue> {
     if (data.mode !== 'fixed') throw new Error('随机试卷请使用原配置页');
+    if (!isFixedCategoryPaper(data)) throw new Error('固定试卷设计器只接受有效培训类别的类别题池试卷');
     const paper: DesignerPaper = { ...operationInfo(data), id: String(data.id), title: data.title, category_id: data.category_id, mode: 'fixed', requires_learning: data.requires_learning,
       sort_order: data.sort_order ?? 0, required_learning_minutes: data.required_learning_minutes ?? null, remark: data.remark ?? null,
       regulation_ids: copy(data.regulation_ids), course_ids: copy(data.course_ids), rules: copy(data.rules), total_score: data.total_score ?? 100, pass_score: data.pass_score,
@@ -159,7 +164,7 @@ export function createPaperDesignerHost(options: { api?: PaperDesignerHostApi; p
       requireAccess('read'); const ticket = serial;
       const page = await api.get('/admin/papers', { params: { ...input, mode: 'fixed' } }) as Page<TrainingPaperSummary>;
       assertSession(ticket);
-      return { ...page, items: page.items.map((row) => ({ id: row.id, title: row.title, category_id: row.category_id, question_count: row.rules.reduce((count, rule) => count + rule.count, 0) })) };
+      return { ...page, items: page.items.filter(isFixedCategoryPaper).map((row) => ({ id: row.id, title: row.title, category_id: row.category_id, question_count: row.rules.reduce((count, rule) => count + rule.count, 0) })) };
     },
     async get(id) { requireAccess('read'); requireAccess('questionsRead'); const ticket = serial;
       const detail = await api.get(`/admin/papers/${id}`) as MainPaperDetail; assertSession(ticket);

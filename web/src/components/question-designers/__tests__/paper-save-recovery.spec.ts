@@ -43,6 +43,27 @@ function sourcedPaper() {
 }
 
 describe('fixed paper phased save and recovery', () => {
+  it.each([
+    { mode: 'fixed', category_id: null, pool_scope: 'category' },
+    { mode: 'fixed', category_id: '', pool_scope: 'category' },
+    { mode: 'fixed', category_id: '0', pool_scope: 'category' },
+    { mode: 'fixed', category_id: '10', pool_scope: 'public' },
+    { mode: 'random', category_id: null, pool_scope: 'public' },
+    { mode: 'random', category_id: '10', pool_scope: 'category' },
+  ])('rejects non-designable detail before assembling any questions %j', async patch => {
+    const env = await setup();
+    env.api.get = async () => ({ ...paperFixture().paper, ...patch, questions: [], rules: [] }) as any;
+    await expect(env.host.load()).rejects.toThrow(/固定|类别|随机/);
+    expect(env.calls.filter(call => call.method !== 'get')).toEqual([]);
+    await expect(env.host.paperLibrarySource.get('200')).rejects.toThrow(/固定|类别|随机/);
+  });
+  it('filters public/random and missing-category candidates out of the fixed paper library', async () => {
+    const env = await setup(); const fixed = { ...paperFixture().paper, mode: 'fixed', pool_scope: 'category', rules: [] };
+    env.api.get = async () => ({ items: [fixed, { ...fixed, id: '201', mode: 'random' },
+      { ...fixed, id: '202', pool_scope: 'public', category_id: null }, { ...fixed, id: '203', category_id: null }], total: 4, page: 1, page_size: 20 }) as any;
+    const candidates = await env.host.paperLibrarySource.list({ keyword: '', page: 1, page_size: 20 });
+    expect(candidates.items).toEqual([{ id: '100', title: '试卷 100', category_id: '10', question_count: 0 }]);
+  });
   it('strips a 120 point paper score from a new question commit and restores it to the association', async () => {
     const value = newPaper(); value.paper.total_score = 120; value.document.questions.question_one!.score_cents = 12000;
     const env = await setup(value);

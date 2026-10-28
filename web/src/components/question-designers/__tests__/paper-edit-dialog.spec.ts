@@ -53,6 +53,54 @@ const puts = () => transport.calls.filter(c => c.method === 'put');
 function saveButton() { return Array.from(document.querySelectorAll<HTMLButtonElement>('.paper-edit-dialog .el-dialog__footer button')).find(button => button.textContent?.trim() === '保存')!; }
 
 describe('paper basic configuration dialog', () => {
+  it('loads public learning courses with an explicit scope and keeps the null category when saving', async () => {
+    const original = transport.respond;
+    transport.respond = async (method, path, payload) => method === 'get' && path === '/admin/papers/2'
+      ? { ...latest, mode: 'random', pool_scope: 'public', category_id: null, total_score: 100, pass_score: 60, questions: [],
+        rules: [{ type: 'single', count: 100, score_cents: 100 }] }
+      : original(method, path, payload);
+    const { wrapper, state: listState } = await list(); await listState.editPaper({ ...row, mode: 'random' }); await flushPromises();
+    const { state } = dialog(wrapper);
+    expect(transport.calls.find(call => call.path === '/admin/papers/course-options')?.payload.params).toEqual({ pool_scope: 'public', page: 1, page_size: 100 });
+    expect(state.courses).toEqual([{ id: '10', title: '安全课程' }]);
+    await state.save(); expect(puts()[0]?.payload).toMatchObject({ pool_scope: 'public', category_id: null, course_ids: ['10'], required_learning_minutes: 90 });
+  });
+  it.each(['public', 'category', undefined])('reloads random rules and attempts and preserves the %s pool scope', async scope => {
+    const randomDetail = { ...latest, mode: 'random', pool_scope: scope, category_id: scope === 'public' ? null : '1', questions: [],
+      requires_learning: false, course_ids: [], required_learning_minutes: null,
+      total_score: 100, pass_score: 60, rules: [{ type: 'single', count: 100, score_cents: 100 }], max_attempts: 7 };
+    const original = transport.respond;
+    transport.respond = async (method, path, payload) => method === 'get' && path === '/admin/papers/2' ? randomDetail : original(method, path, payload);
+    const { wrapper, state: listState, router } = await list();
+    await listState.editPaper({ ...row, mode: 'random' }); await flushPromises();
+    const { state } = dialog(wrapper);
+    expect(state.visible).toBe(true); expect(state.loaded).toBe(true);
+    expect(state.form.rules).toEqual([{ type: 'single', count: 100, score_cents: 100 }]);
+    expect(state.form.max_attempts).toBe(7);
+    expect(document.querySelector('.paper-edit-dialog')?.textContent).toContain('本机构：简单题；外来人员：困难题');
+    state.form.max_attempts = 100;
+    state.form.rules = [{ type: 'single', count: 60, score_cents: 100 }, { type: 'multiple', count: 10, score_cents: 300 }, { type: 'judgment', count: 10, score_cents: 100 }];
+    await state.save();
+    expect(puts()[0]?.payload).toMatchObject({ pool_scope: scope || 'category', category_id: scope === 'public' ? null : '1', max_attempts: 100,
+      rules: [{ type: 'single', count: 60, score_cents: 100 }, { type: 'multiple', count: 10, score_cents: 300 }, { type: 'judgment', count: 10, score_cents: 100 }] });
+    expect(puts()[0]?.payload).not.toHaveProperty('mode'); expect(puts()[0]?.payload).not.toHaveProperty('preserve_questions');
+    expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
+  });
+  it('retains random edits after a failed save and refuses mismatched totals and invalid attempt limits', async () => {
+    const original = transport.respond;
+    transport.respond = async (method, path, payload) => {
+      if (method === 'get' && path === '/admin/papers/2') return { ...latest, mode: 'random', pool_scope: 'public', category_id: null,
+        total_score: 100, pass_score: 60, questions: [], rules: [{ type: 'single', count: 100, score_cents: 100 }] };
+      if (method === 'put') throw new Error('write failed');
+      return original(method, path, payload);
+    };
+    const { wrapper, state: listState } = await list(); await listState.editPaper({ ...row, mode: 'random' }); await flushPromises();
+    const { state } = dialog(wrapper); expect(state.loaded).toBe(true);
+    state.form.total_score = 99; await state.save(); expect(puts()).toHaveLength(0);
+    state.form.total_score = 100; state.form.max_attempts = 101; await state.save(); expect(puts()).toHaveLength(0);
+    state.form.max_attempts = 3; state.form.title = '保留随机卷输入'; await state.save();
+    expect(puts()).toHaveLength(1); expect(state.form.title).toBe('保留随机卷输入'); expect(state.visible).toBe(true); expect(state.dirty).toBe(true);
+  });
   it('loads the latest detail and saves only the displayed configuration without entering the designer', async () => {
     const { wrapper, state: listState, router } = await list();
     await listState.editPaper(row); await flushPromises();
@@ -63,7 +111,7 @@ describe('paper basic configuration dialog', () => {
     state.form.title = '最新名称-修改'; state.form.remark = '  修改备注  ';
     await flushPromises(); saveButton().click(); await flushPromises();
     expect(puts()).toEqual([{ method: 'put', path: '/admin/papers/2', payload: {
-      title: '最新名称-修改', category_id: '1', duration_minutes: 45, total_score: 120, pass_score: 72,
+      title: '最新名称-修改', category_id: '1', duration_minutes: 45, total_score: 120, pass_score: 72, max_attempts: 8,
       requires_learning: true, course_ids: ['10'], required_learning_minutes: 90, remark: '修改备注', preserve_questions: true,
     } }]);
     expect(state.visible).toBe(false); expect(router.currentRoute.value.fullPath).toBe('/admin/papers');

@@ -6,6 +6,7 @@
       <span v-else>正在加载试卷设计器…</span>
       <div class="paper-designer-status__actions">
         <el-button @click="closeDesigner">返回试卷管理</el-button>
+        <el-button v-if="canConfigureRandom" type="primary" :disabled="loading" @click="openRandomConfiguration">修改随机规则</el-button>
         <el-button v-if="designerError" type="primary" :loading="loading || designerLoading" @click="reloadDesigner">重试设计器</el-button>
       </div>
     </div>
@@ -19,6 +20,7 @@
         :media-resolver="designerMediaResolver" :media-adapter="designerMediaAdapter"
         @update:model-value="designerValue = $event" @dirty-change="designerDirty = $event" @close="closeDesigner" @saved="onDesignerSaved" />
     </el-dialog>
+    <PaperEditDialog ref="configurationDialog" :categories="categories" @saved="reloadDesigner" />
   </div>
 </template>
 
@@ -31,6 +33,7 @@ import type { Id, Page, TrainingPaperDetail } from '../../api/training-types';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 import PaperDesigner from '../../components/question-designers/PaperDesigner.vue';
+import PaperEditDialog from '../../components/PaperEditDialog.vue';
 import type { PaperDesignerValue, SaveContext } from '../../components/question-designers/contracts';
 import { createPaperDesignerHost } from '../../composables/paper-designer-host';
 import { useAuthoringOptions } from '../../composables/useAuthoringOptions';
@@ -46,10 +49,14 @@ const detailRouteKey = route.fullPath;
 const paper = ref<TrainingPaperDetail | null>(null);
 const categories = ref<Array<{ id: Id; name: string }>>([]);
 const loading = ref(false);
-const canDesign = computed(() => paper.value?.status === 'draft' && paper.value?.mode === 'fixed' && auth.can('papers:write') && auth.can('questions:read'));
+const canDesign = computed(() => paper.value?.status === 'draft' && paper.value?.mode === 'fixed' && paper.value.pool_scope !== 'public'
+  && typeof paper.value.category_id === 'string' && /^[1-9]\d*$/.test(paper.value.category_id) && auth.can('papers:write') && auth.can('questions:read'));
+const configurationDialog = ref<InstanceType<typeof PaperEditDialog> | null>(null);
+const canConfigureRandom = computed(() => paper.value?.status === 'draft' && paper.value.mode === 'random' && auth.can('papers:read') && auth.can('papers:write'));
 const unavailableMessage = computed(() => paper.value?.status !== 'draft'
   ? '已发布或历史试卷不可编辑，请返回试卷管理查看预览。'
-  : paper.value?.mode !== 'fixed' ? '此历史试卷不支持当前设计器，请返回试卷管理查看预览。' : '当前账号没有试卷设计权限。');
+  : paper.value?.mode === 'random' ? '随机试卷按规则抽题，可修改随机规则或返回试卷管理预览。'
+    : !paper.value?.category_id || paper.value.pool_scope === 'public' ? '固定试卷设计器需要有效的培训类别，请返回试卷管理检查配置。' : '当前账号没有试卷设计权限。');
 const designerVisible = ref(false);
 const designerLoading = ref(false);
 const designerError = ref('');
@@ -72,6 +79,7 @@ const designerGuardDirty = computed(() => designerVisible.value && (designerDirt
 useUnsavedChanges(designerGuardDirty, { canDiscard: () => designerHost.value?.canDiscard() !== false,
   onBlocked: () => { designerError.value = '保存结果尚未确认，请继续保存查询原请求'; }, onDiscard: releaseDesigner });
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)); }
+async function openRandomConfiguration() { if (canConfigureRandom.value && paper.value && viewActive && !viewDestroyed && route.fullPath === detailRouteKey) await configurationDialog.value?.open(paper.value); }
 function releaseDesigner() { designerOperation += 1; designerRelationOperation += 1; designerVisible.value = false; designerDirty.value = false; designerHost.value?.dispose(); designerHost.value = null; designerValue.value = null; }
 watch(() => [designerValue.value?.paper.category_id, designerValue.value?.paper.requires_learning] as const, async ([category, requiresLearning]) => {
   const operation = ++designerRelationOperation;
@@ -144,7 +152,7 @@ async function reloadDesigner() {
   } catch (failure) { if (context === viewContext) designerError.value = failure instanceof Error ? failure.message : '试卷加载失败，请重试'; }
   finally { if (context === viewContext) loading.value = false; }
 }
-function deactivate() { viewActive = false; viewContext += 1; loading.value = false; designerLoading.value = false; releaseDesigner(); }
+function deactivate() { viewActive = false; viewContext += 1; loading.value = false; designerLoading.value = false; configurationDialog.value?.close(); releaseDesigner(); }
 onActivated(() => { const wasInactive = !viewActive; viewActive = true; if (wasInactive) void reloadDesigner(); });
 onDeactivated(deactivate);
 onBeforeUnmount(() => { viewDestroyed = true; deactivate(); });
