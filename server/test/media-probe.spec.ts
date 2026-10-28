@@ -86,7 +86,11 @@ function runFixtureTool(args: string[]): Promise<void> {
 
 async function makeExecutable(name: string, source: string): Promise<string> {
   const path = join(fixtureRoot, name);
-  await writeFile(path, `#!/usr/bin/env node\n${source}\n`, 'utf8');
+  // Avoid the cold-start latency of /usr/bin/env node in the 1s timeout
+  // fixture. On this macOS runner the env shebang can take ~0.8-1.0s before
+  // the child script writes its record, while direct process.execPath starts
+  // consistently within tens of milliseconds.
+  await writeFile(path, `#!${process.execPath}\n${source}\n`, 'utf8');
   await chmod(path, 0o755);
   return path;
 }
