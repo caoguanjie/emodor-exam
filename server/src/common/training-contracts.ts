@@ -142,11 +142,20 @@ export interface FinalResult {
   items: FinalResultItem[];
 }
 
+export interface LearnerExamQuestionType {
+  type: QuestionType;
+  count: number;
+  /** Null when questions of this type have different frozen scores. */
+  score_per_question: number | null;
+  total_score: number;
+}
+
 export interface LearnerExamMetadata {
   total_score: number | null;
   pass_score: number | null;
   duration_minutes: number | null;
   question_count: number | null;
+  question_types: LearnerExamQuestionType[] | null;
 }
 
 export interface LearnerExamSummary extends LearnerExamMetadata {

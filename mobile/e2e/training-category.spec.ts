@@ -157,14 +157,14 @@ test('a long category list scrolls to and selects the final real ID', async ({ p
   await expect.poll(() => state.writes).toEqual([{ category_id: '1034' }])
 })
 
-test('exam guidance prioritizes the missing category while keeping listed exams and records reachable', async ({ page }) => {
+test('exam guidance prioritizes the missing category while keeping visible exam entries reachable', async ({ page }) => {
   const state = await setup(page)
-  state.exams = [{ paper_id: '91', title: '当前可见考试', mode: 'training', status: 'published', source: 'external', category_id: null, difficulty: 'easy' }, { paper_id: '92', title: '历史可见考试', mode: 'training', status: 'withdrawn', source: 'external', category_id: null, difficulty: 'easy' }]
+  state.exams = [{ paper_id: '91', title: '当前可见考试', mode: 'training', status: 'published', source: 'external', category_id: null, difficulty: 'easy' }, { paper_id: '92', title: '本人答题中考试', mode: 'training', status: 'withdrawn', source: 'external', category_id: null, difficulty: 'easy', active_record_id: '82' }]
   await page.goto('/#/pages/exam/index')
   await expect(page.locator('.exam-guidance')).toContainText('请选择培训工种，以便匹配考试。')
   await expect(page.getByText('当前可见考试', { exact: true })).toBeVisible()
-  await expect(page.getByText('历史可见考试', { exact: true })).toBeVisible()
-  await expect(page.getByText('考试记录', { exact: true })).toBeVisible()
+  await expect(page.getByText('本人答题中考试', { exact: true })).toBeVisible()
+  await expect(page.getByText('考试记录', { exact: true })).toHaveCount(0)
   await expect(page.locator('.exam-card').first().getByText('进入考试', { exact: true })).toBeVisible()
   await page.locator('.exam-guidance').getByText('去选择培训工种', { exact: true }).click()
   await expect(page).toHaveURL(/pages\/profile\/info$/)
@@ -177,7 +177,7 @@ for (const status of ['unverified', 'pending', 'rejected', 'error', 'verified'])
     const expected: Record<string, string> = { unverified: '完成实名认证后即可参加新的考试。', pending: '实名认证正在处理中，请查看认证进度。', rejected: '实名认证未通过，请重新核验后参加新的考试。', error: '实名认证状态加载失败，请刷新后重试。', verified: '暂无考试' }
     await expect(page.getByText(expected[status], { exact: true })).toBeVisible()
     if (status === 'verified') await expect(page.locator('.exam-guidance')).toHaveCount(0)
-    else await expect(page.getByText('考试记录', { exact: true })).toBeVisible()
+    else await expect(page.getByText('考试记录', { exact: true })).toHaveCount(0)
   })
 }
 

@@ -330,7 +330,7 @@ describe('frozen assignment facts', () => {
     }))).toBe('unknown');
   });
 
-  it('keeps an assigned exam visible when the learner profile is later cleared', async () => {
+  it('keeps an assigned active exam visible when the learner profile is later cleared', async () => {
     const service = Object.create(AttemptService.prototype) as AttemptService & Record<string, any>;
     service.userRepo = { findOne: async () => ({ id: '9', status: 1, categoryId: null, source: null }) };
     service.assignmentRepo = { find: async () => [{
@@ -339,7 +339,7 @@ describe('frozen assignment facts', () => {
     service.paperRepo = { find: async () => [{
       id: '11', title: '已冻结考试', mode: 'random', status: 'withdrawn', businessScope: 'training',
     }] };
-    service.recordRepo = { find: async () => [] };
+    service.recordRepo = { find: async () => [{ id: '41', paperId: '11', status: 'in_progress', deadlineAt: new Date(Date.now() + 60_000) }] };
     service.dataSource = { manager: { getRepository: () => ({ find: async () => [] }) } };
 
     await expect(service.list('9')).resolves.toMatchObject({

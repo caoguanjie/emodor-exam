@@ -240,6 +240,9 @@ async function runAttempts(ctx) {
     );
     await ctx.queryTestDb('UPDATE exam_paper SET status = ? WHERE id = ?', ['withdrawn', paper.paperId]);
     await ctx.restartApi();
+    const continuingList = await ctx.request(learner, 'GET', '/me/exams?page=1&page_size=100');
+    assert.equal(continuingList.status, 200, JSON.stringify(continuingList));
+    assert.equal(continuingList.data.items.find(item => String(item.paper_id) === String(paper.paperId))?.active_record_id, first.data.record_id);
     const recovered = await ctx.request(learner, 'POST', `/me/exams/${paper.paperId}/start`);
     assert.equal(recovered.status, 200, JSON.stringify(recovered));
     assert.equal(recovered.data.record_id, first.data.record_id);
@@ -264,6 +267,17 @@ async function runAttempts(ctx) {
     assert.equal(otherTicket.status, 200, JSON.stringify(otherTicket));
     const otherPath = otherTicket.data.content_url.replace(/^\/api\/v1/, '');
     await ctx.queryTestDb('UPDATE exam_record SET deadline_at=DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 SECOND) WHERE id=?', [otherStart.data.record_id]);
+    const expiredList = await ctx.request(other, 'GET', '/me/exams?page=1&page_size=1');
+    assert.equal(expiredList.status, 200, JSON.stringify(expiredList));
+    assert.equal(expiredList.data.total, 0, 'an expired attempt must not keep a withdrawn paper in the available list or its total');
+    assert.deepEqual(expiredList.data.items, []);
+    const endedList = await ctx.request(other, 'GET', '/me/exams?state=ended');
+    assert.equal(endedList.status, 200, JSON.stringify(endedList));
+    assert.equal(endedList.data.total, 0, 'legacy state filters must not restore finished papers to the available list');
+    const expiredDetail = await ctx.request(other, 'GET', `/me/exams/${paper.paperId}`);
+    assert.equal(expiredDetail.status, 200, JSON.stringify(expiredDetail));
+    assert.equal(expiredDetail.data.active_record_id, null);
+    assert.equal(expiredDetail.data.latest_record_id, otherStart.data.record_id, 'history remains reachable after the available entry expires');
     const otherTimeout = await ctx.request(other, 'GET', `/me/exam-records/${otherStart.data.record_id}/result`);
     assert.equal(otherTimeout.status, 200);
     assertPureTimeout(otherTimeout.data);
@@ -627,7 +641,7 @@ async function runAttempts(ctx) {
       assignment_id: String(assignments[0].id),
       timeout_record_id: third.data.record_id,
       legacy_record_id: String(oldStart.data.exam_record_id),
-      assertions: 'atomic-start,snapshot,retake,rollback,media,timeout-sweeper,legacy-flow,frozen-legacy-source,terminal-recover,deleted-finalized-result,deleted-legacy-first-start',
+      assertions: 'atomic-start,snapshot,retake,rollback,media,timeout-sweeper,legacy-flow,frozen-legacy-source,terminal-recover,deleted-finalized-result,deleted-legacy-first-start,active-list-visibility,expired-list-total,expired-history-detail',
     }));
   } catch (error) {
     error.message = `[training-attempts stage=${stage}] ${error.message}`;

@@ -30,7 +30,8 @@ export interface FinalResultView { record_id: string; status: AttemptTerminalSta
 export type ExamListState = 'all' | 'active' | 'published' | 'ended'
 export interface ExamListItem { paper_id: string; title: string; mode: string; status: string; source: 'institution' | 'external' | null; category_id: string | null; difficulty: string; total_score?: number | null; pass_score?: number | null; duration_minutes?: number | null; question_count?: number | null; active_record_id?: string | null; latest_record_id?: string | null }
 export interface ExamLearningSummary { required_learning_minutes: number | null; credited_seconds: number | null; remaining_seconds: number | null; courses: { id: string; title: string | null; available: boolean }[] }
-export interface LearnerExamSummary extends ExamListItem { learning?: ExamLearningSummary }
+export interface ExamQuestionTypeSummary { type: QuestionType; count: number; score_per_question: number | null; total_score: number }
+export interface LearnerExamSummary extends ExamListItem { learning?: ExamLearningSummary; question_types?: ExamQuestionTypeSummary[] | null }
 export interface ExamHistoryItemV2 { record_id: string; paper_id: string; paper_title: string | null; attempt_no: number; status: 'in_progress' | AttemptTerminalStatus; grading_state: 'not_submitted' | 'finalized'; submission_method: 'manual' | 'timeout' | null; legacy: boolean; source: 'institution' | 'external' | null; difficulty: string; score: number | null; started_at: string; submitted_at: string | null; graded_at: string | null }
 export interface WrongItemV2 extends FinalResultItemV2 { record_id: string; submitted_at: string; legacy: boolean }
 function hasImage(node: unknown): boolean {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExamAssignment } from '../src/entities/exam-assignment.entity';
 import { ExamPaper } from '../src/entities/exam-paper.entity';
 import { ExamRecord } from '../src/entities/exam-record.entity';
@@ -6,9 +6,14 @@ import { PaperRelease } from '../src/entities/paper-release.entity';
 import { TrainingCourse } from '../src/entities/training-course.entity';
 import { VideoLearningRecord } from '../src/entities/video-learning-record.entity';
 import { AttemptService } from '../src/modules/exams/attempt.service';
+import { projectExamRuleMetadata } from '../src/modules/exams/learner-exam-summary';
 import { ExamHistoryService, projectFinalResult } from '../src/modules/exams/exam-history.service';
 import { DtoValidationPipe } from '../src/common/dto-validation.pipe';
 import { AttemptPageDto, TrainingExamsController } from '../src/modules/exams/training-exams.controller';
+
+const nowMs = Date.parse('2030-01-01T00:00:00.000Z');
+beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(nowMs));
+afterEach(() => vi.restoreAllMocks());
 
 const rule = { totalCents: 12000, passCents: 7200, durationMinutes: 45, maxAttempts: 3, partialCreditRatio: 0.5, rules: [{ type: 'single', count: 20, scoreCents: 600 }] };
 
@@ -29,7 +34,7 @@ function fixture() {
     { id: '24', paperId: '12', versionNo: 1, businessScope: 'training', ruleSnapshot: structuredClone(rule), requiresLearning: 0, requiredLearningMinutes: null, courseIds: [] },
   ];
   const records: any[] = [
-    { id: '41', paperId: '11', userId: '9', status: 'in_progress', deadlineAt: new Date(0) },
+    { id: '41', paperId: '11', userId: '9', status: 'in_progress', deadlineAt: new Date(nowMs + 60_000) },
     { id: '43', paperId: '13', userId: '9', status: 'failed' },
   ];
   const courses: any[] = [{ id: '71', title: '消防课程', status: 'published' }, { id: '72', title: '下架课程', status: 'offline' }];
@@ -64,17 +69,84 @@ describe('learner exam summaries', () => {
     const result = await f.service.list('9');
     expect(result.items.find((row: any) => row.paper_id === '11')).toMatchObject({ total_score: 120, pass_score: 72, duration_minutes: 45, question_count: 20, active_record_id: '41', latest_record_id: '41' });
     expect(result.items.find((row: any) => row.paper_id === '12')).toMatchObject({ total_score: 120, pass_score: 72, active_record_id: null });
-    expect(result.items.find((row: any) => row.paper_id === '13')).toMatchObject({ total_score: null, pass_score: null, duration_minutes: null, question_count: null, latest_record_id: '43' });
+    expect(result.items.map((row: any) => row.paper_id)).toEqual(['12', '11']);
+    expect(result.total).toBe(2);
+    expect(f.recordRepo.find).toHaveBeenCalledWith(expect.objectContaining({ select: expect.arrayContaining(['deadlineAt']) }));
     expect(f.releaseRepo.find).toHaveBeenCalledTimes(1);
     expect(f.query).not.toHaveBeenCalled();
     expect(f.noWrite).not.toHaveBeenCalled();
   });
 
-  it('filters before pagination so ended and active tabs return complete totals', async () => {
+  it('filters the available set before pagination, including legacy state queries', async () => {
     const f = fixture();
     expect(await f.service.list('9', 1, 1, 'active')).toMatchObject({ total: 1, items: [{ paper_id: '11', active_record_id: '41' }] });
-    expect(await f.service.list('9', 1, 1, 'ended')).toMatchObject({ total: 1, items: [{ paper_id: '13' }] });
+    expect(await f.service.list('9', 1, 1, 'ended')).toMatchObject({ total: 0, items: [] });
+    expect(await f.service.list('9', 2, 1)).toMatchObject({ total: 2, items: [{ paper_id: '11' }] });
     expect(await f.service.list('9', 1, 1, 'published')).toMatchObject({ total: 1, items: [{ paper_id: '12' }] });
+  });
+
+  it.each(['withdrawn', 'archived'])('keeps %s papers only while本人 active attempt is still before its deadline', async status => {
+    const f = fixture();
+    f.papers[0].status = status;
+    f.records[1].status = 'in_progress';
+    f.records[1].deadlineAt = new Date(nowMs + 1);
+    expect(await f.service.list('9', 1, 1)).toMatchObject({ total: 3, items: [{ paper_id: '13', active_record_id: '43' }] });
+    f.records[1].deadlineAt = new Date(nowMs);
+    expect(await f.service.list('9', 1, 1)).toMatchObject({ total: 2, items: [{ paper_id: '12' }] });
+    expect(await f.service.list('9', 2, 1)).toMatchObject({ total: 2, items: [{ paper_id: '11' }] });
+    expect(await f.service.detail('9', '13')).toMatchObject({ paper_id: '13', active_record_id: null, latest_record_id: '43' });
+    expect(f.noWrite).not.toHaveBeenCalled();
+  });
+
+  it.each([-1, 0, 1])('uses the same exact cutoff in list and detail for deadline offset %s ms', async offset => {
+    const f = fixture();
+    const deadline = new Date(nowMs + offset);
+    f.records[0].deadlineAt = deadline;
+    const list = await f.service.list('9');
+    const detail = await f.service.detail('9', '11');
+    expect(list.items.some((row: any) => row.paper_id === '11')).toBe(offset > 0);
+    expect(detail.active_record_id).toBe(offset > 0 ? '41' : null);
+    expect(detail).toMatchObject({ total_score: 120, latest_record_id: '41' });
+    expect(f.records[0].deadlineAt).toBe(deadline);
+    expect(f.records[0].status).toBe('in_progress');
+    expect(f.noWrite).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, null, new Date('invalid')])('does not infer an active attempt from an unknown deadline: %s', async deadline => {
+    const f = fixture();
+    f.records[0].deadlineAt = deadline;
+    expect(await f.service.list('9')).toMatchObject({ total: 1, items: [{ paper_id: '12' }] });
+    expect(await f.service.detail('9', '11')).toMatchObject({ active_record_id: null, latest_record_id: '41' });
+  });
+
+  it('uses the same time snapshot for list eligibility and returned active links', async () => {
+    const f = fixture();
+    f.records[0].deadlineAt = new Date(nowMs + 1);
+    f.releaseRepo.find.mockImplementationOnce(async () => {
+      vi.mocked(Date.now).mockReturnValue(nowMs + 2);
+      return f.releases;
+    });
+    expect(await f.service.list('9', 1, 20, 'active')).toMatchObject({
+      total: 1, items: [{ paper_id: '11', active_record_id: '41' }],
+    });
+  });
+
+  it.each(['submitted', 'passed', 'failed', 'timeout'])('does not offer a %s record as active even with a future deadline', async status => {
+    const f = fixture();
+    f.records[0].status = status;
+    expect(await f.service.list('9')).toMatchObject({ total: 1, items: [{ paper_id: '12' }] });
+    expect(await f.service.detail('9', '11')).toMatchObject({ active_record_id: null, latest_record_id: '41' });
+  });
+
+  it('still lists a published paper after its old active deadline expires without inventing a new attempt', async () => {
+    const f = fixture();
+    f.papers[2].status = 'published';
+    f.records[0].deadlineAt = new Date(nowMs);
+    expect(await f.service.list('9', 1, 20, 'active')).toMatchObject({ total: 0, items: [] });
+    expect(await f.service.list('9', 1, 20, 'published')).toMatchObject({ total: 2, items: [
+      { paper_id: '12', active_record_id: null }, { paper_id: '11', active_record_id: null, latest_record_id: '41', total_score: 120 },
+    ] });
+    expect(f.noWrite).not.toHaveBeenCalled();
   });
 
   it('returns original release learning with precise remaining seconds and unavailable course names', async () => {
@@ -119,5 +191,73 @@ describe('frozen result metadata', () => {
   it('retains reliable timeout metadata without scoring or returning answer items', async () => {
     const record: any = { id: '41', assignmentId: '31', status: 'timeout', score: '0.00', gradingState: 'not_submitted', submittedAt: null, gradedAt: null, submissionMethod: null, ruleSnapshot: rule };
     expect(projectFinalResult(record, { rule, items: [] } as any, [])).toMatchObject({ total_score: 120, pass_score: 72, duration_minutes: 45, status: 'timeout', grading_state: 'not_submitted', submitted_at: null, items: [] });
+  });
+});
+
+describe('frozen question type composition', () => {
+  it('aggregates all three types in stable order using integer cents and omits empty types', () => {
+    expect(projectExamRuleMetadata({ totalCents: 12000, rules: [
+      { type: 'judgment', count: 5, scoreCents: 400 },
+      { type: 'multiple', count: 5, scoreCents: 800 },
+      { type: 'single', count: 10, scoreCents: 600 },
+      { type: 'single', count: 0, scoreCents: 0 },
+    ] }).question_types).toEqual([
+      { type: 'single', count: 10, score_per_question: 6, total_score: 60 },
+      { type: 'multiple', count: 5, score_per_question: 8, total_score: 40 },
+      { type: 'judgment', count: 5, score_per_question: 4, total_score: 20 },
+    ]);
+    expect(projectExamRuleMetadata({ totalCents: 3, rules: [
+      { type: 'multiple', count: 0, scoreCents: 100 },
+      { type: 'single', count: 3, scoreCents: 1 },
+    ] }).question_types).toEqual([{ type: 'single', count: 3, score_per_question: 0.01, total_score: 0.03 }]);
+  });
+
+  it('combines repeated equal-score rows without inventing one score for mixed-score questions', () => {
+    expect(projectExamRuleMetadata({ totalCents: 950, rules: [
+      { type: 'single', count: 2, scoreCents: 125 },
+      { type: 'single', count: 2, scoreCents: 125 },
+      { type: 'multiple', count: 1, scoreCents: 200 },
+      { type: 'multiple', count: 1, scoreCents: 250 },
+    ] }).question_types).toEqual([
+      { type: 'single', count: 4, score_per_question: 1.25, total_score: 5 },
+      { type: 'multiple', count: 2, score_per_question: null, total_score: 4.5 },
+    ]);
+  });
+
+  it.each([
+    undefined, null, {}, { totalCents: 100 }, { totalCents: 100, rules: [] },
+    { totalCents: 100, rules: [null] },
+    { totalCents: 100, rules: [{ type: 'essay', count: 1, scoreCents: 100 }] },
+    { totalCents: 100, rules: [{ type: 'single', count: -1, scoreCents: 100 }] },
+    { totalCents: 100, rules: [{ type: 'single', count: 1.5, scoreCents: 100 }] },
+    { totalCents: 100, rules: [{ type: 'single', count: '1', scoreCents: 100 }] },
+    { totalCents: 100, rules: [{ type: 'single', count: 1, scoreCents: -100 }] },
+    { totalCents: 100, rules: [{ type: 'single', count: 1, scoreCents: 0.5 }] },
+    { totalCents: 100, rules: [{ type: 'single', count: 1, scoreCents: '100' }] },
+    { totalCents: 100, rules: [{ type: 'single', count: Number.MAX_SAFE_INTEGER + 1, scoreCents: 1 }] },
+    { totalCents: 100, rules: [{ type: 'single', count: Number.MAX_SAFE_INTEGER, scoreCents: 2 }] },
+    { totalCents: 100.5, rules: [{ type: 'single', count: 1, scoreCents: 100 }] },
+    { totalCents: 100, rules: [{ type: 'single', count: 1, scoreCents: 99 }] },
+  ])('keeps incomplete or inconsistent historical composition unknown: %j', snapshot => {
+    expect(projectExamRuleMetadata(snapshot).question_types).toBeNull();
+  });
+
+  it('uses assignment rules ahead of newer releases and returns only safe composition fields', async () => {
+    const f = fixture();
+    Object.assign(f.assignments[0].ruleSnapshot.rules[0], { answer: ['do-not-project'], analysis: 'private analysis', questions: [{ stem: 'private stem' }] });
+    expect((await f.service.detail('9', '11')).question_types).toEqual([
+      { type: 'single', count: 20, score_per_question: 6, total_score: 120 },
+    ]);
+    expect((await f.service.detail('9', '12')).question_types).toEqual([
+      { type: 'single', count: 20, score_per_question: 6, total_score: 120 },
+    ]);
+    expect((await f.service.detail('9', '13')).question_types).toBeNull();
+    expect(JSON.stringify(await f.service.list('9'))).not.toMatch(/do-not-project|private analysis|private stem/);
+    expect(f.noWrite).not.toHaveBeenCalled();
+  });
+
+  it('keeps final-result metadata within its original response fields', () => {
+    const record: any = { id: '41', assignmentId: '31', status: 'timeout', score: '0.00', gradingState: 'not_submitted', submittedAt: null, gradedAt: null, submissionMethod: null, ruleSnapshot: rule };
+    expect(projectFinalResult(record, { rule, items: [] } as any, [])).not.toHaveProperty('question_types');
   });
 });

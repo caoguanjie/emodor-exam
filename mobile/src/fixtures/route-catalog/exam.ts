@@ -3,7 +3,7 @@ export const examRouteCatalog: RouteScenario[] = [
   { path: '/pages/exam/index', scenario: 'exam-center', pencilBoard: 'JDheF', expectedText: '进入考试' },
   { path: '/pages/exam/index', scenario: 'exam-center-empty', pencilBoard: 'Xgjck', expectedText: '暂无考试' },
   { path: '/pages/exam/index', scenario: 'exam-not-started', pencilBoard: 'Xgjck', expectedText: '考试尚未开始' },
-  { path: '/pages/exam/instructions', scenario: 'exam-instructions', pencilBoard: 'rMONE', expectedText: '题型构成' },
+  { path: '/pages/exam/instructions', scenario: 'exam-instructions', pencilBoard: 'rMONE', expectedText: '考试规则' },
   { path: '/pages/exam/instructions', scenario: 'exam-draft-recover', pencilBoard: 'pm0zP', expectedText: '发现未完成的答题' },
   { path: '/pages/exam/instructions', scenario: 'exam-draft-invalid', pencilBoard: 'qrG44', expectedText: '本地草稿无法恢复' },
   { path: '/pages/exam/take', scenario: 'exam-single', pencilBoard: 'XWexD', expectedText: '新进场的劳动者必须经过' },

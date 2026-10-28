@@ -1,87 +1,242 @@
 import { expect, test, type Page } from '@playwright/test'
+import type { ExamLearningSummary, ExamQuestionTypeSummary } from '../src/types/exam'
 
 const envelope = (data: unknown) => ({ code: 0, message: 'ok', data })
+const title = 'Web前端工程师基础：HTML5 + CSS3 结业考试'
 const papers = [
-  { paper_id: '41', title: '班组长班前会与现场管理安全培训考试', status: 'published', duration_minutes: 35, active_record_id: null, latest_record_id: null },
-  { paper_id: '42', title: '继续本人进行中的考试', status: 'withdrawn', duration_minutes: 30, active_record_id: '82', latest_record_id: '82' },
-  { paper_id: '43', title: '已经结束的安全考试', status: 'archived', duration_minutes: 20, active_record_id: null, latest_record_id: '83' },
+  { paper_id: '901', title, status: 'published', duration_minutes: 35, question_count: 20, total_score: 120, pass_score: 72, active_record_id: null, latest_record_id: null },
+  { paper_id: '902', title: '继续本人进行中的考试', status: 'withdrawn', duration_minutes: 30, question_count: 20, total_score: 120, pass_score: 72, active_record_id: '82', latest_record_id: '82' },
+  { paper_id: '903', title: '历史信息不完整的已发布考试', status: 'published', duration_minutes: null, question_count: null, total_score: null, pass_score: null, active_record_id: null, latest_record_id: null },
 ]
-async function mockList(page: Page, empty = false, paginated = false) {
-  const listQueries: string[] = []
+const questionTypes: ExamQuestionTypeSummary[] = [
+  { type: 'single', count: 10, score_per_question: 6, total_score: 60 },
+  { type: 'multiple', count: 5, score_per_question: 8, total_score: 40 },
+  { type: 'judgment', count: 5, score_per_question: 4, total_score: 20 },
+]
+async function setup(page: Page, options: { empty?: boolean; paginated?: boolean; learning?: boolean; learningDetails?: Partial<ExamLearningSummary>; questionTypes?: ExamQuestionTypeSummary[] | null } = {}) {
+  const queries: string[] = [], calls: string[] = []
+  let learningReady = false
   await page.route('**/api/v1/**', route => {
-    const url = new URL(route.request().url())
-    const path = url.pathname
-    if (path.endsWith('/auth/refresh')) return route.fulfill({ json: envelope({ access_token: 'exam-layout-fixture', expires_in: 900, user: { id: 17, username: 'learner', real_name: '测试学员', phone_masked: '138****0000', role: 'employee', source: 'external', category_id: 3, identity_status: 'verified' } }) })
+    const url = new URL(route.request().url()), path = url.pathname
+    calls.push(`${route.request().method()} ${path}`)
+    if (path.endsWith('/auth/refresh')) return route.fulfill({ json: envelope({ access_token: 'exam-cards-fixture', expires_in: 900, user: { id: 17, username: 'learner', real_name: '测试学员', phone_masked: '138****0000', role: 'employee', source: 'external', category_id: 3, identity_status: 'verified' } }) })
     if (path.endsWith('/me/profile')) return route.fulfill({ json: envelope({ id: '17', username: 'learner', real_name: '测试学员', phone: null, avatar_id: null, category_id: '3', category_name: '安全培训', source: 'external', role: 'employee', status: 1 }) })
     if (path.endsWith('/me/identity-verification')) return route.fulfill({ json: envelope({ status: 'verified', real_name: '测试学员', id_number_masked: null, verified_at: null, current_session_id: null, reason_code: null }) })
     if (path.endsWith('/me/exams')) {
-      listQueries.push(url.search)
+      queries.push(url.search)
       const pageNumber = Number(url.searchParams.get('page') || 1)
-      const items = empty ? [] : paginated ? [papers[pageNumber - 1]].filter(Boolean) : papers
-      return route.fulfill({ json: envelope({ items, total: empty ? 0 : paginated ? 2 : papers.length, page: pageNumber, page_size: paginated ? 1 : 10 }) })
+      const items = options.empty ? [] : options.paginated ? [papers[pageNumber - 1]].filter(Boolean) : papers
+      return route.fulfill({ json: envelope({ items, total: options.empty ? 0 : options.paginated ? 2 : papers.length, page: pageNumber, page_size: options.paginated ? 1 : 10 }) })
     }
+    if (path.endsWith('/me/exams/901')) return route.fulfill({ json: envelope({ ...papers[0], mode: 'fixed', source: 'external', category_id: '3', difficulty: 'easy', question_types: 'questionTypes' in options ? options.questionTypes : questionTypes, learning: { required_learning_minutes: options.learning ? 30 : null, credited_seconds: options.learning ? learningReady ? 1800 : 900 : null, remaining_seconds: options.learning ? learningReady ? 0 : 900 : null, courses: options.learning ? [{ id: '8', title: '消防基础', available: true }] : [], ...options.learningDetails } }) })
     return route.fulfill({ status: 404, json: { code: 40401, message: 'fixture route not provided', data: null } })
   })
-  return listQueries
+  return { queries, calls, finishLearning() { learningReady = true } }
 }
 
-test('compact exam list has a white heading, no filter tabs or record shortcut, and retains all entries', async ({ page }) => {
-  const queries = await mockList(page)
-  await page.goto('/#/pages/exam/index')
+test('vertical exam cards show real totals, only active status, and preserve a simple heading', async ({ page }) => {
+  const { queries } = await setup(page)
+  await page.goto('/mobile/#/pages/exam/index')
   await expect(page.locator('.top-bar__title')).toHaveText('考试')
   await expect(page.locator('.top-bar')).toHaveCSS('background-color', 'rgb(255, 255, 255)')
   await expect(page.locator('.center-tabs, .center-heading')).toHaveCount(0)
   await expect(page.getByText('考试记录', { exact: true })).toHaveCount(0)
   await expect(page.locator('.exam-card')).toHaveCount(3)
-  await expect(page.locator('.exam-card__meta').first()).toContainText('35 分钟')
+  const normal = page.locator('.exam-card').nth(0), active = page.locator('.exam-card').nth(1), incomplete = page.locator('.exam-card').nth(2)
+  await expect(normal.locator('.exam-card__meta')).toContainText('35 分钟')
+  await expect(normal.locator('.exam-card__meta')).toContainText('20 题')
+  await expect(normal.locator('.exam-card__meta')).toContainText('满分 120 分')
+  await expect(normal.locator('.exam-card__status')).toHaveCount(0)
+  await expect(normal.locator('.exam-card__title')).toHaveCSS('-webkit-line-clamp', '2')
+  await expect(active).toHaveClass(/exam-card--active/)
+  await expect(active.locator('.exam-card__status')).toHaveText('答题中')
+  await expect(page.getByText(/^(已撤回|已归档|已发布)$/)).toHaveCount(0)
+  await expect(incomplete.locator('.exam-card__meta')).toContainText('满分 — 分')
   await expect(page.getByText('没有更多了', { exact: true })).toBeVisible()
   expect(queries.every(query => new URLSearchParams(query).get('state') === 'all')).toBe(true)
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  await page.screenshot({ path: '/tmp/ruleexam-exam-list-compact.png', fullPage: true })
+  await page.screenshot({ path: '/tmp/ruleexam-exam-cards-list.png', fullPage: true })
 })
 
-test('entry buttons preserve instructions, active resume and ended result destinations', async ({ page }) => {
-  await mockList(page)
-  await page.goto('/#/pages/exam/index')
+test('whole exam cards and buttons navigate once to instructions or active resume', async ({ page }) => {
+  const { calls } = await setup(page)
+  await page.goto('/mobile/#/pages/exam/index')
   await expect(page.locator('.exam-card')).toHaveCount(3)
   await page.evaluate(() => {
     ;(window as any).__examDestinations = []
     uni.navigateTo = options => { (window as any).__examDestinations.push(options.url); return undefined as any }
   })
+  await page.locator('.exam-card').nth(0).locator('.exam-card__title').click()
+  await page.locator('.exam-card').nth(1).click({ position: { x: 5, y: 5 } })
+  await page.locator('.exam-card').nth(0).locator('.exam-card__meta').click()
   await page.locator('.exam-card').nth(0).getByText('进入考试', { exact: true }).click()
   await page.locator('.exam-card').nth(1).getByText('继续答题', { exact: true }).click()
-  await page.locator('.exam-card').nth(2).getByText('查看记录', { exact: true }).click()
-  expect(await page.evaluate(() => (window as any).__examDestinations)).toEqual(['/pages/exam/instructions?paper_id=41', '/pages/exam/take?record_id=82', '/pages/exam/result?record_id=83'])
+  expect(await page.evaluate(() => (window as any).__examDestinations)).toEqual(['/pages/exam/instructions?paper_id=901', '/pages/exam/take?record_id=82', '/pages/exam/instructions?paper_id=901', '/pages/exam/instructions?paper_id=901', '/pages/exam/take?record_id=82'])
+  expect(calls.filter(call => call.endsWith('/start'))).toEqual([])
 })
 
-test('loading more retains the all-state query and appends entries', async ({ page }) => {
-  const queries = await mockList(page, false, true)
-  await page.goto('/#/pages/exam/index')
+test('loading more preserves server pagination and all-state query without client filtering', async ({ page }) => {
+  const { queries } = await setup(page, { paginated: true })
+  await page.goto('/mobile/#/pages/exam/index')
   await expect(page.locator('.exam-card')).toHaveCount(1)
   await page.getByText('加载更多', { exact: true }).click()
   await expect(page.locator('.exam-card')).toHaveCount(2)
   expect(queries.some(query => new URLSearchParams(query).get('page') === '2')).toBe(true)
   expect(queries.every(query => new URLSearchParams(query).get('state') === 'all')).toBe(true)
-  await expect(page.getByText('没有更多了', { exact: true })).toBeVisible()
 })
 
-test('empty list uses the illustration and no obsolete filter explanation', async ({ page }) => {
-  await mockList(page, true)
-  await page.goto('/#/pages/exam/index')
+test('empty list keeps its illustration and simple white heading', async ({ page }) => {
+  await setup(page, { empty: true })
+  await page.goto('/mobile/#/pages/exam/index')
   await expect(page.locator('.top-bar__title')).toHaveText('考试')
   await expect(page.locator('.empty-state__image')).toBeVisible()
   await expect(page.getByText('考试发布后将显示在这里。', { exact: true })).toBeVisible()
-  await expect(page.getByText('当前筛选下暂无考试。', { exact: true })).toHaveCount(0)
-  await page.screenshot({ path: '/tmp/ruleexam-exam-list-empty.png', fullPage: true })
+  await page.screenshot({ path: '/tmp/ruleexam-exam-cards-empty.png', fullPage: true })
 })
 
-test('static exam preview shares the compact heading and list without issuing APIs', async ({ page }) => {
+test('instructions show real 120-point summary once and three complete rules without starting', async ({ page }) => {
+  const { calls } = await setup(page)
+  await page.goto('/mobile/#/pages/exam/instructions?paper_id=901')
+  await expect(page.locator('.top-bar__title')).toHaveText('考试须知')
+  await expect(page.locator('.paper-intro__title')).toHaveText(title)
+  await expect(page.locator('.paper-stat')).toHaveCount(4)
+  await expect(page.locator('.paper-stat').filter({ hasText: '满分' }).locator('.paper-stat__number')).toHaveText('120')
+  await expect(page.locator('.paper-intro__total')).toHaveCount(0)
+  await expect(page.getByText('及格', { exact: true })).toHaveCount(1)
+  await expect(page.locator('.paper-stats')).toContainText('35')
+  await expect(page.locator('.paper-stats')).toContainText('20')
+  await expect(page.locator('.paper-stats')).toContainText('72')
+  await expect(page.locator('.paper-rule')).toHaveCount(3)
+  await expect(page.locator('.paper-rule').nth(0)).toContainText('不会暂停')
+  await expect(page.locator('.paper-rule').nth(1)).toContainText('本人本机草稿')
+  await expect(page.locator('.paper-rule').nth(1)).toContainText('截止时间不变')
+  await expect(page.locator('.paper-rule').nth(2)).toContainText('不会自动交卷')
+  await expect(page.locator('.paper-rule').nth(2)).toContainText('不评分')
+  await expect(page.locator('.paper-rule').nth(2)).toContainText('不可修改')
+  await expect(page.getByText('题型构成', { exact: true })).toBeVisible()
+  const rows = page.locator('.paper-composition__row')
+  await expect(rows).toHaveCount(3)
+  for (const [index, expected] of ['单选题|10 题 × 6 分|60 分', '多选题|5 题 × 8 分|40 分', '判断题|5 题 × 4 分|20 分'].entries()) {
+    const [label, detail, score] = expected.split('|')
+    await expect(rows.nth(index).locator('.paper-composition__type')).toHaveText(label)
+    await expect(rows.nth(index).locator('.paper-composition__detail')).toHaveText(detail)
+    await expect(rows.nth(index).locator('.paper-composition__score')).toHaveText(score)
+  }
+  await expect(page.getByText(/PAPER|依据出题资料/)).toHaveCount(0)
+  expect(calls.filter(call => call.endsWith('/start'))).toEqual([])
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.screenshot({ path: '/tmp/ruleexam-exam-cards-instructions.png', fullPage: true })
+})
+
+test('mixed scores show actual type totals without inventing a per-question score', async ({ page }) => {
+  const { calls } = await setup(page, { questionTypes: [{ type: 'single', count: 10, score_per_question: null, total_score: 60 }, ...questionTypes.slice(1)] })
+  await page.goto('/mobile/#/pages/exam/instructions?paper_id=901')
+  const mixed = page.locator('.paper-composition__row').first()
+  await expect(mixed.locator('.paper-composition__type')).toHaveText('单选题')
+  await expect(mixed.locator('.paper-composition__detail')).toHaveText('10 题')
+  await expect(mixed.locator('.paper-composition__score')).toHaveText('60 分')
+  await expect(mixed).not.toContainText('×')
+  expect(calls.filter(call => call.endsWith('/start'))).toEqual([])
+})
+
+for (const [description, value] of [['null', null], ['omitted', undefined]] as const) {
+  test(`legacy ${description} type summary remains explicit and does not block start`, async ({ page }) => {
+    const { calls } = await setup(page, { questionTypes: value })
+    await page.goto('/mobile/#/pages/exam/instructions?paper_id=901')
+    await expect(page.getByText('题型信息暂不可用', { exact: true })).toBeVisible()
+    await expect(page.locator('.paper-composition__row')).toHaveCount(0)
+    const start = page.locator('.paper-footer .wd-button')
+    await expect(start).toHaveText('开始答题')
+    await expect(start).not.toHaveClass(/is-disabled/)
+    expect(calls.filter(call => call.endsWith('/start'))).toEqual([])
+    await start.click()
+    await expect.poll(() => calls.filter(call => call.endsWith('/start'))).toEqual(['POST /api/v1/me/exams/901/start'])
+  })
+}
+
+test('zero-count question types do not produce placeholder rows', async ({ page }) => {
+  await setup(page, { questionTypes: [{ type: 'single', count: 20, score_per_question: 6, total_score: 120 }, { type: 'multiple', count: 0, score_per_question: null, total_score: 0 }] })
+  await page.goto('/mobile/#/pages/exam/instructions?paper_id=901')
+  await expect(page.locator('.paper-composition__row')).toHaveCount(1)
+  await expect(page.locator('.paper-composition__type')).toHaveText('单选题')
+})
+
+test('instructions retain learning links and refresh until learning is satisfied', async ({ page }) => {
+  const state = await setup(page, { learning: true })
+  await page.goto('/mobile/#/pages/exam/instructions?paper_id=901')
+  const card = page.locator('.learning-section'), footer = page.locator('.paper-footer')
+  await expect(page.getByText('考前学习要求', { exact: true })).toBeVisible()
+  await expect(page.getByText('还需学习 15 分钟', { exact: true })).toBeVisible()
+  await expect(card.locator('.learning-section__summary')).toHaveText('已有效学习 15 分钟 · 要求 30 分钟')
+  await expect(card.locator('[role="progressbar"]')).toHaveAttribute('aria-valuenow', '50')
+  const statsBox = await page.locator('.paper-stats').boundingBox(), cardBox = await card.boundingBox(), compositionBox = await page.locator('.paper-composition').boundingBox()
+  expect(cardBox!.y).toBeGreaterThanOrEqual(statsBox!.y + statsBox!.height)
+  expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(compositionBox!.y)
+  const studyButton = card.locator('.learning-course .wd-button')
+  await expect(studyButton).toHaveText('去学习')
+  expect((await studyButton.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+  await page.evaluate(() => {
+    ;(window as any).__learningDestinations = []
+    uni.navigateTo = options => { (window as any).__learningDestinations.push(options.url); return undefined as any }
+  })
+  await studyButton.click()
+  expect(await page.evaluate(() => (window as any).__learningDestinations)).toEqual(['/pages/course/detail?id=8&from_exam=901'])
+  await page.screenshot({ path: '/tmp/ruleexam-learning-card-required.png', fullPage: true })
+  await footer.getByText('刷新学习进度', { exact: true }).click()
+  expect(state.calls.filter(call => call.endsWith('/start'))).toEqual([])
+  state.finishLearning()
+  await footer.getByText('刷新学习进度', { exact: true }).click()
+  await expect(page.getByText('考前学习已达标', { exact: true })).toBeVisible()
+  await expect(card).toHaveClass(/learning-section--ready/)
+  await expect(card.locator('[role="progressbar"]')).toHaveAttribute('aria-valuenow', '100')
+  await expect(footer.getByText('开始答题', { exact: true })).toBeVisible()
+  await expect(page.getByText('刷新学习进度', { exact: true })).toHaveCount(0)
+  await page.screenshot({ path: '/tmp/ruleexam-learning-card-ready.png', fullPage: true })
+})
+
+test('unknown learning progress stays explicit without a fabricated zero progress bar', async ({ page }) => {
+  const state = await setup(page, { learning: true, learningDetails: { credited_seconds: null, remaining_seconds: null } })
+  await page.goto('/mobile/#/pages/exam/instructions?paper_id=901')
+  await expect(page.getByText('学习进度暂未确认', { exact: true })).toBeVisible()
+  await expect(page.locator('.learning-section__summary')).toHaveText('已有效学习 — 分钟 · 要求 30 分钟')
+  await expect(page.locator('.learning-section [role="progressbar"]')).toHaveCount(0)
+  await page.locator('.paper-footer').getByText('刷新学习进度', { exact: true }).click()
+  expect(state.calls.filter(call => call.endsWith('/start'))).toEqual([])
+})
+
+test('learning courses support long names and clearly disable unavailable courses', async ({ page }) => {
+  const longTitle = '建筑施工现场消防安全基础与突发事故应急处置培训课程：安全生产责任与实际操作规范'
+  await setup(page, { learning: true, learningDetails: { courses: [{ id: '8', title: longTitle, available: true }, { id: '9', title: '暂不可访问的历史培训课程', available: false }] } })
+  await page.goto('/mobile/#/pages/exam/instructions?paper_id=901')
+  const courses = page.locator('.learning-course')
+  await expect(courses).toHaveCount(2)
+  await expect(courses.first()).toContainText(longTitle)
+  await expect(courses.nth(1).locator('.wd-button')).toHaveText('暂不可学习')
+  await expect(courses.nth(1).locator('.wd-button')).toHaveClass(/is-disabled/)
+  expect((await courses.nth(1).locator('.wd-button').boundingBox())!.height).toBeGreaterThanOrEqual(44)
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+for (const { credited, remaining, expected } of [{ credited: 2400, remaining: 0, expected: '100' }, { credited: 0, remaining: 1800, expected: '0' }]) {
+  test(`learning progress clamps server credited seconds ${credited} to ${expected} percent`, async ({ page }) => {
+    await setup(page, { learning: true, learningDetails: { credited_seconds: credited, remaining_seconds: remaining } })
+    await page.goto('/mobile/#/pages/exam/instructions?paper_id=901')
+    await expect(page.locator('.learning-section [role="progressbar"]')).toHaveAttribute('aria-valuenow', expected)
+  })
+}
+
+test('static list and instructions use the same hierarchy without API requests', async ({ page }) => {
   const requests: string[] = []
   page.on('request', request => { if (request.url().includes('/api/v1/')) requests.push(request.url()) })
-  await page.goto('/#/pages/exam/index?scenario=exam-center')
-  await expect(page.locator('.top-bar__title')).toHaveText('考试')
-  await expect(page.locator('.center-tabs, .center-heading')).toHaveCount(0)
-  await expect(page.locator('.exam-card')).toHaveCount(4)
-  await expect(page.getByText('进入考试', { exact: true })).toBeVisible()
+  await page.goto('/mobile/#/pages/exam/index?scenario=exam-center')
+  await expect(page.locator('.exam-card')).toHaveCount(2)
+  await expect(page.locator('.exam-card__status')).toHaveCount(1)
+  await expect(page.getByText(/已撤回|已归档|已发布|最好成绩|上次离开/)).toHaveCount(0)
+  await page.goto('/mobile/#/pages/exam/instructions?scenario=exam-instructions')
+  await expect(page.locator('.paper-rule')).toHaveCount(3)
+  await expect(page.getByText('题型构成', { exact: true })).toBeVisible()
+  await expect(page.locator('.paper-composition__row')).toHaveCount(3)
+  await expect(page.locator('.paper-stat').filter({ hasText: '满分' }).locator('.paper-stat__number')).toHaveText('120')
+  await expect(page.getByText(/PAPER|依据出题资料/)).toHaveCount(0)
   expect(requests).toEqual([])
 })
