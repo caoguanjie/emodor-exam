@@ -13,7 +13,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 
 // Same dist/mobile + temporary same-origin API proxy pattern as mobile-h5.mjs.
 // The parent retains the live harness database until Chrome has finished.
-async function startMobileServer(ctx) {
+export async function startMobileServer(ctx) {
   assert.ok((await stat(join(MOBILE_DIST, 'index.html'))).isFile(), 'build H5 before PUBLIC_RANDOM_BROWSER=1');
   assert.ok((await stat(join(PC_DIST, 'index.html'))).isFile(), 'build PC before PUBLIC_RANDOM_BROWSER=1');
   const api = new URL(ctx.baseUrl);

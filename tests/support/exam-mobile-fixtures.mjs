@@ -25,8 +25,9 @@ export async function examLearner(ctx, { categoryId = null, source = 'institutio
 }
 
 export function assertAttemptView(view, { status = 'in_progress' } = {}) {
-  assert.deepEqual(Object.keys(view).sort(), ['status', 'record_id', 'paper_id', 'release_id', 'deadline_at', 'server_now', 'questions'].sort());
+  assert.deepEqual(Object.keys(view).sort(), ['status', 'record_id', 'paper_id', 'release_id', 'exam_purpose', 'deadline_at', 'server_now', 'questions'].sort());
   assert.equal(view.status, status);
+  assert.ok(['formal', 'practice'].includes(view.exam_purpose));
   assert.match(view.record_id, /^\d+$/);
   assert.ok(Number.isFinite(Date.parse(view.server_now)));
   assert.ok(Number.isFinite(Date.parse(view.deadline_at)));

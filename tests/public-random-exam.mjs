@@ -50,7 +50,7 @@ function ok(reply, label) {
 
 const parsed = value => typeof value === 'string' ? JSON.parse(value) : value;
 
-async function adminLogin(ctx) {
+export async function adminLogin(ctx) {
   const headers = { 'X-Forwarded-For': '198.51.100.218' };
   const captcha = ok(await ctx.request(null, 'POST', '/auth/captcha', undefined, headers), 'admin captcha');
   const redis = new Redis({ host: ctx.env.REDIS_HOST, port: Number(ctx.env.REDIS_PORT), password: ctx.env.REDIS_PASSWORD || undefined });
@@ -72,7 +72,7 @@ async function adminLogin(ctx) {
   return actor;
 }
 
-async function learner(ctx, source) {
+export async function learner(ctx, source) {
   const actor = await debugLearner(ctx);
   // Durable source is fixture data; the mobile login/session and identity fact
   // are real API flows with only the external identity provider overridden.
@@ -110,7 +110,7 @@ async function count(ctx, table, where = '', params = []) {
   return Number(row.n);
 }
 
-async function importQuestions(ctx, admin, fixture, categoryIds, report) {
+export async function importQuestions(ctx, admin, fixture, categoryIds, report) {
   assert.equal(await count(ctx, 'question'), 0, 'isolated bank must begin empty');
   const importedIds = new Set();
   for (const [index, batch] of fixture.batches.entries()) {
@@ -191,7 +191,7 @@ async function publish(ctx, admin, paperId, expectedPoolSize = 1000) {
   return releaseId;
 }
 
-function assertNoSecrets(value) {
+export function assertNoSecrets(value) {
   if (!value || typeof value !== 'object') return;
   for (const [key, child] of Object.entries(value)) {
     assert.ok(!['answer', 'answers', 'analysis', 'correct_option_ids', 'snapshot_json', 'snapshotJson', 'display_to_original', 'displayToOriginal', 'pool', 'candidates'].includes(key), `learner API leaked ${key}`);

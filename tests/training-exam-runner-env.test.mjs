@@ -9,6 +9,15 @@ test('1000-question suite uses isolated test-only identity and bounded pool', ()
   assert.ok(resolveSuitePaths('all').includes(path));
 });
 
+test('practice suite uses the owned test identity runtime without widening unknown suites', () => {
+  const [path] = resolveSuitePaths('practice-random-exam');
+  assert.deepEqual(suiteRuntimeEnvOverrides(path), { DB_POOL_SIZE: '2', NODE_ENV: 'test', SERVER_DEBUG_LOGIN_ENABLED: 'true', SMS_PROVIDER: 'disabled', IDENTITY_PROVIDER: 'disabled' });
+  assert.match(suiteRuntimeApi(path).apiArgs[0], /server\/test\/identity-e2e-main\.ts$/);
+  assert.ok(resolveSuitePaths('all').includes(path));
+  assert.deepEqual(suiteRuntimeApi('/unknown-practice-suite.mjs'), {});
+  assert.deepEqual(suiteRuntimeEnvOverrides('/unknown-practice-suite.mjs'), {});
+});
+
 for (const name of ['training-attempts', 'training-submissions', 'training-records', 'training-full-flow']) {
   test(`${name} uses isolated mobile debug login and test-only identity provider`, () => {
     const [path] = resolveSuitePaths(name);
