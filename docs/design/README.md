@@ -144,7 +144,7 @@ EmodorRuleExam 当前是一套面向单家培训机构的课程、题库、考�
 | 培训课程 | 按一个培训类别组织的学习内容（training_course），状态为 draft / published / offline；课程可推荐、排序、配置封面与可选制度信息关联，但制度关联不构成抽题池或学习门槛。 |
 | 课程章节与视频课时 | course_chapter 与 course_lesson 分别排序；本期课时类型仅 video。发布后的媒体替换追加 lesson_version 并更新 current_version_id，旧版本不可原地改写。 |
 | 视频学习记录与会话 | video_learning_record 按用户+不可变课时版本保存有效时长、去重覆盖、断点与完成；video_learning_session 保存递增序号及服务端锚点，重启可恢复。 |
-| 心跳上报 | 默认每 30 秒上报。制度阅读携带滚动段位并用 Redis 累计；视频携带递增 seq、position_ms 与播放状态并逐拍落库。视频先按完整服务端间隔 +2 秒判断跳播，再把单次确认封顶 45 秒；暂停/后台不计。 |
+| 心跳上报 | 默认每 30 秒上报。制度阅读携带滚动段位并用 Redis 累计；视频携带递增 seq、position_ms 与播放状态并逐拍落库。视频先按完整服务端间隔 +2 秒判断跳播，再把单次确认封顶 45 秒；进入暂停/后台先结算前一播放区间，此后零累计。 |
 | 滚动覆盖率 | 阅读内容按固定 10 段划分、以 JSON 位图记录的已读到位情况（learning_record.scroll_coverage）；其中底部段必须被覆盖，是「有效学习」的必要条件之一。 |
 | 考试资格 | legacy 制度固定卷仍必须完成有效学习并返回原差距详情。新training移动首次开考校验mobile employee/权威实名、发布、启用类别及首次来源/类别匹配，默认不检查学习门槛；有效 active 恢复优先，撤回/历史归档记录只阻新开，培训卷支持撤回发布，归档及legacy状态写入口继续退场。 |
 | 试题 | 题库稳定身份（question）与不可变 question_version。支持 single/multiple/judgment、当前两档启用且历史中级保留、`ai/manual/import` 来源；人工、文件和参考题 AI 确认后直接启用，兼容status=approved但审核元数据NULL、无新考点或题库分值。发布冻结通过启用校验的精确当前版本，后续修订不改写 release；旧题未知类别、难度与审核事实保持未知。 |

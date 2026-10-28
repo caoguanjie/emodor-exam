@@ -332,7 +332,7 @@ interface CourseProgress {
 
 - `VideoSessionService.start()` 新建 session 时初始锚点固定为 `paused`，位置取 `confirmed_position_ms`。只有播放器实际触发 `play` 后，客户端才发送第一拍 `playing`；该拍只建立锚点，不计开播请求、加载和 seek 等待时间。
 - 心跳周期采用响应的 `heartbeat_interval_ms=30000`。`seq` 从 `progress.last_seq + 1` 开始并严格递增；重复或乱序请求幂等返回现有进度。
-- 只有上一锚点是 `playing` 且当前状态是 `playing/ended` 的连续区间可计时。`paused/buffering/background` 不计时；非 playing→playing 的首拍只重置锚点。
+- **2026-10-28 边界结算修复**：上一锚点为 `playing` 时，结算到当前事件之前的合法播放区间，包括进入 `paused/buffering/background/ended` 的边界拍，然后保存当前锚点。非播放期间与恢复 playing 首拍仍零累计；自然结束的 pause→ended 只结算一次尾段。此增量替代原“本拍非播放则整段不计”规则，修复已播放尾段丢失；不变更请求字段、服务端容差/封顶与95%去重覆盖门槛。
 - 服务端先校验 `forward_position <= server_elapsed + 2000`，再结算 `credited_ms=min(server_elapsed,45000,forward_position)`；前端不上报自算有效时长，也不发送 elapsed、累计秒数或完成标志。
 - 覆盖区间合并去重；重复观看可增加 `credited_ms`，不得重复增加 `coverage_ms`。`coverage_ms >= duration_ms * 0.95` 后完成状态单向置位。
 - `close` 只关闭所有权并返回既有进度，不补算未上报区间；90 秒 stale sweep 同样只收口，不补时。算法常量和 `creditVideoInterval()` 语义不因 Task 12 改动。

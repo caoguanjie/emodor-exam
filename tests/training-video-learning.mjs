@@ -465,9 +465,13 @@ async function runBody(ctx) {
   const at90 = await videoHeartbeat(ctx, learner.actor, sessionId, 10, 90_000, 'playing');
   assert(at90.status === 200 && at90.data?.coverage_ms === 90_000 && at90.data?.completed === false,
     '90 percent coverage completion mismatch');
-  const at95 = await videoHeartbeat(ctx, learner.actor, sessionId, 11, 95_000, 'playing');
+  const at95 = await videoHeartbeat(ctx, learner.actor, sessionId, 11, 95_000, 'paused', 5_000);
   assert(at95.status === 200 && at95.data?.coverage_ms === 95_000 && at95.data?.completed === true,
-    '95 percent coverage did not complete');
+    'pause boundary lost the playing interval that reaches 95 percent');
+  const endedAfterPause = await videoHeartbeat(ctx, learner.actor, sessionId, 12, 95_000, 'ended', 1);
+  assert(endedAfterPause.status === 200 && endedAfterPause.data?.coverage_ms === 95_000
+    && endedAfterPause.data?.credited_ms === at95.data.credited_ms && endedAfterPause.data?.completed === true,
+  'natural pause then ended lost coverage or credited the tail twice');
   const courseProgress = await ctx.request(learner.actor, 'GET', `/me/courses/${course.courseId}/progress`);
   assert(courseProgress.status === 200 && courseProgress.data?.required === 1
     && courseProgress.data?.completed === 1 && courseProgress.data?.completion_rate === 1,

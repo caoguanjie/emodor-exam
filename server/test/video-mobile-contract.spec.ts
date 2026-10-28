@@ -68,6 +68,34 @@ function fixture() {
 }
 
 describe('mobile video contract', () => {
+  it.each([12_000, 100_000])('persists completion for a %i ms video emitting pause before ended', async duration => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.now();
+      vi.setSystemTime(now);
+      const f = fixture(); f.version.durationMs = String(duration);
+      await f.service.start('31', '101');
+      let seq = 1;
+      await f.service.heartbeat('31', '901', { seq, position_ms: 0, state: 'playing' });
+      for (let position = 30_000; position < duration; position += 30_000) {
+        vi.setSystemTime(now + position);
+        await f.service.heartbeat('31', '901', { seq: ++seq, position_ms: position, state: 'playing' });
+      }
+      vi.setSystemTime(now + duration);
+      const paused = await f.service.heartbeat('31', '901', { seq: ++seq, position_ms: duration, state: 'paused' });
+      expect(paused).toMatchObject({ coverage_ms: duration, credited_ms: duration, completed: true, confirmed_position_ms: duration });
+      const completedAt = f.records[0].completedAt;
+      vi.setSystemTime(now + duration + 1);
+      const ended = await f.service.heartbeat('31', '901', { seq: ++seq, position_ms: duration, state: 'ended' });
+      expect(ended).toMatchObject({ coverage_ms: duration, credited_ms: duration, completed: true });
+      expect(f.records[0].coverageIntervals).toEqual([[0, duration]]);
+      expect(f.records[0].completedAt).toEqual(completedAt);
+      expect(f.sessions[0].activeUserId).toBeNull();
+      expect(f.sessions[0].endedAt).toBeInstanceOf(Date);
+      await expect(f.service.close('31', '901')).resolves.toMatchObject({ coverage_ms: duration, completed: true });
+    } finally { vi.useRealTimers(); }
+  });
+
   it.each(['start', 'heartbeat', 'close', 'records', 'progress'])('rejects a PC token before %s reaches video services', (method) => {
     const sessions = new Proxy({}, { get: () => () => { throw new Error('must not reach service'); } });
     const controller: any = new VideoLearningController(sessions as any);

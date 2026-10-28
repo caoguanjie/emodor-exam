@@ -981,7 +981,7 @@ start按同一轮权威current version返回 `media.asset_id` 和精确版本票
 
 视频短票签发/续签以及 proxy 的每次内容读取使用独立 learner-only authorizer：重查启用employee、无有效管理权限、已有实名、published/current、ready资产及精确引用。通用Bearer内容读取仍兼容具备 `courses:read` 的PC管理预览；普通学员通用读取仍须实名及published/current，video不允许以上传者 `asset.owner_id===actor_id` 短路。角色/权限变化、停用、下架、换版或引用撤销后，拒绝新签/续签及旧代理票据；已发 COS 链接在到期前仍可读取。
 
-心跳以数据库中的 `last_seq/last_heartbeat_at/anchor_position_ms/anchor_state` 为权威，进程重启后继续。仅前一锚点为 playing 且本拍为 playing/ended 时可确认区间；先以完整的非负服务端实际间隔判断 `forward_ms ≤ server_elapsed_ms + 2000`，再将有效时长取服务端间隔、45 秒和真实位置前进量的最小值。过大前进不增加 `coverage_ms`，只把下一拍锚点移到新位置。paused/buffering/background 不计时；重复观看可增加 `credited_ms`，合并后的覆盖区间不重复增加。`state=ended` 同拍结算合法区间后关闭会话。
+心跳以数据库中的 `last_seq/last_heartbeat_at/anchor_position_ms/anchor_state` 为权威，进程重启后继续。前一锚点为 playing 时可结算到当前事件的合法区间，包括进入 paused/buffering/background/ended 的边界拍；先以完整的非负服务端实际间隔判断 `forward_ms ≤ server_elapsed_ms + 2000`，再将有效时长取服务端间隔、45 秒和真实位置前进量的最小值。过大前进不增加 `coverage_ms`，只把下一拍锚点移到新位置。边界结算后存当前状态，非播放期间及恢复播放首拍不计时；自然结束的 pause→ended 只结算一次尾段。重复观看可增加 `credited_ms`，合并后的覆盖区间不重复增加。`state=ended` 同拍结算合法区间后关闭会话。
 
 完成条件是 `coverage_ms / duration_ms ≥ 0.95`。课程分母按当前published课程的required video lessons当前版本计算，不再以institution/同类别分配筛选；external、无类别、跨类别适用同一口径，零必学课时返回 `required=0,completed=0,completion_rate=null,lessons=[]`。每个进度项携带稳定 `lesson_id/version_id`，移动端按ID映射目录完成态和断点，不按数组下标猜测。视频替换后旧版本记录保留但不计入新版本完成；下架、当前版本替换、账号停用或播放资格失效会关闭后续计时，单独source/category变化不撤销课程资格。`GET /me/video-records`只按本人读取不可变版本历史，不按当前来源、类别、课程状态或current version隐藏记录，不返回媒体URL、不重开会话。该learner进度口径不改写3.8的C6管理统计既有分母。
 
@@ -1439,7 +1439,7 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | POST /mobile/auth/sms/login | 默认挑战 300 秒有效、最多 5 次尝试；成功后一次消费 | challenge 与手机号 HMAC 绑定，供应商验码通过后原子消费；过期/错误 40001，频率或次数限制 42901，供应商不可用 50004 |
 | POST /learning/heartbeat | 节拍窗口限流：30 秒周期内异常高频丢弃（42901） | 丢弃不影响时长正确性（服务端时钟差结算、credited 封顶 45 秒，天然幂等） |
 | POST /learning/heartbeat/pause、resume | 同一 session_id 每分钟最多 60 次；重复 pause / 重复 resume 幂等（第二次直接返回当前状态，不重复结算） | 事件驱动端点不适用 30 秒节拍窗口——丢弃 pause/resume 会破坏失焦语义（resume 被丢弃 → 下拍 diff 含整段失焦时间、pause 被丢弃 → 失焦期间照常计费，虚增最多 45 秒/次，故单独限流） |
-| POST /me/video-sessions/{id}/heartbeat | 客户端默认 30 秒；序号必须递增，单次最多确认 45 秒 | DB session→record 行锁；重放/乱序返回当前进度，暂停/缓冲/后台零累计，跳播不写覆盖 |
+| POST /me/video-sessions/{id}/heartbeat | 客户端默认 30 秒；序号必须递增，单次最多确认 45 秒 | DB session→record 行锁；重放/乱序返回当前进度，进入暂停/缓冲/后台先结算前一 playing 区间，此后零累计，跳播不写覆盖 |
 | POST /exams/records/{id}/heartbeat | 30 秒节拍窗口限流 | 作答暂存幂等（覆盖写） |
 | POST /exams/records/{id}/submit | 幂等：重复交卷返回首次结果 | 三层幂等（05 册 6.4.5） |
 | POST /me/exam-records/{id}/submit | 严格整卷；同record终态幂等 | 锁后accepted_at严格早于deadline才受理；manual/finalized评分与写答案同事务，纯timeout不评分；终态重复返回首次结果 |
@@ -1476,7 +1476,7 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | POST /media/:assetId/preview-ticket | PC Bearer管理预览，不能作为learner票据 |
 | POST /media/tickets/batch | mobile，最多50项，按每个精确owner引用授权；保留重复项位置 |
 
-`GET /media/limits` 保留原限额，增加 upload_mode、multipart_threshold_bytes、part_size_bytes、parallel_limit、upload_session_ttl_seconds；local模式继续proxy。会话状态 uploading/finalizing/completed/failed/aborted/expired，完成回执默认30天，之后保留请求墓碑。
+`GET /media/limits` 保留原限额，增加 upload_mode、multipart_threshold_bytes、part_size_bytes、parallel_limit、upload_session_ttl_seconds。`upload_mode` 为解析后的 `direct|proxy`，与 `MEDIA_STORAGE_PROVIDER` 独立：`MEDIA_UPLOAD_MODE=auto`（默认）在 development/test 使用 proxy，其他环境 COS 使用 direct；proxy/server/backend 强制中转，direct/presigned 请求直传；local 存储始终 proxy。中转复用 `POST /media/upload` 的鉴权、文件探测、服务端摘要和私有正式对象发布，不改变存储类型。H5 头像仅在 COS PUT 阶段发生 TypeError 网络/CORS 拒绝或无可见状态码时回退一次中转；取消、会话切换、明确 COS HTTP 错误和完成确认失败不触发回退。原直传 staging 会话按既有取消/清理协议处理，资料保存仍需显式绑定头像。会话状态 uploading/finalizing/completed/failed/aborted/expired，完成回执默认30天，之后保留请求墓碑。
 
 local/实名内容保留 `/media/tickets/:ticket/content`（learner）及 `/media/preview-tickets/:ticket/content`（PC代理）。COS普通ready资源在申请/续签时复核当前权限后返回标准桶域名的准确GET签名URL，返回真实 `expires_at`；默认300秒、可配置上限3600秒，旧URL到期前仍有效。品牌入口 `/site-config/assets/:id/content` 当前白名单检查后307到短链，跳转no-store。URL不含业务JWT/SecretKey，身份和staging不签普通链接。在考不发解析图，纯timeout不发题图；客户端续签不重建学习session。
 

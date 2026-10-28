@@ -42,8 +42,10 @@ export function creditVideoInterval(
   const realElapsed = Math.max(0, Number.isFinite(elapsedMs) ? Math.trunc(elapsedMs) : 0);
   const creditWindow = Math.min(VIDEO_HEARTBEAT_CAP_MS, realElapsed);
   const forwardMs = currentPosition - previousPosition;
-  const canCreditState = previous.state === 'playing'
-    && (input.state === 'playing' || input.state === 'ended');
+  // The incoming state closes the preceding interval. A pause/wait/hide
+  // boundary must settle that interval before becoming the next anchor;
+  // browsers also emit pause immediately before ended on natural completion.
+  const canCreditState = previous.state === 'playing';
 
   if (!canCreditState || realElapsed === 0 || forwardMs <= 0) {
     return { nextAnchor, creditedMs: 0, interval: null };

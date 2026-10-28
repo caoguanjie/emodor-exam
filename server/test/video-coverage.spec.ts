@@ -62,7 +62,7 @@ describe('verified video coverage', () => {
   });
 
   it.each(['paused', 'buffering', 'background'] as const)(
-    'does not credit %s playback state',
+    'settles the preceding playing interval when entering %s',
     (state) => {
       const result = creditVideoInterval(
         anchor(),
@@ -71,9 +71,59 @@ describe('verified video coverage', () => {
         DURATION_MS,
       );
 
-      expect(result.creditedMs).toBe(0);
-      expect(result.interval).toBeNull();
+      expect(result.creditedMs).toBe(30_000);
+      expect(result.interval).toEqual([0, 30_000]);
       expect(result.nextAnchor).toEqual({ seq: 1, positionMs: 30_000, state });
+    },
+  );
+
+  it('preserves the final interval when natural completion emits pause before ended', () => {
+    const paused = creditVideoInterval(
+      anchor({ seq: 10, positionMs: 316_298 }),
+      { seq: 11, position_ms: 347_200, state: 'paused' },
+      30_902, 347_200,
+    );
+    const ended = creditVideoInterval(paused.nextAnchor,
+      { seq: 12, position_ms: 347_200, state: 'ended' }, 1, 347_200);
+    expect(paused.interval).toEqual([316_298, 347_200]);
+    expect(paused.creditedMs + ended.creditedMs).toBe(30_902);
+    expect(ended.interval).toBeNull();
+  });
+
+  it('completes a short video before its first periodic heartbeat without double credit', () => {
+    const paused = creditVideoInterval(anchor(),
+      { seq: 1, position_ms: 12_000, state: 'paused' }, 12_000, 12_000);
+    const ended = creditVideoInterval(paused.nextAnchor,
+      { seq: 2, position_ms: 12_000, state: 'ended' }, 1, 12_000);
+    const coverage = mergeCoverage(mergeCoverage([], paused.interval).intervals, ended.interval);
+    expect(coverage.coverageMs).toBe(12_000);
+  });
+
+  it.each(['paused', 'buffering', 'background'] as const)(
+    'does not credit time spent in %s or its resume beat', state => {
+      const stopped = creditVideoInterval(anchor(),
+        { seq: 1, position_ms: 10_000, state }, 10_000, DURATION_MS);
+      const waiting = creditVideoInterval(stopped.nextAnchor,
+        { seq: 2, position_ms: 20_000, state }, 60_000, DURATION_MS);
+      const resumed = creditVideoInterval(waiting.nextAnchor,
+        { seq: 3, position_ms: 20_000, state: 'playing' }, 60_000, DURATION_MS);
+      const playing = creditVideoInterval(resumed.nextAnchor,
+        { seq: 4, position_ms: 30_000, state }, 10_000, DURATION_MS);
+      expect(stopped.creditedMs).toBe(10_000);
+      expect(waiting.creditedMs).toBe(0);
+      expect(resumed.creditedMs).toBe(0);
+      expect(playing.creditedMs).toBe(10_000);
+    },
+  );
+
+  it.each(['paused', 'buffering', 'background', 'ended'] as const)(
+    'keeps jump validation and the credit cap on a %s boundary', state => {
+      expect(creditVideoInterval(anchor(),
+        { seq: 1, position_ms: 62_001, state }, 60_000, DURATION_MS).creditedMs).toBe(0);
+      expect(creditVideoInterval(anchor(),
+        { seq: 1, position_ms: 60_000, state }, 60_000, DURATION_MS).creditedMs).toBe(45_000);
+      expect(creditVideoInterval(anchor({ positionMs: 30_000 }),
+        { seq: 1, position_ms: 0, state }, 30_000, DURATION_MS).creditedMs).toBe(0);
     },
   );
 
