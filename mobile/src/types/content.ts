@@ -48,4 +48,13 @@ export function renderableNodes(doc: unknown): RenderableNode[] {
     : { type: 'image', assetId: node.attrs.asset_id })
 }
 export type ReadonlyContentDoc = ReadonlyTiptapDoc | import('./content-v3').ReadonlyRichDocV3
+export function hasReadonlyContent(doc: ReadonlyContentDoc | null | undefined): boolean {
+  function visible(node: unknown): boolean {
+    if (!record(node)) return false
+    if (node.type === 'text') return typeof node.text === 'string' && !!node.text.trim()
+    if (node.type === 'image' || node.type === 'horizontalRule') return true
+    return Array.isArray(node.content) && node.content.some(visible)
+  }
+  return !!doc && visible(doc)
+}
 export function textDoc(text: string): ReadonlyTiptapDoc { return { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] } }
