@@ -15,6 +15,7 @@ import { resumeLearnerNavigation } from '@/platform/navigation'
 import { nativeNavigationStyle } from '@/platform/native-layout'
 import { useSiteConfig } from '@/composables/useSiteConfig'
 import { resolvePublicBrandingUrl } from '@/platform/media-url'
+import { isTestLoginEnabled } from '@/platform/development'
 
 const nativeStyle = nativeNavigationStyle()
 const { scenario, loadScenario } = useShellScenario('login-default')
@@ -37,6 +38,8 @@ const feedback = ref('短信验证码用于验证你的身份')
 const session = useSessionStore()
 const { config, load, invalidate } = useSiteConfig()
 const logo = computed(() => preview.value ? '/static/brand-logo.png' : resolvePublicBrandingUrl(config.value?.logo_asset_id))
+const testLoginEnabled = isTestLoginEnabled()
+const canTestLogin = computed(() => testLoginEnabled && session.initialized && isValidMobilePhone(phone.value) && !sending.value && !loggingIn.value)
 let ticker: ReturnType<typeof setInterval> | undefined
 let active = true
 let navigationRevision = 0
@@ -103,18 +106,20 @@ async function sendCode() {
   finally { sending.value = false }
 }
 
-async function submitLogin() {
-  if (!canLogin.value || confirmingConsent.value || !active) return
+async function submitLogin(testLogin = false) {
+  const eligible = () => testLogin ? canTestLogin.value : canLogin.value
+  if (!eligible() || confirmingConsent.value || !active) return
   const startedRevision = navigationRevision
   confirmingConsent.value = true
   const approved = await consent.value?.ensureConsent()
   confirmingConsent.value = false
   clock.value = Date.now()
-  if (!approved || !active || startedRevision !== navigationRevision || !canLogin.value) return
+  if (!approved || !active || startedRevision !== navigationRevision || !eligible()) return
   loggingIn.value = true; hasError.value = false
   feedback.value = '正在验证身份，请稍候'
   try {
-    await session.login({ phone: phone.value, challenge_id: challengeId.value, code: code.value })
+    if (testLogin) await session.testLogin(phone.value)
+    else await session.login({ phone: phone.value, challenge_id: challengeId.value, code: code.value })
     if (active && startedRevision === navigationRevision) { challengeId.value = ''; code.value = ''; login() }
   } catch (error) { if (active && startedRevision === navigationRevision) showError(error) }
   finally { loggingIn.value = false }
@@ -132,8 +137,10 @@ async function submitLogin() {
           <view class="login-form__field"><text class="login-form__label">验证码</text><wd-input v-model="code" type="number" :maxlength="6" :disabled="loggingIn" :error="feedbackError" :placeholder="sent ? '请输入验证码' : '6位短信验证码'" custom-style="flex:1;min-width:0" /><wd-button button-id="mobile-sms-send" size="small" variant="soft" :disabled="!!remaining || sending || loggingIn" :loading="sending" custom-style="width:110px;padding:0;flex:none" @click="sendCode">{{ sendLabel }}</wd-button></view>
         </view>
         <view class="login-form__feedback" :class="{ 'login-form__feedback--error': feedbackError, 'login-form__feedback--sent': sent && !feedbackError }" role="status"><AppIcon :name="feedbackError ? 'circle-x' : 'info'" :size="14" :color="feedbackError ? '#ee0a24' : sent ? '#1989fa' : '#969799'" /><text>{{ message }}</text></view>
-        <wd-button button-id="mobile-sms-login" block :disabled="!canLogin || confirmingConsent" :loading="loggingIn" custom-style="--wot-button-height-medium:50px;--wot-button-radius-main:var(--app-radius-md);font-weight:600" @click="submitLogin">{{ loggingIn ? '正在登录' : '登录' }}</wd-button>
-        <LoginConsent ref="consent" :disabled="sending || loggingIn" :eligible="canLogin" :context-key="`${normalizeMobilePhone(phone)}|${challengeId}|${code}`" @terms="openTerms" />
+        <wd-button button-id="mobile-sms-login" block :disabled="!canLogin || confirmingConsent" :loading="loggingIn" custom-style="--wot-button-height-medium:50px;--wot-button-radius-main:var(--app-radius-md);font-weight:600" @click="submitLogin()">{{ loggingIn ? '正在登录' : '登录' }}</wd-button>
+        <wd-button v-if="testLoginEnabled" button-id="mobile-test-login" block variant="soft" :disabled="!canTestLogin || confirmingConsent" :loading="loggingIn" @click="submitLogin(true)">测试登录（免验证码）</wd-button>
+        <text v-if="testLoginEnabled" class="login-form__feedback">仅开发测试：输入测试手机号，登录已有学员或创建新学员；实名规则不变。</text>
+        <LoginConsent ref="consent" :disabled="sending || loggingIn" :eligible="canLogin || canTestLogin" :context-key="`${normalizeMobilePhone(phone)}|${challengeId}|${code}`" @terms="openTerms" />
       </view>
       <view class="login-page__help"><text role="button" @click="setScenario('login-help')">收不到验证码？</text></view>
     </view>

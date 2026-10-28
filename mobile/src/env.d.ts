@@ -1,6 +1,8 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  readonly VITE_MP_LOCAL_HTTP?: string
+  readonly VITE_TEST_LOGIN_ENABLED?: string
   readonly VITE_API_ORIGIN?: string
   readonly VITE_COS_MEDIA_ORIGIN?: string
   readonly VITE_COS_MEDIA_PREFIX?: string

@@ -3,6 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { inspectMpPublicConfig } from '../build/mp-public-config.mjs'
 
 describe('MP public configuration preflight', () => {
+  it('requires development mode and explicit opt-in for loopback HTTP', () => {
+    const env = { VITE_API_ORIGIN: 'http://127.0.0.1:3000', VITE_MP_LOCAL_HTTP: 'true' }
+    expect(inspectMpPublicConfig(env).ready).toBe(false)
+    expect(inspectMpPublicConfig(env, { allowLocalHttp: true }).ready).toBe(true)
+    expect(inspectMpPublicConfig({ ...env, VITE_MP_LOCAL_HTTP: 'false' }, { allowLocalHttp: true }).ready).toBe(false)
+    for (const api of ['http://192.168.1.2:3000', 'http://example.test', 'http://localhost:70000', 'http://localhost:3000/api/v1']) {
+      expect(inspectMpPublicConfig({ ...env, VITE_API_ORIGIN: api }, { allowLocalHttp: true }).ready).toBe(false)
+    }
+  })
   it('reports missing API configuration while permitting a separate static preview compile', () => {
     expect(inspectMpPublicConfig({})).toEqual({ ready: false, errors: ['缺少 VITE_API_ORIGIN：小程序业务请求需要明确的 HTTPS 服务域名。'], requestDomains: [], uploadDomains: [], downloadDomains: [] })
   })

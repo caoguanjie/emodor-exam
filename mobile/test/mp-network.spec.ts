@@ -28,6 +28,16 @@ function installNativeWire(handler: (request: WireRequest) => WireResponse | Pro
 beforeEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.resetModules(); setActivePinia(createPinia()) })
 
 describe('platform API addresses', () => {
+  it('allows loopback HTTP only in explicitly enabled development mode', () => {
+    vi.stubEnv('DEV', true); vi.stubEnv('VITE_MP_LOCAL_HTTP', 'true')
+    expect(resolveApiUrl('/me/home', 'mp-weixin', 'http://127.0.0.1:3000')).toBe('http://127.0.0.1:3000/api/v1/me/home')
+    expect(normalizeApiOrigin('http://localhost:3000')).toBe('http://localhost:3000')
+    for (const api of ['http://192.168.1.2:3000', 'http://localhost.evil.test', 'http://localhost:70000', 'http://localhost:3000/api']) expect(() => normalizeApiOrigin(api)).toThrow()
+    vi.stubEnv('DEV', false)
+    expect(() => normalizeApiOrigin('http://127.0.0.1:3000')).toThrow()
+    vi.stubEnv('DEV', true); vi.stubEnv('VITE_MP_LOCAL_HTTP', 'false')
+    expect(() => normalizeApiOrigin('http://127.0.0.1:3000')).toThrow()
+  })
   it('keeps H5 requests relative and resolves MP requests without browser URL globals', async () => {
     vi.stubGlobal('URL', undefined)
     expect(resolveApiUrl('/me/home', 'h5')).toBe('/api/v1/me/home')

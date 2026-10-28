@@ -1,4 +1,5 @@
 import { ApiError, request } from './client'
+import { isTestLoginEnabled } from '@/platform/development'
 import type { MobileSessionResult, SmsChallenge, SmsLoginInput } from '@/types/api'
 import type { Page } from './courses'
 export function normalizeMobilePhone(phone: string): string { return phone.replace(/[\s-]/g, '') }
@@ -16,6 +17,12 @@ export async function loginWithSms(data: SmsLoginInput): Promise<MobileSessionRe
 
 export function refreshMobileSession(): Promise<MobileSessionResult> {
   return request({ url: '/mobile/auth/refresh', method: 'POST', auth: false })
+}
+
+export function loginWithTestPhone(phone: string): Promise<MobileSessionResult> {
+  if (!isTestLoginEnabled()) throw new ApiError(40301, '测试登录未开启')
+  if (!isValidMobilePhone(phone)) throw new ApiError(40001, '请输入正确的11位手机号')
+  return request({ url: '/mobile/auth/debug-login', method: 'POST', data: { phone: normalizeMobilePhone(phone) }, auth: false })
 }
 
 export function logoutMobileSession(accessToken?: string): Promise<null> {

@@ -5,4 +5,4 @@ export interface MpPublicConfigReport {
   uploadDomains: string[]
   downloadDomains: string[]
 }
-export function inspectMpPublicConfig(env: Record<string, string | undefined>): MpPublicConfigReport
+export function inspectMpPublicConfig(env: Record<string, string | undefined>, options?: { allowLocalHttp?: boolean }): MpPublicConfigReport

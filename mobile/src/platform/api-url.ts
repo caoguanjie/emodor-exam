@@ -17,6 +17,15 @@ export function currentApiPlatform(): ApiPlatform {
 export function normalizeApiOrigin(origin: string): string {
   const fail = () => { throw new ApiUrlError('微信小程序需要配置合法 HTTPS 接口域名') }
   if (typeof origin !== 'string' || /[\u0000-\u0020\u007f]/.test(origin)) return fail()
+  // Desktop simulator only: explicit development opt-in; production remains HTTPS-only.
+  if (import.meta.env.DEV && import.meta.env.VITE_MP_LOCAL_HTTP === 'true') {
+    const local = /^http:\/\/(localhost|127\.0\.0\.1)(?::([0-9]{1,5}))?$/.exec(origin)
+    if (local) {
+      const port = local[2] === undefined ? 80 : Number(local[2])
+      if (port < 1 || port > 65535) return fail()
+      return `http://${local[1]}${port === 80 ? '' : `:${port}`}`
+    }
+  }
   const match = /^https:\/\/([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?\/?$/.exec(origin)
   if (!match) return fail()
   const host = match[1].toLowerCase()

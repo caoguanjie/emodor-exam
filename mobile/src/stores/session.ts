@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { useLearnerStore } from './learner'
 import { ApiError } from '@/api/client'
-import { loginWithSms, logoutMobileSession, refreshMobileSession } from '@/api/auth'
+import { loginWithSms, loginWithTestPhone, logoutMobileSession, refreshMobileSession } from '@/api/auth'
 import { beginNativeAuthLogin, beginNativeAuthLogout, enterMobileLogin, invalidateNativeAuthSession } from '@/platform/session'
 import type { MobileSessionResult, SmsLoginInput } from '@/types/api'
 import { clearUserDrafts } from '@/utils/exam-draft'
@@ -84,6 +84,12 @@ export const useSessionStore = defineStore('mobile-session', () => {
   }
 
   function login(input: SmsLoginInput): Promise<MobileSessionResult> {
+    return loginUsing(() => loginWithSms(input))
+  }
+  function testLogin(phone: string): Promise<MobileSessionResult> {
+    return loginUsing(() => loginWithTestPhone(phone))
+  }
+  function loginUsing(operation: () => Promise<MobileSessionResult>): Promise<MobileSessionResult> {
     if (loginPromise) return Promise.reject(new ApiError(40001, '正在登录，请稍候'))
     const startedRevision = ++revision.value
     beginNativeAuthLogin()
@@ -91,7 +97,7 @@ export const useSessionStore = defineStore('mobile-session', () => {
     loggingIn.value = true
     const pending = enqueueAuthWrite(async () => {
       if (startedRevision !== revision.value) throw new ApiError(40107, '登录会话已切换，请重新操作')
-      const result = await loginWithSms(input)
+      const result = await operation()
       if (startedRevision !== revision.value) throw new ApiError(40107, '登录会话已切换，请重新操作')
       acceptSession(result)
       return result
@@ -123,5 +129,5 @@ export const useSessionStore = defineStore('mobile-session', () => {
     })
   }
 
-  return { accessToken, expiresIn, initialized, user, sessionEpoch, isLoggingIn, bootstrap, login, logout, refreshAccessTokenOnce, expireSession }
+  return { accessToken, expiresIn, initialized, user, sessionEpoch, isLoggingIn, bootstrap, login, testLogin, logout, refreshAccessTokenOnce, expireSession }
 })

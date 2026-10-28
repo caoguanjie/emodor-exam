@@ -42,6 +42,10 @@ node scripts/build.mjs mp-weixin
 
 ## 微信开发者工具导入
 
+开发测试登录：根 `.env` 配置 `VITE_TEST_LOGIN_ENABLED=true`，后端同时配置 `NODE_ENV=development`、`SERVER_DEBUG_LOGIN_ENABLED=true`，短信可以保持 disabled。重新启动前端开发编译后，H5 和小程序开发版登录页会显示「测试登录（免验证码）」；填写有效测试手机号并同意协议即可登录，未知手机号会创建新学员。复用正式会话管理及小程序内存刷新凭据，不绕过实名、账号停用、管理账号隔离或考试规则。正式生产构建不显示此入口且客户端调用会拒绝。
+
+H5 使用 `npm --prefix mobile run dev:h5`；小程序开发版使用 `npm --prefix mobile run dev:mp-weixin`，导入 `mobile/dist/dev/mp-weixin/`。小程序默认仍需 HTTPS origin；仅开发者工具本机模拟器可显式配置 `VITE_MP_LOCAL_HTTP=true` 和 `VITE_API_ORIGIN=http://127.0.0.1:3000`。此例外须运行 dev:mp-weixin（development 模式），并在工具「详情 → 本地设置」勾选不校验合法域名、web-view 域名、TLS 和 HTTPS 证书；只允许 localhost/127.0.0.1，正式构建仍拒绝 HTTP，真机不能以此连接电脑。正式打包前须将 API 地址改为实际 HTTPS 服务地址。根 `.env` 中的变量只在启动或编译时读取，更改后须重新启动对应进程。
+
 1. 执行 `node scripts/build.mjs mp-weixin`，在微信开发者工具中导入 `mobile/dist/build/mp-weixin/`。
 2. 源码 `src/manifest.json` 的 `mp-weixin.appid` 故意留空。导入时选择微信提供的测试号，或填写自己申请的真实 AppID。构建生成的 `touristappid` 不保证被工具接受：本次 ARM 工具 2.02.2609240 导入时报错误码 1，改用工具的测试号后成功。若导入框锁定 AppID，可复制产物到临时目录，仅清除该副本 `project.config.json` 的 `appid` 后重新选择测试号；不要修改源码来伪造 AppID。静态预览不代表可上传、发布或真机业务联调。
 3. 需要重复使用真实 AppID 时，在开发者工具项目设置中配置；不要把工具生成文件中的本地修改当成源码配置。若决定把公开 AppID 固定到源码，应填写 `src/manifest.json` 的 `mp-weixin.appid` 后重建。

@@ -9,11 +9,13 @@ function validPrefix(value) {
 function validCosOrigin(value) {
   return typeof value === 'string' && /^https:\/\/[a-z0-9][a-z0-9-]*-\d+\.cos\.[a-z0-9-]+\.myqcloud\.com$/.test(value)
 }
-export function inspectMpPublicConfig(env) {
+export function inspectMpPublicConfig(env, { allowLocalHttp = false } = {}) {
   const errors = [], requestDomains = [], uploadDomains = [], downloadDomains = []
   const api = env.VITE_API_ORIGIN, cos = env.VITE_COS_MEDIA_ORIGIN, prefix = env.VITE_COS_MEDIA_PREFIX
   if (!api) errors.push('缺少 VITE_API_ORIGIN：小程序业务请求需要明确的 HTTPS 服务域名。')
-  else if (!validOrigin(api)) errors.push('VITE_API_ORIGIN 必须是无路径、凭据、查询参数或结尾斜杠的 HTTPS origin。')
+  else if (!validOrigin(api) && !(allowLocalHttp && env.VITE_MP_LOCAL_HTTP === 'true'
+    && /^http:\/\/(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?$/.test(api)
+    && (() => { try { return new URL(api).origin === api } catch { return false } })())) errors.push('VITE_API_ORIGIN 必须是无路径、凭据、查询参数或结尾斜杠的 HTTPS origin。')
   else { requestDomains.push(api); uploadDomains.push(api); downloadDomains.push(api) }
   if (!!cos !== !!prefix) errors.push('VITE_COS_MEDIA_ORIGIN 与 VITE_COS_MEDIA_PREFIX 必须同时配置。')
   if (cos && !validCosOrigin(cos)) errors.push('VITE_COS_MEDIA_ORIGIN 必须是已批准 COS 桶的 HTTPS origin，不能包含路径或结尾斜杠。')

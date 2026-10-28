@@ -1,4 +1,5 @@
 import { normalizeApiOrigin } from './api-url'
+import { isTestLoginEnabled } from './development'
 
 const cookieName = 'ruleexam_mobile_refresh'
 const cookiePath = '/api/v1/mobile/auth'
@@ -15,7 +16,7 @@ function endpoint(url: string, origin: string): string | null {
     const trusted = normalizeApiOrigin(origin)
     if (!url.startsWith(`${trusted}/`)) return null
     const path = url.slice(trusted.length)
-    return [loginPath, refreshPath, logoutPath].includes(path) ? path : null
+    return [loginPath, refreshPath, logoutPath, ...(isTestLoginEnabled() ? [`${cookiePath}/debug-login`] : [])].includes(path) ? path : null
   } catch { return null }
 }
 
@@ -91,7 +92,7 @@ export function createNativeAuthCookieJar() {
     acceptResponse(url: string, origin: string, response: NativeCookieResponse, expectedGeneration: number) {
       if (generation !== expectedGeneration) return
       const path = endpoint(url, origin)
-      if (path !== loginPath && path !== refreshPath) return
+      if (path !== loginPath && path !== refreshPath && !(isTestLoginEnabled() && path === `${cookiePath}/debug-login`)) return
       const now = Date.now()
       const candidates = responseCookies(response).map(value => parseCookie(value, now)).filter((value): value is ParsedCookie => value !== null)
       if (!candidates.length || candidates.some(value => value.value !== candidates[0].value || value.expiresAt !== candidates[0].expiresAt)) return
