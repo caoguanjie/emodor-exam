@@ -13,7 +13,7 @@ const options = computed(() => props.preview ? profileTrainingCategories : learn
 const selected = computed(() => props.preview ? options.value.find(item => item.id === previewId.value) : learner.categoryDraft)
 const readonly = computed(() => props.preview ? previewConfirmed.value : !!learner.profile?.category_id)
 const disabled = computed(() => !!props.disabled || (!props.preview && !learner.canChooseTrainingCategory))
-const value = computed(() => readonly.value && !props.preview ? learner.profile?.category_name || '已设置培训工种' : selected.value?.name || '请选择培训工种')
+const value = computed(() => readonly.value && !props.preview ? learner.profile?.category_name || '已设置培训工种' : selected.value?.name || '未填写（选填）')
 const confirmation = computed({ get: () => props.preview ? previewConfirmVisible.value : learner.categoryConfirmVisible, set: value => { if (props.preview) previewConfirmVisible.value = value; else learner.categoryConfirmVisible = value } })
 watch(() => props.initialOpen, value => { if (props.preview && value) pickerVisible.value = true }, { immediate: true })
 onHide(() => { pickerVisible.value = false; previewConfirmVisible.value = false; if (!props.preview) learner.cancelCategoryConfirmation() })
@@ -27,7 +27,7 @@ function confirm() { if (props.preview) previewConfirmed.value = true; else void
     <view class="category-field__row" :role="readonly ? undefined : 'button'" :aria-label="readonly ? undefined : '培训工种'" :aria-disabled="!readonly && disabled" @click="!readonly && !disabled && (pickerVisible = true)"><text class="category-field__label">培训工种</text><text class="category-field__value">{{ value }}</text><AppIcon v-if="!readonly" name="chevron-right" :size="16" color="#969799" /></view>
     <text v-if="readonly" class="category-field__hint">如需修改，请联系管理员或监考人员。</text>
     <template v-else>
-      <text class="category-field__hint">确认后将用于匹配考试，学员端无法自行修改。</text>
+      <text class="category-field__hint">选填，不影响实名认证或参加考试。确认后如需修改，请联系管理员。</text>
       <text v-if="!preview && learner.categoryLoading" class="category-field__hint">培训工种加载中…</text>
       <text v-else-if="!preview && !learner.categoryError && !learner.categoryReadRequired && !options.length" class="category-field__hint">暂无可选培训工种，请联系管理员或监考人员。</text>
       <wd-button v-if="selected" size="small" :loading="!preview && learner.categorySaving" :disabled="disabled" @click="requestConfirmation">确认培训工种</wd-button>
@@ -35,7 +35,7 @@ function confirm() { if (props.preview) previewConfirmed.value = true; else void
     <view v-if="!preview && learner.categoryError" class="category-field__error"><text>{{ learner.categoryError }}</text><wd-button size="small" variant="text" :disabled="learner.categorySaving || learner.profileLoading" @click="learner.categoryReadRequired ? emit('refresh') : learner.loadTrainingCategories()">{{ learner.categoryReadRequired ? '刷新资料' : '重新加载工种' }}</wd-button></view>
     <text v-if="!preview && learner.categoryMessage" class="category-field__hint">{{ learner.categoryMessage }}</text>
     <wd-popup v-model="pickerVisible" position="bottom" round safe-area-inset-bottom><view class="category-picker"><view class="category-picker__heading"><text>选择工种</text><view role="button" aria-label="关闭选择器" @click="pickerVisible = false"><AppIcon name="x" :size="22" /></view></view><scroll-view scroll-y class="category-picker__options"><view v-for="option in options" :key="option.id" role="button" :aria-label="`选择${option.name}`" :aria-disabled="disabled" class="category-picker__option" @click="choose(option.id)"><text>{{ option.name }}</text><AppIcon v-if="selected?.id === option.id" name="check" :size="18" color="#1989fa" /></view></scroll-view></view></wd-popup>
-    <ConfirmSheet v-model="confirmation" title="确认培训工种" :message="`你选择的培训工种为「${selected?.name || ''}」。确认后将用于匹配考试，学员端无法自行修改。如需调整，请联系管理员或监考人员。`" confirm-text="确认培训工种" cancel-text="返回修改" @cancel="cancel" @confirm="confirm" />
+    <ConfirmSheet v-model="confirmation" title="确认培训工种" :message="`你选择的培训工种为「${selected?.name || ''}」。工种选填，确认后学员端无法自行修改。如需调整，请联系管理员或监考人员。`" confirm-text="确认培训工种" cancel-text="返回修改" @cancel="cancel" @confirm="confirm" />
   </view>
 </template>
 <style scoped>

@@ -5,6 +5,8 @@ import QuestionView from './QuestionView.vue'
 import AnswerCard from './AnswerCard.vue'
 import ExamTakeHeader from './ExamTakeHeader.vue'
 import { useExamStore } from '@/stores/exam'
+import { useSessionStore } from '@/stores/session'
+import { saveExamEntryIntent } from '@/utils/exam-entry-intent'
 import { protectExamNavigation } from '@/platform/navigation'
 import { nativeNavigationStyle } from '@/platform/native-layout'
 import { watchNativeExamExitPrompt } from '@/platform/native-exam-exit'
@@ -33,7 +35,11 @@ watch(() => store.phase, phase => {
 async function leave() { await store.persistDraft(); leaving.value = true; dialog.value = ''; unprotect(); uni.reLaunch({ url: '/pages/exam/index' }) }
 function confirmSubmit() { dialog.value = ''; card.value = false; void store.submit() }
 function submit() { if (!store.locked) { card.value = false; dialog.value = 'submit' } }
-function identity() { uni.navigateTo({ url: '/pages/identity/index' }) }
+function identity() {
+  const session = useSessionStore(), paperId = store.attempt?.paper_id
+  saveExamEntryIntent(paperId ? { kind: 'exam-instructions', paperId } : { kind: 'exam-tab' }, session.user ? String(session.user.id) : undefined)
+  uni.navigateTo({ url: '/pages/identity/index' })
+}
 async function query() { try { await store.queryStatus() } catch { /* Error remains visible. */ } }
 defineExpose({ show, hide, dispose, back })
 </script>

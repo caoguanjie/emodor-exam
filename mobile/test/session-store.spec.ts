@@ -3,6 +3,8 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useSessionStore } from '../src/stores/session'
 import { useLearnerStore } from '../src/stores/learner'
 import { loginWithSms, sendSmsCode } from '../src/api/auth'
+import { readExamEntryIntent, saveExamEntryIntent } from '../src/utils/exam-entry-intent'
+import { useExamStore } from '../src/stores/exam'
 
 const user = { id: 11, username: 'learner-11', real_name: '', phone_masked: '138****0000', role: 'employee' as const, source: 'external' as const, category_id: null, identity_status: 'unverified' as const }
 type WireRequest = { url: string; data?: unknown; header: Record<string, string>; success: (response: { statusCode: number; data: unknown }) => void; fail: (error: unknown) => void }
@@ -22,6 +24,50 @@ beforeEach(() => {
 })
 
 describe('mobile session store', () => {
+  it('invalidates an old account exam cache even when a refresh returns a different account', async () => {
+    installWire(() => ok({ ...sessionData(), user: { ...user, id: 12 } }))
+    const session = useSessionStore(), exam = useExamStore()
+    useLearnerStore().user = { ...user }
+    exam.$patch({ summary: { paper_id: '7' } as any, questions: [{ question_id: 'old' } as any], answers: { old: ['old-account-answer'] } })
+    const epoch = session.sessionEpoch
+    await session.refreshAccessTokenOnce()
+    expect(session.sessionEpoch).toBeGreaterThan(epoch)
+    expect(exam.summary).toBeNull(); expect(exam.questions).toEqual([]); expect(exam.answers).toEqual({})
+  })
+
+  it('clears a selected owner-bound target on explicit logout instead of recapturing the visible paper', async () => {
+    const values = new Map<string, unknown>()
+    installWire(() => ok(null))
+    Object.assign(uni, { getStorageSync: (key: string) => values.get(key), setStorageSync: (key: string, value: unknown) => values.set(key, value), removeStorageSync: (key: string) => values.delete(key) })
+    vi.stubGlobal('getCurrentPages', () => [{ route: 'pages/exam/instructions', options: { paper_id: '7' } }])
+    useLearnerStore().user = { ...user }
+    saveExamEntryIntent({ kind: 'exam-instructions', paperId: '7' }, '11')
+    await useSessionStore().logout()
+    expect(readExamEntryIntent('11')).toBeNull()
+  })
+  it('captures a generic exam Tab on expired login and keeps the target after SMS authentication', async () => {
+    const values = new Map<string, unknown>()
+    installWire(options => options.url.endsWith('/refresh') ? { code: 40107, message: 'expired', data: null } : ok(sessionData()))
+    Object.assign(uni, { getStorageSync: (key: string) => values.get(key), setStorageSync: (key: string, value: unknown) => values.set(key, value), removeStorageSync: (key: string) => values.delete(key) })
+    vi.stubGlobal('getCurrentPages', () => [{ route: 'pages/exam/index', options: { paper_id: '9' } }])
+    await useSessionStore().bootstrap()
+    expect(readExamEntryIntent()).toEqual({ kind: 'exam-tab' })
+    await useSessionStore().login({ phone: '13800000000', challenge_id: 'challenge-1', code: '123456' })
+    expect(readExamEntryIntent('11')).toEqual({ kind: 'exam-tab' })
+  })
+
+  it('drops the old selected paper and all in-memory exam data on an account switch', async () => {
+    const values = new Map<string, unknown>()
+    installWire(() => ok({ ...sessionData(), user: { ...user, id: 12 } }))
+    Object.assign(uni, { getStorageSync: (key: string) => values.get(key), setStorageSync: (key: string, value: unknown) => values.set(key, value), removeStorageSync: (key: string) => values.delete(key) })
+    const session = useSessionStore(), exam = useExamStore()
+    useLearnerStore().user = { ...user }
+    exam.$patch({ list: { items: [{ paper_id: '7', title: 'account A' } as any], total: 1, page: 1, page_size: 10 }, summary: { paper_id: '7' } as any, questions: [{ question_id: 'old' } as any], answers: { old: ['secret'] } })
+    saveExamEntryIntent({ kind: 'exam-instructions', paperId: '7' }, '11')
+    await session.login({ phone: '13900000000', challenge_id: 'challenge-b', code: '123456' })
+    expect(readExamEntryIntent('12')).toEqual({ kind: 'exam-tab' })
+    expect(exam.list.items).toEqual([]); expect(exam.summary).toBeNull(); expect(exam.questions).toEqual([]); expect(exam.answers).toEqual({})
+  })
   it('normalizes phone numbers and keeps challenge and access credentials out of storage', async () => {
     const received: unknown[] = []
     installWire(options => { received.push(options.data); return ok(options.url.endsWith('/send') ? { challenge_id: 'challenge-1', expires_in: 300, retry_after: 60, masked_phone: '138****0000' } : sessionData()) })

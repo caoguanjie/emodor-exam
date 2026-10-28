@@ -10,6 +10,8 @@ import { useSessionStore } from '@/stores/session'
 import { useLearnerStore } from '@/stores/learner'
 import { useIdentityStore } from '@/stores/identity'
 import { needsLearnerProfile } from '@/utils/learner-onboarding'
+import { consumeExamEntryIntent, readExamEntryIntent } from '@/utils/exam-entry-intent'
+import { navigateExamEntryIntent, resumeLearnerNavigation } from '@/platform/navigation'
 import type { LearnerProfile } from '@/api/auth'
 import ProtectedImage from '@/components/common/ProtectedImage.vue'
 import { pickAvatar, releasePickedMedia, type PickedMedia } from '@/platform/media-picker'
@@ -44,6 +46,7 @@ const saved = ref(false)
 const editLocked = computed(() => !preview.value && (!loaded.value || learner.profileLoading || learner.profileSaving || learner.categorySaving || avatarBusy.value || identity.loading || !identity.authority || !!identity.loadError))
 const nameReadonly = computed(() => preview.value || editLocked.value || identity.verified)
 const needsIdentity = computed(() => !preview.value && !identity.verified)
+const saveLabel = computed(() => !needsIdentity.value ? '保存资料' : readExamEntryIntent(session.user ? String(session.user.id) : undefined)?.kind === 'exam-tab' ? '保存并返回考试列表' : '保存并去实名认证')
 async function changeAvatar() {
   if (preview.value || editLocked.value) return
   const current = pageRevision, epoch = session.sessionEpoch
@@ -107,17 +110,21 @@ async function save() {
   picker.value = ''; saved.value = false; error.value = ''
   const name = form.name.trim()
   if (!name || name.length > 64) { error.value = !name ? '请输入真实姓名' : '真实姓名最多64个字'; return }
-  if (!learner.profile?.category_id || learner.categoryReadRequired) { error.value = '请选择并确认培训工种'; return }
   try {
     const profile = await learner.updateProfile({ ...(!identity.verified ? { real_name: name } : {}), gender: form.gender === '男' ? 'male' : form.gender === '女' ? 'female' : null, birthday: form.birthday || null, ...(avatarDraft.value ? { avatar_id: avatarDraft.value } : {}) })
     if (epoch !== session.sessionEpoch || current !== pageRevision || !active) return
     applyProfile(profile, true); clearAvatar(); saved.value = true
-    if (!needsLearnerProfile(profile) && !identity.verified) uni.redirectTo({ url: '/pages/identity/index' })
+    if (!needsLearnerProfile(profile)) {
+      const intent = readExamEntryIntent(profile.id)
+      if (intent?.kind === 'exam-tab') resumeLearnerNavigation(profile)
+      else if (!identity.verified) uni.redirectTo({ url: '/pages/identity/index' })
+      else if (intent) { consumeExamEntryIntent(profile.id); navigateExamEntryIntent(intent) }
+    }
   } catch (cause) { if (epoch === session.sessionEpoch && current === pageRevision && active) error.value = cause instanceof Error ? cause.message : '资料保存失败，请重试' }
 }
 </script>
 <template>
-  <AppPage :title="onboarding ? '完善个人资料' : '个人资料'" :back-target="`/pages/profile/index${preview ? '?scenario=profile-default' : ''}`"><text class="profile-info__intro">{{ identity.verified ? '姓名已通过实名认证，手机号为当前登录手机号。' : '请填写真实姓名并确认培训工种，头像选填；保存后进行实名认证。' }}</text>
+  <AppPage :title="onboarding ? '完善个人资料' : '个人资料'" :back-target="`/pages/profile/index${preview ? '?scenario=profile-default' : ''}`"><text class="profile-info__intro">{{ identity.verified ? '姓名已通过实名认证，手机号为当前登录手机号。' : '请填写真实姓名，培训工种和头像选填；学习或开考前须完成实名认证。' }}</text>
     <view v-if="!preview && learner.profileLoading" class="profile-info__notice">资料加载中…</view><view v-if="error" class="profile-info__notice profile-info__notice--error"><text>{{ error }}</text><wd-button size="small" :disabled="learner.profileLoading || learner.profileSaving || learner.categorySaving" @click="loadProfile">重新加载</wd-button></view>
     <view class="profile-info__avatar" role="button" aria-label="更换头像" :aria-disabled="editLocked" @click="changeAvatar"><text>头像（选填）</text><view class="profile-info__avatar-icon"><wd-loading v-if="avatarBusy" /><wd-img v-else-if="avatarFile" :src="avatarFile.tempFilePath" :width="48" :height="48" mode="aspectFill" round /><ProtectedImage v-else-if="!preview && learner.profile?.avatar_id" :asset-id="learner.profile.avatar_id" owner-type="user_avatar" :owner-id="learner.profile.id" :width="48" :height="48"><AppIcon name="user-round" :size="30" color="#1989fa" /></ProtectedImage><AppIcon v-else name="user-round" :size="30" color="#1989fa" /></view><AppIcon name="chevron-right" :size="16" color="#969799" /></view><text v-if="avatarDraft" class="profile-info__notice">头像已选择，保存后生效</text>
     <view class="profile-info__fields"><view class="profile-info__row"><text class="profile-info__label"><text class="profile-info__required">*</text>姓名</text><wd-input v-model="form.name" :readonly="nameReadonly" :maxlength="64" placeholder="请输入姓名" custom-style="flex:1;min-width:0" /></view><view class="profile-info__row"><text class="profile-info__label"><text class="profile-info__required">*</text>手机号</text><wd-input v-model="form.phone" :readonly="isProfileFieldReadonly('phone')" type="tel" :maxlength="11" placeholder="请输入手机号" custom-style="flex:1;min-width:0" /></view>
@@ -125,7 +132,7 @@ async function save() {
       <view class="profile-info__row" role="button" aria-label="性别" :aria-disabled="editLocked" @click="openPicker('gender')"><text class="profile-info__label">性别</text><text class="profile-info__value">{{ form.gender }}</text><AppIcon name="chevron-right" :size="16" color="#969799" /></view>
       <view class="profile-info__row" role="button" aria-label="生日" :aria-disabled="editLocked" @click="openPicker('birthday')"><text class="profile-info__label">生日</text><text class="profile-info__value">{{ form.birthday }}</text><AppIcon name="chevron-right" :size="16" color="#969799" /></view>
     </view><text v-if="saved" class="profile-info__saved">已保存</text>
-    <template #footer><view class="profile-info__footer"><wd-button block :loading="!preview && learner.profileSaving" :disabled="!loaded || editLocked" custom-style="--wot-button-height-medium:50px;--wot-button-radius-main:var(--app-radius-md);font-weight:600" @click="save">{{ needsIdentity ? '保存并去实名认证' : '保存资料' }}</wd-button></view></template>
+    <template #footer><view class="profile-info__footer"><wd-button block :loading="!preview && learner.profileSaving" :disabled="!loaded || editLocked" custom-style="--wot-button-height-medium:50px;--wot-button-radius-main:var(--app-radius-md);font-weight:600" @click="save">{{ saveLabel }}</wd-button></view></template>
     <wd-popup v-model="choiceVisible" position="bottom" round safe-area-inset-bottom><view class="profile-picker"><view class="profile-picker__header"><text>选择性别</text><view role="button" aria-label="关闭选择器" @click="picker = ''"><AppIcon name="x" :size="22" /></view></view><view v-for="choice in choices" :key="choice" class="profile-picker__choice" :class="{ 'profile-picker__choice--active': choice === form.gender }" role="button" :aria-disabled="editLocked" :aria-label="`选择${choice}`" @click="choose(choice)"><text>{{ choice }}</text><AppIcon v-if="choice === form.gender" name="check" :size="18" color="#1989fa" /></view></view></wd-popup>
     <wd-datetime-picker v-model="birthday" v-model:visible="birthdayVisible" type="date" title="选择生日" cancel-button-text="取消" confirm-button-text="完成" :min-date="minBirthday" :max-date="maxBirthday" :before-confirm="canConfirmBirthday" :visible-item-count="5" @confirm="chooseBirthday" />
   </AppPage>

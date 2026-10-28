@@ -19,7 +19,7 @@ export const shellRouteCatalog: RouteScenario[] = [
   { path: '/pages/profile/index', scenario: 'profile-default', pencilBoard: 'gmOqo', expectedText: '学员演示账号' },
   { path: '/pages/profile/index', scenario: 'profile-unverified', pencilBoard: 'jcvqt', expectedText: '未实名' },
   { path: '/pages/profile/index', scenario: 'profile-verified', pencilBoard: 'I69w9x', expectedText: '已完成实名认证' },
-  { path: '/pages/profile/info', scenario: 'profile-info', pencilBoard: 'OeE1w', expectedText: '请填写真实姓名并确认培训工种，头像选填；保存后进行实名认证。' },
+  { path: '/pages/profile/info', scenario: 'profile-info', pencilBoard: 'OeE1w', expectedText: '请填写真实姓名，培训工种和头像选填；学习或开考前须完成实名认证。' },
   { path: '/pages/profile/info', scenario: 'profile-job', pencilBoard: 'KNYYf', expectedText: '选择工种' },
   { path: '/pages/profile/info', scenario: 'profile-gender', pencilBoard: 'p5YUs', expectedText: '选择性别' },
   { path: '/pages/profile/info', scenario: 'profile-birthday', pencilBoard: 'HnYQl', expectedText: '选择生日' },

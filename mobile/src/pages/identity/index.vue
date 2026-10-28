@@ -17,6 +17,8 @@ import type { MediaSource } from '@/platform/media-picker'
 import { useSessionStore } from '@/stores/session'
 import { useLearnerStore } from '@/stores/learner'
 import { identityNeedsProfile } from '@/utils/learner-onboarding'
+import { consumeExamEntryIntent, readExamEntryIntent } from '@/utils/exam-entry-intent'
+import { navigateExamEntryIntent } from '@/platform/navigation'
 
 const preview = ref(false)
 const store = useIdentityStore()
@@ -24,6 +26,7 @@ const session = useSessionStore()
 const learner = useLearnerStore()
 const profileReady = ref(false)
 let active = true, pageRevision = 0
+let returning = false
 let reloadPending: Promise<void> | null = null
 const fixtureScenario = ref<IdentityScenario>(identityScenarios['identity-collect'])
 const fixtureMaterials = ref<IdentityMaterials>({ ...fixtureScenario.value.materials })
@@ -76,6 +79,7 @@ function reload(): Promise<void> {
   const pending = (async () => {
     await store.load()
     if (!active || current !== pageRevision || epoch !== session.sessionEpoch || store.loadError || !store.authority) return
+    if (returnToExam()) return
     if (!store.pending && !store.verified) {
       try {
         const profile = await learner.loadProfile()
@@ -89,6 +93,15 @@ function reload(): Promise<void> {
   reloadPending = pending
   return pending
 }
+function returnToExam(): boolean {
+  if (preview.value || !active || returning || !store.verified || !session.user) return false
+  const intent = consumeExamEntryIntent(String(session.user.id))
+  if (!intent) return false
+  returning = true
+  navigateExamEntryIntent(intent)
+  return true
+}
+watch(() => store.verified, verified => { if (verified) returnToExam() }, { flush: 'post' })
 watch(() => store.pending, (pending, previous) => {
   if (preview.value || !previous || pending || store.authority?.status === 'verified') return
   profileReady.value = false
@@ -128,7 +141,11 @@ function submit() {
   if (preview.value) applyScenario({ ...identityScenarios['identity-verifying'], materials: { ...materials.value } })
   else void store.createSession()
 }
-function profile() { uni.reLaunch({ url: `/pages/profile/index${preview.value ? '?scenario=profile-default' : ''}` }) }
+function profile() {
+  const intent = !preview.value && session.user ? readExamEntryIntent(String(session.user.id)) : null
+  if (intent) { consumeExamEntryIntent(String(session.user!.id)); navigateExamEntryIntent(intent) }
+  else uni.reLaunch({ url: `/pages/profile/index${preview.value ? '?scenario=profile-default' : ''}` })
+}
 function details() { uni.navigateTo({ url: `/pages/identity/detail${preview.value ? '?scenario=identity-detail' : ''}` }) }
 function retry() { if (preview.value) applyScenario(identityScenarios['identity-collect']); else void reload() }
 function queryStatus() { if (preview.value) localFeedback.value = '尚未获得最终结果，不代表认证失败。'; else void store.poll() }

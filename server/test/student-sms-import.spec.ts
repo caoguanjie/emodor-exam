@@ -39,6 +39,18 @@ function fixture() {
 const row = { real_name: '合成学员', phone: '138 0013-8000', source: 'institution', category_id: '7' };
 
 describe('SMS-only managed student import', () => {
+  it.each([undefined, null, '', '  '])('previews and commits blank optional category %j as null without assigning any role', async (category_id) => {
+    const { service, state } = fixture();
+    await expect(service.preview('1', 'students', [{ ...row, category_id }])).resolves.toMatchObject({ valid_rows: [2], errors: [] });
+    expect(state.batch.normalizedRows[0].category_id).toBeNull();
+    await service.commit('1', '1', [2]);
+    expect(state.users[0]).toMatchObject({ categoryId: null, role: 'employee', rolesConfigured: 0, source: 'institution' });
+  });
+
+  it.each(['404', 'not-an-id'])('rejects an explicitly supplied invalid category %s', async (category_id) => {
+    const { service } = fixture();
+    await expect(service.preview('1', 'students', [{ ...row, category_id }])).resolves.toMatchObject({ valid_rows: [], errors: [{ message: '培训类别不存在或已停用' }] });
+  });
   it('previews without credentials and commits a normalized SMS learner idempotently', async () => {
     const { service, state } = fixture();
     await expect(service.preview('1', 'students', [row])).resolves.toMatchObject({ valid_rows: [2], errors: [] });
@@ -77,7 +89,7 @@ describe('SMS-only managed student import', () => {
     expect(book.worksheets.map((item) => item.name)).toEqual(['学员导入模板', '填写示例', '填写说明']);
     expect(book.getWorksheet('填写示例')!.actualRowCount).toBeGreaterThan(1);
     expect(JSON.stringify(book.getWorksheet('填写说明')!.getSheetValues())).toContain('产业工人');
-    expect(sheet.getCell('D2').dataValidation).toMatchObject({ type: 'list', formulae: ['StudentTrainingCategories'], errorStyle: 'stop', showErrorMessage: true });
+    expect(sheet.getCell('D2').dataValidation).toMatchObject({ type: 'list', formulae: ['StudentTrainingCategories'], errorStyle: 'stop', showErrorMessage: true, allowBlank: true });
     expect(book.definedNames.getRanges('StudentTrainingCategories').ranges).toEqual(["'填写说明'!$A$10"]);
     sheet.getRow(2).values = ['合成学员', 28, '男', '产业工人', '13800138000', '本机构'];
     await expect(service.parseStudentWorkbook(Buffer.from(await book.xlsx.writeBuffer()))).resolves.toHaveLength(1);
@@ -130,8 +142,8 @@ describe('SMS-only managed student import', () => {
     expect(misspelled.valid_rows).toEqual([]);
     expect(misspelled.errors[0].message).toContain('培训类别不存在或已停用');
     const blank = await controller.preview(undefined, { rows: [{ real_name: '合成学员', phone: '13800138000', category_name: '' }], defaults }, actor);
-    expect(blank.valid_rows).toEqual([]);
-    expect(blank.errors[0].message).toContain('培训类别必填');
+    expect(blank.valid_rows).toEqual([2]);
+    expect(blank.errors).toEqual([]);
     const trimmed = await controller.preview(undefined, { rows: [{ real_name: '合成学员', phone: '13800138000', category_name: ' 产业工人 ' }], defaults }, actor);
     expect(trimmed.valid_rows).toEqual([2]);
   });

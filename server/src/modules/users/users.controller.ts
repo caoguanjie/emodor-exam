@@ -16,12 +16,13 @@ import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import type { LearnerSource } from '../../common/training-contracts';
 
 const QueryNumber = () => Transform(({ value }) => (value === undefined || value === null || value === '' ? undefined : Number(value)));
+const OptionalCategory = () => Transform(({ value }) => typeof value === 'string' && !value.trim() ? null : value);
 
-class CreateStudentDto {
+export class CreateStudentDto {
   @IsOptional() @IsInt() @Min(0) @Max(150) age?: number | null;
   @IsOptional() @IsString() @MinLength(1) @MaxLength(64) username?: string;
   @IsString() @MinLength(1) @MaxLength(64) real_name!: string;
-  @IsString() @MinLength(1) @MaxLength(32) category_id!: string;
+  @OptionalCategory() @IsOptional() @IsString() @MaxLength(32) @Matches(/^[1-9]\d*$/) category_id?: string | null;
   @IsIn(['institution', 'external']) source!: 'institution' | 'external';
   @IsOptional() @IsString() @MaxLength(32) employee_no?: string;
   @IsString() @MinLength(1) @MaxLength(20) phone!: string;
@@ -30,11 +31,11 @@ class CreateStudentDto {
   @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) birthday?: string | null;
 }
 
-class UpdateStudentDto {
+export class UpdateStudentDto {
   @IsOptional() @IsInt() @Min(0) @Max(150) age?: number | null;
   @IsOptional() @IsString() @MaxLength(64) real_name?: string;
   @IsOptional() @IsString() @MaxLength(32) employee_no?: string;
-  @IsOptional() @IsString() @MaxLength(32) category_id?: string;
+  @OptionalCategory() @IsOptional() @IsString() @MaxLength(32) @Matches(/^[1-9]\d*$/) category_id?: string | null;
   @IsOptional() @IsIn(['institution', 'external']) source?: 'institution' | 'external';
   @IsOptional() @IsString() @MaxLength(20) phone?: string;
   @IsOptional() @IsString() @MaxLength(128) email?: string;

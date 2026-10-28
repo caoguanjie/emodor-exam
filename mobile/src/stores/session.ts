@@ -6,6 +6,7 @@ import { loginWithSms, logoutMobileSession, refreshMobileSession } from '@/api/a
 import { beginNativeAuthLogin, beginNativeAuthLogout, enterMobileLogin, invalidateNativeAuthSession } from '@/platform/session'
 import type { MobileSessionResult, SmsLoginInput } from '@/types/api'
 import { clearUserDrafts } from '@/utils/exam-draft'
+import { clearExamEntryIntent, reconcileExamEntryOwner } from '@/utils/exam-entry-intent'
 
 export const useSessionStore = defineStore('mobile-session', () => {
   const accessToken = ref('')
@@ -36,6 +37,8 @@ export const useSessionStore = defineStore('mobile-session', () => {
   }
 
   function acceptSession(result: MobileSessionResult) {
+    if (user.value && String(user.value.id) !== String(result.user.id)) revision.value++
+    reconcileExamEntryOwner(String(result.user.id))
     accessToken.value = result.access_token
     expiresIn.value = result.expires_in
     learner.user = result.user
@@ -43,13 +46,14 @@ export const useSessionStore = defineStore('mobile-session', () => {
     loginNavigationRequested = false
   }
 
-  function expireSession() {
+  function expireSession(preserveExamTarget = true) {
+    const ownerId = user.value ? String(user.value.id) : undefined
     revision.value++
     invalidateNativeAuthSession()
     clearMemory()
     if (!loginNavigationRequested) {
       loginNavigationRequested = true
-      enterMobileLogin()
+      enterMobileLogin(ownerId, preserveExamTarget)
     }
   }
 
@@ -99,6 +103,7 @@ export const useSessionStore = defineStore('mobile-session', () => {
   }
 
   function logout(): Promise<void> {
+    clearExamEntryIntent()
     const previousUser = user.value?.id
     const startedRevision = ++revision.value
     beginNativeAuthLogout()
@@ -112,7 +117,7 @@ export const useSessionStore = defineStore('mobile-session', () => {
       try { await logoutMobileSession(previousToken) }
       catch { /* Local logout still completes when the network is unavailable. */ }
       finally {
-        if (startedRevision === revision.value) expireSession()
+        if (startedRevision === revision.value) expireSession(false)
         else clearMemory() // A newer login is queued after this response and will restore its own state.
       }
     })

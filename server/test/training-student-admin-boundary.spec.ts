@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { UsersService } from '../src/modules/users/users.service';
-import { MeProfileController, StudentsController } from '../src/modules/users/users.controller';
+import { CreateStudentDto, UpdateStudentDto, MeProfileController, StudentsController } from '../src/modules/users/users.controller';
+import { StrictDtoValidationPipe } from '../src/common/dto-validation.pipe';
 import { SysUser } from '../src/entities/sys-user.entity';
 import { SysUserRole } from '../src/entities/sys-user-role.entity';
 import { RoleEnum } from '../src/common/errors';
@@ -153,6 +154,44 @@ const actor = { id: 1, name: 'admin' };
 afterEach(() => vi.useRealTimers());
 
 describe('training student/admin boundary', () => {
+  it.each([undefined, null, '', ' '])('accepts an optional category %j at the managed HTTP DTO boundary', async (category_id) => {
+    const input = { real_name: '学员', phone: '13800138000', source: 'external', ...(category_id === undefined ? {} : { category_id }) };
+    const created = await new StrictDtoValidationPipe(['real_name', 'phone', 'source', 'category_id']).transform(input, { type: 'body', metatype: CreateStudentDto });
+    expect(created.category_id ?? null).toBeNull();
+    const updated = await new StrictDtoValidationPipe(['category_id']).transform({ category_id }, { type: 'body', metatype: UpdateStudentDto });
+    expect(updated.category_id ?? null).toBeNull();
+  });
+
+  it.each(['0', '01', 'not-an-id', 7, [], 'null'])('rejects a malformed nonempty category %j before saving', async (category_id) => {
+    const { service, saves } = makeService();
+    await expect(service.createStudent({ real_name: '学员', phone: '13800138000', source: 'external', category_id } as any, actor, null)).rejects.toMatchObject({ code: 40001 });
+    await expect(service.updateStudent('1', { category_id } as any, actor, null)).rejects.toMatchObject({ code: 40001 });
+    await expect(new StrictDtoValidationPipe(['category_id']).transform({ category_id }, { type: 'body', metatype: UpdateStudentDto })).rejects.toThrow();
+    expect(saves).toHaveLength(0);
+  });
+  it.each([undefined, null, '', '   '])('creates an ordinary learner with no optional category %j', async (category_id) => {
+    const { service, users } = makeService();
+    const created = await service.createStudent({ real_name: '学员', phone: '13800138000', source: 'external', category_id } as any, actor, null);
+    expect(created).toMatchObject({ category_id: null, source: 'external', role: 'employee' });
+    expect(users.get(created.id)).toMatchObject({ categoryId: null, rolesConfigured: 0 });
+    expect(service.categories.lockActive).not.toHaveBeenCalled();
+  });
+
+  it('retains an omitted category on edit and lets an administrator explicitly clear it', async () => {
+    const { service, users } = makeService();
+    await expect(service.updateStudent('1', { age: 18 }, actor, null)).resolves.toMatchObject({ category_id: '7' });
+    await expect(service.updateStudent('1', { category_id: null } as any, actor, null)).resolves.toMatchObject({ category_id: null });
+    expect(users.get('1')?.categoryId).toBeNull();
+    expect(service.categories.lockActive).not.toHaveBeenCalled();
+  });
+
+  it.each(['', '  ', null])('rejects missing managed name %j without creating or saving a learner', async (real_name) => {
+    const { service, saves } = makeService();
+    await expect(service.createStudent({ real_name, phone: '13800138000', source: 'external' } as any, actor, null)).rejects.toMatchObject({ code: 40001 });
+    await expect(service.updateStudent('1', { real_name } as any, actor, null)).rejects.toMatchObject({ code: 40001 });
+    expect(saves).toHaveLength(0);
+  });
+
   it('creates SMS-only learners without a chosen password or pending password change', async () => {
     const { service, users } = makeService();
     const input = { real_name: '学员', category_id: '7', source: 'institution' as const, phone: '138 0013-8000' };

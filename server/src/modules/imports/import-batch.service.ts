@@ -28,7 +28,7 @@ interface StudentRow {
   phone: string;
   email: string | null;
   source: LearnerSource;
-  category_id: Id;
+  category_id: Id | null;
   category_name: string;
   age: number | null;
   gender: string | null;
@@ -161,14 +161,14 @@ export class ImportBatchService {
     for (let row = 2; row <= 1001; row++) {
       worksheet.getCell(row, 2).dataValidation = { type: 'whole', operator: 'between', formulae: [0, 150], allowBlank: true, showErrorMessage: true, errorTitle: '年龄格式不正确', error: '请填写 0—150 的整数，或留空。' };
       worksheet.getCell(row, 3).dataValidation = { type: 'list', formulae: ['"男,女"'], allowBlank: true, showErrorMessage: true, error: '请选择男或女，或留空。' };
-      worksheet.getCell(row, 4).dataValidation = { type: 'list', formulae: ['StudentTrainingCategories'], allowBlank: false, showErrorMessage: true, errorStyle: 'stop', errorTitle: '培训类别不正确', error: '培训类别必填，请从下拉列表选择；类别有更新时请重新下载模板。' };
+      worksheet.getCell(row, 4).dataValidation = { type: 'list', formulae: ['StudentTrainingCategories'], allowBlank: true, showErrorMessage: true, errorStyle: 'stop', errorTitle: '培训类别不正确', error: '培训类别选填；填写时请从下拉列表选择，类别有更新时请重新下载模板。' };
       worksheet.getCell(row, 6).dataValidation = { type: 'list', formulae: ['"本机构,外来"'], allowBlank: true, showErrorMessage: true, error: '请选择本机构或外来；留空时默认本机构。' };
     }
     const examples = workbook.addWorksheet('填写示例');
     examples.addRow(STUDENT_HEADERS);
     examples.getColumn(5).numFmt = '@';
-    examples.addRow(['示例学员甲', 28, '男', categories[0]?.name || '请先创建启用培训类别', '138XXXXXXXX', '本机构']);
-    examples.addRow(['示例学员乙', 35, '女', categories[1]?.name || categories[0]?.name || '请先创建启用培训类别', '139XXXXXXXX', '外来']);
+    examples.addRow(['示例学员甲', 28, '男', categories[0]?.name || '', '138XXXXXXXX', '本机构']);
+    examples.addRow(['示例学员乙', 35, '女', '', '139XXXXXXXX', '外来']);
     examples.addRow([]);
     examples.addRow(['以上为合成示例，不参与导入。手机号必须替换为真实学员本人手机号；请在第一个工作表填写真实数据。']);
     examples.mergeCells('A5:F5');
@@ -182,11 +182,11 @@ export class ImportBatchService {
       ['导入范围', '仅导入第一个工作表；填写示例和本说明不会导入。请勿更改表头，空行自动跳过，最多 1000 条学员。'],
       ['姓名 / 手机号', '姓名、本人手机号必填；手机号按文本填写11位大陆手机号码。138XXXXXXXX、139XXXXXXXX是无效占位示例，必须替换。'],
       ['年龄 / 性别', '可留空；年龄为 0—150 整数，性别填写男/女（也兼容 male/female）。年龄不会反推生日。'],
-      ['培训类别', '每行必填，请从下拉列表选择下载时启用的类别；类别有更新时请重新下载模板。导入时仍检查，留空、未知或停用类别会报错，不使用默认类别。'],
+      ['培训类别', '选填，留空不分配工种，不影响实名或参加考试；填写时请选择启用类别，未知或停用类别仍报错，不使用默认类别。'],
       ['来源', '填写本机构/外来（兼容 institution/external）；留空时默认本机构。'],
       ['登录方式', '学员通过手机验证码登录；不填写用户名或密码，不接受密码列。'],
       ['旧模板', '兼容旧5列：学生姓名/年龄/性别/培训类别/手机号；来源默认本机构。也兼容旧7列无密码模板。'],
-      ['当前启用培训类别', categories.length ? '以下类别来自下载时数据库；实际导入时会重新检查是否启用。' : '当前没有启用类别，请先在培训类别管理中创建或启用，再下载模板。'],
+      ['当前启用培训类别', categories.length ? '以下类别来自下载时数据库；实际导入时会重新检查是否启用。' : '当前没有启用类别，培训类别请留空。'],
       ...categories.map((category) => [category.name, '可填写的培训类别名称']),
     ].forEach((row) => instructions.addRow(row));
     workbook.definedNames.add(`'填写说明'!$A$10:$A$${9 + Math.max(categories.length, 1)}`, 'StudentTrainingCategories');
@@ -267,7 +267,7 @@ export class ImportBatchService {
       phone: safeText(raw && typeof raw === 'object' ? (raw as any).phone ?? (raw as any)['手机号'] : ''),
       email: safeText(raw && typeof raw === 'object' ? (raw as any).email ?? (raw as any)['邮箱'] : '') || null,
       source: ({ 本机构: 'institution', 外来: 'external' }[safeText(source)] || safeText(source) || 'institution') as LearnerSource,
-      category_id: safeText(category),
+      category_id: safeText(category) || null,
       category_name: safeText(record.category_name ?? record['培训类别'] ?? record.category),
       age: age === '' ? null : /^\d+$/.test(age) ? Number(age) : NaN,
       gender: gender === '' ? null : ({ 男: 'male', 女: 'female' }[gender] || gender),
@@ -276,7 +276,7 @@ export class ImportBatchService {
 
   private async resolveCategory(row: StudentRow): Promise<TrainingCategory | null> {
     if (row.category_name) return this.categoryRepo.findOne({ where: { name: row.category_name } });
-    if (!/^[1-9]\d*$/.test(row.category_id)) return null;
+    if (!row.category_id || !/^[1-9]\d*$/.test(row.category_id)) return null;
     return this.categoryRepo.findOne({ where: { id: row.category_id } });
   }
 
@@ -321,7 +321,6 @@ export class ImportBatchService {
       if (row.employee_no && row.employee_no.length > 32) reasons.push('工号超长');
       if (invalidPhones.has(row.row)) reasons.push('手机号格式不正确');
       if (!SOURCES.has(row.source)) reasons.push('来源必须是 institution 或 external');
-      if (!row.category_id && !row.category_name) reasons.push('培训类别必填');
       if (row.age !== null && (!Number.isInteger(row.age) || row.age < 0 || row.age > 150)) reasons.push('年龄须为 0—150 的整数或留空');
       if (row.gender !== null && row.gender !== 'male' && row.gender !== 'female') reasons.push('性别须为男/女或留空');
       if (duplicateUsernames.has(row.row)) reasons.push('用户名在文件内重复');
@@ -420,7 +419,7 @@ export class ImportBatchService {
         }
         const rows = (locked.normalizedRows || []).filter((row) => requested.includes(Number(row.row)));
         if (rows.length !== requested.length) throw Errors.importBatchConflict('导入批次数据已不完整');
-        const categoryIds = [...new Set(rows.map((row) => String(row.category_id)))].sort((left, right) => left.localeCompare(right));
+        const categoryIds = [...new Set(rows.flatMap((row) => row.category_id ? [String(row.category_id)] : []))].sort((left, right) => left.localeCompare(right));
         for (const categoryId of categoryIds) await this.categories.lockActive(manager, categoryId);
         locked.status = 'committing';
         await manager.save(locked);
@@ -431,7 +430,7 @@ export class ImportBatchService {
           realName: String(row.real_name),
           employeeNo: row.employee_no ? String(row.employee_no) : null,
           departmentId: null,
-          categoryId: String(row.category_id),
+          categoryId: row.category_id ? String(row.category_id) : null,
           source: String(row.source) as LearnerSource,
           role: 'employee',
           phone: normalizeChinaMobile(typeof row.phone === 'string' ? row.phone : ''),

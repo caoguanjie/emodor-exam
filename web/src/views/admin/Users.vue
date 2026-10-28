@@ -113,7 +113,7 @@
             <el-form-item label="年龄">
               <el-input-number v-model="studentForm.age" :min="0" :max="150" :precision="0" controls-position="right" placeholder="请输入年龄" style="width:100%" />
             </el-form-item>
-            <el-form-item label="培训类别" required><el-select v-model="studentForm.category_id" style="width:100%"><el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" /></el-select></el-form-item>
+            <el-form-item label="培训类别"><el-select v-model="studentForm.category_id" clearable placeholder="选填" style="width:100%"><el-option v-for="category in categories" :key="category.id" :label="category.name" :value="category.id" /></el-select></el-form-item>
           </div>
         </el-form>
         <template #footer><el-button @click="cancelStudentDialog">取消</el-button><el-button v-if="auth.can('students:write')" type="primary" :loading="studentSaveBusy" :disabled="studentSaveBusy" @click="saveStudent">确定</el-button></template>
@@ -278,7 +278,7 @@ async function beforeStudentDialogClose(done: () => void) {
 }
 
 function sourceLabel(source: string | null) { return source === 'institution' ? '本机构' : source === 'external' ? '外来' : '未设置'; }
-function categoryName(id: string | null) { return categories.value.find((item) => String(item.id) === String(id))?.name || '-'; }
+function categoryName(id: string | null) { return id ? categories.value.find((item) => String(item.id) === String(id))?.name || '-' : '未填写'; }
 
 async function loadCategories() {
   const data: any = await http.get('/admin/training-categories', { params: { page: 1, page_size: 100, status: 1 } });
@@ -345,7 +345,7 @@ function currentStudentSaveContext(): StudentSaveContext | null {
       real_name: studentForm.real_name,
       employee_no: studentForm.employee_no,
       source: studentForm.source,
-      category_id: studentForm.category_id,
+      category_id: studentForm.category_id || null,
       phone: studentForm.phone,
       email: studentForm.email,
       gender: studentForm.gender,
@@ -385,7 +385,7 @@ function openStudentCreate() {
   Object.keys(studentForm).forEach((key) => delete studentForm[key]);
   studentAvatarOriginalId.value = null;
   resetStudentAvatarState();
-  Object.assign(studentForm, { source: 'institution', category_id: categories.value[0]?.id || '' });
+  Object.assign(studentForm, { source: 'institution', category_id: '' });
   captureStudentBaseline();
   studentDialog.value = true;
 }
@@ -417,8 +417,8 @@ async function queryStudentAvatarState() {
 }
 
 async function saveStudent() {
-  if (!studentForm.real_name?.trim() || !studentForm.category_id || (!studentForm.id && !studentForm.source)) {
-    ElMessage.warning('请填写姓名、培训类别；新增学员还需填写来源'); return;
+  if (!studentForm.real_name?.trim() || (!studentForm.id && !studentForm.source)) {
+    ElMessage.warning('请填写姓名；新增学员还需填写来源'); return;
   }
   studentForm.phone = studentForm.phone?.trim();
   if (!/^1[3-9]\d{9}$/.test(studentForm.phone || '')) { ElMessage.warning('请输入有效的 11 位手机号码'); return; }

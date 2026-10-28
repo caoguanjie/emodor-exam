@@ -181,7 +181,7 @@ describe('student list quick switches', () => {
     await fields.find((field) => field.text().includes('手机号'))!.find('input').setValue('13900139000');
     await wrapper.find('.el-dialog__footer').findAll('button').find((button) => button.text() === '确定')!.trigger('click');
     await flushPromises();
-    expect(mocks.post).toHaveBeenCalledWith('/admin/students', expect.objectContaining({ phone: '13900139000', real_name: '短信学员' }));
+    expect(mocks.post).toHaveBeenCalledWith('/admin/students', expect.objectContaining({ phone: '13900139000', real_name: '短信学员', category_id: null }));
     expect(mocks.post.mock.calls[0]![1]).not.toHaveProperty('password');
   });
   it('edits the phone login and profile in the legacy dialog and saves status separately', async () => {

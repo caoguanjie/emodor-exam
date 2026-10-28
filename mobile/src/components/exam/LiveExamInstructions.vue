@@ -1,13 +1,23 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onHide, onShow } from '@dcloudio/uni-app'
 import AppPage from '@/components/common/AppPage.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { useExamStore } from '@/stores/exam'
 import { examNumber, examEntry } from '@/utils/exam-summary'
 import { questionTypeLabels } from '@/types/exam'
+import { useSessionStore } from '@/stores/session'
+import { useLearnerStore } from '@/stores/learner'
+import { useIdentityStore } from '@/stores/identity'
+import { needsLearnerProfile } from '@/utils/learner-onboarding'
+import { saveExamEntryIntent } from '@/utils/exam-entry-intent'
 const props = defineProps<{ paperId: string }>(), store = useExamStore(), starting = ref(false), actionError = ref('')
+const session = useSessionStore(), learner = useLearnerStore(), identityStore = useIdentityStore()
+let active = true, pageRevision = 0
+function deactivate() { active = false; pageRevision++ }
+onHide(deactivate)
+onBeforeUnmount(deactivate)
 const paper = computed(() => store.summary?.paper_id === props.paperId ? store.summary : null)
 const learning = computed(() => paper.value?.learning)
 const hasRequirement = computed(() => typeof learning.value?.required_learning_minutes === 'number' && learning.value.required_learning_minutes > 0)
@@ -33,20 +43,38 @@ async function reload() {
 watch(() => props.paperId, reload, { immediate: true })
 let mounted = false
 onMounted(() => { mounted = true })
-onShow(() => { if (mounted) void reload() })
+onShow(() => { active = true; if (mounted) void reload() })
 async function start() {
   if (starting.value || store.summaryLoading || !paper.value) return
   if (entry.value?.kind !== 'instructions') { if (entry.value) uni.redirectTo({ url: entry.value.url }); return }
   if (needsLearning.value) { await reload(); return }
   starting.value = true; actionError.value = ''
+  const epoch = session.sessionEpoch, current = pageRevision
+  const stillHere = () => active && epoch === session.sessionEpoch && current === pageRevision
   try {
+    const profile = await learner.loadProfile()
+    if (!stillHere()) return
+    if (needsLearnerProfile(profile)) {
+      saveExamEntryIntent({ kind: 'exam-instructions', paperId: props.paperId }, String(session.user!.id))
+      uni.navigateTo({ url: '/pages/profile/info?onboarding=1' })
+      return
+    }
+    await identityStore.load()
+    if (!stillHere()) return
+    if (identityStore.loadError || !identityStore.authority) throw new Error(identityStore.loadError || '实名状态读取失败，请重试')
+    if (!identityStore.verified) { identity(); return }
     await store.start(props.paperId)
+    if (!stillHere()) return
     const attempt = store.attempt
     if (attempt) uni.redirectTo({ url: `/pages/exam/${attempt.status === 'in_progress' ? 'take' : 'result'}?record_id=${encodeURIComponent(attempt.record_id)}` })
-  } catch (error) { actionError.value = store.loadError || (error instanceof Error ? error.message : '暂时无法开始考试，请重试') }
+  } catch (error) { if (stillHere()) actionError.value = store.loadError || (error instanceof Error ? error.message : '暂时无法开始考试，请重试') }
   finally { starting.value = false }
 }
-function identity() { uni.navigateTo({ url: '/pages/identity/index' }) }
+function identity() {
+  if (!session.user) return
+  saveExamEntryIntent({ kind: 'exam-instructions', paperId: props.paperId }, String(session.user.id))
+  uni.navigateTo({ url: '/pages/identity/index' })
+}
 function study(course: { id: string; available: boolean }) { if (course.available) uni.navigateTo({ url: `/pages/course/detail?id=${encodeURIComponent(course.id)}&from_exam=${encodeURIComponent(props.paperId)}` }) }
 const actionLabel = computed(() => entry.value?.kind === 'resume' ? '继续答题' : entry.value?.kind === 'records' ? '查看记录' : needsLearning.value ? '刷新学习进度' : '开始答题')
 </script>

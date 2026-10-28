@@ -42,9 +42,15 @@ function fixture() {
 const images = { face_asset_id: '11', id_card_portrait_asset_id: '12', id_card_emblem_asset_id: '13' };
 describe('durable learner identity', () => {
   afterEach(() => vi.useRealTimers());
-  it.each([{ realName: '', categoryId: '9' }, { realName: '   ', categoryId: '9' }, { realName: '待核验姓名', categoryId: null }])('rejects a new verification with incomplete profile %j before provider or session writes', async (patch) => {
+  it('allows a learner without a category to complete real identity processing', async () => {
+    const f = fixture(); f.tables.get(SysUser)![0].categoryId = null;
+    await expect(f.service.create('7', images)).resolves.toMatchObject({ status: 'verified' });
+    expect(f.provider.verifyCalls).toBe(1);
+    expect(f.tables.get(SysUser)![0]).toMatchObject({ categoryId: null, source: 'external', role: 'employee' });
+  });
+  it.each([{ realName: '', categoryId: '9' }, { realName: '   ', categoryId: null }])('rejects a new verification with incomplete profile %j before provider or session writes', async (patch) => {
     const f = fixture(); Object.assign(f.tables.get(SysUser)![0], patch);
-    await expect(f.service.create('7', images)).rejects.toMatchObject({ code: 40001, message: '请先填写姓名并确认培训工种' });
+    await expect(f.service.create('7', images)).rejects.toMatchObject({ code: 40001, message: '请先填写真实姓名' });
     expect(f.provider.verifyCalls).toBe(0); expect(f.tables.get(IdentityVerificationSession)).toHaveLength(0);
   });
   it('allows a pending session to be replayed after legacy profile fields become incomplete', async () => {

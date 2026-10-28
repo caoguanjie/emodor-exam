@@ -11,7 +11,7 @@ import { ApiError } from '@/api/client'
 import { isValidMobilePhone, normalizeMobilePhone, sendSmsCode } from '@/api/auth'
 import { isStaticSessionPreview } from '@/platform/session'
 import { useSessionStore } from '@/stores/session'
-import { learnerLandingUrl } from '@/utils/learner-onboarding'
+import { resumeLearnerNavigation } from '@/platform/navigation'
 import { nativeNavigationStyle } from '@/platform/native-layout'
 import { useSiteConfig } from '@/composables/useSiteConfig'
 import { resolvePublicBrandingUrl } from '@/platform/media-url'
@@ -71,7 +71,12 @@ function setScenario(id: string) {
   else if (id === 'login-help') realHelpVisible.value = true
 }
 function openTerms() { uni.navigateTo({ url: `/pages/profile/terms${preview.value ? '?scenario=terms-default' : ''}` }) }
-function login() { if (active) uni.reLaunch({ url: preview.value ? '/pages/home/index?scenario=home-default' : session.user ? learnerLandingUrl(session.user) : '/pages/auth/login' }) }
+function login() {
+  if (!active) return
+  if (preview.value) uni.reLaunch({ url: '/pages/home/index?scenario=home-default' })
+  else if (session.user) resumeLearnerNavigation(session.user)
+  else uni.reLaunch({ url: '/pages/auth/login' })
+}
 
 function showError(error: unknown) {
   hasError.value = true
@@ -132,7 +137,7 @@ async function submitLogin() {
       </view>
       <view class="login-page__help"><text role="button" @click="setScenario('login-help')">收不到验证码？</text></view>
     </view>
-    <ConfirmSheet v-model="helpVisible" title="收不到验证码？" confirm-text="我知道了" cancel-text=""><view class="sms-help"><view v-for="item in smsHelp" :key="item.title" class="sms-help__item"><text class="sms-help__title">{{ item.title }}</text><text>{{ item.description }}</text></view><view class="sms-help__notice"><text class="sms-help__title">首次使用本平台？</text><text>使用本人手机号获取验证码即可登录，首次登录后请补充姓名和培训工种。</text></view></view></ConfirmSheet>
+    <ConfirmSheet v-model="helpVisible" title="收不到验证码？" confirm-text="我知道了" cancel-text=""><view class="sms-help"><view v-for="item in smsHelp" :key="item.title" class="sms-help__item"><text class="sms-help__title">{{ item.title }}</text><text>{{ item.description }}</text></view><view class="sms-help__notice"><text class="sms-help__title">首次使用本平台？</text><text>使用本人手机号获取验证码即可登录，首次登录后请补充真实姓名，培训工种选填。</text></view></view></ConfirmSheet>
   </view>
 </template>
 <style scoped>

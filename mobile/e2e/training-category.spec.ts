@@ -4,7 +4,7 @@ const initial = { id: '17', username: 'learner', real_name: '实名权威姓名'
 const categories = [{ id: '9007199254740993', name: '真实高处作业' }, { id: '42', name: '真实焊接作业' }]
 const envelope = (data: unknown) => ({ code: 0, message: 'ok', data })
 async function setup(page: Page, selected = false) {
-  const state = { profile: { ...initial, ...(selected ? { category_id: '42', category_name: 'PC 已分配工种' } : {}) }, categories: [...categories], categoryPageSize: 1, writes: [] as unknown[], saves: [] as unknown[], reads: 0, readFails: false, loseResponse: false, identity: 'unverified', identityFails: false, emptyCategories: false, exams: [] as unknown[] }
+  const state = { profile: { ...initial, ...(selected ? { category_id: '42', category_name: 'PC 已分配工种' } : {}) }, categories: [...categories], categoryPageSize: 1, writes: [] as unknown[], saves: [] as unknown[], reads: 0, identityReads: 0, readFails: false, loseResponse: false, identity: 'unverified', identityFails: false, emptyCategories: false, exams: [] as unknown[] }
   await page.route('**/api/v1/**', async route => {
     const url = new URL(route.request().url()), method = route.request().method()
     if (url.pathname.endsWith('/mobile/auth/refresh')) return route.fulfill({ json: envelope({ access_token: 'browser-memory-access', expires_in: 900, user: { id: 17, username: 'learner', real_name: '实名权威姓名', phone_masked: '138****0000', role: 'employee', source: 'external', category_id: null, identity_status: 'unverified' } }) })
@@ -26,6 +26,7 @@ async function setup(page: Page, selected = false) {
       return route.fulfill({ json: envelope(state.profile) })
     }
     if (url.pathname.endsWith('/me/identity-verification')) {
+      state.identityReads++
       if (state.identityFails) return route.abort('internetdisconnected')
       return route.fulfill({ json: envelope({ status: state.identity, real_name: state.identity === 'verified' ? '实名权威姓名' : null, id_number_masked: null, verified_at: null, current_session_id: null, reason_code: state.identity === 'rejected' ? 'FACE_MISMATCH' : null }) })
     }
@@ -45,7 +46,7 @@ test('selection and cancel are drafts; explicit confirmation saves the real ID o
   await select(page)
   expect(state.writes).toEqual([])
   await page.locator('.category-field > .wd-button').getByText('确认培训工种', { exact: true }).click()
-  await expect(page.getByText('你选择的培训工种为「真实高处作业」。确认后将用于匹配考试，学员端无法自行修改。如需调整，请联系管理员或监考人员。', { exact: true })).toBeVisible()
+  await expect(page.getByText('你选择的培训工种为「真实高处作业」。工种选填，确认后学员端无法自行修改。如需调整，请联系管理员或监考人员。', { exact: true })).toBeVisible()
   await page.getByText('返回修改', { exact: true }).click()
   expect(state.writes).toEqual([])
   await page.locator('.category-field > .wd-button').getByText('确认培训工种', { exact: true }).click()
@@ -68,7 +69,8 @@ test('preassigned category displays its current name and refreshes on return wit
   await page.getByRole('button', { name: '选择男', exact: true }).click()
   const reads = state.reads
   await page.evaluate(() => uni.navigateTo({ url: '/pages/profile/terms' }))
-  await expect(page.getByText('一、服务内容', { exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/pages\/profile\/terms$/)
+  await expect(page.getByText('服务协议', { exact: true })).toBeVisible()
   state.profile = { ...state.profile, category_name: 'PC 改名后的工种', gender: 'female', birthday: '1999-01-01' }
   await page.getByRole('button', { name: '返回', exact: true }).click()
   await expect(page.getByText('PC 改名后的工种', { exact: true })).toBeVisible()
@@ -108,7 +110,8 @@ test('a failed profile refresh on return offers an in-place retry and preserves 
   await page.getByRole('button', { name: '性别', exact: true }).click()
   await page.getByRole('button', { name: '选择男', exact: true }).click()
   await page.evaluate(() => uni.navigateTo({ url: '/pages/profile/terms' }))
-  await expect(page.getByText('一、服务内容', { exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/pages\/profile\/terms$/)
+  await expect(page.getByText('服务协议', { exact: true })).toBeVisible()
   state.readFails = true
   await page.getByRole('button', { name: '返回', exact: true }).click()
   await expect(page.getByText('网络连接失败，请检查网络后重试', { exact: true })).toBeVisible()
@@ -157,27 +160,27 @@ test('a long category list scrolls to and selects the final real ID', async ({ p
   await expect.poll(() => state.writes).toEqual([{ category_id: '1034' }])
 })
 
-test('exam guidance prioritizes the missing category while keeping visible exam entries reachable', async ({ page }) => {
+test('the exam list keeps every visible entry reachable without a category gate', async ({ page }) => {
   const state = await setup(page)
   state.exams = [{ paper_id: '91', title: '当前可见考试', mode: 'training', status: 'published', source: 'external', category_id: null, difficulty: 'easy' }, { paper_id: '92', title: '本人答题中考试', mode: 'training', status: 'withdrawn', source: 'external', category_id: null, difficulty: 'easy', active_record_id: '82' }]
   await page.goto('/#/pages/exam/index')
-  await expect(page.locator('.exam-guidance')).toContainText('请选择培训工种，以便匹配考试。')
+  await expect(page.locator('.exam-guidance')).toHaveCount(0)
   await expect(page.getByText('当前可见考试', { exact: true })).toBeVisible()
   await expect(page.getByText('本人答题中考试', { exact: true })).toBeVisible()
   await expect(page.getByText('考试记录', { exact: true })).toHaveCount(0)
   await expect(page.locator('.exam-card').first().getByText('进入考试', { exact: true })).toBeVisible()
-  await page.locator('.exam-guidance').getByText('去选择培训工种', { exact: true }).click()
-  await expect(page).toHaveURL(/pages\/profile\/info$/)
+  await page.getByText('当前可见考试', { exact: true }).click()
+  await expect(page).toHaveURL(/pages\/exam\/instructions\?paper_id=91$/)
+  expect(state.writes).toEqual([])
 })
 
 for (const status of ['unverified', 'pending', 'rejected', 'error', 'verified']) {
-  test(`exam identity guidance distinguishes ${status} from the normal empty state`, async ({ page }) => {
+  test(`the empty exam list can be read before checking identity status ${status}`, async ({ page }) => {
     const state = await setup(page, true); state.identity = status === 'error' ? 'unverified' : status; state.identityFails = status === 'error'
     await page.goto('/#/pages/exam/index')
-    const expected: Record<string, string> = { unverified: '完成实名认证后即可参加新的考试。', pending: '实名认证正在处理中，请查看认证进度。', rejected: '实名认证未通过，请重新核验后参加新的考试。', error: '实名认证状态加载失败，请刷新后重试。', verified: '暂无考试' }
-    await expect(page.getByText(expected[status], { exact: true })).toBeVisible()
-    if (status === 'verified') await expect(page.locator('.exam-guidance')).toHaveCount(0)
-    else await expect(page.getByText('考试记录', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('暂无考试', { exact: true })).toBeVisible()
+    await expect(page.locator('.exam-guidance')).toHaveCount(0)
+    expect(state.identityReads).toBe(0)
   })
 }
 

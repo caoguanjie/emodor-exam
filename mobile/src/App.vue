@@ -2,15 +2,18 @@
 import { onLaunch } from '@dcloudio/uni-app'
 import { isStaticSessionPreview } from './platform/session'
 import { useSessionStore } from './stores/session'
-import { learnerLandingUrl } from './utils/learner-onboarding'
+import { resumeLearnerNavigation } from './platform/navigation'
+import { examEntryIntentFromRoute, saveExamEntryIntent } from './utils/exam-entry-intent'
 
 onLaunch(async options => {
   if (isStaticSessionPreview(options?.query)) return
   if (options?.path === 'pages/profile/about' || options?.path === 'pages/profile/terms') return
+  const intent = examEntryIntentFromRoute(options?.path, options?.query)
+  if (intent?.kind === 'exam-tab') saveExamEntryIntent(intent)
   const session = useSessionStore()
   const startedEpoch = session.sessionEpoch
   const restored = await session.bootstrap()
-  if (restored && startedEpoch === session.sessionEpoch && session.user && (!options?.path || options.path === 'pages/auth/login')) uni.reLaunch({ url: learnerLandingUrl(session.user) })
+  if (restored && startedEpoch === session.sessionEpoch && session.user && (!options?.path || options.path === 'pages/auth/login')) resumeLearnerNavigation(session.user)
 })
 </script>
 

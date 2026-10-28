@@ -1,5 +1,6 @@
 import { currentApiPlatform, normalizeApiOrigin, resolveApiUrl } from './api-url'
 import { createNativeAuthCookieJar } from './native-auth-cookie'
+import { examEntryIntentFromRoute, saveExamEntryIntent } from '@/utils/exam-entry-intent'
 
 // Never put the native refresh credential in a store or persistent storage.
 const nativeAuthCookie = createNativeAuthCookieJar()
@@ -51,8 +52,13 @@ export function sendSessionRequest(config: SessionWireRequest): Promise<{ status
   }).finally(() => { if (logout) nativeAuthCookie.finishLogout(generation) })
 }
 
-export function enterMobileLogin() {
-  if (typeof getCurrentPages === 'function' && getCurrentPages().at(-1)?.route === 'pages/auth/login') return
+export function enterMobileLogin(ownerId?: string, preserveExamTarget = true) {
+  const current = typeof getCurrentPages === 'function' ? getCurrentPages().at(-1) : undefined
+  if (preserveExamTarget) {
+    const intent = examEntryIntentFromRoute(current?.route, (current as { options?: Record<string, unknown> } | undefined)?.options)
+    if (intent) saveExamEntryIntent(intent, ownerId)
+  }
+  if (current?.route === 'pages/auth/login') return
   uni.reLaunch({ url: '/pages/auth/login' })
 }
 

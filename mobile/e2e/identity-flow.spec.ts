@@ -5,8 +5,8 @@ const initial = { status: 'unverified', real_name: null, id_number_masked: null,
 const pending = { session_id: 's-1', status: 'pending', reason_code: null, clear_materials: [], expires_at: '2030-01-01T00:00:00Z' }
 const envelope = (data: unknown) => ({ code: 0, message: 'ok', data })
 const tiny = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yC9sAAAAASUVORK5CYII=', 'base64')
-async function setup(page: Page, options: { rejected?: boolean; foreverPending?: boolean; failLoad?: boolean; alreadyVerified?: boolean; failSave?: boolean; shortTicket?: boolean; createError?: boolean } = {}) {
-  const record = { uploads: 0, reads: 0, queries: 0, creates: 0, saves: [] as unknown[], deleted: [] as string[], verified: false, failLoad: !!options.failLoad, avatar: null as string | null, ticketOwners: [] as unknown[] }
+async function setup(page: Page, options: { rejected?: boolean; foreverPending?: boolean; failLoad?: boolean; alreadyVerified?: boolean; failSave?: boolean; shortTicket?: boolean; createError?: boolean; verified?: boolean } = {}) {
+  const record = { uploads: 0, reads: 0, queries: 0, creates: 0, saves: [] as unknown[], deleted: [] as string[], verified: !!options.verified, failLoad: !!options.failLoad, avatar: null as string | null, ticketOwners: [] as unknown[] }
   await page.route('**/api/v1/**', async route => {
     const req = route.request(), path = new URL(req.url()).pathname
     if (path.endsWith('/mobile/auth/refresh')) return route.fulfill({ json: envelope({ access_token: 'identity-browser-memory', expires_in: 900, user }) })
@@ -34,6 +34,7 @@ async function setup(page: Page, options: { rejected?: boolean; foreverPending?:
       if (options.foreverPending) return route.fulfill({ json: envelope(pending) })
       record.verified = true; return route.fulfill({ json: envelope({ ...pending, status: 'verified' }) })
     }
+    if (path.endsWith('/media/limits')) return route.fulfill({ json: envelope({ upload_mode: 'proxy', image_max_bytes: 10485760, allowed_image_types: ['image/png'] }) })
     if (path.endsWith('/media/upload')) return route.fulfill({ json: envelope({ asset_id: 'avatar-new', status: 'ready', duration_ms: null }) })
     if (path.endsWith('/me/profile')) {
       if (req.method() === 'POST') { const body = req.postDataJSON(); record.saves.push(body); if (options.failSave && record.saves.length === 1) return route.fulfill({ status: 503, json: { code: 50001, message: '资料保存失败，请重试', data: null } }); if (body.avatar_id) record.avatar = body.avatar_id }
@@ -99,7 +100,7 @@ test('pending stops after twelve queries and allows manual query', async ({ page
   await expect(page.getByText('实名认证成功', { exact: true })).toHaveCount(0)
 })
 test('avatar upload waits for profile save and course covers use their owner policy', async ({ page }) => {
-  const record = await setup(page, { failSave: true, shortTicket: true }); await page.goto('/#/pages/profile/info')
+  const record = await setup(page, { failSave: true, shortTicket: true, verified: true }); await page.goto('/#/pages/profile/info')
   await expect(page.getByRole('button', { name: '更换头像', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '更换头像', exact: true })).toHaveAttribute('aria-disabled', 'false')
   const chooser = page.waitForEvent('filechooser'); await page.getByRole('button', { name: '更换头像', exact: true }).click(); await (await chooser).setFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: tiny })

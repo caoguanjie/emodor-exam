@@ -226,23 +226,36 @@ export class UsersService {
     if (source !== 'institution' && source !== 'external') throw Errors.param('来源必须是 institution 或 external');
   }
 
-  async createStudent(input: { username?: string; real_name: string; category_id: string; source: 'institution' | 'external'; employee_no?: string | null; phone: string; email?: string | null; gender?: 'male' | 'female' | null; birthday?: string | null; age?: number | null }, actor: { id: number; name: string }, ip: string | null) {
+  private optionalCategoryId(value: unknown): string | null {
+    if (value === undefined || value === null || typeof value === 'string' && !value.trim()) return null;
+    if (typeof value !== 'string' || !/^[1-9]\d{0,31}$/.test(value)) throw Errors.param('培训类别 ID 不合法');
+    return value;
+  }
+
+  private managedName(value: unknown): string {
+    if (typeof value !== 'string' || !value.trim() || value.trim().length > 64) throw Errors.param('真实姓名须为1—64个字');
+    return value.trim();
+  }
+
+  async createStudent(input: { username?: string; real_name: string; category_id?: string | null; source: 'institution' | 'external'; employee_no?: string | null; phone: string; email?: string | null; gender?: 'male' | 'female' | null; birthday?: string | null; age?: number | null }, actor: { id: number; name: string }, ip: string | null) {
     if ('password' in input || 'initial_password' in input || 'password_hash' in input) throw Errors.param('学员使用手机验证码登录，不接受密码字段');
     this.assertLearnerSource(input.source);
     this.validateDemographics(input);
+    const realName = this.managedName(input.real_name);
+    const categoryId = this.optionalCategoryId(input.category_id);
     const phone = normalizeChinaMobile(input.phone);
     const username = input.username || `m_${randomBytes(20).toString('hex')}`;
     const passwordHash = await bcrypt.hash(randomBytes(48).toString('base64'), 12);
     try {
       const user = await this.dataSource.transaction(async (manager) => {
-        await this.categories.lockActive(manager, input.category_id);
+        if (categoryId !== null) await this.categories.lockActive(manager, categoryId);
         return manager.getRepository(SysUser).save(manager.getRepository(SysUser).create({
           username,
           passwordHash,
-          realName: input.real_name,
+          realName,
           employeeNo: input.employee_no || null,
           departmentId: null,
-          categoryId: String(input.category_id),
+          categoryId,
           source: input.source,
           role: RoleEnum.EMPLOYEE,
           phone,
@@ -273,10 +286,12 @@ export class UsersService {
     }
   }
 
-  async updateStudent(id: string, patch: { real_name?: string; employee_no?: string | null; category_id?: string; source?: 'institution' | 'external'; phone?: string | null; email?: string | null; gender?: 'male' | 'female' | null; birthday?: string | null; age?: number | null }, actor: { id: number; name: string }, ip: string | null) {
+  async updateStudent(id: string, patch: { real_name?: string; employee_no?: string | null; category_id?: string | null; source?: 'institution' | 'external'; phone?: string | null; email?: string | null; gender?: 'male' | 'female' | null; birthday?: string | null; age?: number | null }, actor: { id: number; name: string }, ip: string | null) {
     if ('password' in patch || 'initial_password' in patch || 'password_hash' in patch) throw Errors.param('学员使用手机验证码登录，不接受密码字段');
     if (patch.source !== undefined) this.assertLearnerSource(patch.source);
     this.validateDemographics(patch);
+    const realName = patch.real_name === undefined ? undefined : this.managedName(patch.real_name);
+    const categoryId = patch.category_id === undefined ? undefined : this.optionalCategoryId(patch.category_id);
     let user: SysUser;
     let previousCategoryId: string | null = null;
     const oldSids: string[] = [];
@@ -285,10 +300,10 @@ export class UsersService {
         const repo = manager.getRepository(SysUser);
         const lockedUser = await this.lockManagedStudent(manager, id);
         previousCategoryId = lockedUser.categoryId ? String(lockedUser.categoryId) : null;
-        if (patch.category_id !== undefined) await this.categories.lockActive(manager, patch.category_id);
-        if (patch.real_name !== undefined) { await this.identity?.assertNameEditable(manager, id, lockedUser.realName, patch.real_name); lockedUser.realName = patch.real_name; }
+        if (categoryId !== undefined && categoryId !== null) await this.categories.lockActive(manager, categoryId);
+        if (realName !== undefined) { await this.identity?.assertNameEditable(manager, id, lockedUser.realName, realName); lockedUser.realName = realName; }
         if (patch.employee_no !== undefined) lockedUser.employeeNo = patch.employee_no || null;
-        if (patch.category_id !== undefined) lockedUser.categoryId = String(patch.category_id);
+        if (categoryId !== undefined) lockedUser.categoryId = categoryId;
         if (patch.source !== undefined) lockedUser.source = patch.source;
         if (patch.phone !== undefined) {
           const phone = normalizeChinaMobile(patch.phone as string);

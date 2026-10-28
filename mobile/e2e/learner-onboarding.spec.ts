@@ -32,7 +32,7 @@ test('complete learner can enter home without an avatar or forced identity', asy
   await expect(page).toHaveURL(/pages\/home\/index$/)
 })
 
-test('requires name and confirmed category, preserves draft through category confirmation, then saves to identity', async ({ page }) => {
+test('requires a name, allows blank category and saves directly to identity', async ({ page }) => {
   const { writes } = await mocks(page)
   await page.goto('/mobile/#/pages/profile/info?onboarding=1')
   const name = page.getByRole('textbox').first()
@@ -41,7 +41,16 @@ test('requires name and confirmed category, preserves draft through category con
   await expect(page.getByText('请输入真实姓名', { exact: true })).toBeVisible()
   await name.fill('  测试学员  ')
   await page.getByText('保存并去实名认证', { exact: true }).click()
-  await expect(page.getByText('请选择并确认培训工种', { exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/pages\/identity\/index$/)
+  expect(writes).toEqual([{ real_name: '测试学员', gender: null, birthday: null }])
+})
+
+test('optional category still confirms explicitly and keeps the unsaved name draft', async ({ page }) => {
+  await mocks(page)
+  await page.goto('/mobile/#/pages/profile/info?onboarding=1')
+  const name = page.getByRole('textbox').first()
+  await expect(name).toBeEditable()
+  await name.fill('  测试学员  ')
   await page.getByRole('button', { name: '培训工种', exact: true }).click()
   await page.getByRole('button', { name: '选择电工', exact: true }).click()
   await page.getByText('确认培训工种', { exact: true }).click()
@@ -50,7 +59,6 @@ test('requires name and confirmed category, preserves draft through category con
   await expect(name).toHaveValue('  测试学员  ')
   await page.getByText('保存并去实名认证', { exact: true }).click()
   await expect(page).toHaveURL(/pages\/identity\/index$/)
-  expect(writes).toEqual([{ real_name: '测试学员', gender: null, birthday: null }])
 })
 
 test('verified name is locked and a normal optional-profile save stays on the page', async ({ page }) => {

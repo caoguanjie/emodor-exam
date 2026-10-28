@@ -25,6 +25,16 @@ beforeEach(() => {
 })
 
 describe('first training category confirmation', () => {
+  it('saves a learner name without selecting a category or elevating controlled fields', async () => {
+    const writes: unknown[] = []
+    install(request => { if (request.method === 'POST') writes.push(request.data); return ok(profile) })
+    const store = useLearnerStore()
+    await store.loadProfile()
+    await store.updateProfile({ real_name: '学员' })
+    expect(writes).toEqual([{ real_name: '学员' }])
+    expect(store.profile?.category_id).toBeNull()
+    expect(store.profile?.role).toBe('employee')
+  })
   it('keeps an ID selection and cancellation as drafts without a write, then confirms only once', async () => {
     const writes: unknown[] = []
     let finish: (value: unknown) => void = () => {}
