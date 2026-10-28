@@ -23,7 +23,7 @@ function hasContent(nodes: VNode[]): boolean {
   });
 }
 
-/** FitsTable's page structure, adapted to RuleExam's existing Element Plus tables. */
+/** FitsTable's page structure, adapted to emodor-training-platform's existing Element Plus tables. */
 export const FitsTable = defineComponent({
   name: 'FitsTable',
   inheritAttrs: false,
