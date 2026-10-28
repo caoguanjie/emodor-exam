@@ -1,5 +1,15 @@
 # 04 · API 设计 —— 制度学习及考试系统（EmodorRuleExam）
 
+## 模拟考接口增量（2026-10-28）
+
+管理试卷新建/读取/筛选增加 `exam_purpose: formal|practice`，缺省formal；用途不可修改。practice只允许training/random/public，max_attempts省略或NULL后归一NULL，数字拒绝；formal新配置仍1—100且显式NULL拒绝。新增 `GET /admin/papers/:id/practice-template`，按管理权限读取选定正式公共随机卷的已保存草稿或最新发布配置；仅返回表单，保存仍使用 `POST /admin/papers`，不自动创建/发布、不复制答卷。模板保留题型、分值、时限、评分与考前学习条件。
+
+学员摘要增加 `exam_purpose`、`release_id`、`attempt_limit_kind: limited|unlimited|unknown`。practice的max_attempts/attempts_remaining为NULL且kind=unlimited；历史未知保持unknown，不因NULL放行。有活动模拟时摘要/学习条件读本次record，没有活动时读最新release。
+
+`POST /me/exams/:id/start`接受可选 `expected_release_id`正整数字符串；模拟确实新开时必须匹配当前最新版本，否则40970且零写入，前端刷新须知后等待用户再次确认。已有活动记录先恢复或收口timeout，不被旧预期版本阻断；正式旧请求继续可省略。新模拟record冻结本次release/rule，首次assignment不改写。提交评分、幂等和超时沿用原协议。
+
+AttemptView、结果、历史、管理记录返回exam_purpose；结果增加paper_id；WrongItem增加exam_purpose/paper_id/paper_title。错题仍包含模拟，按record冻结题单判分和授权媒体。`GET /admin/exam-records`及options支持用途过滤，默认两种记录。正式统计/排名/export/options及首页考试指标在服务端排除practice，直接请求模拟试卷的正式报表返回40401。客户端旧响应缺用途只读兜底formal，不能猜测practice结果的paper_id。
+
 ## 公共随机考试接口增量（2026-10-28）
 
 本节覆盖下文历史培训工种必填/匹配考试条款。`POST/PUT /admin/papers` 支持 `pool_scope: category|public`；public仅允许training随机卷且category_id为null。旧省略字段继续category语义。响应增加pool_scope并允许category_id=null；rules使用type/count/score_cents，max_attempts为1—100默认3。public不按类别过滤题库，发布分别校验easy/hard各题型数量并冻结题池。

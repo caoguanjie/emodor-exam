@@ -6,7 +6,7 @@
 ## 目录
 
 - `docs/design/` 设计方案 8 册（01 需求 … 07 安全与非功能、README 对照表）
-- `database/` `init.sql`（41 张业务表 + 1 张迁移元数据表，共 42 张物理表，与 03 册一致）+ `seed.mjs`（口令经环境变量注入）；当前迁移 000—041，021 考试稳定选项 ID、022 设计器存储、023 课时软删除、024 学员年龄、025 题库分值历史兼容可空、026 题目启停、027 清理题目审核权限、028 续接一次性密码回填完成探针（不改账号数据）、029 题目逻辑删除、030 试卷考前学习要求、031 试卷排序、032 试卷操作信息、033 COS 媒体定位与上传会话、034 管理员逻辑删除、035 角色备注与名称唯一、036 三模块独立按钮权限、037 独立字典分类、038 清理既有账号提升管理员权限链路、039 网站关于我们配置、040 培训试卷撤回显示字典与状态注释、041 培训试卷撤回回草稿兼容；表变更必须同步迁移、`init.sql`、entities 与设计分册
+- `database/` `init.sql`（41 张业务表 + 1 张迁移元数据表，共 42 张物理表，与 03 册一致）+ `seed.mjs`（口令经环境变量注入）；当前迁移 000—043，021 考试稳定选项 ID、022 设计器存储、023 课时软删除、024 学员年龄、025 题库分值历史兼容可空、026 题目启停、027 清理题目审核权限、028 续接一次性密码回填完成探针（不改账号数据）、029 题目逻辑删除、030 试卷考前学习要求、031 试卷排序、032 试卷操作信息、033 COS 媒体定位与上传会话、034 管理员逻辑删除、035 角色备注与名称唯一、036 三模块独立按钮权限、037 独立字典分类、038 清理既有账号提升管理员权限链路、039 网站关于我们配置、040 培训试卷撤回显示字典与状态注释、041 培训试卷撤回回草稿兼容、042 公共随机题池、043 独立随机模拟考用途与不限次；表变更必须同步迁移、`init.sql`、entities 与设计分册
 - `server/` NestJS API：`src/common/`（信封/错误码/守卫链/Redis/审计）、`src/entities/`、`src/modules/`（auth/access/users/training/courses/question-materials/ai/questions/exams/statistics 等）；departments/regulations 只保留共享存储与历史只读依赖，不恢复旧管理 CRUD
 - `web/` Vue 3 + TS + Vite + Element Plus；`src/views/employee/` 学习端、`src/views/admin/` 管理端
 - `mobile/` uni-app + Vue 3 + TypeScript + Pinia + Wot UI 2.3.2；独立学员 H5 / MP-WEIXIN 入口，PC 管理端不复用其登录状态或答题入口
@@ -98,3 +98,5 @@ API 启动后监听 :3000，全局前缀 `api/v1`。本机开发用宿主 MySQL 
 | C6—C7 | 培训统计、全链回归与交付收口 | 场次/难度/个人最高分口径、旧链路回归 |
 
 - 运行构建、API 测试、PC 操作和真实 H5/视频/外部 AI 验收是不同证据等级；文档一致不等于运行或业务验收通过。
+
+- 模拟考使用独立training/public/random试卷，exam_purpose=practice；不限次数、正常评分与错题收录，正式统计排除模拟。每次新模拟读取最新release，活动/历史按record快照，首次来源/难度沿用assignment；新开须知expected_release_id过期40970，恢复优先。见[设计](docs/superpowers/specs/2026-10-28-practice-random-exam-design.md)与[计划](docs/superpowers/plans/2026-10-28-practice-random-exam.md)。

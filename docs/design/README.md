@@ -1,5 +1,7 @@
 # 制度学习及考试系统（EmodorRuleExam）设计方案 · 总览索引
 
+> **模拟考增量（2026-10-28）**：按[设计](../superpowers/specs/2026-10-28-practice-random-exam-design.md)与[实施计划](../superpowers/plans/2026-10-28-practice-random-exam.md)新增独立公共随机模拟卷。共题库、独立配置、不限次数、正常评分并记入错题集；正式统计排除模拟。模拟每次新开读最新发布，活动/历史保持本次快照，首次来源难度仍冻结。043为三表新增exam_purpose并允许模拟max_attempts=NULL；仍为42张物理表。源码、隔离自动化与PC/H5已验证，证据及未验边界见[验收记录](../../review/2026-10-28-practice-random-exam-acceptance.md)；未部署。
+
 > **公共随机考试增量（2026-10-28，实施中）**：按[设计](../superpowers/specs/2026-10-28-shared-random-exam-design.md)与[实施方案](../superpowers/plans/2026-10-28-shared-random-exam.md)执行。一套公共题库、一份来源分难度的随机卷；工种可选，不再控制考试参与。默认100道100分、每人每卷总共3次，均由试卷配置；成功开始计次、超时计次不评分、已及格仍可额度内重考。二维码仅打开H5考试Tab，直接进入小程序Tab等价。此口径覆盖下文工种必填、类别匹配开考、仅未通过才能重考等历史描述；既有个人归属与历史发布不改写。实现/隔离验收与真实供应商、手机、生产部署分开记录。
 
 > **COS 增量（实施中）**：按[已确认设计](../superpowers/specs/2026-10-26-cos-media-integration-design.md)与[Astra 实施计划](../superpowers/plans/2026-10-26-cos-media-integration.md)接入图片/视频存储、上传续传及存量迁移；PDF/DOCX 原件保留本地。共桶/共享后端密钥、独立数据库、按行双存储和申请/续签时授权的COS短链。实际验证状态见[验收记录](../../review/2026-10-26-cos-media-acceptance.md)，不表示真云或数千并发已通过。
