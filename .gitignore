@@ -37,6 +37,9 @@ gui-test-screenshots/
 # 管理日报（本地归档，不进仓库）
 docs/_reference/claude-workflows/日报/
 
+# 会议材料（本地归档，不进仓库）
+docs/meeting/
+
 # 本地存储分析产物（不属于项目源码）
 storage-analysis-report.html
 storage-analysis.json
