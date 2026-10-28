@@ -9,6 +9,7 @@ let native = false
 native = true
 // #endif
 const nativeActions = computed(() => native && !!(props.action || slots.right))
+const fixedNative = computed(() => native && !props.light)
 function goBack() {
   emit('back')
   if (props.historyFirst && getCurrentPages().length > 1) uni.navigateBack()
@@ -18,7 +19,11 @@ function goBack() {
 }
 </script>
 <template>
-  <view class="top-bar" :class="{ 'top-bar--light': light }">
+  <view v-if="fixedNative" class="top-bar-placeholder" aria-hidden="true">
+    <view class="top-bar-placeholder__main" />
+    <view v-if="nativeActions" class="top-bar-placeholder__actions" />
+  </view>
+  <view class="top-bar" :class="{ 'top-bar--light': light, 'top-bar--fixed': fixedNative }">
     <view class="top-bar__main">
       <view class="top-bar__side"><view v-if="back" class="top-bar__back" role="button" aria-label="返回" @click="goBack"><AppIcon name="chevron-left" :size="24" :color="props.light ? '#ffffff' : '#323233'" /></view><slot name="left" /></view>
       <text class="top-bar__title">{{ title }}</text>
@@ -38,4 +43,10 @@ function goBack() {
 .top-bar__right { text-align: right; }
 .top-bar__title { position: absolute; left: 50%; transform: translateX(-50%); max-width: calc(100% - var(--app-native-title-inset, 84px) - var(--app-native-title-inset, 84px)); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 17px; font-weight: 600; }
 .top-bar__actions { min-height: 28px; padding: 0 12px 8px; display: flex; align-items: center; justify-content: flex-end; font-size: 14px; }
+/* Fixed navigation retains an equal flow placeholder, including the action row. */
+.top-bar-placeholder { flex:none; }
+.top-bar-placeholder__main { height:var(--app-native-nav-height, 44px); }
+.top-bar-placeholder__actions { height:36px; }
+.top-bar--fixed { position:fixed; top:var(--app-safe-area-top, 0px); left:0; right:0; z-index:100; }
+.top-bar--fixed .top-bar__actions { height:36px; min-height:0; box-sizing:border-box; }
 </style>
