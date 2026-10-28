@@ -58,7 +58,7 @@ function fixture() {
   service.userRepo = { findOne: async () => user };
   service.assignmentRepo = { find: async () => assignments };
   service.recordRepo = recordRepo;
-  service.paperRepo = { find: vi.fn(async ({ where }: any) => papers.filter(paper => where.id ? where.id._value.includes(paper.id) : paper.status === 'published' && paper.categoryId === where.categoryId)) };
+  service.paperRepo = { find: vi.fn(async ({ where }: any) => papers.filter(paper => where.id ? where.id._value.includes(paper.id) : paper.status === 'published' && (where.categoryId === undefined || paper.categoryId === where.categoryId))) };
   service.dataSource = { manager };
   return { service, user, papers, assignments, releases, records, noWrite, releaseRepo, recordRepo, query, learningBuilder, setCreditedMs: (value: string) => { creditedMs = value; } };
 }
@@ -166,7 +166,7 @@ describe('learner exam summaries', () => {
     f.assignments.splice(0);
     await expect(f.service.detail('9', '11')).rejects.toMatchObject({ code: 40401 });
     f.user.categoryId = '8';
-    await expect(f.service.detail('9', '12')).rejects.toMatchObject({ code: 40401 });
+    expect(await f.service.detail('9', '12')).toMatchObject({ paper_id: '12', category_id: '7' });
   });
 
   it('validates state and exposes the read-only detail through the mobile controller', async () => {

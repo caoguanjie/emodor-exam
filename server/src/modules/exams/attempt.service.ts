@@ -43,6 +43,7 @@ export function decideAttemptTransition(input: {
   active: { recordId: string; deadlineAt: Date } | null;
   records: AttemptRecordFact[];
   maxAttempts: number;
+  allowPassedRetakes?: boolean;
 }): { kind: 'recover'; recordId: string } | { kind: 'create'; attemptNo: number } {
   if (input.active) {
     if (new Date(input.active.deadlineAt).getTime() > input.nowMs) {
@@ -50,7 +51,7 @@ export function decideAttemptTransition(input: {
     }
     throw Errors.examInProgress('考试已到期，请刷新查看状态');
   }
-  if (input.records.some((record) => record.status === ExamStatus.PASSED)) throw Errors.alreadyPassed();
+  if (!input.allowPassedRetakes && input.records.some((record) => record.status === ExamStatus.PASSED)) throw Errors.alreadyPassed();
   if (input.records.some((record) => record.status === ExamStatus.SUBMITTED)) {
     throw Errors.examInProgress('考试正在等待批改，暂不能补考');
   }
@@ -319,30 +320,38 @@ export class AttemptService {
         categoryId = assignment.categoryId;
         difficulty = assignment.difficulty;
         snapshotOrigin = assignment.snapshotOrigin;
-        if (paper.businessScope === 'training') {
-          if (!categoryId) throw Errors.paperReleaseConflict('个人考试归属缺少培训类别');
-          await this.assertTrainingCategoryActive(manager, categoryId);
-        } else {
+        if (paper.businessScope !== 'training') {
           await this.assertLegacyEligibility(manager, user, paper);
         }
         if (assignment.releaseId) {
           release = await this.releases.get(String(assignment.releaseId), manager);
           if (String(release.paperId) !== String(paper.id)) throw Errors.paperReleaseConflict('个人考试发布版本不匹配');
+          if (release.businessScope !== paper.businessScope) throw Errors.paperReleaseConflict('个人考试发布版本业务范围不匹配');
           if (paper.businessScope === 'regulation') assertLegacyClientPool(release.pool);
         } else {
           pool = await this.previousLegacyPool(manager, String(assignment.id), records);
           if (!pool) throw Errors.paperReleaseConflict('个人考试冻结题池不完整');
           if (paper.businessScope === 'regulation') assertLegacyClientPool(pool);
         }
+        if (paper.businessScope === 'training') {
+          if (release?.poolScope === 'public' && release.mode === 'random') {
+            if (categoryId !== null) throw Errors.paperReleaseConflict('公共个人考试归属类别必须为空');
+          } else {
+            if (!categoryId) throw Errors.paperReleaseConflict('个人考试归属缺少培训类别');
+            await this.assertTrainingCategoryActive(manager, categoryId);
+          }
+        }
       } else {
         release = await this.releases.latestForPaper(String(paper.id), manager);
         if (paper.businessScope === 'training') {
           if (!release || release.businessScope !== 'training') throw Errors.paperReleaseConflict('培训试卷缺少发布版本');
-          if (!user.categoryId || !user.source) throw Errors.param('学员培训类别和来源必须先配置');
-          if (String(user.categoryId) !== String(release.categoryId)) throw Errors.dataForbidden('该考试不属于学员培训类别');
-          await this.assertTrainingCategoryActive(manager, String(release.categoryId));
+          if (user.source !== 'institution' && user.source !== 'external') throw Errors.param('学员来源未配置或无效，请联系管理员');
+          if ((release.poolScope ?? 'category') === 'category') {
+            if (!release.categoryId) throw Errors.paperReleaseConflict('培训试卷发布版本缺少培训类别');
+            await this.assertTrainingCategoryActive(manager, String(release.categoryId));
+          }
           source = user.source;
-          categoryId = String(release.categoryId);
+          categoryId = release.categoryId == null ? null : String(release.categoryId);
           difficulty = resolveAttemptDifficulty(source, release);
           rule = deepClone(release.rule);
           snapshotOrigin = 'release';
@@ -373,7 +382,7 @@ export class AttemptService {
       assertContentCapability(requiredContentCapability(actualPool), contentVersion);
 
       const transition = decideAttemptTransition({
-        nowMs: Date.now(), active: null, records, maxAttempts: Number(rule.maxAttempts),
+        nowMs: Date.now(), active: null, records, maxAttempts: Number(rule.maxAttempts), allowPassedRetakes: paper.businessScope === 'training',
       });
       if (transition.kind !== 'create') throw Errors.examInProgress();
 
@@ -492,12 +501,10 @@ export class AttemptService {
     if (!user) throw Errors.notFound('用户不存在');
     if (Number(user.status) !== 1) throw Errors.accountDisabled();
     const assignments = await this.assignmentRepo.find({ where: { userId: String(userId) } });
-    const published = user.categoryId && user.source
-      ? await this.paperRepo.find({
-        where: { businessScope: 'training', categoryId: String(user.categoryId), status: PaperStatus.PUBLISHED },
+    const published = await this.paperRepo.find({
+        where: { businessScope: 'training', status: PaperStatus.PUBLISHED },
         order: { id: 'DESC' },
-      })
-      : [];
+      });
     const assignedIds = assignments.map((assignment) => String(assignment.paperId));
     const assigned = assignedIds.length ? await this.paperRepo.find({ where: { id: In(assignedIds), businessScope: 'training' } }) : [];
     const byId = new Map([...published, ...assigned].map((paper) => [String(paper.id), paper]));

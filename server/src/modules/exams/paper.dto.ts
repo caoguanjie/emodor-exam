@@ -3,9 +3,9 @@ import type { ArgumentMetadata } from '@nestjs/common';
 import {
   ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional,
   IsString, Matches, Max, MaxLength, Min, MinLength, Validate, ValidateIf, ValidateNested,
-  ValidatorConstraint, ValidatorConstraintInterface,
+  ValidationArguments, ValidatorConstraint, ValidatorConstraintInterface,
 } from 'class-validator';
-import type { Difficulty, QuestionType } from '../../common/training-contracts';
+import type { Difficulty, PoolScope, QuestionType } from '../../common/training-contracts';
 import type { DesignerLayoutV1 } from '../../common/question-authoring';
 import { Errors } from '../../common/errors';
 import { StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
@@ -87,10 +87,21 @@ export class PaperRuleDto {
   @IsInt() @Min(1) @Max(99999) score_cents!: number;
 }
 
+@ValidatorConstraint({ name: 'paperPoolScope', async: false })
+class PaperPoolScopeValidator implements ValidatorConstraintInterface {
+  validate(value: unknown, args: ValidationArguments): boolean {
+    const input = args.object as { mode?: string; category_id?: string | null };
+    return value !== 'public' || ((input.mode === undefined || input.mode === 'random') && input.category_id == null);
+  }
+
+  defaultMessage(): string { return '公共题池仅支持随机卷，培训类别必须为空'; }
+}
+
 export class CreateTrainingPaperDto {
   @IsString() @MinLength(1) @MaxLength(128) title!: string;
   @IsIn(['fixed', 'random']) mode!: 'fixed' | 'random';
-  @IsString() @Matches(ID_PATTERN) category_id!: string;
+  @ValidateIf((_object, value) => value !== undefined) @IsIn(['category', 'public']) @Validate(PaperPoolScopeValidator) pool_scope?: PoolScope;
+  @ValidateIf((object, value) => object.pool_scope !== 'public' || value != null) @IsString() @Matches(ID_PATTERN) category_id?: string | null;
   @IsOptional() @IsArray() @ArrayMaxSize(100) @ArrayUnique() @IsString({ each: true }) @Matches(ID_PATTERN, { each: true }) regulation_ids?: string[];
   @IsOptional() @IsArray() @ArrayMaxSize(100) @ArrayUnique() @IsString({ each: true }) @Matches(ID_PATTERN, { each: true }) course_ids?: string[];
   @IsOptional() @IsBoolean() requires_learning?: boolean;
@@ -110,7 +121,8 @@ export class UpdateTrainingPaperDto {
   @ValidateIf((_object, value) => value !== undefined) @IsBoolean() preserve_questions?: boolean;
   @IsOptional() @IsString() @MinLength(1) @MaxLength(128) title?: string;
   @IsOptional() @IsIn(['fixed', 'random']) mode?: 'fixed' | 'random';
-  @IsOptional() @IsString() @Matches(ID_PATTERN) category_id?: string;
+  @ValidateIf((_object, value) => value !== undefined) @IsIn(['category', 'public']) @Validate(PaperPoolScopeValidator) pool_scope?: PoolScope;
+  @IsOptional() @IsString() @Matches(ID_PATTERN) category_id?: string | null;
   @IsOptional() @IsArray() @ArrayMaxSize(100) @ArrayUnique() @IsString({ each: true }) @Matches(ID_PATTERN, { each: true }) regulation_ids?: string[];
   @IsOptional() @IsArray() @ArrayMaxSize(100) @ArrayUnique() @IsString({ each: true }) @Matches(ID_PATTERN, { each: true }) course_ids?: string[];
   @IsOptional() @IsBoolean() requires_learning?: boolean;
@@ -154,6 +166,7 @@ export class PaperCandidateQueryDto {
 
 export class PaperOptionQueryDto {
   @IsOptional() @IsString() @Matches(ID_PATTERN) category_id?: string;
+  @ValidateIf((_object, value) => value !== undefined) @IsIn(['category', 'public']) pool_scope?: PoolScope;
   @IsOptional() @QueryNumber() @IsInt() @Min(1) page?: number;
   @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
 }
@@ -163,12 +176,12 @@ export class PaperPreviewQueryDto {
 }
 
 export const PAPER_CREATE_KEYS = [
-  'title', 'mode', 'category_id', 'regulation_ids', 'course_ids', 'requires_learning',
+  'title', 'mode', 'pool_scope', 'category_id', 'regulation_ids', 'course_ids', 'requires_learning',
   'required_learning_minutes', 'remark', 'sort_order',
   'total_score', 'pass_score', 'duration_minutes', 'max_attempts', 'partial_credit_ratio', 'rules', 'designer_layout',
 ] as const;
 export const PAPER_UPDATE_KEYS = [...PAPER_CREATE_KEYS, 'preserve_questions'] as const;
 export const PAPER_LIST_KEYS = ['page', 'page_size', 'keyword', 'category_id', 'mode', 'status'] as const;
 export const PAPER_CANDIDATE_KEYS = ['type', 'difficulty', 'page', 'page_size'] as const;
-export const PAPER_OPTION_KEYS = ['category_id', 'page', 'page_size'] as const;
+export const PAPER_OPTION_KEYS = ['category_id', 'pool_scope', 'page', 'page_size'] as const;
 export const PAPER_PREVIEW_KEYS = ['difficulty'] as const;

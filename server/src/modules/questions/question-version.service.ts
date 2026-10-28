@@ -29,8 +29,7 @@ import {
 } from './question-validator';
 
 export type QuestionDraft = QuestionDraftInput;
-export interface CandidateFilter {
-  categoryId: string;
+export type CandidateFilter = ({ poolScope: 'public'; categoryId?: never } | { poolScope?: 'category'; categoryId: string }) & {
   regulationIds?: string[];
   type: QuestionType;
   difficulty: Difficulty;
@@ -709,26 +708,40 @@ export class QuestionVersionService implements OnModuleInit {
     });
   }
 
-  async enabledCandidates(filter: CandidateFilter, manager?: EntityManager): Promise<QuestionVersionSnapshot[]> {
-    assertActiveDifficulty(filter.difficulty);
-    if (manager) await this.categories.lockActive(manager, String(filter.categoryId));
-    else await this.categories.assertActive(String(filter.categoryId));
-    const repo = manager ? manager.getRepository(QuestionVersion) : this.versionRepo;
-    const qb = repo.createQueryBuilder('version')
-      .innerJoin(Question, 'question', 'question.current_version_id = version.id AND question.id = version.question_id')
-      .where('question.is_enabled = :enabled', { enabled: true })
-      .andWhere('question.deleted_at IS NULL')
-      .andWhere('question.category_id = version.category_id AND question.type = version.type AND question.difficulty = version.difficulty')
-      .andWhere('version.category_id = :categoryId', { categoryId: String(filter.categoryId) })
-      .andWhere('version.type = :type', { type: filter.type })
-      .andWhere('version.difficulty = :difficulty', { difficulty: filter.difficulty });
-    if (filter.regulationIds?.length) {
-      qb.andWhere('version.regulation_id IN (:...regulationIds)', { regulationIds: filter.regulationIds.map(String) });
+  async enabledCandidates(input: CandidateFilter | readonly CandidateFilter[], manager?: EntityManager): Promise<QuestionVersionSnapshot[]> {
+    const filters: readonly CandidateFilter[] = Array.isArray(input) ? input : [input as CandidateFilter];
+    for (const filter of filters) assertActiveDifficulty(filter.difficulty);
+    // Category references precede every question lock. Public pools have no
+    // category admission gate and must never acquire one after locking questions.
+    const categoryIds = [...new Set(filters.filter(filter => filter.poolScope !== 'public').map(filter => String(filter.categoryId)))];
+    categoryIds.sort((a, b) => BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0);
+    for (const categoryId of categoryIds) {
+      if (manager) await this.categories.lockActive(manager, categoryId);
+      else await this.categories.assertActive(categoryId);
     }
-    const rows = await qb.orderBy('version.id', 'ASC').getMany();
+    const repo = manager ? manager.getRepository(QuestionVersion) : this.versionRepo;
+    const candidates = new Map<string, { row: QuestionVersion; filter: CandidateFilter }>();
+    // Collect ALL difficulty/type groups before the first question lock. Sorting
+    // each query alone reverses fixed-publication order for hard Q1 / easy Q2.
+    for (const filter of filters) {
+      const qb = repo.createQueryBuilder('version')
+        .innerJoin(Question, 'question', 'question.current_version_id = version.id AND question.id = version.question_id')
+        .where('question.is_enabled = :enabled', { enabled: true })
+        .andWhere('question.deleted_at IS NULL')
+        .andWhere('question.category_id = version.category_id AND question.type = version.type AND question.difficulty = version.difficulty')
+        .andWhere('version.type = :type', { type: filter.type })
+        .andWhere('version.difficulty = :difficulty', { difficulty: filter.difficulty });
+      if (filter.poolScope !== 'public') qb.andWhere('version.category_id = :categoryId', { categoryId: String(filter.categoryId) });
+      if (filter.regulationIds?.length) {
+        qb.andWhere('version.regulation_id IN (:...regulationIds)', { regulationIds: filter.regulationIds.map(String) });
+      }
+      for (const row of await qb.orderBy('version.id', 'ASC').getMany()) {
+        candidates.set(String(row.id), { row, filter });
+      }
+    }
     if (!manager) {
       const usable: QuestionVersionSnapshot[] = [];
-      for (const row of rows) {
+      for (const { row } of candidates.values()) {
         try {
           await this.assertStoredFactsUsable(row, String(row.id));
           usable.push(this.snapshot(row));
@@ -739,12 +752,30 @@ export class QuestionVersionService implements OnModuleInit {
       return usable;
     }
     const usable: QuestionVersion[] = [];
-    const ordered = [...rows].sort((a, b) => BigInt(a.questionId) < BigInt(b.questionId) ? -1 : BigInt(a.questionId) > BigInt(b.questionId) ? 1 : 0);
-    for (const row of ordered) {
-      const identity = await manager.getRepository(Question).findOne({ where: { id: String(row.questionId) }, lock: { mode: 'pessimistic_write' } });
+    const ordered = [...candidates.values()].sort((a, b) => BigInt(a.row.questionId) < BigInt(b.row.questionId) ? -1 : BigInt(a.row.questionId) > BigInt(b.row.questionId) ? 1 : 0);
+    const identities = new Map<string, Question | null>();
+    for (const { row } of ordered) {
+      const id = String(row.questionId);
+      if (!identities.has(id)) identities.set(id, await manager.getRepository(Question).findOne({ where: { id }, lock: { mode: 'pessimistic_write' } }));
+    }
+    for (const { row, filter } of ordered) {
+      const isPublic = filter.poolScope === 'public';
+      const identity = identities.get(String(row.questionId));
       if (!identity?.isEnabled || identity.deletedAt || String(identity.currentVersionId || '') !== String(row.id)
-        || String(identity.categoryId) !== String(filter.categoryId) || identity.type !== filter.type || identity.difficulty !== filter.difficulty) continue;
-      await this.assertCurrentUsable(String(row.questionId), manager);
+        || String(identity.categoryId) !== String(row.categoryId)
+        || (!isPublic && String(identity.categoryId) !== String(filter.categoryId))
+        || identity.type !== filter.type || identity.difficulty !== filter.difficulty) continue;
+      if (isPublic) {
+        try { await this.assertStoredFactsUsable(row, String(row.id), manager); }
+        catch (error) {
+          if (!(error instanceof BizError) || error.code >= 50000) throw error;
+          continue;
+        }
+      } else {
+        // The locked identity matches this filter's already-held category.
+        // Lifecycle validation only re-enters those locks, never a new category.
+        await this.assertCurrentUsable(String(row.questionId), manager);
+      }
       usable.push(row);
     }
     return usable.map((row) => this.snapshot(row));

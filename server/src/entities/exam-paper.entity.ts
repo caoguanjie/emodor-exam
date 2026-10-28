@@ -18,6 +18,9 @@ export class ExamPaper {
   @Column({ type: 'varchar', length: 16, default: 'fixed' })
   mode: string;
 
+  @Column({ name: 'pool_scope', type: 'varchar', length: 16, default: 'category' })
+  poolScope?: import('../common/training-contracts').PoolScope;
+
   @Column({ name: 'category_id', type: 'bigint', unsigned: true, nullable: true })
   categoryId: string | null;
 

@@ -103,10 +103,11 @@ function releaseFixture(regulationIds: string[]) {
       throw new Error(`unexpected repository ${(entity as any)?.name}`);
     },
   };
-  const enabledCandidates = vi.fn(async (filter: { difficulty: Difficulty; regulationIds?: string[] }) => candidates.filter((item) => (
+  type Filter = { difficulty: Difficulty; regulationIds?: string[] };
+  const enabledCandidates = vi.fn(async (input: Filter | readonly Filter[]) => (Array.isArray(input) ? input : [input as Filter]).flatMap(filter => candidates.filter((item) => (
     item.difficulty === filter.difficulty
       && (!filter.regulationIds?.length || Boolean(item.regulationId && filter.regulationIds.includes(item.regulationId)))
-  )));
+  ))));
   const registerRandomDraftMediaResolver = vi.fn();
   const service = Object.create(PaperReleaseService.prototype) as PaperReleaseService & Record<string, any>;
   Object.assign(service, {
@@ -273,9 +274,13 @@ describe('immutable paper releases', () => {
     expect(withoutRegulationFilter).toContain('101');
     expect(withRegulationFilter).not.toContain('101');
     expect(withFilter.enabledCandidates).toHaveBeenCalledWith(
-      expect.objectContaining({ regulationIds: ['9'] }),
+      expect.arrayContaining([
+        expect.objectContaining({ difficulty: 'easy', regulationIds: ['9'] }),
+        expect.objectContaining({ difficulty: 'hard', regulationIds: ['9'] }),
+      ]),
       expect.anything(),
     );
+    expect(withFilter.enabledCandidates).toHaveBeenCalledTimes(1);
   });
 
   it('stores the exact release rule and marks the training paper published without enabling a learning gate', async () => {

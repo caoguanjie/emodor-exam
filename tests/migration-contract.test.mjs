@@ -511,6 +511,15 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
       '031_paper_sort_order',
       '032_paper_operation_metadata',
       '033_cos_media_storage',
+      '034_administrator_soft_delete',
+      '035_role_management',
+      '036_role_menu_button_permissions',
+      '037_dictionary_types',
+      '038_remove_administrator_role_assignment',
+      '039_site_about_settings',
+      '040_paper_withdraw_metadata',
+      '041_training_withdraw_to_draft',
+      '042_public_random_paper',
     ]);
 
     await conn.query("INSERT INTO sys_department (name, sort, status) VALUES ('完整升级保留数据', 917, 0)");
@@ -561,7 +570,17 @@ test('the complete migration chain upgrades once from the accepted A1 schema and
     const [reservedMenusAfter] = await conn.query(
       'SELECT id, parent_id, name, type, route_path, permission_code, icon, sort, status FROM sys_menu WHERE id BETWEEN 20 AND 26 ORDER BY id',
     );
-    assert.deepEqual(reservedMenusAfter, reservedMenusBefore);
+    const menuReadTargets = reservedMenusBefore.filter((row) => row.type === 'menu' && row.route_path === '/admin/system/menus');
+    assert.equal(menuReadTargets.length, 1, 'the fixture must exercise the menu permission changed by 036');
+    assert.equal(menuReadTargets[0].permission_code, 'system_settings:read', '004 must supply the original aggregate menu permission');
+    // 036/bind_menu_read_permission intentionally changes this one field;
+    // every other field and every other reserved menu must retain its old fact.
+    const expectedReservedMenus = reservedMenusBefore.map((row) => (
+      row.type === 'menu' && row.route_path === '/admin/system/menus'
+        ? { ...row, permission_code: 'menus:read' }
+        : row
+    ));
+    assert.deepEqual(reservedMenusAfter, expectedReservedMenus);
     const [newNavigation] = await conn.query(
       "SELECT id, route_path FROM sys_menu WHERE route_path IN ('/admin/courses','/admin/dashboard','/admin/grading','/admin/exam-records','/admin/exam-monitor','/admin/training-statistics') ORDER BY route_path",
     );

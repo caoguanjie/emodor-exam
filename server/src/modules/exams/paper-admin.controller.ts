@@ -99,6 +99,10 @@ export class PaperAdminController {
   @Permissions('papers:read')
   courseOptions(@Query(new StrictDtoValidationPipe(PAPER_OPTION_KEYS)) query: PaperOptionQueryDto, @Req() req: Request) {
     assertKeys(req.query, PAPER_OPTION_KEYS, '课程选项查询');
+    if (query.pool_scope === 'public') {
+      if (query.category_id) throw Errors.param('公共题池课程选项不接受类别限制');
+      return this.papers.courseOptions(null, query.page, query.page_size);
+    }
     if (!query.category_id) throw Errors.param('category_id 必填');
     return this.papers.courseOptions(query.category_id, query.page, query.page_size);
   }
@@ -199,7 +203,7 @@ export class PaperAdminController {
   @Permissions('papers:publish')
   async publish(@Param('id') paperId: string, @CurrentUser() user: AuthUser) {
     const result = await this.releases.publish(id(paperId, 'paper_id'), String(user.id));
-    return { release_id: result.releaseId };
+    return { release_id: result.releaseId, pool_scope: result.poolScope ?? 'category' };
   }
 
   @Post(':id/withdraw')

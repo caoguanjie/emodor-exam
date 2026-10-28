@@ -90,7 +90,7 @@ function releaseFixture() {
   const service = Object.create(PaperReleaseService.prototype) as PaperReleaseService;
   Object.assign(service, {
     paperRepo, releaseRepo, releaseQuestionRepo, categories: { lockActive: async () => ({ id: '7', status: 1 }) },
-    questions: { enabledCandidates: async ({ difficulty }: any) => [{ ...structuredClone(QUESTION), difficulty, questionId: difficulty === 'easy' ? '101' : '102', versionId: difficulty === 'easy' ? '201' : '202' }] },
+    questions: { enabledCandidates: async (input: any) => (Array.isArray(input) ? input : [input]).map(({ difficulty }: any) => ({ ...structuredClone(QUESTION), difficulty, questionId: difficulty === 'easy' ? '101' : '102', versionId: difficulty === 'easy' ? '201' : '202' })) },
     sampling: new SamplingService(), audit: { log: () => undefined }, dataSource: { transaction: (work: any) => work(manager) },
   });
   return { service, paper, courses, releases, items };
@@ -223,7 +223,7 @@ describe('training paper learning requirement', () => {
     expect(f.paper.updatedBy).toBe('9');
     expect(f.paper.updatedAt).toBeInstanceOf(Date);
     const updatedAt = f.paper.updatedAt;
-    expect(await f.service.publish('11', '10')).toEqual({ releaseId });
+    expect(await f.service.publish('11', '10')).toEqual({ releaseId, poolScope: 'category' });
     expect(f.paper.updatedBy).toBe('9');
     expect(f.paper.updatedAt).toBe(updatedAt);
     f.paper.requiredLearningMinutes = 900;

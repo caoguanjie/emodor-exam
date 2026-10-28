@@ -74,7 +74,7 @@ export async function readLearnerExamSummaries(
   if (!papers.length) return [];
   const releaseRows = await manager.getRepository(PaperRelease).find({
     where: { paperId: In(papers.map(paper => String(paper.id))) },
-    select: ['id', 'paperId', 'versionNo', 'businessScope', 'ruleSnapshot', 'requiresLearning', 'requiredLearningMinutes', 'courseIds'],
+    select: ['id', 'paperId', 'versionNo', 'businessScope', 'poolScope', 'categoryId', 'ruleSnapshot', 'requiresLearning', 'requiredLearningMinutes', 'courseIds'],
     order: { versionNo: 'DESC', id: 'DESC' },
   });
   return papers.map(paper => {
@@ -91,9 +91,10 @@ export async function readLearnerExamSummaries(
       release,
       view: {
         paper_id: paperId, title: paper.title, mode: paper.mode, status: paper.status,
-        source: assignment?.source ?? user.source,
-        category_id: assignment?.categoryId ?? (user.categoryId ? String(user.categoryId) : null),
-        difficulty: assignment?.difficulty ?? (paper.mode === 'random' && user.source ? difficultyForSource(user.source) : null),
+        pool_scope: release?.poolScope ?? paper.poolScope ?? 'category',
+        source: assignment ? assignment.source : user.source,
+        category_id: assignment ? assignment.categoryId : release?.categoryId ?? paper.categoryId ?? null,
+        difficulty: assignment?.difficulty ?? (paper.mode === 'random' && (user.source === 'institution' || user.source === 'external') ? difficultyForSource(user.source) : null),
         ...projectExamRuleMetadata(assignment ? assignment.ruleSnapshot : release?.ruleSnapshot),
         active_record_id: active ? String(active.id) : null,
         latest_record_id: latest ? String(latest.id) : null,

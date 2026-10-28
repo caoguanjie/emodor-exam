@@ -5,7 +5,8 @@ import { AuditService } from '../../common/audit.service';
 import { BizError, Errors } from '../../common/errors';
 import { assertPaperLearningCourses, normalizePaperLearning } from './paper-learning';
 import { MAX_PAPER_SCORE_CENTS, paperScoreRule } from './paper-score';
-import type { Difficulty, PoolRule, QuestionContentV2, QuestionOption, QuestionType, RuleSnapshot } from '../../common/training-contracts';
+import type { Difficulty, PoolRule, PoolScope, QuestionContentV2, QuestionOption, QuestionType, RuleSnapshot } from '../../common/training-contracts';
+import { paperPoolConfig } from './paper-pool';
 import { ExamPaper } from '../../entities/exam-paper.entity';
 import { PaperQuestion } from '../../entities/paper-question.entity';
 import { PaperRelease } from '../../entities/paper-release.entity';
@@ -13,7 +14,7 @@ import { PaperReleaseQuestion } from '../../entities/paper-release-question.enti
 import { Question } from '../../entities/question.entity';
 import { QuestionVersion } from '../../entities/question-version.entity';
 import { CategoryService } from '../training/category.service';
-import { QuestionVersionService, type QuestionVersionSnapshot } from '../questions/question-version.service';
+import { QuestionVersionService, type CandidateFilter, type QuestionVersionSnapshot } from '../questions/question-version.service';
 import { SamplingService, samplingGroupKey, type SamplingGrouping } from './sampling.service';
 import type { QuestionContentV3 } from '../../common/question-content-v3';
 import { parseQuestionContent } from '../questions/question-content-dispatch';
@@ -50,6 +51,7 @@ export interface ReleaseQuestionSnapshot {
 interface PublishedPaperBase {
   id: string;
   paperId: string;
+  poolScope?: PoolScope;
   rule: RuleSnapshot;
   requiresLearning: boolean;
   requiredLearningMinutes: number | null;
@@ -57,7 +59,7 @@ interface PublishedPaperBase {
 }
 
 export interface TrainingPublishedPaper extends PublishedPaperBase {
-  categoryId: string;
+  categoryId: string | null;
   businessScope: 'training';
   mode: PaperMode;
   pool: ScoredQuestionVersionSnapshot[];
@@ -199,10 +201,15 @@ export class PaperReleaseService implements OnModuleInit {
     categoryId: string | null,
   ): Promise<QuestionVersionSnapshot | null> {
     if (!categoryId) return null;
-    const papers = await this.paperRepo.find({
+    const categoryPapers = await this.paperRepo.find({
       where: { businessScope: 'training', mode: 'random', status: 'draft', categoryId },
       order: { id: 'ASC' },
     });
+    const publicPapers = await this.paperRepo.find({
+      where: { businessScope: 'training', mode: 'random', status: 'draft', poolScope: 'public' },
+      order: { id: 'ASC' },
+    });
+    const papers = [...new Map([...categoryPapers, ...publicPapers].map(paper => [String(paper.id), paper])).values()];
     for (const paper of papers) {
       try {
         const { pool } = await this.randomPool(undefined, paper);
@@ -233,8 +240,8 @@ export class PaperReleaseService implements OnModuleInit {
     if (!Number.isInteger(rule.passCents) || rule.passCents <= 0 || rule.passCents > rule.totalCents) {
       throw Errors.paperRuleInvalid('及格分数必须大于 0 且不超过试卷总分');
     }
-    if (!Number.isInteger(rule.durationMinutes) || rule.durationMinutes < 1) throw Errors.paperRuleInvalid('考试时长必须是正整数');
-    if (!Number.isInteger(rule.maxAttempts) || rule.maxAttempts < 1) throw Errors.paperRuleInvalid('作答次数必须是正整数');
+    if (!Number.isInteger(rule.durationMinutes) || rule.durationMinutes < 1 || rule.durationMinutes > 1440) throw Errors.paperRuleInvalid('考试时长必须为1—1440分钟');
+    if (!Number.isInteger(rule.maxAttempts) || rule.maxAttempts < 1 || rule.maxAttempts > 100) throw Errors.paperRuleInvalid('作答次数必须为1—100次');
     if (!Number.isFinite(rule.partialCreditRatio) || rule.partialCreditRatio < 0 || rule.partialCreditRatio > 1) {
       throw Errors.paperRuleInvalid('多选漏选比例必须在 0—1 之间');
     }
@@ -253,28 +260,31 @@ export class PaperReleaseService implements OnModuleInit {
     manager: EntityManager | undefined,
     paper: ExamPaper,
   ): Promise<{ rule: RuleSnapshot; pool: ScoredQuestionVersionSnapshot[] }> {
+    const poolConfig = paperPoolConfig(paper);
     const configuredRules = paper.ruleConfig?.rules || [];
-    if (configuredRules.length > 4 || new Set(configuredRules.map((item) => item.type)).size !== configuredRules.length) {
+    if (configuredRules.length > 3 || configuredRules.some(item => item.count > 500)
+      || new Set(configuredRules.map((item) => item.type)).size !== configuredRules.length) {
       throw Errors.paperRuleInvalid('随机组卷同一题型只能配置一项规则');
     }
     const rule = this.ruleForPaper(paper, configuredRules);
     const pool: QuestionVersionSnapshot[] = [];
     const regulationIds = (paper.regulationIds || []).map(String);
-    for (const difficulty of activeDifficulties()) {
-      for (const item of rule.rules) {
-        pool.push(...await this.questions.enabledCandidates({
-          categoryId: String(paper.categoryId),
-          type: item.type,
-          difficulty,
-          ...(regulationIds.length ? { regulationIds } : {}),
-        }, manager));
-      }
+    const filters: CandidateFilter[] = activeDifficulties().flatMap(difficulty => rule.rules.map(item => ({
+      ...(poolConfig.poolScope === 'public' ? { poolScope: 'public' as const } : { categoryId: poolConfig.categoryId! }),
+      type: item.type,
+      difficulty,
+      ...(regulationIds.length ? { regulationIds } : {}),
+    })));
+    if (manager) {
+      pool.push(...await this.questions.enabledCandidates(filters, manager));
+    } else {
+      for (const filter of filters) pool.push(...await this.questions.enabledCandidates(filter, manager));
     }
     for (const difficulty of activeDifficulties()) {
       const validation = this.sampling.validatePool(pool, rule.rules, difficulty);
       if (!validation.ok) {
         const label = difficultyCatalog().find((option) => option.code === difficulty)?.label || difficulty;
-        throw Errors.paperPoolInsufficient(validation.deficits, `${label}候选题池容量不足`);
+        throw Errors.paperPoolInsufficient(validation.deficits.map(deficit => ({ difficulty, ...deficit })), `${label}候选题池容量不足`);
       }
     }
     const scoreByType = new Map(rule.rules.map((item) => [item.type, item.scoreCents]));
@@ -405,22 +415,22 @@ export class PaperReleaseService implements OnModuleInit {
     }
   }
 
-  async publish(paperId: string, actorId: string): Promise<{ releaseId: string }> {
+  async publish(paperId: string, actorId: string): Promise<{ releaseId: string; poolScope?: PoolScope }> {
     const current = await this.paperRepo.findOne({ where: { id: String(paperId) } });
     if (!current || !['training', 'regulation'].includes(current.businessScope)) throw Errors.notFound('试卷不存在');
     if (current.status === 'published') {
       const existing = await this.releaseRepo.findOne({ where: { paperId: String(paperId) }, order: { versionNo: 'DESC' } });
-      if (existing) return { releaseId: String(existing.id) };
+      if (existing) return { releaseId: String(existing.id), poolScope: existing.poolScope ?? 'category' };
     }
     if (current.status !== 'draft') throw Errors.paperReleaseConflict('只有草稿试卷可以发布');
-    if (current.businessScope === 'training' && !current.categoryId) throw Errors.paperRuleInvalid('培训试卷必须选择培训类别');
+    const currentPool = paperPoolConfig(current);
     if (current.businessScope === 'regulation' && (!current.regulationId || current.mode !== 'fixed')) {
       throw Errors.paperRuleInvalid('制度试卷必须是关联制度的固定组卷');
     }
     const result = await this.dataSource.transaction(async (manager) => {
       // Category references use the established category -> paper lock order.
       // C2 can then serialize start against publish/withdraw on the paper row.
-      if (current.businessScope === 'training') await this.categories.lockActive(manager, String(current.categoryId));
+      if (current.businessScope === 'training' && currentPool.categoryId !== null) await this.categories.lockActive(manager, currentPool.categoryId);
       const paperRepo = manager.getRepository(ExamPaper);
       const releaseRepo = manager.getRepository(PaperRelease);
       const releaseQuestionRepo = manager.getRepository(PaperReleaseQuestion);
@@ -428,19 +438,17 @@ export class PaperReleaseService implements OnModuleInit {
       if (!paper || !['training', 'regulation'].includes(paper.businessScope)) throw Errors.notFound('试卷不存在');
       if (paper.status === 'published') {
         const existing = await releaseRepo.findOne({ where: { paperId: String(paperId) }, order: { versionNo: 'DESC' } });
-        if (existing) return { releaseId: String(existing.id) };
+        if (existing) return { releaseId: String(existing.id), poolScope: existing.poolScope ?? 'category' };
       }
       if (paper.status !== 'draft') throw Errors.paperReleaseConflict('只有草稿试卷可以发布');
       if (paper.businessScope !== current.businessScope || paper.mode !== current.mode
+        || (paper.poolScope ?? 'category') !== currentPool.poolScope
         || String(paper.categoryId || '') !== String(current.categoryId || '')) {
         throw Errors.paperReleaseConflict('试卷类别或组卷模式已变化，请刷新后重试');
       }
-      if (paper.businessScope === 'training' && !paper.categoryId) {
-        throw Errors.paperReleaseConflict('试卷培训类别已变化，请刷新后重试');
-      }
-
-        const learning = paper.businessScope === 'training' ? normalizePaperLearning(paper) : null;
-        if (learning) await assertPaperLearningCourses(manager, String(paper.categoryId), learning.courseIds);
+      const poolConfig = paperPoolConfig(paper);
+      const learning = paper.businessScope === 'training' ? normalizePaperLearning(paper) : null;
+      if (learning) await assertPaperLearningCourses(manager, poolConfig.categoryId, learning.courseIds);
 
       const frozen = paper.businessScope === 'regulation'
         ? await this.regulationFixedPool(manager, paper)
@@ -456,6 +464,7 @@ export class PaperReleaseService implements OnModuleInit {
         versionNo: Number(previous?.versionNo || 0) + 1,
         businessScope: paper.businessScope,
         mode: paper.mode,
+        poolScope: poolConfig.poolScope,
         categoryId: paper.categoryId ? String(paper.categoryId) : null,
         requiresLearning: learning ? learning.requiresLearning : Number(paper.requiresLearning || 0),
         requiredLearningMinutes: learning?.requiredLearningMinutes ?? null,
@@ -482,7 +491,7 @@ export class PaperReleaseService implements OnModuleInit {
         paper.updatedAt = new Date();
       }
       await paperRepo.save(paper);
-      return { releaseId: String(release.id) };
+      return { releaseId: String(release.id), poolScope: poolConfig.poolScope };
     });
     this.audit.log({
       actor_id: Number(actorId), actor_name: String(actorId), action: 'paper.release.publish',
@@ -527,6 +536,7 @@ export class PaperReleaseService implements OnModuleInit {
     const base = {
       id: String(release.id),
       paperId: String(release.paperId),
+      poolScope: release.poolScope ?? 'category',
       rule: deepClone(release.ruleSnapshot),
       requiresLearning: Boolean(release.requiresLearning),
       requiredLearningMinutes: release.requiredLearningMinutes ?? null,
@@ -546,10 +556,11 @@ export class PaperReleaseService implements OnModuleInit {
         })),
       };
     }
-    if (!release.categoryId) throw Errors.paperReleaseConflict('培训试卷发布版本缺少培训类别');
+    if ((release.poolScope ?? 'category') === 'category' && !release.categoryId) throw Errors.paperReleaseConflict('培训试卷发布版本缺少培训类别');
+    const poolConfig = paperPoolConfig(release);
     return {
       ...base,
-      categoryId: String(release.categoryId),
+      categoryId: poolConfig.categoryId,
       businessScope: 'training',
       mode: release.mode as PaperMode,
       pool: rows.map((row) => ({ ...deepClone(row.snapshotJson as QuestionVersionSnapshot), scoreCents: Number(row.scoreCents) })),

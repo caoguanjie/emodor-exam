@@ -10,6 +10,7 @@ export type LearnerSource = 'institution' | 'external';
 export type Difficulty = 'easy' | 'medium' | 'hard';
 export type ExamDifficulty = Difficulty | 'mixed' | 'unknown';
 export type QuestionType = 'single' | 'multiple' | 'judgment';
+export type PoolScope = 'category' | 'public';
 
 export interface Page<T> {
   items: T[];
@@ -162,6 +163,8 @@ export interface LearnerExamSummary extends LearnerExamMetadata {
   paper_id: Id;
   title: string;
   mode: string;
+  /** Old consumers/fixtures may omit this; the read-time default is category. */
+  pool_scope?: PoolScope;
   status: string;
   source: LearnerSource | null;
   category_id: Id | null;
@@ -228,6 +231,7 @@ export interface TrainingExamOverviewRow {
   paper_id: Id;
   title: string;
   category_id: Id | null;
+  pool_scope?: PoolScope;
   category_name: string | null;
   status: string;
   release_id: Id | null;
@@ -272,6 +276,7 @@ export interface TrainingExamSummary {
     paper_id: Id;
     title: string;
     category_id: Id | null;
+    pool_scope?: PoolScope;
     mode: 'fixed' | 'random';
     total_score: number | null;
     duration_minutes: number | null;
@@ -307,7 +312,7 @@ export interface RankRow {
 }
 
 export interface TrainingStatisticsOptions {
-  papers: Array<{ id: Id; title: string; category_id: Id | null; status: string }>;
+  papers: Array<{ id: Id; title: string; category_id: Id | null; pool_scope?: PoolScope; status: string }>;
   categories: Array<{ id: Id; name: string }>;
 }
 

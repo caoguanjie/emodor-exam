@@ -218,22 +218,29 @@ describe('basic paper updates preserve the current question list', () => {
     expect(f.papers.get(created.id)).toEqual(beforePaper);
     expect(await f.paperRepo.findOne.mock.results.at(-1)!.value).toEqual(beforePaper);
     expect(f.links).toEqual(beforeLinks);
-    expect(f.paperQuestionRepo.existsBy).toHaveBeenCalledWith({ paperId: created.id });
+    if (patch.category_id) expect(f.paperQuestionRepo.existsBy).toHaveBeenCalledWith({ paperId: created.id });
+    else expect(f.paperQuestionRepo.existsBy).not.toHaveBeenCalled();
     expect(f.paperRepo.save).not.toHaveBeenCalled();
     expect(f.paperQuestionRepo.delete).not.toHaveBeenCalled();
     expect(f.audit.log).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { category_id: '8' },
-    { mode: 'random', rules: [{ type: 'single', count: 1, score_cents: 10000 }] },
-  ])('allows a basic category/mode change while the locked paper is empty: %j', async (patch) => {
+  it('allows a category change while the locked category paper is empty', async () => {
     const f = fixture();
     const created = await f.service.createTraining(CREATE, CREATOR, null);
-    const updated = await f.service.updateTraining(created.id, { ...patch, preserve_questions: true } as UpdateTrainingPaperDto, UPDATER, null);
-    expect(updated).toMatchObject(patch.category_id ? { category_id: '8' } : { mode: 'random' });
+    const updated = await f.service.updateTraining(created.id, { category_id: '8', preserve_questions: true }, UPDATER, null);
+    expect(updated).toMatchObject({ category_id: '8', mode: 'fixed' });
     expect(f.paperQuestionRepo.existsBy).toHaveBeenCalledWith({ paperId: created.id });
     expect(f.links).toEqual([]);
+  });
+
+  it('rejects a mode conversion even when the existing draft has no questions', async () => {
+    const f = fixture();
+    const created = await f.service.createTraining(CREATE, CREATOR, null);
+    await expect(f.service.updateTraining(created.id, {
+      mode: 'random', rules: [{ type: 'single', count: 1, score_cents: 10000 }], preserve_questions: true,
+    }, UPDATER, null)).rejects.toMatchObject({ code: 40970 });
+    expect(f.papers.get(created.id).mode).toBe('fixed');
   });
 
   it('allows basic title edits on a populated paper without clearing its question list', async () => {

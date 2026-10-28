@@ -34,12 +34,12 @@ export function normalizePaperRemark(value: string | null | undefined): string |
   return value.trim() || null;
 }
 
-export async function assertPaperLearningCourses(manager: EntityManager, categoryId: string, courseIds: string[]): Promise<void> {
+export async function assertPaperLearningCourses(manager: EntityManager, categoryId: string | null, courseIds: string[]): Promise<void> {
   if (!courseIds.length) return;
   const rows = await manager.getRepository(TrainingCourse).findBy({ id: In(courseIds) });
   if (rows.length !== courseIds.length
-    || rows.some(row => String(row.categoryId) !== categoryId || row.status !== 'published')) {
-    throw Errors.paperRuleInvalid('考前学习课程必须全部属于试卷培训类别且已上架');
+    || rows.some(row => (categoryId !== null && String(row.categoryId) !== categoryId) || row.status !== 'published')) {
+    throw Errors.paperRuleInvalid(categoryId === null ? '考前学习课程必须全部已上架' : '考前学习课程必须全部属于试卷培训类别且已上架');
   }
 }
 
