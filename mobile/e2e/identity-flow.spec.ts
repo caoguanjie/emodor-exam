@@ -135,10 +135,10 @@ test('leaving during an upload discards its late response and releases the unuse
   await finish!(); await expect.poll(() => record.deleted).toContain('late-face')
   await page.getByText('实名认证', { exact: true }).click(); await expect(page.getByText('已上传 · 重新拍摄', { exact: true })).toHaveCount(0)
 })
-test('large synthetic camera material is reduced to a 1600-pixel local preview', async ({ page }) => {
+test('48MP synthetic camera material is reduced to a 1600-pixel local preview', async ({ page }) => {
   await setup(page); await page.goto('/#/pages/identity/index')
   await expect(page.getByText('照片仅用于本人身份核验，请确保清晰。', { exact: true })).toBeVisible()
-  const data = await page.evaluate(() => { const canvas = document.createElement('canvas'); canvas.width = 2400; canvas.height = 1800; canvas.getContext('2d')!.fillRect(0, 0, 2400, 1800); return canvas.toDataURL('image/png').split(',')[1] })
+  const data = await page.evaluate(() => { const canvas = document.createElement('canvas'); canvas.width = 8000; canvas.height = 6000; canvas.getContext('2d')!.fillRect(0, 0, 8000, 6000); const data = canvas.toDataURL('image/png').split(',')[1]; canvas.width = 0; canvas.height = 0; return data })
   await page.getByRole('button', { name: '本人正脸照片', exact: true }).click()
   const chooser = page.waitForEvent('filechooser'); await page.locator('#identity-live-face').click()
   const input = await chooser; expect(await input.element().getAttribute('capture')).toBe('camera')

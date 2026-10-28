@@ -61,6 +61,42 @@ test('proxy avatar upload works without Web Crypto and binds only when saving th
   await expect.poll(() => record.savedAvatar).toBe('92')
 })
 
+test('uploads a mislabeled JPEG whose dimensions follow more than one MiB of metadata', async ({ page }) => {
+  const record = await setup(page, 'proxy')
+  await page.goto('/mobile/#/pages/profile/info')
+  const encoded = await page.evaluate(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 2400; canvas.height = 1800
+    canvas.getContext('2d')!.fillRect(0, 0, canvas.width, canvas.height)
+    const encoded = canvas.toDataURL('image/jpeg').split(',')[1]
+    canvas.width = 0; canvas.height = 0
+    return encoded
+  })
+  const photo = Buffer.from(encoded, 'base64'), segment = Buffer.alloc(65537)
+  segment.set([0xff, 0xe2, 0xff, 0xff])
+  const buffer = Buffer.concat([photo.subarray(0, 2), ...Array.from({ length: 17 }, () => segment), photo.subarray(2)])
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: '更换头像', exact: true }).click()
+  await (await chooser).setFiles({ name: 'gallery-photo.png', mimeType: 'image/png', buffer })
+  await expect(page.getByText('头像已选择，保存后生效', { exact: true })).toBeVisible()
+  expect(record.uploads).toBe(1)
+  await page.getByText('保存资料', { exact: true }).click()
+  await expect.poll(() => record.savedAvatar).toBe('92')
+})
+
+test('uploads a supplied original avatar sample', async ({ page }) => {
+  test.skip(!process.env.AVATAR_REPRO_IMAGE, 'Set AVATAR_REPRO_IMAGE to a local original photograph')
+  const record = await setup(page, 'proxy')
+  await page.goto('/mobile/#/pages/profile/info')
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: '更换头像', exact: true }).click()
+  await (await chooser).setFiles(process.env.AVATAR_REPRO_IMAGE!)
+  await expect(page.getByText('头像已选择，保存后生效', { exact: true })).toBeVisible()
+  expect(record.uploads).toBe(1)
+  await page.getByText('保存资料', { exact: true }).click()
+  await expect.poll(() => record.savedAvatar).toBe('92')
+})
+
 test('a browser COS network rejection falls back once without completing the failed direct session', async ({ page }) => {
   const record = await setup(page, 'direct')
   await chooseAvatar(page)
