@@ -118,11 +118,14 @@ export const useExamStore = defineStore('mobile-exam', () => {
       throw error
     }
   }
-  async function start(paper: string) {
-    const epoch = session.sessionEpoch
-    try { await open(() => startExam(paper)) }
+  async function start(paper: string, expectedReleaseId?: string) {
+    const epoch = session.sessionEpoch, current = revision + 1
+    try { await open(() => startExam(paper, expectedReleaseId)) }
     catch (error) {
-      if (epoch === session.sessionEpoch && error instanceof ApiError && error.code === 40901 && (error.data as { reason_code?: string } | null)?.reason_code === 'LEARNING_REQUIRED') {
+      if (same(current, epoch) && error instanceof ApiError && error.code === 40970) {
+        loadError.value = '模拟考试配置已更新，请确认后再开始'
+        try { await loadSummary(paper) } catch { /* Stale instructions stay cleared until an explicit refresh succeeds. */ }
+      } else if (same(current, epoch) && error instanceof ApiError && error.code === 40901 && (error.data as { reason_code?: string } | null)?.reason_code === 'LEARNING_REQUIRED') {
         try { await loadSummary(paper) } catch { /* The original rejection and refresh retry remain visible. */ }
       }
       throw error

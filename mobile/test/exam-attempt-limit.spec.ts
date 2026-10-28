@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ExamListItem } from '../src/types/exam'
-import { examEntry } from '../src/utils/exam-summary'
+import { examAttemptsLabel, examEntry } from '../src/utils/exam-summary'
 
 const paper: ExamListItem = {
   paper_id: '901', title: '本人随机考试', mode: 'random', status: 'published', source: 'external',
@@ -34,5 +34,19 @@ describe('exam attempt quota entry', () => {
 
   it('does not invent a limit for an unknown historical snapshot', () => {
     expect(examEntry({ ...paper, attempts_used: 8, max_attempts: null, attempts_remaining: null }).kind).toBe('instructions')
+  })
+
+  it('keeps practice available after 100 attempts and displays its explicit unlimited meaning', () => {
+    const practice = { ...paper, exam_purpose: 'practice' as const, attempt_limit_kind: 'unlimited' as const, attempts_used: 100, max_attempts: null, attempts_remaining: null }
+    expect(examEntry(practice).kind).toBe('instructions')
+    expect(examAttemptsLabel(practice)).toBe('不限次数')
+    expect(examEntry({ ...practice, active_record_id: '81' }).kind).toBe('resume')
+  })
+
+  it('labels an unknown formal limit without granting unlimited meaning', () => {
+    const unknown = { ...paper, exam_purpose: 'formal' as const, attempt_limit_kind: 'unknown' as const, attempts_used: 8, max_attempts: null, attempts_remaining: null }
+    expect(examAttemptsLabel(unknown)).toBe('已用 8 次 · 次数上限待确认')
+    const inconsistent = { ...unknown, attempt_limit_kind: 'unlimited' as const }
+    expect(examAttemptsLabel(inconsistent)).not.toContain('不限')
   })
 })

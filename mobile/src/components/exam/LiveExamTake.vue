@@ -6,6 +6,7 @@ import AnswerCard from './AnswerCard.vue'
 import ExamTakeHeader from './ExamTakeHeader.vue'
 import { useExamStore } from '@/stores/exam'
 import { useSessionStore } from '@/stores/session'
+import { examPurposeLabel } from '@/types/exam'
 import { saveExamEntryIntent } from '@/utils/exam-entry-intent'
 import { protectExamNavigation } from '@/platform/navigation'
 import { nativeNavigationStyle } from '@/platform/native-layout'
@@ -44,7 +45,7 @@ async function query() { try { await store.queryStatus() } catch { /* Error rema
 defineExpose({ show, hide, dispose, back })
 </script>
 <template>
-  <view class="take-page" :style="nativeStyle"><ExamTakeHeader :remaining-seconds="store.remaining" :answered="store.answered" :total="store.questions.length" :saved-label="savedLabel" :draft-error="!!store.draftError" :disabled="store.locked" @exit="dialog = 'exit'" @submit="submit" />
+  <view class="take-page" :style="nativeStyle"><ExamTakeHeader :title="store.attempt ? examPurposeLabel(store.attempt) : '在线考试'" :remaining-seconds="store.remaining" :answered="store.answered" :total="store.questions.length" :saved-label="savedLabel" :draft-error="!!store.draftError" :disabled="store.locked" @exit="dialog = 'exit'" @submit="submit" />
     <view class="take-body"><text v-if="store.phase === 'loading'">题目加载中…</text><EmptyState v-else-if="store.loadError || !item" :title="store.identityReason ? '实名认证' : '题目加载失败'" :description="store.loadError || '请联网从考试中心进入本次考试。'"><wd-button v-if="store.identityReason" @click="identity">{{ store.identityReason === 'IDENTITY_PENDING' ? '查看实名状态' : '去实名认证' }}</wd-button><wd-button v-else @click="reload">重新加载</wd-button></EmptyState><template v-else><text v-if="store.draftRestored" class="take-notice">已恢复本人本机草稿，考试截止时间不变</text><text v-if="store.draftError" class="take-notice danger" role="alert" @click="store.persistDraft">{{ store.draftError }} · 点击重试</text><QuestionView :item="item" :number="store.currentIndex + 1" :total="store.items.length" :selected="store.answers[item.id] || []" :disabled="store.locked" :assets="store.assets[item.id] || {}" @retry-image="store.loadItemMedia(item.id)" @select="store.choose(item.id, $event)" /><view v-if="store.mediaErrors[item.id]" class="take-notice danger"><text>题目图片加载失败</text><text role="button" @click="store.loadItemMedia(item.id)">重试图片</text></view></template></view>
     <view v-if="item" class="take-footer">
       <wd-button variant="plain" type="info" round :disabled="store.locked || store.currentIndex === 0" @click="store.jump(store.currentIndex - 1)"><view class="take-footer__button-content"><image class="take-footer__arrow" src="/static/icons/pen-gemini/exam-chevron-left.svg" mode="aspectFit" aria-hidden="true" /><text>上一题</text></view></wd-button>

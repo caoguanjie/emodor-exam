@@ -5,14 +5,16 @@ import AppPage from '@/components/common/AppPage.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { useExamStore } from '@/stores/exam'
+import { ApiError } from '@/api/client'
 import { examAttemptsLabel, examNumber, examEntry } from '@/utils/exam-summary'
-import { questionTypeLabels } from '@/types/exam'
+import { examPurposeLabel, questionTypeLabels } from '@/types/exam'
 import { useSessionStore } from '@/stores/session'
 import { useLearnerStore } from '@/stores/learner'
 import { useIdentityStore } from '@/stores/identity'
 import { needsLearnerProfile } from '@/utils/learner-onboarding'
 import { saveExamEntryIntent } from '@/utils/exam-entry-intent'
 const props = defineProps<{ paperId: string }>(), store = useExamStore(), starting = ref(false), actionError = ref('')
+const releaseUpdated = ref(false)
 const session = useSessionStore(), learner = useLearnerStore(), identityStore = useIdentityStore()
 let active = true, pageRevision = 0
 function deactivate() { active = false; pageRevision++ }
@@ -36,7 +38,7 @@ const entry = computed(() => paper.value ? examEntry(paper.value) : null)
 const questionTypes = computed(() => paper.value?.question_types?.filter(item => item.count > 0) ?? [])
 const rules = ['考试开始后计时不会暂停，刷新、退出或切后台均不延长截止时间。', '答案仅保存为本人本机草稿，截止前可恢复原次作答且截止时间不变；刷新时需联网获取题目。', '请提前交卷，确认交卷成功后再退出。时间到了不会自动交卷，未成功交卷不计成绩；交卷成功后不能修改答案。']
 async function reload() {
-  actionError.value = ''
+  actionError.value = ''; releaseUpdated.value = false
   if (!props.paperId) return
   try { await store.loadSummary(props.paperId) } catch { /* Store exposes retryable detail errors. */ }
 }
@@ -48,7 +50,8 @@ async function start() {
   if (starting.value || store.summaryLoading || !paper.value) return
   if (entry.value?.kind !== 'instructions') { if (entry.value) uni.redirectTo({ url: entry.value.url }); return }
   if (needsLearning.value) { await reload(); return }
-  starting.value = true; actionError.value = ''
+  const paperId = props.paperId, expectedReleaseId = paper.value.release_id ?? undefined
+  starting.value = true; actionError.value = ''; releaseUpdated.value = false
   const epoch = session.sessionEpoch, current = pageRevision
   const stillHere = () => active && epoch === session.sessionEpoch && current === pageRevision
   try {
@@ -63,11 +66,11 @@ async function start() {
     if (!stillHere()) return
     if (identityStore.loadError || !identityStore.authority) throw new Error(identityStore.loadError || '实名状态读取失败，请重试')
     if (!identityStore.verified) { identity(); return }
-    await store.start(props.paperId)
+    await store.start(paperId, expectedReleaseId)
     if (!stillHere()) return
     const attempt = store.attempt
     if (attempt) uni.redirectTo({ url: `/pages/exam/${attempt.status === 'in_progress' ? 'take' : 'result'}?record_id=${encodeURIComponent(attempt.record_id)}` })
-  } catch (error) { if (stillHere()) actionError.value = store.loadError || (error instanceof Error ? error.message : '暂时无法开始考试，请重试') }
+  } catch (error) { if (stillHere()) { releaseUpdated.value = error instanceof ApiError && error.code === 40970; actionError.value = store.loadError || (error instanceof Error ? error.message : '暂时无法开始考试，请重试') } }
   finally { starting.value = false }
 }
 function identity() {
@@ -84,7 +87,8 @@ const actionLabel = computed(() => entry.value && entry.value.kind !== 'instruct
       <view v-if="store.summaryLoading" class="paper-loading">考试信息加载中…</view>
       <EmptyState v-else-if="!paperId || store.summaryError || !paper" title="考试信息加载失败" :description="store.summaryError || '未找到考试，请从考试中心重新进入。'"><wd-button v-if="paperId" @click="reload">重新加载</wd-button></EmptyState>
       <template v-else>
-        <view class="paper-intro"><text class="paper-intro__title">{{ paper.title }}</text><text v-if="examAttemptsLabel(paper)" class="paper-intro__attempts">{{ examAttemptsLabel(paper) }}</text></view>
+        <view class="paper-intro"><text class="paper-intro__purpose">{{ examPurposeLabel(paper) }}</text><text class="paper-intro__title">{{ paper.title }}</text><text v-if="examAttemptsLabel(paper)" class="paper-intro__attempts">{{ examAttemptsLabel(paper) }}</text></view>
+        <text v-if="releaseUpdated && actionError" class="paper-update-notice" role="alert">{{ actionError }}</text>
         <view class="paper-stats">
           <view class="paper-stat"><view class="paper-stat__value"><text class="paper-stat__number">{{ examNumber(paper.duration_minutes) }}</text><text class="paper-stat__unit">分钟</text></view><text class="paper-stat__label">时长</text></view>
           <view class="paper-stat"><view class="paper-stat__value"><text class="paper-stat__number">{{ examNumber(paper.question_count) }}</text><text class="paper-stat__unit">道</text></view><text class="paper-stat__label">题量</text></view>
@@ -113,7 +117,7 @@ const actionLabel = computed(() => entry.value && entry.value.kind !== 'instruct
           <text v-else class="paper-composition__unknown">题型信息暂不可用</text>
         </view>
         <view class="paper-section paper-rules"><text class="paper-section__title">考试规则</text><view v-for="(rule, index) in rules" :key="rule" class="paper-rule"><text>{{ String(index + 1).padStart(2, '0') }}</text><text>{{ rule }}</text></view></view>
-        <EmptyState v-if="actionError" :title="store.identityReason ? '实名认证' : '暂时无法开始考试'" :description="actionError"><wd-button v-if="store.identityReason" @click="identity">{{ store.identityReason === 'IDENTITY_PENDING' ? '查看实名状态' : '去实名认证' }}</wd-button></EmptyState>
+        <EmptyState v-if="actionError && !releaseUpdated" :title="store.identityReason ? '实名认证' : '暂时无法开始考试'" :description="actionError"><wd-button v-if="store.identityReason" @click="identity">{{ store.identityReason === 'IDENTITY_PENDING' ? '查看实名状态' : '去实名认证' }}</wd-button></EmptyState>
       </template>
     </view>
     <template #footer><view class="paper-footer"><wd-button block custom-style="font-weight:600" :disabled="!paper || store.summaryLoading" :loading="starting" @click="start">{{ actionLabel }}</wd-button><text>{{ entry?.kind === 'resume' ? '继续原次考试，截止时间不会延长' : entry?.kind === 'records' ? paper?.attempts_remaining === 0 ? '考试次数已用完，可查看本试卷最近一次考试结果' : '本试卷已结束，可查看本人考试记录' : needsLearning ? '学习达标后再开始，不消耗考试次数' : '开始后计时不会暂停' }}</text></view></template>
@@ -123,8 +127,10 @@ const actionLabel = computed(() => entry.value && entry.value.kind !== 'instruct
 .paper-body { display:flex; flex-direction:column; gap:16px; padding:4px 20px calc(117px + var(--app-safe-area-bottom)); }
 .paper-loading { padding:32px 0; text-align:center; color:var(--app-color-text-muted); font-size:13px; }
 .paper-intro { display:flex; flex-direction:column; gap:6px; }
+.paper-intro__purpose { color:var(--app-color-text-secondary); font-size:13px; font-weight:600; }
 .paper-intro__title { display:block; font-size:22px; line-height:1.3; font-weight:700; overflow-wrap:break-word; }
 .paper-intro__attempts { color:var(--app-color-text-secondary); font-size:14px; line-height:1.5; }
+.paper-update-notice { display:block; padding:12px 14px; border-left:3px solid var(--app-color-primary); border-radius:var(--app-radius-sm); color:var(--app-color-primary); background:var(--app-color-primary-soft); font-size:13px; line-height:1.6; }
 .paper-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); padding:14px 0; background:linear-gradient(120deg,var(--app-color-primary),var(--app-color-primary-deep)); border-radius:18px; color:var(--app-color-surface); }
 .paper-stat { flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; gap:4px; border-right:1px solid rgba(255,255,255,.2); }
 .paper-stat:last-child { border-right:0; }

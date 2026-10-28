@@ -4,6 +4,7 @@ import AppTopBar from '@/components/common/AppTopBar.vue'
 import ExamTimer from './ExamTimer.vue'
 
 defineProps<{
+  title?: string
   remainingSeconds: number
   answered: number
   total: number
@@ -17,7 +18,7 @@ const emit = defineEmits<{ exit: []; submit: [] }>()
 
 <template>
   <view class="take-header">
-    <AppTopBar title="在线考试" :back="false">
+    <AppTopBar :title="title || '在线考试'" :back="false">
       <template #left>
         <view class="take-header__exit" role="button" aria-label="退出答题" @click="emit('exit')">
           <AppIcon name="chevron-left" :size="24" />
