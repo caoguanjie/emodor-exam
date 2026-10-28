@@ -1,4 +1,4 @@
-// EmodorRuleExam 端到端测试启动器。
+// emodor-training-platform 端到端测试启动器。
 // 默认只接受 ruleexam_test_* 目标库；--ephemeral 会创建本次运行专属的
 // 本地 MySQL/Redis，避免任何开发服务连接。口令/密钥只存在运行期环境。
 //

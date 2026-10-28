@@ -1,4 +1,4 @@
-// EmodorRuleExam 端到端冒烟测试：覆盖 README 1.1 全闭环
+// emodor-training-platform 端到端冒烟测试：覆盖 README 1.1 全闭环
 // 资料上传、AI 配置、题库启停 → 自动评分；参考题 AI 导入由专门套件验证。
 // 运行前提：API 服务已启动（见 tests/run-e2e.sh）；管理员初始口令经环境变量注入（不落源码）。
 //
