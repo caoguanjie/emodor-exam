@@ -40,7 +40,7 @@ async function bootstrap() {
   mkdirSync(config.logDir, { recursive: true });
 
   await app.listen(config.port, '0.0.0.0');
-  console.log(`[EmodorRuleExam] api listening on :${config.port} (env=${config.env}, TZ=${config.tz})`);
+  console.log(`[emodor-training-platform] api listening on :${config.port} (env=${config.env}, TZ=${config.tz})`);
 
   // 首次部署种子（幂等）：根部门 + 超级管理员（口令经 ADMIN_INITIAL_PASSWORD 注入）
   const { DataSource } = await import('typeorm');
