@@ -1,5 +1,7 @@
 # 制度学习及考试系统（EmodorRuleExam）设计方案 · 总览索引
 
+> **公共随机考试增量（2026-10-28，实施中）**：按[设计](../superpowers/specs/2026-10-28-shared-random-exam-design.md)与[实施方案](../superpowers/plans/2026-10-28-shared-random-exam.md)执行。一套公共题库、一份来源分难度的随机卷；工种可选，不再控制考试参与。默认100道100分、每人每卷总共3次，均由试卷配置；成功开始计次、超时计次不评分、已及格仍可额度内重考。二维码仅打开H5考试Tab，直接进入小程序Tab等价。此口径覆盖下文工种必填、类别匹配开考、仅未通过才能重考等历史描述；既有个人归属与历史发布不改写。实现/隔离验收与真实供应商、手机、生产部署分开记录。
+
 > **COS 增量（实施中）**：按[已确认设计](../superpowers/specs/2026-10-26-cos-media-integration-design.md)与[Astra 实施计划](../superpowers/plans/2026-10-26-cos-media-integration.md)接入图片/视频存储、上传续传及存量迁移；PDF/DOCX 原件保留本地。共桶/共享后端密钥、独立数据库、按行双存储和申请/续签时授权的COS短链。实际验证状态见[验收记录](../../review/2026-10-26-cos-media-acceptance.md)，不表示真云或数千并发已通过。
 
 > **人工录题 Tiptap 融合（2026-10-26 最新纠正）**：按[现有新增/修订试题弹窗融合设计](../superpowers/specs/2026-10-26-manual-question-tiptap-design.md)，在当前弹窗中集成 Tiptap 题干、选项、答案设置和解析，提供选项排序、受控图片及保存并新增。下文“保留原表单”只表示保留入口与保存链路，不再表示保留文本框；Tiptap 不再仅用于试卷设计器。分值、考点、资料来源均不进入人工题表单。实现和验收按[实施计划](../superpowers/plans/2026-10-26-manual-question-tiptap.md)登记。
