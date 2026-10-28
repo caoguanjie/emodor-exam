@@ -1,4 +1,4 @@
-// EmodorRuleExam 种子数据脚本：根部门（id=1）+ 超级管理员（id=1，username=admin）
+// emodor-training-platform 种子数据脚本：根部门（id=1）+ 超级管理员（id=1，username=admin）
 // 依据 docs/design/03-数据库设计.md 第 7 章「初始化数据」口径。
 // 安全约束：初始口令一律经环境变量 ADMIN_INITIAL_PASSWORD 注入（运行期生成 bcrypt 哈希），
 // 本脚本与库中均不落明文口令；首次登录由应用侧 last_login_at IS NULL 强制改密。
