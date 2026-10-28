@@ -1,4 +1,4 @@
-# AGENTS.md — EmodorRuleExam 工作区指引
+# AGENTS.md — emodor-training-platform 工作区指引
 
 培训机构管理与考试系统：资料上传解析 → AI 出题/人工导题 → 预览确认并启用 → 组卷发布 → 自动评分 → 记录与统计；课程视频学习独立保留。题库不配置分值，分值归属试卷；停用与逻辑删除不影响历史冻结卷和考试。
 **`docs/design/`（8 册）是实现基准**：改数据库/API/流程前先读对应分册，改动后保持文档、`database/init.sql`、`server/src/entities/` 三方一致。

@@ -1,4 +1,4 @@
-# EmodorRuleExam · 安全培训考试系统
+# emodor-training-platform · 安全培训考试系统
 
 当前仓库面向单家培训机构，主链路为「出题资料上传解析 → AI 出题 → 题目审核 → 三类客观题题库 → 组卷发布 → 自动评分 → 考试记录 → 培训统计」。[docs/design](docs/design/) 是设计基准，本轮培训瘦身边界见[培训计划](docs/superpowers/plans/2026-10-22-training-demo-slimming.md)，学员 H5/微信兼容实现见[学员端计划](docs/superpowers/plans/2026-10-22-learner-mobile-h5.md)。独立制度管理、员工管理、部门管理、图片作答题、人工阅卷与实时监控/切屏采集已经取消；旧制度阅读、旧固定卷执行和历史记录所需后端兼容仍保留，但没有对应管理端 CRUD 入口。源码和自动回归不等于生产升级、真实手机、真实供应商或真实弱网已经验收。
 
