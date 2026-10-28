@@ -26,9 +26,11 @@ export const useCourseStore = defineStore('mobile-course', () => {
   const chapters = computed(() => (detail.value?.chapters || []).map(chapter => ({ id: chapter.id, title: chapter.title, lessons: chapter.lessons.map(lesson => {
     const saved = lessonProgress.value[detail.value!.id]?.[lesson.id]
     const progress = saved?.version_id === lesson.current_version?.version_id ? saved : undefined
-    const seconds = Math.floor((progress?.confirmed_position_ms || 0) / 1000)
-    const position = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
-    return { id: lesson.id, title: lesson.title, completed: progress?.completed === true, progressText: progress ? progress.completed ? '已完成' : seconds > 0 ? `已学 ${position}` : '未开始' : '视频' }
+    const coverage = progress?.coverage_ms, duration = progress?.duration_ms
+    const percent = typeof coverage === 'number' && Number.isFinite(coverage) && coverage >= 0
+      && typeof duration === 'number' && Number.isFinite(duration) && duration > 0
+      ? Math.max(0, Math.min(99, Math.floor(coverage / duration * 100))) : 0
+    return { id: lesson.id, title: lesson.title, completed: progress?.completed === true, progressText: progress ? progress.completed ? '已完成' : percent > 0 ? `已学 ${percent}%` : '0%' : '视频' }
   }) })))
 
   watch(() => session.sessionEpoch, () => {

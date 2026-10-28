@@ -43,7 +43,12 @@ onUnload(invalidate)
 .terms-paper--rich :deep(.rich-node--heading) { color: var(--app-color-text); font-size: 14px !important; font-weight: 600 !important; line-height: 1.8; }
 .terms-paper--rich :deep(.readonly-content > .rich-node--heading) { margin: 20px 0 8px; }
 .terms-paper--rich :deep(.readonly-content > .rich-node--heading:first-child) { margin-top: 0; }
-.terms-paper--rich :deep(.readonly-content > .rich-node--heading + *) { margin-top: 0; }
+.terms-paper--rich :deep(.readonly-content > .rich-node--heading + .rich-node),
+.terms-paper--rich :deep(.readonly-content > .rich-node--heading + .rich-node__table-scroll),
+.terms-paper--rich :deep(.readonly-content > .rich-node--heading + .rich-node__rule),
+.terms-paper--rich :deep(.readonly-content > .rich-node--heading + .rich-node__list-item),
+.terms-paper--rich :deep(.readonly-content > .rich-node--heading + .readonly-content__image),
+.terms-paper--rich :deep(.readonly-content > .rich-node--heading + .readonly-content__placeholder) { margin-top: 0; }
 .terms-paper--rich :deep(.readonly-content > .rich-node--paragraph + .rich-node--paragraph) { margin-top: 1.8em; }
 .terms-paper--titled :deep(.readonly-content > .rich-node--heading:first-child) { font-size: 18px !important; line-height: 1.5; text-align: center !important; margin-bottom: 20px; }
 .terms-paper--titled :deep(.readonly-content > .rich-node--heading:first-child + .rich-node--paragraph) { line-height: 1.5; }

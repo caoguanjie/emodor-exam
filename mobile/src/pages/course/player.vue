@@ -26,6 +26,8 @@ const video = createVideoSessionClient({
 const title = computed(() => preview.value ? scenario.value.hasVideo ? '课程文件视频示范课' : '现场隐患排查与整改实训' : course.detail?.title || '课程学习')
 const selectedLesson = computed(() => course.detail?.chapters.flatMap(chapter => chapter.lessons).find(lesson => lesson.id === lessonId.value))
 const chapters = computed(() => preview.value ? scenario.value.hasVideo ? videoChapters : hazardChapters : course.chapters)
+const selectedLessonId = computed(() => preview.value ? scenario.value.hasVideo ? videoChapters[0]?.lessons[0]?.id || '' : '' : lessonId.value)
+const playingLessonId = computed(() => !preview.value && video.state.status === 'playing' ? video.state.lessonId : '')
 onLoad(query => {
   preview.value = isStaticSessionPreview(query); loadScenario(query)
   if (preview.value) return
@@ -57,15 +59,15 @@ const backTarget = computed(() => preview.value ? `/pages/course/detail?scenario
 </script>
 <template>
   <AppPage :title="title" :padded="false" :back-target="backTarget">
-    <template v-if="preview"><VideoPanel :has-video="scenario.hasVideo" /><ChapterList :chapters="chapters" :collapsed-chapters="scenario.collapsedChapters" /></template>
+    <template v-if="preview"><VideoPanel :has-video="scenario.hasVideo" /><ChapterList :chapters="chapters" :collapsed-chapters="scenario.collapsedChapters" :selected-lesson-id="selectedLessonId" /></template>
     <template v-else>
       <view v-if="course.detailLoading" class="player-state">课程加载中…</view>
       <view v-else-if="course.detailError || !selectedLesson" class="player-state"><text>{{ course.detailError || '未找到课程课时' }}</text><wd-button v-if="courseId" size="small" @click="reload">重新加载</wd-button></view>
       <template v-else>
         <VideoPanel :key="`${lessonId}:${video.state.src}`" ref="panel" live :has-video="!!selectedLesson.current_version" :src="video.state.src" :status="video.state.status" :position-ms="video.state.positionMs" :error="video.state.identityReason ? '' : video.state.error" :blocked="!!video.state.identityReason" @request-play="video.play" @native="onNative" @timeupdate="onTimeupdate" @ready="ready" />
-        <view class="player-summary"><text class="player-summary__title">{{ selectedLesson.title }}</text><text v-if="video.state.progress">{{ video.state.progress.completed ? '本课时已完成，可按需再次观看' : '学习进度以服务端确认记录为准' }}</text><template v-if="video.state.identityReason"><text>{{ video.state.error }}</text><wd-button role="button" :aria-label="video.state.identityReason === 'IDENTITY_PENDING' ? '查看实名状态' : '去实名认证'" size="small" @click="identity">{{ video.state.identityReason === 'IDENTITY_PENDING' ? '查看实名状态' : '去实名认证' }}</wd-button></template></view>
+        <view class="player-summary"><text class="player-summary__title">{{ selectedLesson.title }}</text><text v-if="video.state.progress">{{ video.state.progress.completed ? '本课时已完成，可按需再次观看' : '学习进度会自动保存，请保持页面打开并正常播放' }}</text><template v-if="video.state.identityReason"><text>{{ video.state.error }}</text><wd-button role="button" :aria-label="video.state.identityReason === 'IDENTITY_PENDING' ? '查看实名状态' : '去实名认证'" size="small" @click="identity">{{ video.state.identityReason === 'IDENTITY_PENDING' ? '查看实名状态' : '去实名认证' }}</wd-button></template></view>
       </template>
-      <ChapterList v-if="course.detail" :chapters="chapters" @select="selectLesson" />
+      <ChapterList v-if="course.detail" :chapters="chapters" :selected-lesson-id="selectedLessonId" :playing-lesson-id="playingLessonId" @select="selectLesson" />
     </template>
   </AppPage>
 </template>

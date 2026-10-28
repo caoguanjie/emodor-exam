@@ -24,10 +24,26 @@ describe('course module read model', () => {
     install(options => ok(options.url.includes('/progress') ? { required: 2, completed: 1, completion_rate: 0.5, lessons: [{ lesson_id: '62', version_id: '72', confirmed_position_ms: 12000, credited_ms: 9000, coverage_ms: 9000, duration_ms: 120000, completed: false, last_seq: 4 }, { lesson_id: '61', version_id: '71', confirmed_position_ms: 120000, credited_ms: 120000, coverage_ms: 120000, duration_ms: 120000, completed: true, last_seq: 8 }] } : detail))
     const { useCourseStore } = await import('../src/stores/course'); const store = useCourseStore()
     await store.loadDetail(summary.id)
-    expect(store.chapters[0].lessons.map(lesson => ({ id: lesson.id, completed: lesson.completed, text: lesson.progressText }))).toEqual([{ id: '61', completed: true, text: '已完成' }, { id: '62', completed: false, text: '已学 00:12' }])
+    expect(store.chapters[0].lessons.map(lesson => ({ id: lesson.id, completed: lesson.completed, text: lesson.progressText }))).toEqual([{ id: '61', completed: true, text: '已完成' }, { id: '62', completed: false, text: '已学 7%' }])
     await store.loadDetail(summary.id)
     expect(store.lessonProgress[summary.id]['61'].completed).toBe(true)
-    expect(store.chapters[0].lessons[1].progressText).toBe('已学 00:12')
+    expect(store.chapters[0].lessons[1].progressText).toBe('已学 7%')
+  })
+  it.each([
+    { coverage: 0, duration: 120000, completed: false, text: '0%' },
+    { coverage: 30000, duration: 120000, completed: false, text: '已学 25%' },
+    { coverage: 114000, duration: 120000, completed: false, text: '已学 95%' },
+    { coverage: 120000, duration: 120000, completed: false, text: '已学 99%' },
+    { coverage: 114000, duration: 120000, completed: true, text: '已完成' },
+    { coverage: -1, duration: 120000, completed: false, text: '0%' },
+    { coverage: Number.NaN, duration: 120000, completed: false, text: '0%' },
+    { coverage: 120000, duration: 0, completed: false, text: '0%' },
+  ])('uses unique watched coverage for lesson state: $text ($coverage/$duration)', async ({ coverage, duration, completed, text }) => {
+    const detail = { ...summary, description: null, chapters: [{ id: '51', title: '课程目录', sort_order: 1, lessons: [{ id: '61', title: '课时', lesson_type: 'video', required: true, sort_order: 1, current_version: { version_id: '71', asset_id: '91', duration_ms: 120000 } }] }] }
+    install(options => ok(options.url.includes('/progress') ? { required: 1, completed: completed ? 1 : 0, completion_rate: completed ? 1 : 0, lessons: [{ lesson_id: '61', version_id: '71', confirmed_position_ms: 99000, credited_ms: 240000, coverage_ms: coverage, duration_ms: duration, completed, last_seq: 4 }] } : detail))
+    const { useCourseStore } = await import('../src/stores/course'); const store = useCourseStore()
+    await store.loadDetail(summary.id)
+    expect(store.chapters[0].lessons[0].progressText).toBe(text)
   })
   it('keeps authoritative session progress per lesson without deriving course completion locally', async () => {
     install(() => ok(null))
