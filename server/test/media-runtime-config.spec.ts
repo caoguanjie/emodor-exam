@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { randomBytes } from 'node:crypto';
 import { loadConfig } from '../src/config/configuration';
 import { MediaService } from '../src/modules/media/media.service';
 
@@ -28,6 +29,49 @@ describe('media runtime configuration', () => {
     const config = loadConfig();
     const service = new MediaService(null as any, null as any, null as any, config, null as any);
     expect(service.limits()).toMatchObject({ upload_mode: 'proxy', part_size_bytes: 4194304, parallel_limit: 3, upload_session_ttl_seconds: 86400 });
+  });
+
+  it.each(['development', 'test'])('uses the existing COS proxy pipeline by default in %s', (environment) => {
+    vi.stubEnv('NODE_ENV', environment);
+    vi.stubEnv('MEDIA_UPLOAD_MODE', undefined);
+    vi.stubEnv('MEDIA_STORAGE_PROVIDER', 'cos');
+    for (const [name, value] of Object.entries({ COS_BUCKET: 'fixture-1234567890', COS_REGION: 'ap-guangzhou', COS_KEY_PREFIX: 'ruleexam/test/', COS_SECRET_ID: 'unusable-fixture-id', COS_SECRET_KEY: 'unusable-fixture-key' })) vi.stubEnv(name, value);
+    const config = loadConfig();
+    const service = new MediaService(null as any, null as any, null as any, config, null as any, { config: config.cosMedia } as any);
+    expect(config.mediaUpload).toMatchObject({ mode: 'proxy' });
+    expect(service.limits()).toMatchObject({ upload_mode: 'proxy' });
+    expect(config.cosMedia.provider).toBe('cos');
+  });
+
+  it.each(['proxy', 'server', 'backend', 'direct', 'presigned', 'auto'])('validates MEDIA_UPLOAD_MODE=%s independently of storage', (mode) => {
+    vi.stubEnv('NODE_ENV', 'test');
+    vi.stubEnv('MEDIA_STORAGE_PROVIDER', 'local');
+    vi.stubEnv('MEDIA_UPLOAD_MODE', mode);
+    const config = loadConfig();
+    expect(config.mediaUpload).toMatchObject({ mode: 'proxy' });
+  });
+
+  it('rejects an unknown upload mode instead of silently selecting direct transfer', () => {
+    vi.stubEnv('MEDIA_UPLOAD_MODE', 'unknown');
+    expect(() => loadConfig()).toThrow(/MEDIA_UPLOAD_MODE/);
+  });
+
+  it.each([
+    ['production', 'auto', 'direct'], ['production', 'proxy', 'proxy'],
+    ['development', 'direct', 'direct'], ['test', 'presigned', 'direct'],
+    ['production', 'server', 'proxy'], ['production', 'backend', 'proxy'],
+  ])('advertises %s/%s as %s while retaining COS storage', (environment, mode, expected) => {
+    vi.stubEnv('NODE_ENV', environment);
+    vi.stubEnv('MEDIA_UPLOAD_MODE', mode);
+    vi.stubEnv('MEDIA_STORAGE_PROVIDER', 'cos');
+    vi.stubEnv('SMS_PROVIDER', 'disabled'); vi.stubEnv('IDENTITY_PROVIDER', 'disabled');
+    vi.stubEnv('SERVER_DEBUG_LOGIN_ENABLED', 'false');
+    for (const key of ['JWT_SECRET', 'EXAM_SHUFFLE_SECRET', 'APP_ENCRYPTION_KEY', 'DB_PASSWORD', 'IDENTITY_DATA_ENCRYPTION_KEY', 'IDENTITY_FINGERPRINT_SECRET', 'MEDIA_TICKET_SECRET']) vi.stubEnv(key, randomBytes(32).toString('base64'));
+    for (const [name, value] of Object.entries({ COS_BUCKET: 'fixture-1234567890', COS_REGION: 'ap-guangzhou', COS_KEY_PREFIX: 'ruleexam/test/', COS_SECRET_ID: 'unusable-fixture-id', COS_SECRET_KEY: 'unusable-fixture-key' })) vi.stubEnv(name, value);
+    const config = loadConfig();
+    const service = new MediaService(null as any, null as any, null as any, config, null as any, { config: config.cosMedia } as any);
+    expect(service.limits()).toMatchObject({ upload_mode: expected });
+    expect(config.cosMedia.provider).toBe('cos');
   });
 
   it('rejects a partial COS configuration during application startup', () => {

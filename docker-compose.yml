@@ -98,6 +98,7 @@ services:
       LOG_DIR: /app/data/logs
       # 媒体默认沿用 local/proxy；COS 凭据只注入 API 运行期。
       MEDIA_STORAGE_PROVIDER: ${MEDIA_STORAGE_PROVIDER:-local}
+      MEDIA_UPLOAD_MODE: ${MEDIA_UPLOAD_MODE:-auto}
       COS_BUCKET: ${COS_BUCKET:-}
       COS_REGION: ${COS_REGION:-}
       COS_KEY_PREFIX: ${COS_KEY_PREFIX:-ruleexam/dev/}

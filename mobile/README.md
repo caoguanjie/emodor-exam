@@ -38,6 +38,8 @@ node scripts/build.mjs mp-weixin
 
 正式构建统一使用根脚本。MP 输出为 `mobile/dist/build/mp-weixin/`，独立于 PC/H5 的网站 `dist/`。
 
+本地头像上传：后端 `MEDIA_UPLOAD_MODE=auto`（默认）在 development/test 返回中转模式，H5 通过 `/media/upload` 交给后端校验并保存到配置的 COS 或 local；手机局域网 HTTP 不执行直传所需的 Web Crypto 操作。可显式配置 `proxy`（别名 server/backend）或 `direct`（别名 presigned），local 始终中转；修改后手动重启后端。生产 auto + COS 仍直传，需 HTTPS 和匹配的 COS CORS。H5 头像直传的 PUT 若发生网络/CORS 拒绝，可回退一次中转；取消、会话切换、明确 COS HTTP 错误及完成确认异常不回退。该设置不改变 COS 下载短链的跨域要求。
+
 ## 微信开发者工具导入
 
 1. 执行 `node scripts/build.mjs mp-weixin`，在微信开发者工具中导入 `mobile/dist/build/mp-weixin/`。

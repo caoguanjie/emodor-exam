@@ -29,15 +29,29 @@ const error = ref('')
 const avatarFile = ref<PickedMedia | null>(null), avatarDraft = ref(''), avatarBusy = ref(false)
 const avatarPicking = ref(false)
 let pageRevision = 0
-function clearAvatar() { pageRevision++; if (avatarFile.value) releasePickedMedia(avatarFile.value); avatarFile.value = null; avatarDraft.value = ''; avatarBusy.value = false; avatarPicking.value = false }
-onHide(() => { active = false; if (!avatarPicking.value) { pageRevision++; avatarBusy.value = false } })
+let returningFromAvatar = false
+function clearAvatar() { pageRevision++; if (avatarFile.value) releasePickedMedia(avatarFile.value); avatarFile.value = null; avatarDraft.value = ''; avatarBusy.value = false; avatarPicking.value = false; returningFromAvatar = false }
+onHide(() => {
+  active = false
+  // Phone gallery callbacks and hide/show events can arrive in either order.
+  // Keep the whole pick/compress/upload operation alive, not only chooseImage.
+  if (avatarBusy.value) { returningFromAvatar = true; return }
+  pageRevision++
+})
 onUnload(clearAvatar)
 watch(() => session.sessionEpoch, () => { clearAvatar(); loaded.value = false; lastProfile = null; Object.assign(form, { name: '', phone: '', gender: '', birthday: '' }) }, { flush: 'sync' })
 onLoad(query => {
   preview.value = isStaticSessionPreview(query); onboarding.value = query?.onboarding === '1'; loadScenario(query)
   if (preview.value) { Object.assign(form, shellProfile); loaded.value = true }
 })
-onShow(() => { active = true; if (!preview.value && !avatarPicking.value) void loadProfile() })
+onShow(() => {
+  active = true
+  const avatarReturn = returningFromAvatar
+  returningFromAvatar = false
+  // A late return must retain the staged avatar or its upload error rather than
+  // reloading the form. Unload/account changes still invalidate pageRevision.
+  if (!preview.value && !avatarBusy.value && !avatarReturn) void loadProfile()
+})
 const picker = ref('')
 const birthday = ref(new Date(2000, 0, 1).getTime())
 const minBirthday = new Date(1900, 0, 1).getTime()

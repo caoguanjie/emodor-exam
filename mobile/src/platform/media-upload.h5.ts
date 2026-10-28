@@ -8,6 +8,11 @@ export interface UploadResult { asset_id: string; status: 'ready'; duration_ms: 
 interface SessionView { session_id: string; mode: 'simple' | 'multipart'; state: string; result: UploadResult | null }
 interface SimpleGrant { mode: 'simple'; method: 'PUT'; url: string; headers: Record<string, string>; expires_at: string }
 
+/** Only a storage PUT network failure can be retried through the controlled API. */
+export class DirectUploadNetworkError extends ApiError {
+  constructor() { super(-1, '照片直传网络连接失败') }
+}
+
 export async function uploadImageDirect(file: PickedMedia, purpose: 'avatar', providedLimits?: DirectImageLimits): Promise<UploadResult> {
   const session = useSessionStore(), epoch = session.sessionEpoch, controller = new AbortController()
   const stop = watch(() => session.sessionEpoch, () => controller.abort(), { flush: 'sync' })
@@ -46,7 +51,18 @@ export async function uploadImageDirect(file: PickedMedia, purpose: 'avatar', pr
         try { destination = new URL(grant.url) } catch { throw new ApiError(-2, '上传授权地址无效') }
         if (grant.mode !== 'simple' || grant.method !== 'PUT' || destination.protocol !== 'https:' || destination.username || destination.password || destination.hash
           || !grant.headers || typeof grant.headers !== 'object' || Object.entries(grant.headers).some(([key, value]) => /^cookie$/i.test(key) || (/^authorization$/i.test(key) && /^bearer\s/i.test(value)))) throw new ApiError(-2, '上传授权响应无效')
-        const put = await fetch(grant.url, { method: 'PUT', headers: grant.headers, body: blob, credentials: 'omit', redirect: 'error', signal: controller.signal }); same()
+        let put: Response
+        try {
+          put = await fetch(grant.url, { method: 'PUT', headers: grant.headers, body: blob, credentials: 'omit', redirect: 'error', signal: controller.signal })
+        } catch (error) {
+          same()
+          // CORS rejection is exposed as TypeError. Abort and business/API errors
+          // must not create a second upload, especially after switching accounts.
+          if (!controller.signal.aborted && error instanceof TypeError) throw new DirectUploadNetworkError()
+          throw error
+        }
+        same()
+        if (put.status === 0) throw new DirectUploadNetworkError()
         if (put.ok) break
         if (attempt === 0 && [401, 403].includes(put.status)) continue
         throw new ApiError(-1, '照片直传失败，请稍后重试')

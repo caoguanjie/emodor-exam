@@ -19,7 +19,7 @@ const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 
-async function fixture() {
+async function fixture(uploadMode?: 'direct' | 'proxy') {
   const root = await mkdtemp(join(tmpdir(), 'ruleexam-storage-flow-')); roots.push(root);
   const objects = new Map<string, Buffer>();
   const assets = new Map<string, any>();
@@ -56,12 +56,34 @@ async function fixture() {
   const probe = { probe: vi.fn(async () => ({ mimeType: 'image/png', width: 1, height: 1 })) };
   const access = { assertAllowed: vi.fn(async (_actor: string, _permission: string) => {}) };
   const media = new MediaService(assetRepo, references as any, dataSource,
-    { upload: { dir: root }, media: DEFAULT_MEDIA_LIMITS, cosMedia: cosConfig } as any,
+    { upload: { dir: root }, media: DEFAULT_MEDIA_LIMITS, cosMedia: cosConfig, mediaUpload: { mode: uploadMode } } as any,
     probe as any, router, undefined, access as any);
   return { root, media, assets, objects, cos, router, probe, access, manager, assetRepo, references };
 }
 
 describe('media storage integration', () => {
+  it('avatar proxy mode still probes and publishes verified bytes to COS before returning ready', async () => {
+    const f = await fixture('proxy');
+    // This case verifies content publication, independently of POSIX chmod bits
+    // (covered by the original fixture cases and unavailable on Windows).
+    f.cos.putFile.mockImplementation(async (locator, path, mimeType) => {
+      f.objects.set(locator.key, await readFile(path));
+      return { ...(await f.cos.stat(locator)), mimeType };
+    });
+    const bytes = Buffer.from('bounded-avatar-proxy-fixture');
+    expect(f.media.limits()).toMatchObject({ upload_mode: 'proxy' });
+    const { ownerId } = await f.media.assertUploadAllowed({ id: 7, role: 'employee', client: 'mobile' } as any, 'avatar');
+    const result = await f.media.upload('7', 'avatar', { buffer: bytes, originalname: 'avatar.png', mimetype: 'image/png' } as any, ownerId);
+    const asset = f.assets.get(result.assetId);
+    expect(result).toMatchObject({ status: 'ready' });
+    expect(f.probe.probe).toHaveBeenCalledTimes(1);
+    expect(asset).toMatchObject({ ownerId: '7', uploadedBy: '7', storageProvider: 'cos', sha256: hash(bytes), status: 'ready' });
+    expect(asset.storageKey).toMatch(/^ruleexam\/media\//);
+    expect(f.objects.get(asset.storageKey)).toEqual(bytes);
+    expect(f.cos.open).toHaveBeenCalled();
+    expect(await readdir(join(f.root, 'tmp', 'media'))).toEqual([]);
+  });
+
   it.each([
     { cosBucket: 'other-1234567890' }, { cosRegion: 'ap-other' },
     { storageKey: 'ruleexam/dev/media/migration/6/other.png' },

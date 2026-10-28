@@ -154,7 +154,7 @@ export class MediaService {
       probe_timeout_ms: media.probeTimeoutMs,
       allowed_image_types: [...media.allowedImageTypes],
       allowed_video_types: [...media.allowedVideoTypes],
-      upload_mode: this.config.cosMedia?.provider === 'cos' ? 'direct' : 'proxy',
+      upload_mode: this.config.cosMedia?.provider === 'cos' ? (this.config.mediaUpload?.mode ?? 'direct') : 'proxy',
       multipart_threshold_bytes: this.config.mediaUpload?.multipartThresholdBytes ?? 16777216,
       part_size_bytes: this.config.mediaUpload?.partSizeBytes ?? 8388608,
       parallel_limit: this.config.mediaUpload?.parallelLimit ?? 3,

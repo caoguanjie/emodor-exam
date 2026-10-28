@@ -52,6 +52,7 @@ export class AppConfig {
   cosMedia: CosMediaConfig;
   mediaDelivery: { mode: 'proxy' | 'cos-signed'; readUrlTtlSeconds: number; videoUrlTtlSeconds: number };
   mediaUpload: {
+    mode?: 'direct' | 'proxy';
     sessionTtlSeconds: number;
     receiptTtlSeconds: number;
     multipartThresholdBytes: number;
@@ -207,6 +208,10 @@ export function loadConfig(): AppConfig {
     throw new Error('IDENTITY_PROVIDER=tencent 时必须同时启用身份证 OCR 和 FaceID');
   }
   const cosMedia = readCosMediaConfig(process.env);
+  const uploadMode = (process.env.MEDIA_UPLOAD_MODE || 'auto').trim().toLowerCase();
+  if (!['auto', 'direct', 'presigned', 'proxy', 'server', 'backend'].includes(uploadMode)) {
+    throw new Error('MEDIA_UPLOAD_MODE 只支持 auto、direct/presigned 或 proxy/server/backend');
+  }
   const deliveryMode = process.env.MEDIA_DELIVERY_MODE || 'proxy';
   if (deliveryMode !== 'proxy' && deliveryMode !== 'cos-signed') throw new Error('MEDIA_DELIVERY_MODE 只支持 proxy 或 cos-signed');
   if (deliveryMode === 'cos-signed') readCosMediaConfig({ ...process.env, MEDIA_STORAGE_PROVIDER: 'cos' });
@@ -216,6 +221,10 @@ export function loadConfig(): AppConfig {
     videoUrlTtlSeconds: mediaEnvInt('MEDIA_VIDEO_URL_TTL_SECONDS', 300, 1, 3600),
   };
   const mediaUpload: AppConfig['mediaUpload'] = {
+    // Transfer mode does not change the storage provider or its validation pipeline.
+    // Local development avoids browser COS CORS and HTTP Web Crypto requirements.
+    mode: cosMedia.provider === 'local' || ['proxy', 'server', 'backend'].includes(uploadMode)
+      || (uploadMode === 'auto' && ['development', 'test'].includes(env)) ? 'proxy' : 'direct',
     sessionTtlSeconds: mediaEnvInt('MEDIA_UPLOAD_SESSION_TTL_SECONDS', 86400, 60, 604800),
     receiptTtlSeconds: mediaEnvInt('MEDIA_UPLOAD_RECEIPT_TTL_SECONDS', 2592000, 86400, 7776000),
     multipartThresholdBytes: mediaEnvInt('MEDIA_MULTIPART_THRESHOLD_BYTES', 16777216, 1048576, 536870912),

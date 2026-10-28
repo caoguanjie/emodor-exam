@@ -68,11 +68,18 @@ export async function uploadAvatar(file: PickedMedia): Promise<{ asset_id: strin
     const direct = limits.upload_mode === 'direct'
     same()
     if (direct) {
-      const { uploadImageDirect } = await import('@/platform/media-upload.h5')
+      const { uploadImageDirect, DirectUploadNetworkError } = await import('@/platform/media-upload.h5')
       same()
-      const result = await uploadImageDirect(file, 'avatar', limits)
-      same()
-      return result
+      try {
+        const result = await uploadImageDirect(file, 'avatar', limits)
+        same()
+        return result
+      } catch (error) {
+        same()
+        if (!(error instanceof DirectUploadNetworkError)) throw error
+        // The direct uploader aborts its unused staging session. The proxy still
+        // enforces authentication, media probing and private COS publication.
+      }
     }
   }
   // #endif
