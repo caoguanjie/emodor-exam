@@ -15,6 +15,7 @@ import { needsLearnerProfile } from '@/utils/learner-onboarding'
 import { saveExamEntryIntent } from '@/utils/exam-entry-intent'
 const props = defineProps<{ paperId: string }>(), store = useExamStore(), starting = ref(false), actionError = ref('')
 const releaseUpdated = ref(false)
+const startBlocked = ref(false)
 const session = useSessionStore(), learner = useLearnerStore(), identityStore = useIdentityStore()
 let active = true, pageRevision = 0
 function deactivate() { active = false; pageRevision++ }
@@ -38,7 +39,7 @@ const entry = computed(() => paper.value ? examEntry(paper.value) : null)
 const questionTypes = computed(() => paper.value?.question_types?.filter(item => item.count > 0) ?? [])
 const rules = ['考试开始后计时不会暂停，刷新、退出或切后台均不延长截止时间。', '答案仅保存为本人本机草稿，截止前可恢复原次作答且截止时间不变；刷新时需联网获取题目。', '请提前交卷，确认交卷成功后再退出。时间到了不会自动交卷，未成功交卷不计成绩；交卷成功后不能修改答案。']
 async function reload() {
-  actionError.value = ''; releaseUpdated.value = false
+  actionError.value = ''; releaseUpdated.value = false; startBlocked.value = false
   if (!props.paperId) return
   try { await store.loadSummary(props.paperId) } catch { /* Store exposes retryable detail errors. */ }
 }
@@ -47,11 +48,11 @@ let mounted = false
 onMounted(() => { mounted = true })
 onShow(() => { active = true; if (mounted) void reload() })
 async function start() {
-  if (starting.value || store.summaryLoading || !paper.value) return
+  if (starting.value || startBlocked.value || store.summaryLoading || !paper.value) return
   if (entry.value?.kind !== 'instructions') { if (entry.value) uni.redirectTo({ url: entry.value.url }); return }
   if (needsLearning.value) { await reload(); return }
   const paperId = props.paperId, expectedReleaseId = paper.value.release_id ?? undefined
-  starting.value = true; actionError.value = ''; releaseUpdated.value = false
+  starting.value = true; actionError.value = ''; releaseUpdated.value = false; startBlocked.value = false
   const epoch = session.sessionEpoch, current = pageRevision
   const stillHere = () => active && epoch === session.sessionEpoch && current === pageRevision
   try {
@@ -70,7 +71,7 @@ async function start() {
     if (!stillHere()) return
     const attempt = store.attempt
     if (attempt) uni.redirectTo({ url: `/pages/exam/${attempt.status === 'in_progress' ? 'take' : 'result'}?record_id=${encodeURIComponent(attempt.record_id)}` })
-  } catch (error) { if (stillHere()) { releaseUpdated.value = error instanceof ApiError && error.code === 40970; actionError.value = store.loadError || (error instanceof Error ? error.message : '暂时无法开始考试，请重试') } }
+  } catch (error) { if (stillHere()) { startBlocked.value = error instanceof ApiError && [40902, 40903, 40904].includes(error.code); releaseUpdated.value = error instanceof ApiError && error.code === 40970; actionError.value = store.loadError || (error instanceof Error ? error.message : '暂时无法开始考试，请重试') } }
   finally { starting.value = false }
 }
 function identity() {
@@ -79,7 +80,7 @@ function identity() {
   uni.navigateTo({ url: '/pages/identity/index' })
 }
 function study(course: { id: string; available: boolean }) { if (course.available) uni.navigateTo({ url: `/pages/course/detail?id=${encodeURIComponent(course.id)}&from_exam=${encodeURIComponent(props.paperId)}` }) }
-const actionLabel = computed(() => entry.value && entry.value.kind !== 'instructions' ? entry.value.label : needsLearning.value ? '刷新学习进度' : '开始答题')
+const actionLabel = computed(() => startBlocked.value ? '暂时无法开始考试' : entry.value && entry.value.kind !== 'instructions' ? entry.value.label : needsLearning.value ? '刷新学习进度' : '开始答题')
 </script>
 <template>
   <AppPage title="考试须知" back-target="/pages/exam/index" :padded="false">
@@ -120,7 +121,7 @@ const actionLabel = computed(() => entry.value && entry.value.kind !== 'instruct
         <EmptyState v-if="actionError && !releaseUpdated" :title="store.identityReason ? '实名认证' : '暂时无法开始考试'" :description="actionError"><wd-button v-if="store.identityReason" @click="identity">{{ store.identityReason === 'IDENTITY_PENDING' ? '查看实名状态' : '去实名认证' }}</wd-button></EmptyState>
       </template>
     </view>
-    <template #footer><view class="paper-footer"><wd-button block custom-style="font-weight:600" :disabled="!paper || store.summaryLoading" :loading="starting" @click="start">{{ actionLabel }}</wd-button><text>{{ entry?.kind === 'resume' ? '继续原次考试，截止时间不会延长' : entry?.kind === 'records' ? paper?.attempts_remaining === 0 ? '考试次数已用完，可查看本试卷最近一次考试结果' : '本试卷已结束，可查看本人考试记录' : needsLearning ? '学习达标后再开始，不消耗考试次数' : '开始后计时不会暂停' }}</text></view></template>
+    <template #footer><view class="paper-footer"><wd-button block custom-style="font-weight:600" :disabled="!paper || store.summaryLoading || startBlocked" :loading="starting" @click="start">{{ actionLabel }}</wd-button><text>{{ startBlocked ? actionError : entry?.kind === 'resume' ? '继续原次考试，截止时间不会延长' : entry?.kind === 'records' ? paper?.attempts_remaining === 0 ? '考试次数已用完，可查看本试卷最近一次考试结果' : '本试卷已结束，可查看本人考试记录' : needsLearning ? '学习达标后再开始，不消耗考试次数' : '开始后计时不会暂停' }}</text></view></template>
   </AppPage>
 </template>
 <style scoped>

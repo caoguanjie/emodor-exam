@@ -143,6 +143,43 @@ test('a failed exam image visibly offers a fresh per-item ticket retry', async (
   await expect(page.getByRole('button', { name: '图片加载失败，点击重试', exact: true })).toHaveCount(0)
   await expect(page.getByRole('radio', { name: '选项 A', exact: true })).toHaveAttribute('aria-checked', 'false')
 })
+for (const rejection of [
+  { code: 40902, message: '补考次数已用尽' },
+  { code: 40903, message: '已通过该考试，无需再次作答' },
+  { code: 40904, message: '考试正在等待批改，暂不能补考' },
+]) {
+test(`start rejection ${rejection.code} replaces and disables the start button`, async ({ page }) => {
+  await setup(page)
+  let starts = 0
+  await page.route('**/api/v1/me/exams/41/start', route => {
+    starts++
+    return route.fulfill({ status: 409, json: { ...rejection, data: null } })
+  })
+  await page.goto('/#/pages/exam/instructions?paper_id=41')
+  await page.getByText('开始答题', { exact: true }).click()
+  const footer = page.locator('.paper-footer')
+  const blocked = footer.locator('.wd-button')
+  await expect(blocked).toBeVisible()
+  await expect(blocked).toHaveText('暂时无法开始考试')
+  await expect(blocked).toHaveClass(/is-disabled/)
+  await expect(footer.getByText(rejection.message, { exact: true })).toBeVisible()
+  await expect(page.getByText('开始答题', { exact: true })).toHaveCount(0)
+  await blocked.click({ force: true })
+  expect(starts).toBe(1)
+})
+}
+
+test('a temporary start error keeps the start action retryable', async ({ page }) => {
+  await setup(page)
+  await page.route('**/api/v1/me/exams/41/start', route => route.fulfill({ status: 503, json: { code: 50001, message: '服务暂不可用，请重试', data: null } }))
+  await page.goto('/#/pages/exam/instructions?paper_id=41')
+  await page.getByText('开始答题', { exact: true }).click()
+  await expect(page.getByText('服务暂不可用，请重试', { exact: true })).toBeVisible()
+  const start = page.locator('.paper-footer .wd-button')
+  await expect(start).toHaveText('开始答题')
+  await expect(start).not.toHaveClass(/is-disabled/)
+})
+
 for (const reason of ['IDENTITY_REQUIRED', 'IDENTITY_PENDING']) {
   test(`start uses structured ${reason} to offer the identity entry`, async ({ page }) => {
     await setup(page, { identity: reason }); await page.goto('/#/pages/exam/instructions?paper_id=41'); await page.getByText('开始答题', { exact: true }).click()
