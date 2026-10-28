@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "410c4727ac1b904b86ed3ceca898a1a7d3773e0b",
-    "indexed_at": "2026-10-28T03:41:22Z",
+    "commit": "dc986c0812980a0eeab6ef0c5735bdde3c10305b",
+    "indexed_at": "2026-10-28T06:08:50Z",
     "project": "emodor-training-platform",
-    "nodes": 15399,
-    "edges": 55148,
-    "original_size": 35454976,
-    "compressed_size": 6828613,
-    "compression_level": 9
+    "nodes": 15545,
+    "edges": 55294,
+    "original_size": 49807360,
+    "compressed_size": 9688835,
+    "compression_level": 3
 }

@@ -1,10 +1,36 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPaperDesignerController } from '../../../composables/paper-designer-controller';
 import type { SaveOutcome, PaperDesignerValue } from '../contracts';
 import { applyQuestionCommitResult } from '../paper-designer-state';
 import { copy, deferred, paperFixture } from './paper-designer-fixtures';
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe('paper designer save controller', () => {
+  it('shows a useful save error without sending a request when secure randomness is unavailable', async () => {
+    vi.stubGlobal('crypto', undefined);
+    const saveDraft = vi.fn();
+    const controller = createPaperDesignerController({ value: paperFixture(), saveDraft });
+    expect(await controller.save()).toBe(false);
+    expect(controller.error.value).toContain('当前浏览器不支持安全随机数');
+    expect(controller.saving.value).toBe(false);
+    expect(saveDraft).not.toHaveBeenCalled();
+  });
+
+  it('resumes an existing save request without generating another id', async () => {
+    let calls = 0;
+    const requests: string[] = [];
+    const controller = createPaperDesignerController({ value: paperFixture(), saveDraft: async (value, context) => {
+      requests.push(context.request_id);
+      return ++calls === 1 ? { status: 'incomplete', value, message: '等待确认', can_abandon: false } : { status: 'saved', value };
+    } });
+    expect(await controller.save()).toBe(false);
+    vi.stubGlobal('crypto', undefined);
+    expect(await controller.save()).toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toBe(requests[0]);
+  });
+
   it('adopts partial receipts, freezes edits and resumes the same logical save', async () => {
     const initial = paperFixture(); initial.bindings.question_one = { kind: 'new' };
     const requests: string[] = [];

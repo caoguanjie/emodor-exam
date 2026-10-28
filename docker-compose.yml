@@ -1,7 +1,7 @@
 # =====================================================================
 # emodor-training-platform 培训服务平台 · Docker Compose 一键部署（NFR-16）
 # 拓扑与 02 册 5.1 逐字对应：nginx + api + mysql + redis 四容器运行于
-# 自定义桥接网络 ruleexam-net；仅 nginx 对宿主机暴露 80/443；
+# 自定义桥接网络 ruleexam-net；仅 nginx 对宿主机暴露 8080；
 # mysql(3306) / redis(6379) / api(3000) 端口不映射宿主机（杜绝内网直连绕过鉴权）。
 # 数据卷：mysql_data（权威数据）+ redis_data（AOF/RDB）+ upload_files（制度文件本体）。
 #
@@ -14,13 +14,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VITE_COS_MEDIA_ORIGIN: ${VITE_COS_MEDIA_ORIGIN:-}
+        VITE_COS_MEDIA_PREFIX: ${VITE_COS_MEDIA_PREFIX:-}
+        COS_BUCKET: ${COS_BUCKET:-}
+        COS_REGION: ${COS_REGION:-}
+        COS_KEY_PREFIX: ${COS_KEY_PREFIX:-ruleexam/dev/}
     container_name: ruleexam-nginx
     ports:
-      - "80:80"
+      - "${HTTP_BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-8080}:80"
       # 生产启用 HTTPS（TLS 1.2+，证书挂载后放开）：
       # - "443:443"
     volumes:
-      - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/nginx/default.conf:/etc/nginx/templates/default.conf.template:ro
       # 生产 TLS 证书：
       # - ./deploy/tls:/etc/nginx/tls:ro
     depends_on:

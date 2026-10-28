@@ -1,0 +1,36 @@
+#!/bin/sh
+# Sourced by the official nginx entrypoint before 20-envsubst-on-templates.sh.
+set -eu
+
+public_media_runtime_origin=${VITE_COS_MEDIA_ORIGIN-}
+public_media_runtime_prefix=${VITE_COS_MEDIA_PREFIX-}
+public_media_file=${NGINX_PUBLIC_MEDIA_ENV:-/etc/nginx/public-media.env}
+if [ ! -r "$public_media_file" ]; then
+    echo 'Missing image public-media configuration; rebuild the nginx image.' >&2
+    exit 1
+fi
+. "$public_media_file"
+
+if [ -n "$VITE_COS_MEDIA_ORIGIN" ]; then
+    if ! printf '%s' "$VITE_COS_MEDIA_ORIGIN" | LC_ALL=C grep -Eq '^https://[a-z0-9][a-z0-9-]*-[0-9]+\.cos\.[a-z][a-z0-9-]+\.myqcloud\.com$'; then
+        echo 'Invalid public COS origin in nginx image.' >&2
+        exit 1
+    fi
+    if ! printf '%s' "$VITE_COS_MEDIA_PREFIX" | LC_ALL=C grep -Eq '^ruleexam/[A-Za-z0-9_-]+/media/$'; then
+        echo 'Invalid public COS media prefix in nginx image.' >&2
+        exit 1
+    fi
+elif [ -n "$VITE_COS_MEDIA_PREFIX" ]; then
+    echo 'A public COS media prefix requires an exact origin.' >&2
+    exit 1
+fi
+if { [ -n "$public_media_runtime_origin" ] && [ "$public_media_runtime_origin" != "$VITE_COS_MEDIA_ORIGIN" ]; } || { [ -n "$public_media_runtime_prefix" ] && [ "$public_media_runtime_prefix" != "$VITE_COS_MEDIA_PREFIX" ]; }; then
+    echo 'Public COS runtime settings differ from the compiled frontend; rebuild the nginx image.' >&2
+    exit 1
+fi
+
+COS_MEDIA_CSP_SOURCE=${VITE_COS_MEDIA_ORIGIN:+ $VITE_COS_MEDIA_ORIGIN}
+export COS_MEDIA_CSP_SOURCE
+# Never substitute nginx variables such as $uri, $host or $request_uri.
+NGINX_ENVSUBST_FILTER='^COS_MEDIA_CSP_SOURCE$'
+export NGINX_ENVSUBST_FILTER

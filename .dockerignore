@@ -8,6 +8,8 @@
 !web/index.html
 !web/vite.config.ts
 !web/tsconfig.json
+!web/build/
+!web/build/public-env.ts
 !web/src/
 !web/src/**
 !mobile/
@@ -16,5 +18,16 @@
 !mobile/index.html
 !mobile/vite.config.ts
 !mobile/tsconfig.json
+!mobile/build/
+!mobile/build/public-env.ts
+!mobile/build/mp-public-config.mjs
 !mobile/src/
 !mobile/src/**
+
+# nginx image only needs public template / validation code, never deployment secrets.
+!deploy/
+deploy/**
+!deploy/nginx/
+!deploy/nginx/default.conf
+!deploy/nginx/public-media-config.mjs
+!deploy/nginx/15-public-media.envsh

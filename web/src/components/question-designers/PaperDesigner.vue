@@ -91,6 +91,7 @@
 </template>
 
 <script setup lang="ts">
+import { createUuid } from '../../utils/uuid';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import type { Editor } from '@tiptap/vue-3';
 import type { JSONContent, QuestionAuthoringDocument, QuestionMeta } from '../../api/question-document-types';
@@ -260,7 +261,7 @@ async function changeType(type: 'single' | 'multiple' | 'judgment') {
     if (!await ask('切换判断题会重建选项和答案，题干将保留。确定切换吗？') || revision !== controller.revision.value || locked.value) return;
     const labels = type === 'judgment' ? ['正确', '错误'] : ['', ''];
     block.content = [block.content!.find((node) => node.type === 'questionStem')!, ...labels.map((label): JSONContent => ({
-      type: 'questionOption', attrs: { option_id: crypto.randomUUID(), checked: false }, content: [{ type: 'paragraph', ...(label ? { content: [{ type: 'text', text: label }] } : {}) }],
+      type: 'questionOption', attrs: { option_id: createUuid(), checked: false }, content: [{ type: 'paragraph', ...(label ? { content: [{ type: 'text', text: label }] } : {}) }],
     }))];
   }
   meta.type = type; delete meta.concept_id;

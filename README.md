@@ -72,15 +72,22 @@
 
 ### 方式一：Docker Compose（一键部署，NFR-16）
 
+运维人员或 AI 请先阅读[部署简明流程](deploy/部署简明流程.md)，按首次部署、日常更新或只补配置选择步骤。
+
 ```bash
-cp deploy/.env.example .env
-# 在 .env 中生成全部密钥（文件内有生成命令注释），然后：
-docker compose up -d --build
+test -e .env || (umask 077; cp deploy/.env.example .env)
+# 仅首次部署生成系统密钥；已有服务器保留原密钥。填写数据库、短信和实名配置后：
+node scripts/supplier-env.mjs check --file .env && docker compose up -d --build
 # 数据库表结构由 mysql 容器初始化脚本自动装载（database/init.sql）
 # 超级管理员首登口令：部署时执行一次
-DB_PASSWORD=<.env 中的口令> ADMIN_INITIAL_PASSWORD=<自定义初始口令> \
-  docker compose exec api node dist/seed.js   # 或在宿主机：node database/seed.mjs
+docker compose exec api node dist/seed.js
 ```
+
+代码更新不会携带电脑里的密码和供应商密钥。已有服务器缺少短信、实名配置时，按 [安全补齐配置](deploy/supplier-env.md) 单独传递并补齐，不要覆盖服务器整份 `.env`。检查通过仅表示配置完整，仍需实际验证短信登录和实名认证。
+
+外部访问 `/api/v1/health` 返回 404 是预期行为；内部探活使用 `docker compose exec -T api wget -qO- http://127.0.0.1:3000/api/v1/health`。部署后还应打开首页和 `/mobile/`，用浏览器完成管理员验证码登录及首次改密。
+
+默认访问 `http://服务器地址:8080`，不占用宿主机 80 端口。如需更换，在 `.env` 设置 `HTTP_PORT`，不必修改 Compose 文件。由宿主 nginx 转发时可设置 `HTTP_BIND_ADDRESS=127.0.0.1`；额外代理层的 HTTPS 和真实客户端地址转发仍需单独配置及验收。
 
 新库 `init.sql` 已包含现有 Logo 和三张轮播图的 COS 媒体记录、配置及引用，不需要重新上传；`seed.mjs` 仍负责创建管理员。重复初始化不会覆盖已有网站配置（包括手工清空）。
 

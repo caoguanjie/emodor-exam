@@ -51,6 +51,25 @@ node --env-file=.env scripts/media/cos-preflight.mjs --render-proposal --out '<�
 
 `cors.template.json` 的来源数组故意为空；必须先读取真实桶规则并通过工具生成保留原规则的提案。CORS 控制浏览器跨域行为，不提供对象权限隔离。提案没有 `apply` 入口。
 
+## Docker 部署中的前端定位与 CSP
+
+根 `Dockerfile` 同时构建 PC 与 H5。Compose 只把 `COS_BUCKET`、`COS_REGION`、`COS_KEY_PREFIX` 这些公开定位和可选的 `VITE_COS_MEDIA_ORIGIN/PREFIX` 传入 nginx 构建，不传入密钥。构建器默认从桶/地域派生精确 HTTPS origin，从项目键前缀派生正式 `media/` 目录；显式 Vite 值与 API 定位不一致时构建失败。local 模式未配桶时两项保持为空。
+
+构建会把同一份公开配置用于 PC/H5 编译和镜像内 `public-media.env`。Nginx 启动先校验它，再由官方 `envsubst` 模板只替换 `COS_MEDIA_CSP_SOURCE`；`$uri/$host` 等 nginx 变量不会被替换。镜像自带默认模板，Compose 挂载的是模板源而非只读输出配置。CSP 为图片、媒体和直传连接追加唯一精确桶 origin；PC 与 H5 都允许现有组件所需的内联样式，脚本仍仅同源，不使用通配来源或 `unsafe-eval`。
+
+已有部署保持原 API 环境和 COS 对象，更新代码后重建前端镜像：
+
+```bash
+docker compose build nginx
+docker compose up -d --no-deps nginx
+```
+
+修改桶、地域或前缀也必须重新构建；只改容器运行时变量不会改变已经编译的前端。启动发现运行时公开配置与镜像内编译值不一致会拒绝启动并要求重建。构建不把 `.env` 复制进镜像；不要通过 `VITE_*` 注入 SecretId/SecretKey/token。
+
+`deploy/nginx/default.conf` 现是模板源，需要以上启动流程渲染，不能直接作为未经渲染的 nginx 活动配置。针对实际入口（如 `/admin/system/site-settings` 和 `/mobile/`）检查响应头时，应在 `img-src/media-src/connect-src` 中看到精确 COS origin，图片 307 跳转后的对象 GET 应返回图片。CSP 放行不替代 COS CORS、签名或业务授权。
+
+本机可执行 `node --test tests/nginx-media-config.test.mjs tests/docker-compose-env.test.mjs tests/build-orchestrator.test.mjs` 验证配置派生、注入拒绝、真实 shell/envsubst 渲染以及组合构建契约；这不等于镜像/容器、真实 HTTP 站点或浏览器已验收。生产 HTTPS 仍按部署安全约束配置，部分 H5 浏览器能力仍要求安全上下文。
+
 ## 经准确前缀授权后的写入探针
 
 以下是模板，必须先由操作者确认完整临时前缀和私有 journal 路径；本地自动化不会执行真实 COS 探针：

@@ -1,3 +1,4 @@
+import { createUuid } from '../utils/uuid';
 import { computed, ref } from 'vue';
 import type { DesignerMode, PaperDesignerValue, SavePaperDraft } from '../components/question-designers/contracts';
 import {
@@ -53,10 +54,10 @@ export function createPaperDesignerController(options: {
     const issues = preflightPaper(value.value);
     if (issues.length) { error.value = issues[0]!.message; return false; }
     const ticket = epoch;
-    state.value = beginPaperSave(state.value, crypto.randomUUID());
-    const context = { request_id: state.value.context!.request_id, intent: 'save' as const };
     error.value = '';
     try {
+      state.value = beginPaperSave(state.value, state.value.context?.request_id ?? createUuid());
+      const context = { request_id: state.value.context!.request_id, intent: 'save' as const };
       const outcome = await options.saveDraft(copy(value.value), context);
       if (ticket !== epoch) return false;
       state.value = applyPaperSaveOutcome(state.value, outcome);

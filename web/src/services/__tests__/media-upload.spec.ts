@@ -30,7 +30,7 @@ beforeEach(async () => {
   mocks.part.mockResolvedValue(undefined);
   mocks.simple.mockResolvedValue(undefined);
 });
-afterEach(() => { invalidateMediaContext(); sessionStorage.clear(); });
+afterEach(() => { invalidateMediaContext(); sessionStorage.clear(); vi.unstubAllGlobals(); });
 
 describe('resumable upload task', () => {
   it('restores the exact file after refresh and uploads only backend-confirmed missing parts', async () => {
@@ -117,6 +117,19 @@ describe('resumable upload task', () => {
     await rejected;
     expect(mocks.cancel).toHaveBeenCalledWith('session-1');
     expect(mocks.complete).not.toHaveBeenCalled();
+  });
+  it('uploads a branding image without randomUUID and reuses its secure request id after a lost response', async () => {
+    const getRandomValues = vi.fn((bytes: Uint8Array) => { bytes.fill(27); return bytes; });
+    vi.stubGlobal('crypto', { getRandomValues });
+    const image = new File(['image-bytes'], 'logo.png', { type: 'image/png' });
+    mocks.begin.mockRejectedValueOnce(new Error('reply lost')).mockResolvedValueOnce(completed());
+    await expect(createMediaUploadTask(image, 'branding').result).rejects.toThrow('reply lost');
+    const requestId = mocks.begin.mock.calls[0][0].client_request_id;
+    expect(requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(getRandomValues).toHaveBeenCalledTimes(1);
+    expect(await createMediaUploadTask(image, 'branding').result).toMatchObject({ asset_id: '25' });
+    expect(mocks.begin.mock.calls[1][0].client_request_id).toBe(requestId);
+    expect(getRandomValues).toHaveBeenCalledTimes(1);
   });
   it('replays the same client request after an unknown begin response without creating a second session', async () => {
     mocks.begin.mockRejectedValueOnce(new Error('reply lost')).mockResolvedValueOnce(completed());

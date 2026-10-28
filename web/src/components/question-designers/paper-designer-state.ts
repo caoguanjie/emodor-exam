@@ -1,3 +1,4 @@
+import { createUuid } from '../../utils/uuid';
 import type { CommitResult, JSONContent, QuestionAuthoringDocument, QuestionMeta } from '../../api/question-document-types';
 import type { AuthoringBundle, AuthoringReceipt, DesignerLayoutV1, DesignerSession, DesignerState } from '../../api/question-document-types';
 import type {
@@ -15,7 +16,7 @@ function withoutWriteIdentity(meta: QuestionMeta): QuestionMeta {
 
 export function copyQuestionsForPaper(
   source: PaperQuestionSet,
-  createId: () => string = () => crypto.randomUUID(),
+  createId: () => string = () => createUuid(),
   reservedIds: Iterable<string> = [],
 ): PaperQuestionSet {
   const issues = validatePaperStructure(source);
@@ -241,7 +242,7 @@ export function insertPaper(
   current: PaperDesignerValue,
   source: PaperDesignerValue,
   mode: 'append' | 'replace',
-  createId: () => string = () => crypto.randomUUID(),
+  createId: () => string = () => createUuid(),
 ): { ok: true; value: PaperDesignerValue } | { ok: false; issues: DesignerIssue[] } {
   const categoryId = mode === 'replace' ? source.paper.category_id : current.paper.category_id;
   const issues = questionSetIssues(mode === 'replace' ? [source] : [current, source], categoryId);

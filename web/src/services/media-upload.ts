@@ -1,3 +1,4 @@
+import { createUuid } from '../utils/uuid';
 import type { MediaPurpose, MediaUploadOptions, MediaUploadResponse, UploadSessionView } from '../api/media';
 import { beginMediaUpload, getMediaLimits, getMediaUploadSession, getMediaUploadGrant, completeMediaUpload, cancelMediaUpload, uploadMediaProxy } from '../api/media';
 import { validateMediaFile } from '../components/media-upload-state';
@@ -194,7 +195,7 @@ export function createMediaUploadTask(file: File, purpose: MediaPurpose, options
         const previous = await checked(mediaResumeStore.get(context.userId, fingerprint), generation);
         const reusable = previous && previous.sizeBytes === file.size && previous.purpose === purpose && (previous.ownerId || '') === (options.ownerId || '');
         record = reusable ? previous : {
-          userId: context.userId, sessionId: '', requestId: crypto.randomUUID(), fingerprint, sizeBytes: file.size,
+          userId: context.userId, sessionId: '', requestId: createUuid(), fingerprint, sizeBytes: file.size,
           expiresAt: new Date(Date.now() + (limits.upload_session_ttl_seconds || 86400) * 1000).toISOString(), purpose,
           ...(options.ownerId ? { ownerId: options.ownerId } : {}),
         };
