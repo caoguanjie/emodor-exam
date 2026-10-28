@@ -1,6 +1,6 @@
 # 独立随机模拟考实施与验收记录
 
-状态：源码、隔离自动化、PC/H5 实际页面与独立审查已完成。实现位于 Codex 管理的独立工作区，本地提交保留；未合入主工作区、未推送。本次未对开发/生产库应用043，也未创建或发布真实业务模拟卷。
+状态：源码、隔离自动化、PC/H5 实际页面与独立审查已完成。实现已按用户指令于2026-10-28从独立工作区快进合入当前main（1f07cd7 → 0176915）；未推送。本次未对开发/生产库应用043，也未创建或发布真实业务模拟卷。
 
 设计：[独立随机模拟考](../docs/superpowers/specs/2026-10-28-practice-random-exam-design.md)；计划：[实施计划](../docs/superpowers/plans/2026-10-28-practice-random-exam.md)。
 
@@ -22,7 +22,7 @@
 
 ## 验证证据
 
-日志目录为本工作区 `.superpowers/practice-exam/logs/`，截图位于 `.superpowers/practice-exam/screenshots/`；均为本机验证证据，不入库。
+原实施日志和截图继续位于上述独立工作区的 `.superpowers/practice-exam/logs/`、`.superpowers/practice-exam/screenshots/`。合并后补验日志位于主工作区 `.superpowers/practice-exam/merge-migration-check.log` 与 `merge-server-check.log`；均为本机证据，不入库。
 
 | 验证 | 实际结果 | 日志 |
 |---|---|---|
@@ -83,4 +83,8 @@ fixture浏览器通过已有静态服务 helper 启动随机端口，设置 MOBI
 
 ## 后续集成与部署
 
-当前保留独立工作区及本地提交，原main与未提交修改保持原样。集成时先核对主分支迁移恢复改动，沿用现有校验协议；应用新增043后才能启用本功能API及页面。停止新模拟可撤回模拟卷，但已进行考试需由兼容API完成；不删历史、不把未识别用途的旧统计服务直接接回新数据。
+已快进合入main；6项原有修改/未跟踪文件经SHA-256核对逐字节保留，重名旧版未跟踪实施计划已备份到本机 `.superpowers/practice-exam/merge-backup-20261028T200130/`。Codex管理的独立工作区及原验收日志继续保留。沿用主工作区现有迁移恢复改动和校验协议；应用新增043后才能启用本功能API及页面。停止新模拟可撤回模拟卷，但已进行考试需由兼容API完成；不删历史、不把未识别用途的旧统计服务直接接回新数据。
+
+## 合并后补验（2026-10-28）
+
+当前main的代码树已核对与0176915一致；随后仅更新本设计/验收文档的合并状态。`node --test tests/practice-random-paper-migration.test.mjs tests/historical-checksums.test.mjs`在主工作区现有迁移恢复改动上通过13/13；`npm --prefix server test -- test/practice-attempt.spec.ts test/question-content-capability.spec.ts`通过32/32且pretest编译退出0。测试使用自有隔离环境，没有应用开发库043迁移。快进合并完成时原有6项工作文件SHA-256均与合并前一致；补验期间预约/支付草稿继续发生并发修改，本轮保留其最新内容，另外5项仍逐字节一致。未将这些未提交修改纳入本次提交。
