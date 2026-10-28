@@ -302,13 +302,14 @@ export class AttemptService {
         return { record: active, recovered: true, actorName: user.username };
       }
 
-      if (mobile) await assertExamIdentity(manager, String(userId));
-
       const paper = await manager.getRepository(ExamPaper).findOne({
         where: { id: String(paperId) }, lock: { mode: 'pessimistic_write' },
       });
       if (!paper) throw Errors.notFound('试卷不存在');
       if (mobile && paper.businessScope !== 'training') throw Errors.contentInvisible('请使用培训考试入口');
+      // Under REPEATABLE READ this first ordinary read pins the release snapshot.
+      // Take the paper lock first so a concurrent publication commits before it.
+      if (mobile) await assertExamIdentity(manager, String(userId));
       if (paper.status !== PaperStatus.PUBLISHED) throw Errors.contentInvisible('考试未发布或已撤回');
 
       const purpose = examPurposeOf(paper.examPurpose);

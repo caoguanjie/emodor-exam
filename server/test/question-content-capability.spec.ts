@@ -9,7 +9,14 @@ describe('question content capability HTTP boundary', () => {
     const attempts: any = { start: vi.fn() };
     const controller = new TrainingExamsController(attempts, {} as any, {} as any);
     (controller.start as any)('11', user, header);
-    expect(attempts.start).toHaveBeenCalledWith('9', '11', true, expected);
+    expect(attempts.start).toHaveBeenCalledWith('9', '11', true, expected, undefined);
+  });
+
+  it.each([[undefined, 2], ['2', 2], ['3', 3]])('passes the expected release together with header %s capability %s', (header, expected) => {
+    const attempts: any = { start: vi.fn() };
+    const controller = new TrainingExamsController(attempts, {} as any, {} as any);
+    (controller.start as any)('11', user, header, { expected_release_id: '21' });
+    expect(attempts.start).toHaveBeenCalledWith('9', '11', true, expected, '21');
   });
 
   it.each(['', '1', '4', '03', ' 3', '3 ', '2,3', 3, ['3'], null])('rejects malformed header %j before invoking start', (header) => {
