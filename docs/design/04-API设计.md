@@ -142,7 +142,7 @@
 | /admin/question-materials | 题库资料 | 现行 | 资料创建、列表/详情、版本上传、解析状态和重试；版本 `id` 为字符串 |
 | /admin/questions | 题库导入 | 现行 | 普通导入与 AI 参考题统一使用中文五列模板并由页面选择整批类别；兼容旧中文四列及英文七／八／九列，支持逐题预览、warnings和直接启用的幂等确认 |
 | /ai | AI 与题库 | 现行 | AI配置／旧任务读取、类别选项、三类客观题版本、人工录入与启停 |
-| /admin/papers | 试卷发布 | 现行 | 固定/随机卷配置、来源选项、候选、预览、发布、复制、草稿删除；撤回/归档写入口退场 |
+| /admin/papers | 试卷发布 | 现行 | 固定/随机卷配置、来源选项、候选、预览、发布、撤回发布、复制、草稿删除；归档写入口退场 |
 | /me | 本人/考试 | Gate H2已自动验证 | 本人资料/首页、考试列表、开考/状态恢复、主动整卷交卷、结果、历史和错题；无考试draft/heartbeat |
 | /media | 受控媒体 | 现行 | 头像、课程、视频、题目和品牌媒体；无答题图片 purpose |
 | /admin/courses、/me/courses | 课程 | 现行；视频增量见Task 12冻结契约 | 课程/章节/视频版本；启用学员可浏览全部已发布课程，来源/类别不额外阻断视频学习，开播须实名 |
@@ -598,11 +598,11 @@ proxy/local/实名场景的 `content_url` 为站内相对 URL，仅含短期票�
 | 11 | GET | /admin/papers/{id}/preview/answers | `papers:read` 且还需 `papers:export` / `questions:read` / `questions:export` 之一；答案版 |
 | 12 | POST | /admin/papers/{id}/publish | `papers:publish`；冻结发布版本，返回 `{release_id}` |
 | 13 | POST | /admin/papers/{id}/copy | `papers:write`；复制配置/固定题单为新 draft |
-| 14 | POST | /admin/papers/{id}/withdraw | 已退场，404；不再产生 withdrawn 状态 |
+| 14 | POST | /admin/papers/{id}/withdraw | papers:publish；仅培训卷，published/历史withdrawn→draft；有发布版本的draft重复撤回幂等；返回 `{paper_id,status:"draft"}` |
 | 15 | POST | /admin/papers/{id}/archive | 已退场，404；不再产生 archived 状态 |
 | 16 | DELETE | /admin/papers/{id} | `papers:write`；仅删除无发布/考试引用的 training 草稿，成功 `data:null` |
 
-**现行状态边界（2026-10-26）**：新写入流程仅 `draft → published`，发布后调整沿用复制新草稿。培训和 legacy 试卷的撤回/归档写入口均不再注册；旧状态的列表、详情、快照读取和开考限制仍保留，读取接口可继续按历史状态筛选，PC 日常筛选只提供草稿、已发布。不迁移或重写历史状态。
+**现行状态边界（2026-10-28）**：培训卷支持 `draft → published → draft（撤回）`。撤回复用发布权限并锁定试卷行，仅更新状态及操作元数据；历史withdrawn也可回草稿，有发布版本的draft重复请求幂等且不重复审计；从未发布的草稿及归档返回40970，不存在/非培训卷返回40401。撤回后可修改当前属性、题单与内容，普通/答案预览读取当前草稿；再次发布新增递增版本，不覆盖旧release。已有assignment、进行中考试与历史成绩继续使用原冻结版本；未分配学员在重新发布后使用新版本。草稿期间禁止新开考，原次恢复和交卷保留。041只转换既有training withdrawn为draft；不改legacy或archived，不改旧迁移checksum。有发布版本、assignment或record引用的草稿仍禁止物理删除，以保护历史。
 
 **草稿删除（2026-10-27）**：`DELETE /admin/papers/{id}`在事务内取得`exam_paper`的`pessimistic_write`锁，锁后重新核对`business_scope=training`与`status=draft`；目标不存在或属于legacy返回40401，非草稿返回40970。只要`paper_release`、`exam_assignment`、`exam_record`任一表存在该`paper_id`引用，即使试卷仍标为draft也返回40970。仅删除该卷的`paper_question`及`exam_paper`，不删除共享题库、题目版本、课程、媒体、学习记录、发布快照或考试历史；不新增软删字段或迁移。删除不要求培训类别仍启用。提交成功后记录`training_paper.delete`审计，返回`{code:0,message:'success',data:null}`；重复删除已不存在的目标返回40401，客户端不自动重发。
 
@@ -711,7 +711,7 @@ AI通过模板接口下载与普通导入一致的中文五列参考格式，页
 
 | # | 方法 | 路径 | 说明 |
 |---|---|---|---|
-| 1 | GET | /me/exams | 当前类别已发布 training 卷 + 本人已有 assignment 分页列表 |
+| 1 | GET | /me/exams | 已发布 training 卷 + 本人未超时进行中考试，过滤后分页 |
 | 2 | POST | /me/exams/{id}/start | 原子首次开考、补考或有效 active 恢复 |
 | 3 | GET | /me/exam-records/{id} | 权威状态；进行中才返回题面，到期先纯timeout |
 | 4 | POST | /me/exam-records/{id}/submit | 学员主动确认后的严格整卷稳定ID答案 |
@@ -720,9 +720,11 @@ AI通过模板接口下载与普通导入一致的中文五列参考格式，页
 | 7 | GET | /me/wrong-questions | 本人finalized非满分题Page分页，新纯timeout无条目 |
 | 8 | GET | /me/exams/{id} | 本人可见考试的只读摘要与考前学习进度；不创建考试或收口记录 |
 
-**H5 考试摘要增量（2026-10-27）**：`GET /me/exams` 保留原字段，并返回 `total_score/pass_score/duration_minutes/question_count:number|null`、`active_record_id/latest_record_id:string|null`。分值、时限、题量优先本人 assignment 的冻结规则，未分配时读取最新 training release；旧快照不完整时为 null，不能使用当前试卷设置或固定100分补值。记录链接只来自本人记录；仍为 `in_progress` 的过期记录也返回 active，由既有恢复接口按截止规则收口。查询新增 `state=all|active|published|ended`（默认 all），筛选先于分页及 total 计算：active 为有进行中记录，published 为已发布且无进行中记录，ended 为非已发布且无进行中记录。保留按试卷ID降序；不使用管理端 `sort_order`。
+**H5 考试摘要增量（2026-10-27）**：`GET /me/exams` 保留原字段，并返回 `total_score/pass_score/duration_minutes/question_count:number|null`、`active_record_id/latest_record_id:string|null`。分值、时限、题量优先本人 assignment 的冻结规则，未分配时读取最新 training release；旧快照不完整时为 null，不能使用当前试卷设置或固定100分补值。记录链接只来自本人记录；active 仅限 `in_progress` 且有效 `deadline_at` 严格晚于服务端本次读取时点，截止相等、过期、已交卷均不返回 active。列表在分页与 total 之前仅保留已发布试卷或本人有效 active；撤回/归档但本人原次仍在时限内的可继续，结束的历史项只通过考试记录查看。保留兼容查询 `state=all|active|published|ended`（默认 all）：active 为有效进行中，published 为已发布且无有效 active，ended 不再返回历史列表项（空分页）。学员页面统一请求 all，不展示筛选 Tab。保留按试卷ID降序；不使用管理端 `sort_order`。
 
-`GET /me/exams/{id}` 使用与列表相同的可见集合：当前学员类别已发布 training 卷，或本人已有 assignment 的 training 卷；不可见返回40401。返回同一摘要以及 `learning={required_learning_minutes:number|null,credited_seconds:number|null,remaining_seconds:number|null,courses:[{id:string,title:string|null,available:boolean}]}`。学习配置来自本人 assignment 指向的 release；未分配用最新 release，不读当前可变配置。未配置或旧版本无阈值时三数值为null、courses为空；配置有效时累计当前已上架课程、未删除视频课时当前版本的有效毫秒，已学秒向下取整、剩余秒向上取整且最小0，与开考门槛完全同源。课程保留冻结ID顺序；下架课程保留标题且available=false，不存在时title=null。详情只读，不创建assignment、不评分、不顺便过期记录；页面状态仅供展示，POST开考继续执行全部资格核验。
+**考前题型构成**：列表和单卷摘要新增 `question_types:Array<{type:single|multiple|judgment,count:number,score_per_question:number|null,total_score:number}>|null`。仅由同一冻结规则中的 `rules` 聚合，按单选、多选、判断排序，零题型省略；各题型同分时提供单题分，混合分值时单题分为null但题数与总分仍为真实合计。按整数分币累加后转换分；快照缺失、畸形或与总分不一致返回null，不能用当前草稿或图稿示例填补。不加载题池，不返回题目、答案或解析。
+
+`GET /me/exams/{id}` 保留更宽的本人历史详情可见集合：当前学员类别已发布 training 卷，或本人已有 assignment 的 training 卷；不可见返回40401。返回同一摘要以及 `learning={required_learning_minutes:number|null,credited_seconds:number|null,remaining_seconds:number|null,courses:[{id:string,title:string|null,available:boolean}]}`。学习配置来自本人 assignment 指向的 release；未分配用最新 release，不读当前可变配置。未配置或旧版本无阈值时三数值为null、courses为空；配置有效时累计当前已上架课程、未删除视频课时当前版本的有效毫秒，已学秒向下取整、剩余秒向上取整且最小0，与开考门槛完全同源。课程保留冻结ID顺序；下架课程保留标题且available=false，不存在时title=null。详情只读，不创建assignment、不评分、不顺便过期记录；页面状态仅供展示，POST开考继续执行全部资格核验。
 
 `POST /me/exams/{id}/start` 的首次新开要求账号启用、试卷 published、启用培训类别、用户 category/source 必填且类别与 release 匹配。random 卷按 `institution → easy`、`external → hard` 抽取；fixed 卷按冻结题单得出单一难度或 `mixed`。首次同事务冻结 `release_id/source/category_id/difficulty/rule_snapshot/snapshot_origin`，补考沿用 assignment，不按用户新资料或题库当前内容重算。升级前旧 `exam_record` 同样计入 `max_attempts`，默认总次数 3 次（含首次）。
 
@@ -1428,7 +1430,8 @@ type FinalResultView = FinalResultV2 | LegacySubmittedResult
 | POST /admin/questions/ai-import-tasks | 5MB、50参考行；任务状态与批次owner隔离 | 参考正文仅任务内存；生成后选行确认前零题库写，原批次幂等对账 |
 | POST /admin/papers/{id}/publish | 重复发布已 published 卷返回现有 release_id；并发发布只生成一个版次 | 先锁培训类别、再写锁 exam_paper；uk_paper_release_version 兜底 |
 | DELETE /admin/papers/{id} | 仅无发布/考试引用的 training 草稿；成功 data:null，重复删除40401 | 事务内写锁 exam_paper，锁后核对范围/状态/三表引用；与发布互斥，只删本卷题单与试卷 |
-| POST /admin/papers/{id}/withdraw/archive | 已退场，404 | 不再注册状态写入路由；历史快照保留 |
+| POST /admin/papers/{id}/withdraw | papers:publish，仅training | 锁试卷行撤回；禁止新开考，进行中及历史快照保留 |
+| POST /admin/papers/{id}/archive | 已退场，404 | 不注册归档写路由；历史快照保留 |
 
 ### 6.3 传输与敏感信息
 

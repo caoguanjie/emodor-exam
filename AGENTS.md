@@ -6,7 +6,7 @@
 ## 目录
 
 - `docs/design/` 设计方案 8 册（01 需求 … 07 安全与非功能、README 对照表）
-- `database/` `init.sql`（41 张业务表 + 1 张迁移元数据表，共 42 张物理表，与 03 册一致）+ `seed.mjs`（口令经环境变量注入）；当前迁移 000—039，021 考试稳定选项 ID、022 设计器存储、023 课时软删除、024 学员年龄、025 题库分值历史兼容可空、026 题目启停、027 清理题目审核权限、028 续接一次性密码回填完成探针（不改账号数据）、029 题目逻辑删除、030 试卷考前学习要求、031 试卷排序、032 试卷操作信息、033 COS 媒体定位与上传会话、034 管理员逻辑删除、035 角色备注与名称唯一、036 三模块独立按钮权限、037 独立字典分类、038 清理既有账号提升管理员权限链路、039 网站关于我们配置；表变更必须同步迁移、`init.sql`、entities 与设计分册
+- `database/` `init.sql`（41 张业务表 + 1 张迁移元数据表，共 42 张物理表，与 03 册一致）+ `seed.mjs`（口令经环境变量注入）；当前迁移 000—041，021 考试稳定选项 ID、022 设计器存储、023 课时软删除、024 学员年龄、025 题库分值历史兼容可空、026 题目启停、027 清理题目审核权限、028 续接一次性密码回填完成探针（不改账号数据）、029 题目逻辑删除、030 试卷考前学习要求、031 试卷排序、032 试卷操作信息、033 COS 媒体定位与上传会话、034 管理员逻辑删除、035 角色备注与名称唯一、036 三模块独立按钮权限、037 独立字典分类、038 清理既有账号提升管理员权限链路、039 网站关于我们配置、040 培训试卷撤回显示字典与状态注释、041 培训试卷撤回回草稿兼容；表变更必须同步迁移、`init.sql`、entities 与设计分册
 - `server/` NestJS API：`src/common/`（信封/错误码/守卫链/Redis/审计）、`src/entities/`、`src/modules/`（auth/access/users/training/courses/question-materials/ai/questions/exams/statistics 等）；departments/regulations 只保留共享存储与历史只读依赖，不恢复旧管理 CRUD
 - `web/` Vue 3 + TS + Vite + Element Plus；`src/views/employee/` 学习端、`src/views/admin/` 管理端
 - `mobile/` uni-app + Vue 3 + TypeScript + Pinia + Wot UI 2.3.2；独立学员 H5 / MP-WEIXIN 入口，PC 管理端不复用其登录状态或答题入口
@@ -69,6 +69,8 @@ API 启动后监听 :3000，全局前缀 `api/v1`。本机开发用宿主 MySQL 
 - 采用[批准设计](docs/superpowers/specs/2026-10-26-cos-media-integration-design.md)与[Astra计划](docs/superpowers/plans/2026-10-26-cos-media-integration.md)，不经过SDD。local/COS按媒体行读取；PDF/DOCX原件仍本地。两边后端共用原COS密钥，浏览器只获精确临时授权。
 - 本分支新增 `033_cos_media_storage.sql`。原 COS 候选 030 从未部署；整合主线已应用的 029—032 后顺延为 033，不改写已应用迁移或其 checksum。根 `.env` 由已有工具加载，`import-cos --from-env <明确源路径>` 只导入4项白名单；不得提交或打印真实值。
 - 实际实施/云/容量边界见[验收记录](review/2026-10-26-cos-media-acceptance.md)和[G0记录](review/2026-10-26-cos-cloud-gates.md)。不把源码、自动化或同桶配置当成真实分发/迁移完成。
+
+- 培训试卷撤回发布回到真实 `draft`，恢复编辑和重新发布；草稿预览读当前题单，重新发布追加release版本。旧assignment/考试记录保留原冻结版本，有历史引用的草稿禁止物理删除。041兼容既有training withdrawn，不改已应用040或checksum。
 
 ## 已知坑
 
