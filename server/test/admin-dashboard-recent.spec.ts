@@ -12,6 +12,24 @@ const record = (patch = {}): any => ({
 });
 
 describe('dashboard recent exams and shared scoring', () => {
+  it('labels public latest releases and retains actual participation across learner categories', async () => {
+    const { AdminDashboardService } = await import('../src/modules/statistics/admin-dashboard.service');
+    const f = await dashboardQueryFixture(['statistics:read']);
+    f.query.mockResolvedValue([
+      { paper_id: '11', title: '公共考试', status: 'published', release_id: '21', pool_scope: 'public', category_id: null, rule_snapshot: RULE, released_at: new Date('2026-10-27T01:00:00Z') },
+      { paper_id: '12', title: '历史未填写', status: 'published', release_id: '22', category_id: null, rule_snapshot: RULE, released_at: new Date('2026-10-26T01:00:00Z') },
+    ]);
+    vi.spyOn(f.source.getRepository(ExamRecord), 'find').mockResolvedValue([
+      record({ categoryId: null, score: 80 }),
+      record({ id: '2', userId: '2', categoryId: null, source: 'external', difficulty: 'hard', score: 90 }),
+    ]);
+    const result = await new AdminDashboardService(f.source, f.access as any).recentExams('9');
+    expect(result.items[0]).toMatchObject({ pool_scope: 'public', category_id: null, category_name: '公共题库', participant_count: 2, finalized_users: 2, average_score: 85 });
+    expect(result.items[1]).toMatchObject({ pool_scope: 'category', category_id: null, category_name: null, participant_count: 0, average_score: null });
+    expect(f.query.mock.calls[0][0]).toContain('publication.pool_scope');
+    expect(f.query).toHaveBeenCalledTimes(1);
+  });
+
   it('summarizes only the selected release and uses one personal best across difficulties', async () => {
     const { summarizeReleaseRecords, statisticsRecordView } = await import('../src/modules/statistics/ranking');
     const records = [

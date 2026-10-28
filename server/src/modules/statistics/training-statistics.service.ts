@@ -4,7 +4,7 @@ import ExcelJS from 'exceljs';
 import { In, Repository } from 'typeorm';
 import { Errors } from '../../common/errors';
 import type {
-  ExamDifficulty, LearnerSource, Page, RankRow, RuleSnapshot, StatsFilter,
+  ExamDifficulty, LearnerSource, Page, PoolScope, RankRow, RuleSnapshot, StatsFilter,
   TrainingExamOverviewRow, TrainingExamSummary, TrainingStatisticsOptions, TrainingStatisticsOverviewFilter,
   TrainingUncompletedReason,
 } from '../../common/training-contracts';
@@ -35,11 +35,13 @@ function difficulty(value: unknown): ExamDifficulty {
   return DIFFICULTIES.includes(text) ? text : 'unknown';
 }
 
-function examInfo(paper: ExamPaper, release: PaperRelease | null): TrainingExamSummary['exam'] {
+function examInfo(paper: ExamPaper, release: PaperRelease | null): TrainingExamSummary['exam'] & { pool_scope: PoolScope } {
   const rule = release?.ruleSnapshot;
   const categoryId = release ? release.categoryId : paper.categoryId;
   return {
     paper_id: String(paper.id), title: paper.title,
+    // A missing field on a historical release always means category scope.
+    pool_scope: (release ? release.poolScope : paper.poolScope) === 'public' ? 'public' : 'category',
     category_id: categoryId ? String(categoryId) : null,
     mode: (release?.mode || paper.mode) === 'random' ? 'random' : 'fixed',
     total_score: rule ? Number(rule.totalCents) / 100 : null,
@@ -102,7 +104,7 @@ export class TrainingStatisticsService {
       recordsByRelease.set(record.releaseId, group);
     }
     const categoryNames = new Map(categories.map((category) => [String(category.id), category.name]));
-    const items = papers.map((paper): TrainingExamOverviewRow => {
+    const items = papers.map((paper): TrainingExamOverviewRow & { pool_scope: PoolScope } => {
       const release = paper.statisticsRelease || null;
       const info = examInfo(paper, release);
       const releaseId = release ? String(release.id) : null;
@@ -111,8 +113,8 @@ export class TrainingStatisticsService {
       const summary = release ? summarizeReleaseRecords(records, releaseId!, release.ruleSnapshot)
         : { participant_count: 0, finalized_users: 0, average_score: null };
       return {
-        paper_id: info.paper_id, title: info.title, category_id: info.category_id,
-        category_name: info.category_id ? categoryNames.get(info.category_id) || null : null,
+        paper_id: info.paper_id, title: info.title, pool_scope: info.pool_scope, category_id: info.category_id,
+        category_name: info.pool_scope === 'public' ? '公共题库' : info.category_id ? categoryNames.get(info.category_id) || null : null,
         status: paper.status, release_id: releaseId,
         total_score: info.total_score, duration_minutes: info.duration_minutes, pass_score: info.pass_score,
         ...summary,
@@ -151,7 +153,11 @@ export class TrainingStatisticsService {
       this.recordRepo.find({ where: { paperId }, order: { id: 'ASC' } }),
     ]);
     const currentCategory = release ? release.categoryId : paper.categoryId || null;
+    const publicPool = examInfo(paper, release).pool_scope === 'public';
     const eligibleUsers = userRows.filter((user) => {
+      // Public exams have no registered audience. Actual starts and submissions
+      // come from frozen records, never an estimate from current profiles.
+      if (publicPool) return false;
       // Source and category are training facts, not permission roles. Giving a
       // learner a business role must not silently remove that person from the
       // current exam population.
@@ -255,7 +261,7 @@ export class TrainingStatisticsService {
   async ranking(filter: StatsFilter): Promise<Page<RankRow>> {
     const context = await this.context(filter);
     const mode = (context.release?.mode || context.paper.mode) === 'random' ? 'random' : 'fixed';
-    if (mode === 'random' && !filter.difficulty) throw Errors.param('历史随机卷排名必须明确 difficulty');
+    if (mode === 'random' && !filter.difficulty) throw Errors.param('随机卷排名必须明确 difficulty');
     const rows = buildRankingRows(
       context.records,
       new Map(context.users.map((user) => [String(user.id), user.realName])),
@@ -311,6 +317,7 @@ export class TrainingStatisticsService {
     return {
       papers: papers.filter((paper) => paper.businessScope === 'training').map((paper) => ({
         id: String(paper.id), title: paper.title, category_id: paper.categoryId ? String(paper.categoryId) : null,
+        pool_scope: paper.poolScope === 'public' ? 'public' : 'category',
         status: paper.status,
       })),
       categories: categories.map((category) => ({ id: String(category.id), name: category.name })),

@@ -25,7 +25,7 @@
         <el-table-column header-align="left" align="left" prop="title" label="考试名称" min-width="220" show-overflow-tooltip>
           <template #header><span class="overview-name-heading">考试名称<el-tooltip content="仅展示已发布试卷，总分取当前发布版本。参考人数按成功开考人数去重；平均分取该版本、相同评分规则下每人已评分最高分的平均值，无已评分成绩显示 —，不用于跨难度排名。" placement="top" :show-after="200"><span class="overview-help" tabindex="0">（统计口径<el-icon><QuestionFilled /></el-icon>）</span></el-tooltip></span></template>
         </el-table-column>
-        <el-table-column header-align="center" align="center" label="培训类别" min-width="140"><template #default="{ row }">{{ row.category_name || '未分类' }}</template></el-table-column>
+        <el-table-column header-align="center" align="center" label="培训类别" min-width="140"><template #default="{ row }">{{ isPublicPool(row) ? '公共题库' : row.category_name || (row.category_id ? '—' : '未填写') }}</template></el-table-column>
         <el-table-column header-align="center" align="center" label="试卷总分" width="100"><template #default="{ row }">{{ row.total_score ?? '—' }}</template></el-table-column>
         <el-table-column header-align="center" align="center" prop="participant_count" label="参考人数" width="110" />
         <el-table-column header-align="center" align="center" label="平均分" width="110"><template #default="{ row }">{{ row.average_score ?? '—' }}</template></el-table-column>
@@ -55,10 +55,10 @@
           <el-descriptions-item label="考试时长">{{ minuteMetric(summary.exam.duration_minutes) }}</el-descriptions-item>
           <el-descriptions-item label="及格分">{{ scoreMetric(summary.exam.pass_score) }}</el-descriptions-item>
           <el-descriptions-item label="优秀分">{{ summary.exam.excellent_score === null ? '未设置' : scoreMetric(summary.exam.excellent_score) }}</el-descriptions-item>
-          <el-descriptions-item label="当前应考">{{ summary.eligible_count }} 人</el-descriptions-item>
+          <el-descriptions-item label="当前应考">{{ publicExam ? '不适用' : `${summary.eligible_count} 人` }}</el-descriptions-item>
           <el-descriptions-item label="参考人数">{{ summary.historical_started_count }} 人</el-descriptions-item>
           <el-descriptions-item label="已交卷人数">{{ summary.submitted_users }} 人</el-descriptions-item>
-          <el-descriptions-item label="参考率">{{ rate(summary.participation_rate) }}</el-descriptions-item>
+          <el-descriptions-item label="参考率">{{ publicExam ? '不适用' : rate(summary.participation_rate) }}</el-descriptions-item>
           <el-descriptions-item label="平均分">{{ scoreMetric(selectedScoreGroup?.average_score) }}</el-descriptions-item>
           <el-descriptions-item label="最高分">{{ scoreMetric(selectedScoreGroup?.highest_score) }}</el-descriptions-item>
           <el-descriptions-item label="最低分">{{ scoreMetric(selectedScoreGroup?.lowest_score) }}</el-descriptions-item>
@@ -195,17 +195,25 @@ const selectedScoreGroup = computed(() => {
   if (data.exam.mode === 'random') return data.score_groups.find((item) => item.difficulty === filters.difficulty) || null;
   return combineScoreGroups(data.score_groups);
 });
+function isPublicPool(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && 'pool_scope' in value && value.pool_scope === 'public';
+}
+const publicExam = computed(() => isPublicPool(summary.value?.exam));
 const summaryCategoryName = computed(() => {
+  if (publicExam.value) return '公共题库';
   const id = summary.value?.exam.category_id;
-  if (!id) return '未分类';
+  if (!id) return '未填写';
   return options.categories.find((item) => item.id === id)?.name || '—';
 });
 const analysisVisible = computed(() => viewActive.value && Boolean(filters.paper_id));
 const canReadExamRecords = computed(() => auth.can('exam_records:read'));
 const canLoadRanking = computed(() => Boolean(summary.value && (summary.value.exam.mode === 'fixed' || filters.difficulty)));
-const analysisScopeNote = computed(() => summary.value?.exam.mode === 'random'
-  ? '该历史随机卷按所选卷面难度比较当前发布版本、相同冻结评分规则下每位学员的最高最终成绩。'
-  : '固定卷比较当前发布版本、相同冻结评分规则下每位学员的最高最终成绩；参与人数保留该考试历史范围。');
+const analysisScopeNote = computed(() => {
+  const comparison = summary.value?.exam.mode === 'random'
+    ? '随机卷按所选卷面难度比较当前发布版本、相同冻结评分规则下每位学员的最高最终成绩。'
+    : '固定卷比较当前发布版本、相同冻结评分规则下每位学员的最高最终成绩；参与人数保留该考试历史范围。';
+  return publicExam.value ? `公共考试仅统计实际参与和交卷人数，应考人数与参考率不适用。${comparison}` : comparison;
+});
 
 let requestEpoch = 0;
 let rankingEpoch = 0;

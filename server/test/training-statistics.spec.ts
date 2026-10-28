@@ -275,10 +275,77 @@ function serviceFixture(permissions: string[] = ['statistics:read', 'statistics:
     ]),
     repository([{ id: '7', name: '危化培训', status: 1 }]),
   );
-  return { service };
+  return { service, users, examRows };
 }
 
 describe('TrainingStatisticsService', () => {
+  it('reports public participation without an estimated audience and keeps frozen source and difficulty after profile changes', async () => {
+    const { service, users } = serviceFixture();
+    users[0].source = 'external';
+    users[0].categoryId = null as any;
+    users[2].source = 'institution';
+    users[2].categoryId = '99';
+    Object.assign(service, {
+      paperRepo: repository([{ id: '10', title: '公共考试', businessScope: 'training', mode: 'random', poolScope: 'public', categoryId: null }]),
+      releaseRepo: repository([{ id: '20', paperId: '10', mode: 'random', poolScope: 'public', categoryId: null, ruleSnapshot: RULE }]),
+      recordRepo: repository([
+        record({ id: '201', userId: '1', categoryId: null, difficulty: 'easy', score: 50, status: 'failed' }),
+        record({ id: '202', userId: '1', categoryId: null, difficulty: 'easy', score: 80 }),
+        record({ id: '203', userId: '3', categoryId: null, source: 'external', difficulty: 'hard', score: 90 }),
+        record({ id: '204', userId: '5', categoryId: null, difficulty: 'easy', status: 'timeout', gradingState: 'not_submitted', score: 0, submittedAt: null }),
+      ]),
+      courseRepo: { find: async () => { throw new Error('public participation has no category course audience'); } },
+    });
+    const summary = await service.examSummary({ paperId: '10', page: 1, pageSize: 20 });
+    expect(summary).toMatchObject({
+      exam: { pool_scope: 'public', category_id: null },
+      eligible_count: 0, participation_rate: null,
+      historical_started_count: 3, submitted_users: 2, submitted_attempts: 3, finalized_users: 2,
+      course_completion: { eligible_users: 0, completion_rate: null },
+    });
+    expect(summary.score_groups.map(group => [group.difficulty, group.finalized_users, group.average_score]))
+      .toEqual([['easy', 1, 80], ['hard', 1, 90]]);
+    await expect(service.ranking({ paperId: '10' })).rejects.toMatchObject({ code: 40001 });
+    const easy = await service.ranking({ paperId: '10', source: 'institution', difficulty: 'easy' });
+    expect(easy.items).toMatchObject([{ user_id: '1', record_id: '202', source: 'institution', difficulty: 'easy', score: 80, rank: 1 }]);
+    const hard = await service.ranking({ paperId: '10', source: 'external', difficulty: 'hard' });
+    expect(hard.items).toMatchObject([{ user_id: '3', source: 'external', difficulty: 'hard', score: 90, rank: 1 }]);
+    const institution = await service.examSummary({ paperId: '10', source: 'institution' });
+    expect(institution).toMatchObject({ historical_started_count: 2, submitted_users: 1, participation_rate: null });
+  });
+
+  it('does not infer a public pool from a null category or from a newer paper configuration', async () => {
+    const { service } = serviceFixture();
+    Object.assign(service, {
+      paperRepo: repository([{ id: '10', title: '历史类别考试', businessScope: 'training', mode: 'random', poolScope: 'public', categoryId: null }]),
+    });
+    const summary = await service.examSummary({ paperId: '10' });
+    expect(summary).toMatchObject({ exam: { pool_scope: 'category', category_id: '7' }, eligible_count: 4, participation_rate: 1 });
+    Object.assign(service, { releaseRepo: repository([{ id: '20', paperId: '10', mode: 'random', categoryId: null, ruleSnapshot: RULE }]) });
+    expect(await service.examSummary({ paperId: '10' })).toMatchObject({ exam: { pool_scope: 'category', category_id: null } });
+  });
+
+  it('labels public overview rows explicitly, including an empty public exam, without using learner categories', async () => {
+    const { service } = serviceFixture();
+    const query: any = {};
+    for (const method of ['leftJoinAndMapOne', 'where', 'andWhere', 'orderBy', 'skip', 'take']) query[method] = () => query;
+    query.getManyAndCount = async () => [[
+      { id: '10', title: '公共考试', mode: 'random', poolScope: 'public', categoryId: null, status: 'published', statisticsRelease: { id: '20', mode: 'random', poolScope: 'public', categoryId: null, ruleSnapshot: RULE } },
+      { id: '11', title: '公共空场', mode: 'random', poolScope: 'public', categoryId: null, status: 'published', statisticsRelease: { id: '21', mode: 'random', poolScope: 'public', categoryId: null, ruleSnapshot: RULE } },
+    ], 2];
+    Object.assign(service, {
+      paperRepo: { createQueryBuilder: () => query },
+      recordRepo: repository([
+        record({ id: '201', userId: '1', categoryId: null, difficulty: 'easy', score: 80 }),
+        record({ id: '202', userId: '3', categoryId: null, source: 'external', difficulty: 'hard', score: 90 }),
+      ]),
+      userRepo: { find: async () => { throw new Error('public overview counts actual records'); } },
+    });
+    const result = await service.overview({});
+    expect(result.items[0]).toMatchObject({ pool_scope: 'public', category_id: null, category_name: '公共题库', participant_count: 2, finalized_users: 2, average_score: 85 });
+    expect(result.items[1]).toMatchObject({ pool_scope: 'public', category_id: null, category_name: '公共题库', participant_count: 0, finalized_users: 0, average_score: null });
+  });
+
   it('applies current learner scope, frozen historical facts, current video versions, and reason groups', async () => {
     const { service } = serviceFixture();
     const summary = await service.examSummary({ paperId: '10', page: 1, pageSize: 20 });
@@ -400,7 +467,7 @@ describe('TrainingStatisticsService', () => {
     });
     const result = await service.overview({ keyword: '安全', categoryId: '7', page: 2, pageSize: 1 });
     expect(result).toEqual({
-      items: [{ paper_id: '10', title: '安全考试', category_id: '7', category_name: '危化培训', status: 'published', release_id: '20',
+      items: [{ paper_id: '10', title: '安全考试', pool_scope: 'category', category_id: '7', category_name: '危化培训', status: 'published', release_id: '20',
         total_score: 100, duration_minutes: 30, pass_score: 60, participant_count: 5, finalized_users: 3, average_score: 72 }],
       total: 3, page: 2, page_size: 1,
     });

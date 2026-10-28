@@ -41,6 +41,7 @@ describe('ExamRecordsService pure record projection', () => {
     expect(result).toEqual({
       record_id: '41', paper_id: '11', paper_title: '安全培训考试', user_id: '9',
       username: 'student9', name: '张三', source: 'institution', category_id: '7', category_name: '安全培训', difficulty: 'medium',
+      pool_scope: 'category',
       release_id: '21', attempt_no: 2, started_at: '2026-10-22T09:00:00.000Z',
       deadline_at: '2026-10-22T09:30:00.000Z', submitted_at: '2026-10-22T09:20:00.000Z',
       answered_count: 3, total_count: 3, status: 'passed', grading_state: 'finalized',
@@ -50,6 +51,19 @@ describe('ExamRecordsService pure record projection', () => {
       'connection_state', 'server_now', 'remaining_seconds', 'last_heartbeat_at',
       'switch_count', 'device_summary', 'grading_revision',
     ]) expect(result).not.toHaveProperty(removed);
+  });
+
+  it('uses the frozen release scope to distinguish a public exam from an unfilled historical category', async () => {
+    expect(recordSummaryView({ ...ROW, pool_scope: 'public', category_id: null, category_name: null } as any))
+      .toMatchObject({ pool_scope: 'public', category_id: null, category_name: '公共题库', source: 'institution', difficulty: 'medium' });
+    expect(recordSummaryView({ ...ROW, category_id: null, category_name: null }))
+      .toMatchObject({ pool_scope: 'category', category_id: null, category_name: null });
+    const { service, calls } = serviceFixture();
+    await service.list('1', {});
+    expect(calls.some(({ method, args }) => method === 'leftJoin' && String(args[2]).includes('record.release_id'))).toBe(true);
+    const scope = calls.find(({ method, args }) => method === 'addSelect' && args[1] === 'pool_scope');
+    expect(scope?.args[0]).toContain('release.pool_scope');
+    expect(scope?.args[0]).not.toContain('paper.pool_scope');
   });
 
   it.each([

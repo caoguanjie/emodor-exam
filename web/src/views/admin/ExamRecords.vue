@@ -50,7 +50,7 @@
           <template #default="{ row }"><div>{{ row.paper_title }}</div><div class="muted">第 {{ row.attempt_no }} 次</div></template>
         </el-table-column>
         <el-table-column label="培训类别" min-width="130">
-          <template #default="{ row }">{{ row.category_name || '—' }}</template>
+          <template #default="{ row }">{{ categoryLabel(row) }}</template>
         </el-table-column>
         <el-table-column label="成绩" min-width="135">
           <template #default="{ row }">{{ examRecordScoreLabel(row) }}</template>
@@ -123,6 +123,10 @@ const entryHint = computed(() => [
 
 function openDetail(recordId: string) {
   detailRecordId.value = recordId;
+}
+function categoryLabel(row: ExamRecordSummary) {
+  if ('pool_scope' in row && row.pool_scope === 'public') return '公共题库';
+  return row.category_name || (row.category_id ? '—' : '未填写');
 }
 async function applyFilters(filters: ExamRecordsFilters) {
   const paperTitle = options.value.papers.find(paper => paper.id === filters.paper_id)?.title

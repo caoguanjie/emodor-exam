@@ -61,6 +61,22 @@ async function click(wrapper: VueWrapper, label: string) {
 }
 
 describe('exam records list', () => {
+  it('distinguishes a public exam label from an unfilled occupation and preserves an old category label', async () => {
+    const original = transport.respond;
+    transport.respond = (method, path, payload) => path === '/admin/exam-records'
+      ? Promise.resolve({ items: [
+        { ...record({ category_id: null, category_name: null }), pool_scope: 'public' },
+        record({ record_id: '43', category_id: null, category_name: null }),
+        record({ record_id: '44', category_name: '历史工种' }),
+      ], total: 3 }) : original(method, path, payload);
+    const { wrapper } = await page();
+    const rows = wrapper.findAll('.el-table__body tr');
+    expect(rows[0].text()).toContain('公共题库');
+    expect(rows[1].text()).toContain('未填写');
+    expect(rows[1].text()).not.toContain('公共题库');
+    expect(rows[2].text()).toContain('历史工种');
+  });
+
   it('shows the common illustrated empty state only after an empty successful request', async () => {
     const original = transport.respond;
     let rejectList = false;

@@ -5,6 +5,7 @@ import { Page, TRAINING_DEFAULTS } from '../../common/training-contracts';
 import { Errors } from '../../common/errors';
 import { ExamPaper } from '../../entities/exam-paper.entity';
 import { ExamRecord } from '../../entities/exam-record.entity';
+import { PaperRelease } from '../../entities/paper-release.entity';
 import { TrainingCategory } from '../../entities/training-category.entity';
 import { applyVisibleExamRecordScope } from './exam-record-visibility';
 
@@ -19,6 +20,7 @@ interface RecordProjectionRow {
   source: string | null;
   category_id: string | null;
   category_name: string | null;
+  pool_scope?: string | null;
   difficulty: string | null;
   release_id: string | null;
   attempt_no: number | string;
@@ -81,8 +83,9 @@ export function recordSummaryView(row: RecordProjectionRow) {
     username: row.username,
     name: row.name,
     source: row.source,
+    pool_scope: row.pool_scope === 'public' ? 'public' as const : 'category' as const,
     category_id: row.category_id ? String(row.category_id) : null,
-    category_name: row.category_name ?? null,
+    category_name: row.pool_scope === 'public' ? '公共题库' : row.category_name ?? null,
     difficulty: row.difficulty,
     release_id: row.release_id ? String(row.release_id) : null,
     attempt_no: Number(row.attempt_no),
@@ -113,6 +116,7 @@ export class ExamRecordsService {
   private projection(): SelectQueryBuilder<ExamRecord> {
     return applyVisibleExamRecordScope(this.recordRepo.createQueryBuilder('record'))
       .leftJoin(TrainingCategory, 'category', 'category.id = record.category_id')
+      .leftJoin(PaperRelease, 'release', 'release.id = record.release_id')
       .select('record.id', 'record_id')
       .addSelect('record.paper_id', 'paper_id')
       .addSelect('paper.title', 'paper_title')
@@ -120,6 +124,7 @@ export class ExamRecordsService {
       .addSelect('learner.username', 'username')
       .addSelect('learner.real_name', 'name')
       .addSelect('record.source', 'source')
+      .addSelect("COALESCE(release.pool_scope, 'category')", 'pool_scope')
       .addSelect('record.category_id', 'category_id')
       .addSelect('category.name', 'category_name')
       .addSelect('record.difficulty', 'difficulty')

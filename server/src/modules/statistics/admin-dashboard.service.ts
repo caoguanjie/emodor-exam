@@ -227,7 +227,7 @@ export class AdminDashboardService {
     const now = new Date();
     const manager = this.dataSource.manager;
     const exams = await manager.query(`SELECT paper.id AS paper_id, paper.title, paper.status,
-      publication.id AS release_id, publication.category_id, publication.rule_snapshot, publication.released_at
+      publication.id AS release_id, publication.pool_scope, publication.category_id, publication.rule_snapshot, publication.released_at
       FROM exam_paper paper INNER JOIN paper_release publication ON publication.paper_id = paper.id
         AND publication.version_no = (SELECT MAX(latest.version_no) FROM paper_release latest WHERE latest.paper_id = paper.id)
       WHERE paper.business_scope = 'training'
@@ -252,9 +252,10 @@ export class AdminDashboardService {
         const rule: RuleSnapshot | null = typeof row.rule_snapshot === 'string' ? JSON.parse(row.rule_snapshot) : row.rule_snapshot || null;
         const releaseId = String(row.release_id);
         const categoryId = row.category_id != null ? String(row.category_id) : null;
+        const poolScope = row.pool_scope === 'public' ? 'public' : 'category';
         return {
-          paper_id: String(row.paper_id), title: row.title, category_id: categoryId,
-          category_name: categoryId ? names.get(categoryId) || null : null, status: row.status, release_id: releaseId,
+          paper_id: String(row.paper_id), title: row.title, pool_scope: poolScope, category_id: categoryId,
+          category_name: poolScope === 'public' ? '公共题库' : categoryId ? names.get(categoryId) || null : null, status: row.status, release_id: releaseId,
           total_score: rule ? Number(rule.totalCents) / 100 : null,
           duration_minutes: rule ? Number(rule.durationMinutes) : null,
           pass_score: rule ? Number(rule.passCents) / 100 : null,

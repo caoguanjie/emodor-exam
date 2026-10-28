@@ -216,7 +216,7 @@ async function assertTrainingOverviewAndSorting(ctx, admin, adminId, readOnlyAct
   assert.equal(overview.data.items.length, 2);
   const row = overview.data.items.find((item) => item.paper_id === paper.id);
   assert.deepEqual(row, {
-    paper_id: paper.id, title: paper.title, category_id: categories[0].id, category_name: categories[0].name,
+    paper_id: paper.id, title: paper.title, pool_scope: 'category', category_id: categories[0].id, category_name: categories[0].name,
     status: 'published', release_id: releaseId, total_score: 100, duration_minutes: 30, pass_score: 60,
     participant_count: 5, finalized_users: 3, average_score: 72,
   }, 'overview must count latest-release starters, then average one best score per user across difficulties');
@@ -255,7 +255,7 @@ async function assertTrainingOverviewAndSorting(ctx, admin, adminId, readOnlyAct
   const summary = await ctx.request(admin.actor, 'GET', `/statistics/training/summary?paper_id=${paper.id}`);
   assert.equal(summary.status, 200, JSON.stringify(summary));
   assert.deepEqual(summary.data.exam, {
-    paper_id: paper.id, title: paper.title, category_id: categories[0].id,
+    paper_id: paper.id, title: paper.title, pool_scope: 'category', category_id: categories[0].id, mode: 'random',
     total_score: 100, duration_minutes: 30, pass_score: 60, excellent_score: null,
   });
   const easy = summary.data.score_groups.find((group) => group.difficulty === 'easy');
@@ -316,7 +316,7 @@ async function assertTrainingOverviewAndSorting(ctx, admin, adminId, readOnlyAct
   assert.equal(exported.status, 200);
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(exported.body);
-  const sheet = workbook.getWorksheet('难度排名');
+  const sheet = workbook.getWorksheet('成绩排名');
   assert.equal(sheet.rowCount, 2, 'export must contain the sorted current page only');
   assert.deepEqual([sheet.getCell('A2').value, String(sheet.getCell('B2').value), sheet.getCell('C2').value, sheet.getCell('F2').value, sheet.getCell('G2').value, String(sheet.getCell('H2').value)], [1, String(users[1].id), '排序乙', 90, 300, sortedPage.data.items[0].record_id]);
   for (const query of ['sort_by=name', 'sort_order=up']) {
@@ -325,6 +325,116 @@ async function assertTrainingOverviewAndSorting(ctx, admin, adminId, readOnlyAct
       assert.equal(invalid.status, 400, `invalid ranking/export sort must be rejected: ${query}`);
     }
   }
+}
+
+async function assertPublicStatistics(ctx, admin, adminId) {
+  assert.match(ctx.env.DB_DATABASE, /^ruleexam_test_/, 'public statistics fixtures require an isolated database');
+  const tag = `T7公共${randomBytes(4).toString('hex')}`;
+  const category = await ctx.queryTestDb('INSERT INTO training_category (name,status,created_by) VALUES (?,1,?)', [`${tag} 工种`, adminId]);
+  const rule = { totalCents: 10000, passCents: 6000, durationMinutes: 30, maxAttempts: 3, partialCreditRatio: 0.5,
+    rules: [{ type: 'single', count: 1, scoreCents: 10000 }] };
+  const oldRule = { ...rule, passCents: 7000 };
+  const paper = await ctx.queryTestDb(`INSERT INTO exam_paper
+    (business_scope,mode,pool_scope,category_id,rule_config,title,total_score,pass_score,duration_minutes,max_attempts,partial_credit_ratio,status,created_by)
+    VALUES ('training','random','public',NULL,?,?,100,60,30,3,0.5,'published',?)`, [JSON.stringify(rule), tag, adminId]);
+  const paperId = String(paper.insertId);
+  const release = async (version, snapshot) => {
+    const result = await ctx.queryTestDb(`INSERT INTO paper_release
+      (paper_id,version_no,business_scope,mode,pool_scope,category_id,requires_learning,rule_snapshot,created_by)
+      VALUES (?,?,'training','random','public',NULL,0,?,?)`, [paperId, version, JSON.stringify(snapshot), adminId]);
+    return String(result.insertId);
+  };
+  const priorReleaseId = await release(1, oldRule);
+  const releaseId = await release(2, rule);
+  const users = [];
+  for (const [label, categoryId, source] of [
+    ['null_easy', null, 'institution'], ['cross_hard', String(category.insertId), 'external'],
+    ['null_timeout', null, 'external'], ['old_public', null, 'institution'], ['not_started', null, 'institution'],
+  ]) users.push(await createUser(ctx, { label, name: `${tag}_${label}`, categoryId, source, status: 1 }));
+  const addRecord = (user, values) => insertRecord(ctx, {
+    paperId, releaseId, categoryId: null, rule, userId: user.id, source: 'institution', difficulty: 'easy', attemptNo: 1,
+    status: 'passed', score: 80, startedAt: '2026-10-28 01:00:00.000', deadlineAt: '2026-10-28 01:30:00.000',
+    submittedAt: '2026-10-28 01:10:00.000', method: 'manual', gradingState: 'finalized', gradedAt: '2026-10-28 01:10:00.000', ...values,
+  });
+  await addRecord(users[0], { score: 50, status: 'failed' });
+  await addRecord(users[0], { attemptNo: 2 });
+  await addRecord(users[1], { source: 'external', difficulty: 'hard', score: 90 });
+  await addRecord(users[2], { source: 'external', difficulty: 'hard', status: 'timeout', score: 0, submittedAt: null, method: null, gradingState: 'not_submitted', gradedAt: null });
+  await addRecord(users[3], { releaseId: priorReleaseId, rule: oldRule, score: 100 });
+  await ctx.queryTestDb("UPDATE sys_user SET source='external' WHERE id=?", [users[0].id]);
+  await ctx.queryTestDb("UPDATE sys_user SET category_id=NULL,source='institution' WHERE id=?", [users[1].id]);
+
+  const summary = await ctx.request(admin.actor, 'GET', `/statistics/training/summary?paper_id=${paperId}`);
+  assert.equal(summary.status, 200, JSON.stringify(summary));
+  assert.deepEqual(summary.data.exam, { paper_id: paperId, title: tag, pool_scope: 'public', category_id: null,
+    mode: 'random', total_score: 100, duration_minutes: 30, pass_score: 60, excellent_score: null });
+  assert.equal(summary.data.participation_rate, null, 'public exams do not define an expected-audience rate');
+  assert.equal(summary.data.eligible_count, 0, 'numeric compatibility field must not estimate an audience');
+  assert.deepEqual([summary.data.historical_started_count, summary.data.submitted_users, summary.data.submitted_attempts, summary.data.finalized_users], [4, 3, 4, 2]);
+  assert.deepEqual(summary.data.score_groups.map(item => [item.difficulty, item.finalized_users, item.average_score]), [['easy', 1, 80], ['hard', 1, 90]]);
+  const overview = await ctx.request(admin.actor, 'GET', `/statistics/training/overview?keyword=${encodeURIComponent(tag)}`);
+  assert.equal(overview.status, 200);
+  assert.equal(overview.data.total, 1);
+  assert.deepEqual({ scope: overview.data.items[0].pool_scope, category: overview.data.items[0].category_id, label: overview.data.items[0].category_name,
+    participants: overview.data.items[0].participant_count, finalized: overview.data.items[0].finalized_users, average: overview.data.items[0].average_score },
+  { scope: 'public', category: null, label: '公共题库', participants: 3, finalized: 2, average: 85 });
+  for (const [source, difficulty, user, score] of [['institution', 'easy', users[0], 80], ['external', 'hard', users[1], 90]]) {
+    const query = `paper_id=${paperId}&source=${source}&difficulty=${difficulty}`;
+    const ranking = await ctx.request(admin.actor, 'GET', `/statistics/training/ranking?${query}`);
+    assert.equal(ranking.status, 200);
+    assert.deepEqual(ranking.data.items.map(item => [item.user_id, item.source, item.difficulty, item.score, item.rank]),
+      [[String(user.id), source, difficulty, score, 1]], 'ranking must use frozen source/difficulty and only the latest matching release');
+    const exported = await ctx.request(admin.actor, 'GET', `/statistics/training/export?${query}`);
+    assert.equal(exported.status, 200);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(exported.body);
+    const sheet = workbook.getWorksheet('成绩排名');
+    assert.equal(sheet.rowCount, 2);
+    assert.deepEqual([String(sheet.getCell('B2').value), sheet.getCell('F2').value], [String(user.id), score]);
+  }
+  for (const endpoint of ['ranking', 'export']) {
+    const result = await ctx.request(admin.actor, 'GET', `/statistics/training/${endpoint}?paper_id=${paperId}`);
+    assert.equal(result.status, 400, 'a public random exam cannot mix difficulties in a ranking');
+  }
+  const records = await ctx.request(admin.actor, 'GET', `/admin/exam-records?paper_id=${paperId}`);
+  assert.equal(records.status, 200, JSON.stringify(records));
+  assert.equal(records.data.total, 5);
+  for (const row of records.data.items) {
+    assert.equal(row.pool_scope, 'public');
+    assert.equal(row.category_id, null);
+    assert.equal(row.category_name, '公共题库');
+  }
+  const detail = await ctx.request(admin.actor, 'GET', `/admin/exam-records/${records.data.items[0].record_id}`);
+  assert.equal(detail.status, 200);
+  assert.equal(detail.data.pool_scope, 'public');
+  const options = await ctx.request(admin.actor, 'GET', '/statistics/training/options');
+  assert.equal(options.status, 200);
+  assert.equal(options.data.papers.find(item => item.id === paperId).pool_scope, 'public');
+  const recent = await ctx.request(admin.actor, 'GET', '/admin/dashboard/recent-exams');
+  assert.equal(recent.status, 200);
+  const recentRow = recent.data.items.find(item => item.paper_id === paperId);
+  assert.ok(recentRow, 'latest public exam must be present in recent exams');
+  assert.deepEqual([recentRow.pool_scope, recentRow.category_name, recentRow.participant_count, recentRow.average_score], ['public', '公共题库', 3, 85]);
+
+  // Zero-participant public exams keep null rates and scores, with the same scope.
+  const emptyPaper = await ctx.queryTestDb(`INSERT INTO exam_paper
+    (business_scope,mode,pool_scope,category_id,rule_config,title,total_score,pass_score,duration_minutes,max_attempts,partial_credit_ratio,status,created_by)
+    VALUES ('training','random','public',NULL,?,?,100,60,30,3,0.5,'published',?)`, [JSON.stringify(rule), `${tag} 空场`, adminId]);
+  await ctx.queryTestDb(`INSERT INTO paper_release
+    (paper_id,version_no,business_scope,mode,pool_scope,category_id,requires_learning,rule_snapshot,created_by)
+    VALUES (?,1,'training','random','public',NULL,0,?,?)`, [emptyPaper.insertId, JSON.stringify(rule), adminId]);
+  const empty = await ctx.request(admin.actor, 'GET', `/statistics/training/summary?paper_id=${emptyPaper.insertId}`);
+  assert.equal(empty.status, 200);
+  assert.deepEqual([empty.data.exam.pool_scope, empty.data.historical_started_count, empty.data.submitted_users, empty.data.participation_rate, empty.data.score_groups], ['public', 0, 0, null, []]);
+
+  const learner = await learnerSession(ctx, users[4].id);
+  const listed = await ctx.request(learner, 'GET', '/me/exams?page_size=100');
+  assert.equal(listed.status, 200);
+  const dashboard = await ctx.request(admin.actor, 'GET', '/admin/dashboard');
+  assert.equal(dashboard.status, 200);
+  assert.equal(listed.data.total, dashboard.data.metrics.published_paper_count, 'a new learner without an occupation sees the same published exams counted by the dashboard');
+  for (const target of [paperId, String(emptyPaper.insertId)]) assert.ok(listed.data.items.some(item => String(item.paper_id) === target), 'public exams remain visible without an occupation');
+  console.log('[T7] public/null statistics, frozen source/difficulty, best scores, ranking/export, records and dashboard/list counts verified');
 }
 
 export async function run(ctx) {
@@ -479,7 +589,7 @@ export async function run(ctx) {
   assert.equal(exported.status, 200);
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(exported.body);
-  const sheet = workbook.getWorksheet('难度排名');
+  const sheet = workbook.getWorksheet('成绩排名');
   assert.equal(sheet.rowCount, 2);
   assert.deepEqual({
     rank: sheet.getCell('A2').value,
@@ -535,4 +645,5 @@ export async function run(ctx) {
   const learnerActor = await learnerSession(ctx, learnerB.id);
   await assertTrainingOverviewAndSorting(ctx, admin, adminRow.id, narrowLogin.actor, learnerActor);
   await assertLegacyPureTimeoutStatistics(ctx, admin, adminRow.id);
+  await assertPublicStatistics(ctx, admin, adminRow.id);
 }
