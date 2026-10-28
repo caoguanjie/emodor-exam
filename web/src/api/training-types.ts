@@ -7,6 +7,8 @@ export type Difficulty = 'easy' | 'medium' | 'hard';
 export type ActiveDifficulty = 'easy' | 'hard';
 export type ExamDifficulty = Difficulty | 'mixed' | 'unknown';
 export type QuestionType = 'single' | 'multiple' | 'judgment';
+export type ExamPurpose = 'formal' | 'practice';
+export type AttemptLimitKind = 'limited' | 'unlimited' | 'unknown';
 
 export interface Page<T> {
   items: T[];
@@ -68,7 +70,7 @@ export interface RuleSnapshot {
   totalCents: number;
   passCents: number;
   durationMinutes: number;
-  maxAttempts: number;
+  maxAttempts: number | null;
   partialCreditRatio: number;
   rules: PoolRule[];
 }
@@ -100,6 +102,7 @@ export interface ExamRecordOptions {
 }
 
 export interface ExamRecordSummary {
+  exam_purpose?: ExamPurpose;
   pool_scope?: PoolScope;
   record_id: Id;
   paper_id: Id;
@@ -725,7 +728,28 @@ export interface PaperRuleInput {
   score_cents: number;
 }
 
+export interface PracticePaperTemplate {
+  title: string;
+  exam_purpose: 'practice';
+  mode: 'random';
+  pool_scope: 'public';
+  category_id: null;
+  rules: PaperRuleInput[];
+  total_score: number;
+  pass_score: number;
+  duration_minutes: number;
+  partial_credit_ratio: number;
+  max_attempts: null;
+  requires_learning: boolean;
+  required_learning_minutes: number | null;
+  course_ids: Id[];
+  regulation_ids: [];
+  remark: null;
+  sort_order: 0;
+}
+
 export interface TrainingPaperSummary {
+  exam_purpose?: ExamPurpose;
   created_by_name?: string | null;
   updated_by_name?: string | null;
   id: Id;
@@ -744,7 +768,7 @@ export interface TrainingPaperSummary {
   total_score: number;
   pass_score: number;
   duration_minutes: number;
-  max_attempts: number;
+  max_attempts: number | null;
   partial_credit_ratio: number;
   status: TrainingPaperStatus;
   created_at?: string;
@@ -792,6 +816,7 @@ export interface PaperPreviewQuestion extends QuestionContentFields {
 }
 
 export interface PaperPreview {
+  exam_purpose?: ExamPurpose;
   paper_id: Id;
   release_id: Id | null;
   mode: PaperMode;
@@ -802,7 +827,7 @@ export interface PaperPreview {
     total_cents: number;
     pass_cents: number;
     duration_minutes: number;
-    max_attempts: number;
+    max_attempts: number | null;
     partial_credit_ratio: number;
     rules: PaperRuleInput[];
   };
@@ -841,6 +866,7 @@ export interface AttemptQuestion {
 }
 
 export interface AttemptView {
+  exam_purpose?: ExamPurpose;
   record_id: Id;
   paper_id: Id;
   release_id: Id | null;
@@ -894,6 +920,8 @@ export type FinalResultItemCanonical = FinalResultItemV2 | FinalResultItemV3;
 export type FinalResultItem = FinalResultItemCanonical | LegacyFinalResultItem;
 
 export interface FinalResult {
+  exam_purpose?: ExamPurpose;
+  paper_id?: Id;
   record_id: Id;
   /** 本次冻结规则；旧结果缺失时不以当前试卷配置补值。 */
   total_score?: number | null;
@@ -912,6 +940,7 @@ export interface FinalResult {
 }
 
 export interface ExamHistoryItem {
+  exam_purpose?: ExamPurpose;
   record_id: Id;
   paper_id: Id;
   paper_title: string | null;
@@ -928,4 +957,4 @@ export interface ExamHistoryItem {
   graded_at: string | null;
 }
 
-export type WrongItem = FinalResultItem & { record_id: Id; submitted_at: string };
+export type WrongItem = FinalResultItem & { record_id: Id; submitted_at: string; exam_purpose?: ExamPurpose; paper_id?: Id; paper_title?: string | null };

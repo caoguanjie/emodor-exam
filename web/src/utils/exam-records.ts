@@ -13,6 +13,9 @@ export const examRecordResultOptions: Array<{ value: ExamRecordResultStatus; lab
 export const examRecordDifficultyOptions = [
   { value: 'easy', label: '简单' }, { value: 'hard', label: '困难' },
 ];
+export const examRecordPurposeOptions = [
+  { value: 'formal', label: '正式考试' }, { value: 'practice', label: '模拟考' },
+];
 
 export function examRecordResultStatus(record: RecordFacts): ExamRecordResultStatus {
   return record.result_status || record.status;
@@ -51,6 +54,7 @@ export interface ExamRecordsFilters {
   paper_id: string;
   user_id: string;
   category_id: string;
+  exam_purpose: string;
   difficulty: string;
   result_status: string;
   date_from: string;
@@ -66,6 +70,10 @@ function activeResultStatus(value: unknown): string {
   const status = queryText(value);
   return examRecordResultOptions.some(option => option.value === status) ? status : '';
 }
+function activePurpose(value: unknown): string {
+  const purpose = queryText(value);
+  return examRecordPurposeOptions.some(option => option.value === purpose) ? purpose : '';
+}
 
 export function examRecordsFiltersFromRoute(route: LocationQuery): ExamRecordsFilters {
   const page = Number(queryText(route.page));
@@ -77,15 +85,16 @@ export function examRecordsFiltersFromRoute(route: LocationQuery): ExamRecordsFi
     page_size: [20, 50, 100].includes(size) ? size : 20,
     keyword: queryText(route.keyword), paper_id: queryText(route.paper_id), user_id: queryText(route.user_id),
     category_id: queryText(route.category_id), difficulty: activeDifficulty(route.difficulty),
+    exam_purpose: activePurpose(route.exam_purpose),
     result_status: activeResultStatus(route.result_status), date_from: dateFrom && dateTo ? dateFrom : '', date_to: dateFrom && dateTo ? dateTo : '',
   };
 }
 
 export function examRecordsParams(filters: ExamRecordsFilters): Record<string, string | number> {
   const params: Record<string, string | number> = { page: filters.page, page_size: filters.page_size };
-  for (const key of ['keyword', 'paper_id', 'user_id', 'category_id', 'difficulty', 'result_status', 'date_from', 'date_to'] as const) {
+  for (const key of ['keyword', 'paper_id', 'user_id', 'category_id', 'exam_purpose', 'difficulty', 'result_status', 'date_from', 'date_to'] as const) {
     if ((key === 'date_from' || key === 'date_to') && !(filters.date_from && filters.date_to)) continue;
-    const value = key === 'difficulty' ? activeDifficulty(filters[key]) : key === 'result_status' ? activeResultStatus(filters[key]) : filters[key].trim();
+    const value = key === 'difficulty' ? activeDifficulty(filters[key]) : key === 'result_status' ? activeResultStatus(filters[key]) : key === 'exam_purpose' ? activePurpose(filters[key]) : filters[key].trim();
     if (value) params[key] = value;
   }
   return params;

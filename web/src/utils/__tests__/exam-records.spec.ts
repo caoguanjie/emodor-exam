@@ -23,6 +23,15 @@ describe('exam record business display', () => {
 });
 
 describe('exam record route boundaries', () => {
+  it.each(['formal', 'practice'])('keeps the %s purpose when restoring and serializing filters', exam_purpose => {
+    const filters = examRecordsFiltersFromRoute({ exam_purpose, paper_id: '7' });
+    expect(examRecordsParams(filters)).toEqual({ page: 1, page_size: 20, paper_id: '7', exam_purpose });
+    expect(examRecordsRouteQuery(filters).exam_purpose).toBe(exam_purpose);
+  });
+  it.each([undefined, 'all', 'bad', ['practice']])('drops invalid or absent purpose %s instead of creating an invisible filter', exam_purpose => {
+    expect(examRecordsParams(examRecordsFiltersFromRoute(exam_purpose === undefined ? {} : { exam_purpose }))).toEqual({ page: 1, page_size: 20 });
+  });
+
   it('keeps exact IDs and dates while excluding display-only labels and retired parameters from HTTP', () => {
     const filters = examRecordsFiltersFromRoute({ page: '3', page_size: '50', user_id: '9', paper_id: '7', category_id: '3', keyword: ' learner ', difficulty: 'hard', result_status: 'failed', date_from: '2026-10-26', date_to: '2026-10-27', learner_name: '学员甲', paper_title: '安全卷', source: 'external', status: 'submitted', grading_state: 'finalized' });
     expect(examRecordsParams(filters)).toEqual({ page: 3, page_size: 50, user_id: '9', paper_id: '7', category_id: '3', keyword: 'learner', difficulty: 'hard', result_status: 'failed', date_from: '2026-10-26', date_to: '2026-10-27' });

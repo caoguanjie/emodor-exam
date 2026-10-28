@@ -14,7 +14,7 @@
       </section>
       <section class="exam-overview" aria-label="本次考试">
         <el-descriptions :column="2" border label-width="110px" class="exam-description">
-          <el-descriptions-item label="试卷名称" :span="2">{{ record.paper_title }}</el-descriptions-item>
+          <el-descriptions-item label="试卷名称" :span="2"><el-tag size="small" type="info" effect="plain">{{ record.exam_purpose === 'practice' ? '模拟考' : '正式考试' }}</el-tag> {{ record.paper_title }}</el-descriptions-item>
           <el-descriptions-item label="考试成绩">{{ examRecordScoreLabel(record) }}</el-descriptions-item>
           <el-descriptions-item label="考试状态"><el-tag :type="examRecordResultType(record)">{{ examRecordResultLabel(record) }}</el-tag></el-descriptions-item>
           <el-descriptions-item label="考试次数">第 {{ record.attempt_no }} 次</el-descriptions-item>

@@ -53,6 +53,26 @@ const puts = () => transport.calls.filter(c => c.method === 'put');
 function saveButton() { return Array.from(document.querySelectorAll<HTMLButtonElement>('.paper-edit-dialog .el-dialog__footer button')).find(button => button.textContent?.trim() === '保存')!; }
 
 describe('paper basic configuration dialog', () => {
+  it('displays immutable practice purpose and unlimited attempts, preserving null on save and reopen', async () => {
+    const original = transport.respond;
+    transport.respond = async (method, path, payload) => method === 'get' && path === '/admin/papers/2'
+      ? { ...latest, exam_purpose: 'practice', mode: 'random', pool_scope: 'public', category_id: null, total_score: 100,
+        pass_score: 60, max_attempts: null, rules: [{ type: 'single', count: 50, score_cents: 200 }], questions: [] }
+      : original(method, path, payload);
+    const { wrapper, state: listState } = await list();
+    await listState.editPaper({ ...row, mode: 'random' }); await flushPromises();
+    const { component, state } = dialog(wrapper);
+    expect(state.form.max_attempts).toBeNull();
+    expect(component.text()).toContain('模拟考（不可变更）'); expect(component.text()).toContain('不限次数');
+    expect(component.text()).not.toContain('已有考试归属沿用首次开考时冻结的次数上限');
+    state.form.title = '模拟卷修改'; await state.save();
+    expect(puts()).toHaveLength(1); expect(puts()[0]?.payload).toMatchObject({ title: '模拟卷修改', max_attempts: null,
+      rules: [{ type: 'single', count: 50, score_cents: 200 }], course_ids: ['10'], required_learning_minutes: 90 });
+    expect(puts()[0]?.payload).not.toHaveProperty('exam_purpose');
+    await listState.editPaper({ ...row, mode: 'random' }); await flushPromises();
+    expect(state.form.max_attempts).toBeNull(); expect(state.visible).toBe(true);
+  });
+
   it('loads public learning courses with an explicit scope and keeps the null category when saving', async () => {
     const original = transport.respond;
     transport.respond = async (method, path, payload) => method === 'get' && path === '/admin/papers/2'

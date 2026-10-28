@@ -169,9 +169,9 @@ describe('paper list operations', () => {
     await state.handlePaperAction(random, 'manage');
     expect(router.currentRoute.value.fullPath).toBe('/admin/papers');
   });
-  it('renders seven management columns without exposing learning requirements in a row', async () => {
+  it('renders management columns including purpose without exposing learning requirements in a row', async () => {
     const { wrapper } = await list();
-    expect(wrapper.findAll('.el-table__header th').map(h => h.text())).toEqual(['试卷名称', '培训类别', '考试时间', '状态', '备注', '创建时间', '操作']);
+    expect(wrapper.findAll('.el-table__header th').map(h => h.text())).toEqual(['试卷名称', '考试用途', '培训类别', '考试时间', '状态', '备注', '创建时间', '操作']);
     const row = wrapper.findAll('.el-table__body tr').find(r => r.text().includes('草稿试卷'))!;
     expect(row.text()).toContain('产业工人'); expect(row.text()).toContain('45 分钟'); expect(row.text()).toContain('班组考核备注');
     expect(row.text()).not.toContain('学习'); expect(row.text()).not.toContain('开启');

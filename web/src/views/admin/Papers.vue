@@ -14,6 +14,11 @@
               <el-option v-for="item in trainingStatuses" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </el-form-item>
+          <el-form-item label="考试用途">
+            <el-select v-model="trainingQuery.exam_purpose" placeholder="全部用途" clearable>
+              <el-option label="正式考试" value="formal" /><el-option label="模拟考" value="practice" />
+            </el-select>
+          </el-form-item>
           <template #actions><el-button type="primary" @click="searchTraining">查询</el-button><el-button @click="resetTrainingQuery">重置</el-button></template>
         </FitsListSearch>
       </template>
@@ -22,16 +27,18 @@
       </template>
       <el-table v-loading="loading" :data="trainingItems">
         <el-table-column prop="title" label="试卷名称" min-width="220" show-overflow-tooltip />
+        <el-table-column label="考试用途" width="110"><template #default="{ row }">{{ row.exam_purpose === 'practice' ? '模拟考' : '正式考试' }}</template></el-table-column>
         <el-table-column label="培训类别" min-width="150"><template #default="{ row }">{{ row.pool_scope === 'public' ? '公共题库' : categoryName(row.category_id) }}</template></el-table-column>
         <el-table-column label="考试时间" width="120"><template #default="{ row }">{{ row.duration_minutes }} 分钟</template></el-table-column>
         <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
         <el-table-column prop="remark" label="备注" min-width="180" show-overflow-tooltip><template #default="{ row }">{{ row.remark || '—' }}</template></el-table-column>
         <el-table-column label="创建时间" width="170"><template #default="{ row }">{{ formatDateTime(row.created_at) }}</template></el-table-column>
-        <el-table-column label="操作" width="460" align="center" fixed="right"><template #default="{ row }"><FitsTableActions class="paper-row-actions" :data-paper-id="row.id">
+        <el-table-column label="操作" width="540" align="center" fixed="right"><template #default="{ row }"><FitsTableActions class="paper-row-actions" :data-paper-id="row.id">
           <FitsTableAction v-if="canEdit(row)" type="primary" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'manage')">试卷管理</FitsTableAction>
           <FitsTableAction v-if="canModify(row)" type="primary" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'edit')">修改</FitsTableAction>
           <FitsTableAction type="primary" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'preview')">预览/打印</FitsTableAction>
           <FitsTableAction v-if="row.mode === 'fixed' && auth.can('papers:write')" type="primary" :loading="busyActions.has(`copy:${row.id}`)" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'copy')">复制</FitsTableAction>
+          <FitsTableAction v-if="canCreatePractice(row)" type="primary" :loading="busyActions.has(`practice:${row.id}`)" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'practice')">创建模拟卷</FitsTableAction>
           <FitsTableAction v-if="row.status === 'draft' && auth.can('papers:publish')" type="success" :loading="busyActions.has(`publish:${row.id}`)" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'publish')">发布</FitsTableAction>
           <FitsTableAction v-if="row.status === 'published' && auth.can('papers:read')" type="primary" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'qr')">考试入口二维码</FitsTableAction>
           <FitsTableAction v-if="canWithdraw(row)" type="warning" :loading="busyActions.has(`withdraw:${row.id}`)" :disabled="isRowBusy(row)" @click="handlePaperAction(row, 'withdraw')">撤回发布</FitsTableAction>
@@ -51,7 +58,8 @@
     <el-dialog v-model="trainingCreateVisible" title="新增试卷" width="720px" class="re-form-dialog" :before-close="beforeTrainingCreateClose">
       <el-form label-width="120px" label-position="left" :disabled="creating" @submit.prevent>
         <el-form-item label="试卷名称" required><el-input v-model="trainingCreate.title" maxlength="128" /></el-form-item>
-        <el-form-item label="组卷方式" required><el-radio-group v-model="trainingCreate.mode"><el-radio value="fixed">固定试卷</el-radio><el-radio value="random">随机试卷</el-radio></el-radio-group></el-form-item>
+        <el-form-item label="考试用途" required><el-radio-group v-model="trainingCreate.exam_purpose"><el-radio value="formal">正式考试</el-radio><el-radio value="practice">模拟考</el-radio></el-radio-group><div class="hint">保存后用途不可变更，需要另一种用途时请新建试卷。</div></el-form-item>
+        <el-form-item label="组卷方式" required><span v-if="trainingCreate.exam_purpose === 'practice'">随机试卷（模拟考固定使用公共题库）</span><el-radio-group v-else v-model="trainingCreate.mode"><el-radio value="fixed">固定试卷</el-radio><el-radio value="random">随机试卷</el-radio></el-radio-group></el-form-item>
         <el-form-item label="考试时间" required>
           <el-input v-model.number="trainingCreate.duration_minutes" class="paper-value-input" type="number" inputmode="numeric" :min="1" :max="1440" :step="1" placeholder="请输入考试时间">
             <template #append>分钟</template>
@@ -70,7 +78,8 @@
           </el-input>
         </el-form-item>
         <el-form-item v-if="trainingCreate.mode === 'random'" label="随机抽题规则" required><RandomPaperRules v-model="trainingCreate.rules" :total-score="trainingCreate.total_score" :disabled="creating" /></el-form-item>
-        <el-form-item label="最多考试次数" required>
+        <el-form-item v-if="trainingCreate.exam_purpose === 'practice'" label="考试次数">不限次数<div class="hint">每次模拟独立计次，不消耗正式考试次数。</div></el-form-item>
+        <el-form-item v-else label="最多考试次数" required>
           <el-input v-model.number="trainingCreate.max_attempts" class="paper-value-input" type="number" inputmode="numeric" :min="1" :max="100" :step="1"><template #append>次</template></el-input>
           <div class="hint">每人每份试卷累计计次，成功开考即占一次，超时未交卷也计次。</div>
         </el-form-item>
@@ -108,7 +117,7 @@ import PaperEditDialog from '../../components/PaperEditDialog.vue';
 import RandomPaperRules from '../../components/RandomPaperRules.vue';
 import ExamEntryQrDialog from '../../components/ExamEntryQrDialog.vue';
 import { defaultRandomRules, selectedRandomRules, validateRandomRules } from '../../utils/random-paper-rules';
-import type { Id, Page, PaperMode, PaperRuleInput, PoolScope, TrainingPaperStatus, TrainingPaperSummary } from '../../api/training-types';
+import type { ExamPurpose, Id, Page, PaperMode, PaperRuleInput, PoolScope, PracticePaperTemplate, TrainingPaperStatus, TrainingPaperSummary } from '../../api/training-types';
 import { useUnsavedChanges } from '../../composables/useUnsavedChanges';
 import { useAuthStore } from '../../stores/auth';
 import { formatDateTime } from '../../utils/format';
@@ -117,9 +126,10 @@ interface NamedOption { id: Id; name?: string; title?: string }
 interface TrainingCreateDraft {
   title: string; category_id: Id | '' | null; course_ids: Id[]; requires_learning: boolean;
   required_learning_minutes: number | null; remark: string;
-  total_score: number; pass_score: number; duration_minutes: number; mode: PaperMode; rules: PaperRuleInput[]; max_attempts: number;
+  total_score: number; pass_score: number; duration_minutes: number; mode: PaperMode; rules: PaperRuleInput[]; max_attempts: number | null;
+  exam_purpose: ExamPurpose; partial_credit_ratio: number;
 }
-type TrainingCreatePayload = Omit<TrainingCreateDraft, 'remark' | 'rules'> & { pool_scope: PoolScope; rules?: PaperRuleInput[]; remark: string | null };
+type TrainingCreatePayload = Omit<TrainingCreateDraft, 'remark' | 'rules' | 'exam_purpose' | 'partial_credit_ratio'> & { exam_purpose?: ExamPurpose; partial_credit_ratio?: number; pool_scope: PoolScope; rules?: PaperRuleInput[]; remark: string | null };
 
 const router = useRouter();
 const route = useRoute();
@@ -134,7 +144,8 @@ const busyActions = reactive(new Set<string>());
 function canEdit(row: TrainingPaperSummary) { return row.mode === 'fixed' && row.pool_scope !== 'public' && typeof row.category_id === 'string' && /^[1-9]\d*$/.test(row.category_id) && row.status === 'draft' && auth.can('papers:write') && auth.can('questions:read'); }
 function canModify(row: TrainingPaperSummary) { return ['fixed', 'random'].includes(row.mode) && row.status === 'draft' && auth.can('papers:write'); }
 function canWithdraw(row: TrainingPaperSummary) { return row.business_scope === 'training' && row.status === 'published' && auth.can('papers:publish'); }
-function isRowBusy(row: TrainingPaperSummary) { return ['copy', 'publish', 'withdraw', 'delete'].some(action => busyActions.has(`${action}:${row.id}`)); }
+function canCreatePractice(row: TrainingPaperSummary) { return row.business_scope === 'training' && (row.exam_purpose ?? 'formal') === 'formal' && row.mode === 'random' && row.pool_scope === 'public' && ['draft', 'published'].includes(row.status) && auth.can('papers:read') && auth.can('papers:write'); }
+function isRowBusy(row: TrainingPaperSummary) { return ['copy', 'practice', 'publish', 'withdraw', 'delete'].some(action => busyActions.has(`${action}:${row.id}`)); }
 async function editPaper(row: TrainingPaperSummary) { if (canModify(row) && !isRowBusy(row)) await editDialog.value?.open(row); }
 function handlePaperAction(row: TrainingPaperSummary, command: string) {
   if (isRowBusy(row) || !viewActive || viewDestroyed) return;
@@ -142,6 +153,7 @@ function handlePaperAction(row: TrainingPaperSummary, command: string) {
   else if (command === 'edit') void editPaper(row);
   else if (command === 'preview') void previewDialog.value?.open(row, false);
   else if (command === 'copy') void copyPaper(row);
+  else if (command === 'practice') void createPracticePaper(row);
   else if (command === 'publish') void publishPaper(row);
   else if (command === 'qr' && row.status === 'published' && auth.can('papers:read')) qrVisible.value = true;
   else if (command === 'withdraw') void withdrawPaper(row);
@@ -165,7 +177,10 @@ async function publishPaper(row: TrainingPaperSummary) {
   busyActions.add(key);
   const context = viewContext;
   try {
-    await ElMessageBox.confirm('发布后将冻结试卷规则和当前题目版本。已开考学员后续重考沿用首次开考时的发布版本、难度和次数上限；重新发布不重置次数。确认发布？', '发布试卷', {type:'warning'});
+    const effect = row.exam_purpose === 'practice'
+      ? '所有学员的下一次新模拟使用本次发布配置，进行中的模拟和历史记录保留原版本。模拟考不限次数。'
+      : '已开考学员后续重考沿用首次开考时的发布版本、难度和次数上限；重新发布不重置次数。';
+    await ElMessageBox.confirm(`发布后将冻结试卷规则和当前题目版本。${effect}确认发布？`, '发布试卷', {type:'warning'});
     if (context !== viewContext || !viewActive || viewDestroyed || !auth.can('papers:publish') || row.status !== 'draft') return;
     await http.post(`/admin/papers/${row.id}/publish`);
     if (context === viewContext && viewActive && !viewDestroyed) { ElMessage.success('试卷已发布'); await loadTraining(); }
@@ -181,7 +196,10 @@ async function withdrawPaper(row: TrainingPaperSummary) {
   const isCurrent = () => context === viewContext && actionRoute === route.fullPath && viewActive && !viewDestroyed;
   try {
     const prompt = `确认撤回试卷“${row.title}”的发布并转为草稿？撤回后${nextStep}`;
-    await ElMessageBox.confirm(`${prompt}；重新发布前禁止新开考，进行中的考试可继续，历史成绩保留。重新发布不改变已开考学员冻结的版本、难度和次数上限，也不重置次数。`, '撤回发布', { type: 'warning', confirmButtonText: '撤回发布', cancelButtonText: '取消' });
+    const effect = row.exam_purpose === 'practice'
+      ? '重新发布后所有学员的下一次新模拟使用最新配置，进行中的模拟和历史记录保留原版本。'
+      : '重新发布不改变已开考学员冻结的版本、难度和次数上限，也不重置次数。';
+    await ElMessageBox.confirm(`${prompt}；重新发布前禁止新开考，进行中的考试可继续，历史成绩保留。${effect}`, '撤回发布', { type: 'warning', confirmButtonText: '撤回发布', cancelButtonText: '取消' });
     if (!isCurrent() || !canWithdraw(row)) return;
     await http.post(`/admin/papers/${row.id}/withdraw`);
     if (!isCurrent()) return;
@@ -212,7 +230,7 @@ const categories = ref<Array<{ id: Id; name: string }>>([]);
 const createCourses = ref<NamedOption[]>([]);
 const trainingItems = ref<TrainingPaperSummary[]>([]);
 const trainingTotal = ref(0);
-const trainingQuery = reactive({ page: 1, page_size: 20, keyword: '', category_id: '', status: '' });
+const trainingQuery = reactive({ page: 1, page_size: 20, keyword: '', category_id: '', status: '', exam_purpose: '' });
 const trainingCreateVisible = ref(false);
 const trainingCreate = reactive<TrainingCreateDraft>(emptyTrainingCreate());
 const trainingCreateDirty = ref(false);
@@ -222,6 +240,7 @@ let viewContext = 0;
 let loadOperation = 0;
 let createContext = 0;
 let createOperation = 0;
+let createRequest = 0;
 let viewActive = true;
 let viewDestroyed = false;
 const completedCreateScopes = new Set<'training'>();
@@ -231,11 +250,12 @@ const trainingStatuses = [
   { value: 'withdrawn', label: '已撤回' }, { value: 'archived', label: '已归档' },
 ];
 
-function emptyTrainingCreate(): TrainingCreateDraft { return { title: '', mode: 'fixed', category_id: '', course_ids: [], requires_learning: false, required_learning_minutes: null, remark: '', total_score: 100, pass_score: 60, duration_minutes: 30, max_attempts: 3, rules: defaultRandomRules() }; }
+function emptyTrainingCreate(): TrainingCreateDraft { return { title: '', exam_purpose: 'formal', mode: 'fixed', category_id: '', course_ids: [], requires_learning: false, required_learning_minutes: null, remark: '', total_score: 100, pass_score: 60, duration_minutes: 30, max_attempts: 3, partial_credit_ratio: .5, rules: defaultRandomRules() }; }
 function snapshotCreate(): TrainingCreateDraft { return JSON.parse(JSON.stringify(trainingCreate)); }
 function createPayload(submitted: TrainingCreateDraft): TrainingCreatePayload {
   return {
     title: submitted.title.trim(),
+    ...(submitted.exam_purpose === 'practice' ? { exam_purpose: 'practice', partial_credit_ratio: submitted.partial_credit_ratio } : {}),
     mode: submitted.mode,
     pool_scope: submitted.mode === 'random' ? 'public' : 'category',
     category_id: submitted.mode === 'random' ? null : submitted.category_id,
@@ -257,6 +277,11 @@ watch(() => trainingCreate.requires_learning, (enabled) => {
   if (!enabled) { trainingCreate.course_ids = []; trainingCreate.required_learning_minutes = null; }
   void loadCreateRelations();
 }, { flush: 'sync' });
+watch(() => trainingCreate.exam_purpose, purpose => {
+  if (!trainingCreateVisible.value) return;
+  if (purpose === 'practice') { trainingCreate.mode = 'random'; trainingCreate.category_id = null; trainingCreate.max_attempts = null; }
+  else trainingCreate.max_attempts = 3;
+}, { flush: 'sync' });
 watch(() => trainingCreate.mode, mode => {
   if (!trainingCreateVisible.value) return;
   trainingCreate.category_id = mode === 'random' ? null : categories.value[0]?.id || '';
@@ -269,7 +294,7 @@ function statusType(status: TrainingPaperStatus | string) { return status === 'p
 function categoryName(categoryId: Id | null) { return categoryId === null ? '未设置类别' : categories.value.find((item) => item.id === categoryId)?.name || `类别 ${categoryId}`; }
 function openDetail(id: Id | number, designer = false) { void router.push({ path: `/admin/papers/${id}`, query: { scope: 'training', ...(designer ? { designer: '1' } : {}) } }); }
 async function searchTraining() { trainingQuery.page = 1; await navigation.syncQuery({ status: trainingQuery.status || 'all' }); await loadTraining(); }
-function resetTrainingQuery() { Object.assign(trainingQuery, { page: 1, keyword: '', category_id: '', status: '' }); void searchTraining(); }
+function resetTrainingQuery() { Object.assign(trainingQuery, { page: 1, keyword: '', category_id: '', status: '', exam_purpose: '' }); void searchTraining(); }
 function nonBlankParams(source: Record<string, unknown>) { return Object.fromEntries(Object.entries(source).filter(([, value]) => value !== '')); }
 async function loadTraining() {
   const context = viewContext; const operation = ++loadOperation;
@@ -277,6 +302,7 @@ async function loadTraining() {
   try {
     const data = await http.get('/admin/papers', { params: nonBlankParams({ page: trainingQuery.page, page_size: trainingQuery.page_size,
       keyword: trainingQuery.keyword, category_id: trainingQuery.category_id, status: trainingStatuses.some(item => item.value === trainingQuery.status) ? trainingQuery.status : '',
+      exam_purpose: ['formal', 'practice'].includes(trainingQuery.exam_purpose) ? trainingQuery.exam_purpose : '',
     }) }) as Page<TrainingPaperSummary>;
     if (context !== viewContext || operation !== loadOperation) return;
     trainingItems.value = data.items; trainingTotal.value = data.total;
@@ -297,8 +323,32 @@ async function loadCreateRelations() {
   createCourses.value = coursesPage.items;
 }
 function onCreateCategoryChange() { trainingCreate.course_ids = []; void loadCreateRelations(); }
-function openTrainingCreate() { if (!auth.can('papers:read') || !auth.can('papers:write')) return false; createContext += 1; relationToken += 1; creating.value = false; trainingCreateVisible.value = false; createCourses.value = []; Object.assign(trainingCreate, emptyTrainingCreate(), { category_id: categories.value[0]?.id || '' }); createBaseline = snapshotCreate(); createUnsaved.markClean(); trainingCreateVisible.value = true; return true; }
-function closeTrainingCreateContext() { createContext += 1; relationToken += 1; creating.value = false; trainingCreateVisible.value = false; }
+function openTrainingCreate() { if (!auth.can('papers:read') || !auth.can('papers:write')) return false; createRequest += 1; createContext += 1; relationToken += 1; creating.value = false; trainingCreateVisible.value = false; createCourses.value = []; Object.assign(trainingCreate, emptyTrainingCreate(), { category_id: categories.value[0]?.id || '' }); createBaseline = snapshotCreate(); createUnsaved.markClean(); trainingCreateVisible.value = true; return true; }
+async function createPracticePaper(row: TrainingPaperSummary) {
+  if (!canCreatePractice(row) || isRowBusy(row) || !viewActive || viewDestroyed || creating.value) return;
+  const key = `practice:${row.id}`; const context = viewContext; const actionRoute = route.fullPath;
+  const request = ++createRequest;
+  const isCurrent = () => request === createRequest && context === viewContext && actionRoute === route.fullPath && viewActive && !viewDestroyed;
+  busyActions.add(key);
+  try {
+    if (!await createUnsaved.confirmDiscard(isCurrent)) return;
+    if (!isCurrent() || !canCreatePractice(row)) return;
+    const dialogContext = ++createContext;
+    const template = await http.get(`/admin/papers/${row.id}/practice-template`) as PracticePaperTemplate;
+    if (!isCurrent() || dialogContext !== createContext || !canCreatePractice(row)) return;
+    trainingCreateVisible.value = false; relationToken += 1; createCourses.value = [];
+    Object.assign(trainingCreate, emptyTrainingCreate(), {
+      title: template.title, exam_purpose: 'practice', mode: 'random', category_id: null, max_attempts: null,
+      rules: template.rules.map(rule => ({ ...rule })), total_score: template.total_score, pass_score: template.pass_score,
+      duration_minutes: template.duration_minutes, partial_credit_ratio: template.partial_credit_ratio,
+      requires_learning: template.requires_learning, course_ids: [...template.course_ids], required_learning_minutes: template.required_learning_minutes,
+    });
+    createBaseline = snapshotCreate(); createUnsaved.markClean(); trainingCreateVisible.value = true;
+    await loadCreateRelations();
+  } catch { /* A template request only prepares the form; never create or retry a write here. */ }
+  finally { busyActions.delete(key); }
+}
+function closeTrainingCreateContext() { createRequest += 1; createContext += 1; relationToken += 1; creating.value = false; trainingCreateVisible.value = false; }
 async function closeTrainingCreate() { if (await createUnsaved.confirmDiscard()) closeTrainingCreateContext(); }
 async function beforeTrainingCreateClose(done: () => void) { if (await createUnsaved.confirmDiscard()) { closeTrainingCreateContext(); done(); } }
 function flushCompletedCreates() {
@@ -317,7 +367,9 @@ async function createTraining(action: 'save' | 'design' = 'design') {
   if (!Number.isInteger(trainingCreate.duration_minutes) || trainingCreate.duration_minutes < 1 || trainingCreate.duration_minutes > 1440) { ElMessage.warning('考试时间须为 1–1440 的整数分钟'); return; }
   if (!validPoints(trainingCreate.total_score)) { ElMessage.warning('试卷总分须为 0.01～999.99 分，最多两位小数'); return; }
   if (!validPoints(trainingCreate.pass_score) || trainingCreate.pass_score > trainingCreate.total_score) { ElMessage.warning('及格分数须大于 0，且不能超过试卷总分，最多两位小数'); return; }
-  if (!Number.isInteger(trainingCreate.max_attempts) || trainingCreate.max_attempts < 1 || trainingCreate.max_attempts > 100) { ElMessage.warning('最多考试次数须为 1–100 的整数'); return; }
+  if (trainingCreate.exam_purpose === 'practice') {
+    if (trainingCreate.mode !== 'random' || trainingCreate.max_attempts !== null) { ElMessage.warning('模拟考须使用公共随机卷且不限次数'); return; }
+  } else if (typeof trainingCreate.max_attempts !== 'number' || !Number.isInteger(trainingCreate.max_attempts) || trainingCreate.max_attempts < 1 || trainingCreate.max_attempts > 100) { ElMessage.warning('最多考试次数须为 1–100 的整数'); return; }
   if (trainingCreate.mode === 'random') { const error = validateRandomRules(trainingCreate.rules, trainingCreate.total_score); if (error) { ElMessage.warning(error); return; } }
   if (trainingCreate.requires_learning && !trainingCreate.course_ids.length) { ElMessage.warning('请至少选择一门关联课程'); return; }
   const minutes = trainingCreate.required_learning_minutes;
@@ -345,13 +397,13 @@ const navigation = useDashboardListNavigation(route, router, {
   beforeEntry: () => createUnsaved.confirmDiscard(),
   apply(entry, explicit) {
     if (entry.kind !== 'papers') return;
-    if (explicit) Object.assign(trainingQuery, { page: 1, keyword: '', category_id: '' });
+    if (explicit) Object.assign(trainingQuery, { page: 1, keyword: '', category_id: '', exam_purpose: '' });
     trainingQuery.status = entry.status || '';
   },
   prepare: loadOptions, load: loadTraining, openCreate: openTrainingCreate,
   onInvalid: () => { ElMessage.warning('已清除无效的试卷入口参数'); },
 });
-function invalidateView() { previewDialog.value?.close(); editDialog.value?.close(); qrVisible.value = false; viewContext += 1; loadOperation += 1; createContext += 1; relationToken += 1; creating.value = false; trainingCreateVisible.value = false; }
+function invalidateView() { previewDialog.value?.close(); editDialog.value?.close(); qrVisible.value = false; viewContext += 1; loadOperation += 1; createRequest += 1; createContext += 1; relationToken += 1; creating.value = false; trainingCreateVisible.value = false; }
 onActivated(() => { viewActive = true; flushCompletedCreates(); });
 onDeactivated(() => { viewActive = false; invalidateView(); });
 onBeforeUnmount(() => { viewDestroyed = true; viewActive = false; invalidateView(); });

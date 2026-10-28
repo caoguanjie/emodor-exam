@@ -21,6 +21,11 @@
               <el-option v-for="option in examRecordDifficultyOptions" :key="option.value" :label="option.label" :value="option.value" />
             </el-select>
           </el-form-item>
+          <el-form-item label="考试用途">
+            <el-select v-model="query.exam_purpose" clearable placeholder="全部用途">
+              <el-option v-for="option in examRecordPurposeOptions" :key="option.value" :label="option.label" :value="option.value" />
+            </el-select>
+          </el-form-item>
           <el-form-item label="考试状态">
             <el-select v-model="query.result_status" clearable placeholder="全部状态">
               <el-option v-for="option in examRecordResultOptions" :key="option.value" :label="option.label" :value="option.value" />
@@ -47,7 +52,7 @@
           <template #default="{ row }"><b>{{ row.name }}</b><div class="muted">{{ row.username }}</div></template>
         </el-table-column>
         <el-table-column label="试卷" min-width="210">
-          <template #default="{ row }"><div>{{ row.paper_title }}</div><div class="muted">第 {{ row.attempt_no }} 次</div></template>
+          <template #default="{ row }"><div>{{ row.paper_title }}</div><el-tag size="small" type="info" effect="plain">{{ row.exam_purpose === 'practice' ? '模拟考' : '正式考试' }}</el-tag><div class="muted">第 {{ row.attempt_no }} 次</div></template>
         </el-table-column>
         <el-table-column label="培训类别" min-width="130">
           <template #default="{ row }">{{ categoryLabel(row) }}</template>
@@ -84,7 +89,7 @@ import http from '../../api/http';
 import type { ExamRecordOptions, ExamRecordSummary, Page } from '../../api/training-types';
 import { createLatestRequestScope } from '../../utils/latest-request-scope';
 import {
-  examRecordDifficultyOptions, examRecordResultOptions, examRecordResultLabel, examRecordResultType,
+  examRecordDifficultyOptions, examRecordPurposeOptions, examRecordResultOptions, examRecordResultLabel, examRecordResultType,
   examRecordScoreLabel, examRecordsFiltersFromRoute, examRecordsParams, examRecordsRouteQuery,
   formatExamRecordTime, type ExamRecordsFilters,
 } from '../../utils/exam-records';
@@ -166,7 +171,8 @@ async function loadOptions() {
   optionsLoading.value = true;
   optionsError.value = '';
   try {
-    const data = await http.get('/admin/exam-records/options', { signal: ticket.signal }) as ExamRecordOptions;
+    const purpose = examRecordsFiltersFromRoute(route.query).exam_purpose;
+    const data = await http.get('/admin/exam-records/options', { ...(purpose ? { params: { exam_purpose: purpose } } : {}), signal: ticket.signal }) as ExamRecordOptions;
     if (ticket.isCurrent()) options.value = data;
   } catch (error) {
     if (ticket.isCurrent()) optionsError.value = error instanceof Error ? error.message : '筛选选项加载失败';
@@ -182,6 +188,7 @@ watch(() => route.fullPath, () => {
   void load();
 }, { immediate: true });
 onMounted(loadOptions);
+watch(() => route.query.exam_purpose, loadOptions);
 onBeforeUnmount(() => { requestScope.stop(); optionsScope.stop(); });
 </script>
 

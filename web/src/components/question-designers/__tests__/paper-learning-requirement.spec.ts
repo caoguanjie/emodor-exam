@@ -71,7 +71,7 @@ describe('paper pre-exam learning configuration', () => {
     const dialog = wrapper.findAllComponents(ElDialog).find((item) => item.props('title') === '新增试卷')!;
     expect(document.querySelector('.el-dialog.re-form-dialog')).not.toBeNull();
     const labels = () => dialog.findAllComponents(ElFormItem).map((item) => item.props('label'));
-    expect(labels()).toEqual(['试卷名称', '组卷方式', '考试时间', '培训类别', '试卷总分', '及格分数', '最多考试次数', '考前学习要求', '备注']);
+    expect(labels()).toEqual(['试卷名称', '考试用途', '组卷方式', '考试时间', '培训类别', '试卷总分', '及格分数', '最多考试次数', '考前学习要求', '备注']);
     const duration = formItem(dialog, '考试时间').getComponent(ElInput);
     const score = formItem(dialog, '及格分数').getComponent(ElInput);
     expect(duration.get('.el-input-group__append').text()).toBe('分钟');

@@ -3,6 +3,7 @@
     <div v-if="loading" v-loading="true" class="paper-edit-loading" aria-label="正在加载试卷配置" />
     <el-form v-if="loaded" label-width="120px" label-position="left" :disabled="loading || saving" @submit.prevent>
       <el-form-item label="试卷名称" required><el-input v-model="form.title" maxlength="128" /></el-form-item>
+      <el-form-item label="考试用途">{{ loadedPurpose === 'practice' ? '模拟考' : '正式考试' }}（不可变更）</el-form-item>
       <el-form-item label="组卷方式">{{ loadedMode === 'random' ? '随机试卷' : '固定试卷' }}（不可变更）</el-form-item>
       <el-form-item label="考试时间" required>
         <el-input v-model.number="form.duration_minutes" class="paper-value-input" type="number" inputmode="numeric" :min="1" :max="1440" :step="1" placeholder="请输入考试时间"><template #append>分钟</template></el-input>
@@ -19,7 +20,8 @@
         <el-input v-model.number="form.pass_score" class="paper-value-input" type="number" inputmode="decimal" :min="0.01" :max="form.total_score" :step="0.01" placeholder="请输入及格分数"><template #append>分</template></el-input>
       </el-form-item>
       <el-form-item v-if="loadedMode === 'random'" label="随机抽题规则" required><RandomPaperRules v-model="form.rules" :total-score="form.total_score" :disabled="loading || saving" /></el-form-item>
-      <el-form-item label="最多考试次数" required>
+      <el-form-item v-if="loadedPurpose === 'practice'" label="考试次数">不限次数<div class="hint">重新发布后，所有学员的下一次新模拟使用最新配置，进行中的模拟和历史记录保留原版本。</div></el-form-item>
+      <el-form-item v-else label="最多考试次数" required>
         <el-input v-model.number="form.max_attempts" class="paper-value-input" type="number" inputmode="numeric" :min="1" :max="100" :step="1"><template #append>次</template></el-input>
         <div class="hint">成功开考即占一次，超时未交卷也计次。已有考试归属沿用首次开考时冻结的次数上限。</div>
       </el-form-item>
@@ -44,7 +46,7 @@
 import { computed, onBeforeUnmount, onDeactivated, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import http from '../api/http';
-import type { Id, Page, PaperMode, PaperRuleInput, PoolScope, TrainingPaperDetail } from '../api/training-types';
+import type { ExamPurpose, Id, Page, PaperMode, PaperRuleInput, PoolScope, TrainingPaperDetail } from '../api/training-types';
 import RandomPaperRules from './RandomPaperRules.vue';
 import { selectedRandomRules, validateRandomRules } from '../utils/random-paper-rules';
 import { useUnsavedChanges } from '../composables/useUnsavedChanges';
@@ -53,7 +55,7 @@ import { useAuthStore } from '../stores/auth';
 interface BasicConfiguration {
   title: string; category_id: Id | '' | null; duration_minutes: number; total_score: number; pass_score: number;
   requires_learning: boolean; course_ids: Id[]; required_learning_minutes: number | null; remark: string;
-  rules: PaperRuleInput[]; max_attempts: number;
+  rules: PaperRuleInput[]; max_attempts: number | null;
 }
 const props = defineProps<{ categories: Array<{ id: Id; name: string }> }>();
 const emit = defineEmits<{ saved: [] }>();
@@ -64,6 +66,7 @@ const loading = ref(false);
 const saving = ref(false);
 const categoryLocked = ref(false);
 const loadedMode = ref<PaperMode>('fixed');
+const loadedPurpose = ref<ExamPurpose>('formal');
 const loadedPoolScope = ref<PoolScope>('category');
 const publicRandom = computed(() => loadedMode.value === 'random' && loadedPoolScope.value === 'public');
 const paperId = ref<Id | null>(null);
@@ -92,7 +95,7 @@ function invalidateSession() {
   session += 1; courseRequest += 1;
   visible.value = false; loading.value = false; saving.value = false; loaded.value = false;
   categoryLocked.value = false; loadedCategory = '';
-  loadedMode.value = 'fixed'; loadedPoolScope.value = 'category';
+  loadedMode.value = 'fixed'; loadedPoolScope.value = 'category'; loadedPurpose.value = 'formal';
   paperId.value = null; courses.value = []; dirty.value = false;
 }
 function close() { openRequest += 1; invalidateSession(); }
@@ -115,17 +118,19 @@ async function open(row: { id: Id; mode?: string; status?: string }) {
   try {
     const detail = await http.get(`/admin/papers/${row.id}`) as TrainingPaperDetail;
     if (!isCurrent(operation)) return;
-    if (!canWrite() || detail.status !== 'draft' || detail.mode !== row.mode || (detail.pool_scope === 'public' && detail.mode !== 'random')) {
+    if (!canWrite() || detail.status !== 'draft' || detail.mode !== row.mode || (detail.pool_scope === 'public' && detail.mode !== 'random')
+      || (detail.exam_purpose === 'practice' && (detail.mode !== 'random' || detail.pool_scope !== 'public'))) {
       ElMessage.warning('当前试卷已不可修改，请刷新列表'); close(); return;
     }
     loadedCategory = detail.category_id;
     loadedMode.value = detail.mode; loadedPoolScope.value = detail.pool_scope || 'category';
+    loadedPurpose.value = detail.exam_purpose || 'formal';
     categoryLocked.value = detail.mode === 'fixed' && detail.questions.length > 0;
     hydrating = true;
     Object.assign(form, {
       title: detail.title, category_id: detail.category_id, duration_minutes: Number(detail.duration_minutes),
       total_score: Number(detail.total_score), pass_score: Number(detail.pass_score),
-      max_attempts: Number(detail.max_attempts), rules: detail.rules.map(rule => ({ ...rule })),
+      max_attempts: detail.max_attempts === null ? null : Number(detail.max_attempts), rules: detail.rules.map(rule => ({ ...rule })),
       requires_learning: detail.requires_learning,
       course_ids: detail.requires_learning ? [...detail.course_ids] : [],
       required_learning_minutes: detail.requires_learning ? detail.required_learning_minutes : null,
@@ -167,7 +172,9 @@ function validate(): boolean {
   if (!Number.isInteger(form.duration_minutes) || form.duration_minutes < 1 || form.duration_minutes > 1440) { ElMessage.warning('考试时间须为 1–1440 的整数分钟'); return false; }
   if (!validPoints(form.total_score)) { ElMessage.warning('试卷总分须为 0.01～999.99 分，最多两位小数'); return false; }
   if (!validPoints(form.pass_score) || form.pass_score > form.total_score) { ElMessage.warning('及格分数须大于 0，且不能超过试卷总分，最多两位小数'); return false; }
-  if (!Number.isInteger(form.max_attempts) || form.max_attempts < 1 || form.max_attempts > 100) { ElMessage.warning('最多考试次数须为 1–100 的整数'); return false; }
+  if (loadedPurpose.value === 'practice') {
+    if (form.max_attempts !== null) { ElMessage.warning('模拟考不限次数'); return false; }
+  } else if (typeof form.max_attempts !== 'number' || !Number.isInteger(form.max_attempts) || form.max_attempts < 1 || form.max_attempts > 100) { ElMessage.warning('最多考试次数须为 1–100 的整数'); return false; }
   if (loadedMode.value === 'random') { const error = validateRandomRules(form.rules, form.total_score); if (error) { ElMessage.warning(error); return false; } }
   if (form.requires_learning && !form.course_ids.length) { ElMessage.warning('请至少选择一门关联课程'); return false; }
   const minutes = form.required_learning_minutes;

@@ -61,6 +61,23 @@ async function click(wrapper: VueWrapper, label: string) {
 }
 
 describe('exam records list', () => {
+  it('marks both purposes, defaults to all, and preserves the purpose filter through route and paging', async () => {
+    const original = transport.respond;
+    transport.respond = (method, path, payload) => path === '/admin/exam-records'
+      ? Promise.resolve({ items: [record(), { ...record({ record_id: '43' }), exam_purpose: 'practice' }], total: 90 })
+      : original(method, path, payload);
+    const { wrapper, router } = await page();
+    expect(latestParams()).not.toHaveProperty('exam_purpose');
+    const rows = wrapper.findAll('.el-table__body tr');
+    expect(rows[0].text()).toContain('正式考试'); expect(rows[1].text()).toContain('模拟考');
+    formItem(wrapper, '考试用途').getComponent(ElSelect).vm.$emit('update:modelValue', 'practice'); await flushPromises();
+    await click(wrapper, '查询');
+    expect(latestParams().exam_purpose).toBe('practice'); expect(router.currentRoute.value.query.exam_purpose).toBe('practice');
+    await wrapper.get('.el-pagination .btn-next').trigger('click'); await flushPromises();
+    expect(latestParams()).toMatchObject({ page: 2, exam_purpose: 'practice' });
+    await click(wrapper, '重置'); expect(latestParams()).not.toHaveProperty('exam_purpose');
+  });
+
   it('distinguishes a public exam label from an unfilled occupation and preserves an old category label', async () => {
     const original = transport.respond;
     transport.respond = (method, path, payload) => path === '/admin/exam-records'
@@ -107,9 +124,9 @@ describe('exam records list', () => {
     expect(body[2].text()).toContain('已通过'); expect(body[2].text()).toContain('80 分');
     expect(body[0].text()).toContain('第 2 次');
   });
-  it('sends all six flat filters while keeping entry labels and old source parameters out of requests', async () => {
+  it('sends the flat filters while keeping entry labels and old source parameters out of requests', async () => {
     const { wrapper, router } = await page('/admin/exam-records?user_id=9&learner_name=学员甲&paper_title=提示标题&source=external');
-    expect(wrapper.findAllComponents(ElFormItem).map(item => item.props('label')).filter(Boolean)).toEqual(['关键字', '试卷名称', '培训类别', '难度', '考试状态', '考试日期']);
+    expect(wrapper.findAllComponents(ElFormItem).map(item => item.props('label')).filter(Boolean)).toEqual(['关键字', '试卷名称', '培训类别', '难度', '考试用途', '考试状态', '考试日期']);
     await formItem(wrapper, '关键字').get('input').setValue(' learner ');
     for (const [label, value] of [['试卷名称', '7'], ['培训类别', '3'], ['难度', 'hard'], ['考试状态', 'failed']]) {
       formItem(wrapper, label).getComponent(ElSelect).vm.$emit('update:modelValue', value);
@@ -183,6 +200,15 @@ describe('exam records list', () => {
 });
 
 describe('readonly exam record detail', () => {
+  it('shows the frozen practice purpose in the readonly record detail', async () => {
+    const original = transport.respond;
+    transport.respond = (method, path, payload) => path === '/admin/exam-records/42'
+      ? Promise.resolve({ ...record(), exam_purpose: 'practice' }) : original(method, path, payload);
+    const { wrapper } = await page('/admin/exam-records/42');
+    expect(wrapper.get('.exam-description').text()).toContain('模拟考');
+    expect(transport.calls.every(call => call.method === 'get')).toBe(true);
+  });
+
   it.each(['in_progress', 'timeout'] as const)('does not request a result or show internal zero for %s', async status => {
     const original = transport.respond;
     transport.respond = (method, path, payload) => path === '/admin/exam-records/42' ? Promise.resolve(record({ status })) : original(method, path, payload);
