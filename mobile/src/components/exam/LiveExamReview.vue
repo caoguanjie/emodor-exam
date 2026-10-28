@@ -6,7 +6,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import ReadonlyRichContent from '@/components/rich-content/ReadonlyRichContent.vue'
 import QuestionView from './QuestionView.vue'
 import AnswerCard from './AnswerCard.vue'
-import { areOptionIdsCorrect, reviewItem } from '@/types/exam'
+import { areOptionIdsCorrect, formatExamAnswer, reviewItem } from '@/types/exam'
 import { hasReadonlyContent } from '@/types/content'
 import { useExamStore } from '@/stores/exam'
 const props = defineProps<{ recordId: string }>(), store = useExamStore(), index = ref(0), card = ref(false)
@@ -17,7 +17,7 @@ const items = computed(() => reviews.value.map(row => row.item))
 async function load() { if (!props.recordId) return; try { await store.loadResult(props.recordId) } catch { /* Visible retry. */ } }
 onMounted(load)
 watch(() => review.value?.item.id, id => { if (id) void store.loadItemMedia(id) })
-function labels(ids: string[]) { return ids.length ? ids.map(id => { const at = review.value.item.options.findIndex(option => option.id === id); return review.value.item.type === 'judgment' ? at === 0 ? '正确' : '错误' : String.fromCharCode(65 + at) }).join(' ') : '未作答' }
+function labels(ids: string[]) { return formatExamAnswer(review.value.item, ids) }
 </script>
 <template>
   <AppPage :padded="false"><template #header><AppTopBar title="答案解析" :back-target="`/pages/exam/result?record_id=${encodeURIComponent(recordId)}`"><template #right><text class="review-count">{{ review ? index + 1 : 0 }} / {{ reviews.length }}</text></template></AppTopBar></template>

@@ -166,6 +166,21 @@ for (const location of ['stem', 'option', 'analysis'] as const) {
   })
 }
 
+test('review sorts correct and selected answer labels by displayed options', async ({ page }) => {
+  await setup(page)
+  const item = {
+    ...questions[1], options: ['option-z', 'option-a', 'option-m', 'option-b'].map(id => ({ id, content: doc(id) })),
+    correct_option_ids: ['option-z', 'option-m', 'option-a'], selected_option_ids: ['option-m', 'option-z', 'option-a'],
+    analysis: null, gained_score: 25,
+  }
+  await page.route('**/api/v1/me/exam-records/81/result', route => route.fulfill({ json: envelope({ record_id: '81', status: 'passed', grading_state: 'finalized', submission_method: 'manual', legacy: false, submitted_at: new Date().toISOString(), graded_at: new Date().toISOString(), score: 25, passed: true, correct_rate: 1, items: [item] }) }))
+  await page.goto('/#/pages/exam/review?record_id=81')
+  const summaries = page.locator('.review-analysis__answers > uni-view')
+  await expect(summaries.nth(0)).toHaveText('正确答案A B C')
+  await expect(summaries.nth(1)).toHaveText('你的答案A B C')
+  await expect(page.getByText('回答正确', { exact: true })).toBeVisible()
+})
+
 test('partial multiple-choice credit stays wrong in the review, answer card, and result metrics', async ({ page }) => {
   await setup(page)
   const partial = { ...questions[1], selected_option_ids: ['choice-y'], correct_option_ids: ['choice-y', 'choice-x'], analysis: doc('多选漏选会获得部分分'), gained_score: 10 }

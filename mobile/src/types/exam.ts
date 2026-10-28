@@ -24,6 +24,15 @@ export function areOptionIdsCorrect(selected: string[], correct: string[]): bool
     && new Set(correct).size === correct.length && selected.every(id => correct.includes(id))
 }
 
+/** Answer labels follow the frozen display order, never answer or click order. */
+export function formatExamAnswer(item: Pick<ExamTakeItem, 'options' | 'type'>, ids: string[]): string {
+  const selected = new Set(ids)
+  const labels = item.options.flatMap((option, index) => selected.has(option.id)
+    ? [item.type === 'judgment' ? index === 0 ? '正确' : '错误' : String.fromCharCode(65 + index)]
+    : [])
+  return labels.length ? labels.join(' ') : '未作答'
+}
+
 export interface AttemptQuestionV2 { item_id: string; type: QuestionType; score: number; stem: ReadonlyContentDoc; options: ExamOption[]; content_schema_version?: 2 | 3 }
 export type AttemptTerminalStatus = 'submitted' | 'passed' | 'failed' | 'timeout'
 export interface AttemptRecordViewV2 { status: 'in_progress' | AttemptTerminalStatus; record_id: string; paper_id: string; exam_purpose?: ExamPurpose; release_id: string | null; deadline_at: string; server_now: string; questions: AttemptQuestionV2[] }

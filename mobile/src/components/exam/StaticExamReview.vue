@@ -6,6 +6,7 @@ import QuestionView from '@/components/exam/QuestionView.vue'
 import AnswerCard from '@/components/exam/AnswerCard.vue'
 import ReadonlyRichContent from '@/components/rich-content/ReadonlyRichContent.vue'
 import { examAssets, examReviewItems, examTakeItems, useExamScenario } from '@/fixtures/ui-scenarios/exam'
+import { formatExamAnswer } from '@/types/exam'
 const { scenario, loadScenario } = useExamScenario('exam-review-single')
 const props = defineProps<{ query: Record<string, unknown> }>()
 loadScenario(props.query)
@@ -14,7 +15,7 @@ const cardVisible = ref(false)
 watch(scenario, value => { currentIndex.value = value.questionIndex || 0; cardVisible.value = value.overlay === 'card' }, { immediate: true })
 const review = computed(() => examReviewItems[currentIndex.value])
 const reviewAnswers = Object.fromEntries(examReviewItems.map(row => [row.item.id, row.selectedOptionIds]))
-function displayIds(ids: string[]) { if (!ids.length) return '未作答'; return ids.map(id => { const index = review.value.item.options.findIndex(option => option.id === id); return review.value.item.type === 'judgment' ? index === 0 ? '正确' : '错误' : String.fromCharCode(65 + index) }).join(' ') }
+function displayIds(ids: string[]) { return formatExamAnswer(review.value.item, ids) }
 function move(offset: number) { currentIndex.value = Math.max(0, Math.min(19, currentIndex.value + offset)) }
 function jump(id: string) { currentIndex.value = examTakeItems.findIndex(item => item.id === id) }
 </script>
