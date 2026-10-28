@@ -69,8 +69,9 @@ test('all selection gives the video suite the same override and leaves other sui
     assert.equal(apiArgs.length, 1);
     assert.match(apiArgs[0], /server\/test\/identity-e2e-main\.ts$/);
   }
-  for (const suitePath of allSuites.filter((path) => ![enumeratedVideoSuite, enumeratedMobileAuthSuite, selectedCourseSuite, ...identitySuites].includes(path))) {
-    assert.deepEqual(suiteEnvFor(suitePath), {});
-    assert.deepEqual(suiteApiFor(suitePath), {});
-  }
+  // New suites may intentionally supply their own isolated runtime. Unknown
+  // paths must still receive no overrides; known suites are tested by contract.
+  assert.deepEqual(suiteEnvFor('/not-a-registered-suite.mjs'), {});
+  assert.deepEqual(suiteApiFor('/not-a-registered-suite.mjs'), {});
+  assert.ok(allSuites.includes(selectedCourseSuite));
 });

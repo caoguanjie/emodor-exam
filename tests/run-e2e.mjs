@@ -43,6 +43,7 @@ export const SUITE_REGISTRY = Object.freeze({
   'training-question-import': join(ROOT, 'tests', 'training-question-import.mjs'),
   'training-ai-question-import': join(ROOT, 'tests', 'training-ai-question-import.mjs'),
   'training-publishing': join(ROOT, 'tests', 'training-publishing.mjs'),
+  'public-random-exam': join(ROOT, 'tests', 'public-random-exam.mjs'),
   'training-paper-learning': join(ROOT, 'tests', 'training-paper-learning.mjs'),
   'training-attempts': join(ROOT, 'tests', 'training-attempts.mjs'),
   'training-submissions': join(ROOT, 'tests', 'training-submissions.mjs'),
@@ -62,6 +63,9 @@ export function resolveSuitePaths(selector, registry = SUITE_REGISTRY) {
 }
 
 export function suiteRuntimeEnvOverrides(suitePath) {
+  if (suitePath === SUITE_REGISTRY['public-random-exam']) {
+    return { DB_POOL_SIZE: '2', NODE_ENV: 'test', SERVER_DEBUG_LOGIN_ENABLED: 'true', SMS_PROVIDER: 'disabled', IDENTITY_PROVIDER: 'disabled' };
+  }
   if (suitePath === SUITE_REGISTRY['training-video-learning']) {
     return {
       DB_POOL_SIZE: '2',
@@ -106,6 +110,9 @@ export function suiteRuntimeEnvOverrides(suitePath) {
 }
 
 export function suiteRuntimeApi(suitePath) {
+  if (suitePath === SUITE_REGISTRY['public-random-exam']) {
+    return { apiEntry: join(ROOT, 'server', 'node_modules', 'tsx', 'dist', 'cli.mjs'), apiArgs: [join(ROOT, 'server', 'test', 'identity-e2e-main.ts')] };
+  }
   if (!['mobile-identity', 'mobile-media-ticket', 'training-video-learning', 'training-publishing', 'training-paper-learning', 'training-attempts', 'training-submissions', 'training-records', 'training-full-flow', 'mobile-h5', 'main-question-designers', 'main-question-designers-compatibility', 'cos-media-flow', 'admin-dashboard'].some((name) => SUITE_REGISTRY[name] === suitePath)) return {};
   return {
     apiEntry: join(ROOT, 'server', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
