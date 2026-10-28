@@ -81,6 +81,42 @@ describe('practice exam release confirmation and record contracts', () => {
     expect(calls.filter(wire => wire.url.endsWith('/start'))).toHaveLength(1)
   })
 
+  it('a late practice conflict cannot replace the newer instructions for another paper', async () => {
+    let finishStart: (value: unknown) => void = () => {}
+    const otherPaper = { ...practice, paper_id: '902', release_id: '91', title: 'B 卷当前须知' }
+    install(wire => wire.url.endsWith('/start') ? new Promise(resolve => { finishStart = resolve })
+      : ok(wire.url.endsWith('/exams/902') ? otherPaper : practice))
+    const store = useExamStore()
+    await store.loadSummary('901')
+    const pending = store.start('901', '71')
+    await vi.waitFor(() => expect(calls.filter(wire => wire.url.endsWith('/start'))).toHaveLength(1))
+    await store.loadSummary('902')
+    const rejected = expect(pending).rejects.toMatchObject({ code: 40970 })
+    finishStart({ statusCode: 409, data: { code: 40970, message: 'A 卷配置已更新', data: null } })
+    await rejected
+    expect(store.summary).toEqual(otherPaper)
+    expect(calls.filter(wire => wire.url.endsWith('/exams/901'))).toHaveLength(1)
+    expect(calls.filter(wire => wire.url.endsWith('/start'))).toHaveLength(1)
+  })
+
+  it('a late practice conflict does not reload instructions after their page has left', async () => {
+    let finishStart: (value: unknown) => void = () => {}, pageActive = true
+    install(wire => wire.url.endsWith('/start') ? new Promise(resolve => { finishStart = resolve })
+      : ok(wire.url.includes('/exams?') ? page(practice) : practice))
+    const store = useExamStore()
+    await store.loadSummary('901')
+    const pending = store.start('901', '71', () => pageActive)
+    await vi.waitFor(() => expect(calls.filter(wire => wire.url.endsWith('/start'))).toHaveLength(1))
+    pageActive = false
+    await store.loadList()
+    const rejected = expect(pending).rejects.toMatchObject({ code: 40970 })
+    finishStart({ statusCode: 409, data: { code: 40970, message: 'A 卷配置已更新', data: null } })
+    await rejected
+    expect(calls.filter(wire => wire.url.endsWith('/exams/901'))).toHaveLength(1)
+    expect(calls.filter(wire => wire.url.endsWith('/start'))).toHaveLength(1)
+    expect(store.list.items).toMatchObject([{ paper_id: '901' }])
+  })
+
   it('accepts recovery of the active release even when the expected new release differs', async () => {
     install(() => ok(active()))
     const store = useExamStore()

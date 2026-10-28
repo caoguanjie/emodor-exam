@@ -66,7 +66,7 @@ async function start() {
     if (!stillHere()) return
     if (identityStore.loadError || !identityStore.authority) throw new Error(identityStore.loadError || '实名状态读取失败，请重试')
     if (!identityStore.verified) { identity(); return }
-    await store.start(paperId, expectedReleaseId)
+    await store.start(paperId, expectedReleaseId, stillHere)
     if (!stillHere()) return
     const attempt = store.attempt
     if (attempt) uni.redirectTo({ url: `/pages/exam/${attempt.status === 'in_progress' ? 'take' : 'result'}?record_id=${encodeURIComponent(attempt.record_id)}` })
