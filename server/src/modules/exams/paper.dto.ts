@@ -184,6 +184,12 @@ export class PaperCandidateQueryDto {
   @IsOptional() @QueryNumber() @IsInt() @Min(1) @Max(100) page_size?: number;
 }
 
+export class RandomCapacityQueryDto {
+  @IsOptional() @IsString() @Matches(ID_PATTERN) paper_id?: string;
+  @IsOptional() @IsIn(['category', 'public']) pool_scope?: 'category' | 'public';
+  @IsOptional() @IsString() @Matches(ID_PATTERN) category_id?: string;
+}
+
 export class PaperOptionQueryDto {
   @IsOptional() @IsString() @Matches(ID_PATTERN) category_id?: string;
   @ValidateIf((_object, value) => value !== undefined) @IsIn(['category', 'public']) pool_scope?: PoolScope;

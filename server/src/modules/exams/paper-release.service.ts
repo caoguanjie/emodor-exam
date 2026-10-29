@@ -259,6 +259,32 @@ export class PaperReleaseService implements OnModuleInit {
     if (requireComplete && total !== rule.totalCents) throw Errors.paperRuleInvalid(`题目分值合计须为 ${rule.totalCents / 100} 分，当前为 ${total / 100} 分`);
   }
 
+  /** Current usable identities, using exactly the publication candidate policy. */
+  async randomCapacities(query: { paper_id?: string; pool_scope?: PoolScope; category_id?: string }) {
+    if (query.paper_id && (query.pool_scope || query.category_id)) throw Errors.param('paper_id 不可与题池筛选同时使用');
+    let paper: Pick<ExamPaper, 'businessScope' | 'mode' | 'poolScope' | 'categoryId' | 'regulationIds'>;
+    if (query.paper_id) {
+      const stored = await this.paperRepo.findOne({ where: { id: query.paper_id } });
+      if (!stored || stored.businessScope !== 'training') throw Errors.notFound('培训试卷不存在');
+      if (stored.mode !== 'random') throw Errors.param('仅随机试卷可查询可抽题数');
+      paper = stored;
+    } else {
+      paper = { businessScope: 'training', mode: 'random', poolScope: query.pool_scope || 'category', categoryId: query.category_id || null, regulationIds: [] };
+    }
+    const config = paperPoolConfig(paper);
+    const types: QuestionType[] = ['single', 'multiple', 'judgment'];
+    const filters: CandidateFilter[] = activeDifficulties().flatMap(difficulty => types.map(type => ({
+      ...(config.poolScope === 'public' ? { poolScope: 'public' as const } : { categoryId: config.categoryId! }),
+      difficulty, type, ...(paper.regulationIds?.length ? { regulationIds: paper.regulationIds.map(String) } : {}),
+    })));
+    const pool = await this.questions.enabledCandidates(filters);
+    return { items: types.map(type => {
+      const count = (difficulty: string) => new Set(pool.filter(item => item.type === type && item.difficulty === difficulty).map(item => String(item.questionId))).size;
+      const easy = count('easy'), hard = count('hard');
+      return { type, easy, hard, available: Math.min(easy, hard) };
+    }) };
+  }
+
   private async randomPool(
     manager: EntityManager | undefined,
     paper: ExamPaper,

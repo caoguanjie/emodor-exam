@@ -10,7 +10,7 @@ import { AccessService } from '../access/access.service';
 import { CategoryService } from '../training/category.service';
 import {
   CreateTrainingPaperDto, PAPER_CANDIDATE_KEYS, PAPER_CREATE_KEYS, PAPER_LIST_KEYS, PAPER_OPTION_KEYS,
-  PAPER_PREVIEW_KEYS, PAPER_UPDATE_KEYS, PaperCandidateQueryDto, PaperOptionQueryDto, PaperPreviewQueryDto,
+  PAPER_PREVIEW_KEYS, PAPER_UPDATE_KEYS, PaperCandidateQueryDto, PaperOptionQueryDto, PaperPreviewQueryDto, RandomCapacityQueryDto,
   SetTrainingQuestionsDto, TrainingPaperDtoValidationPipe, TrainingPaperListQueryDto, UpdateTrainingPaperDto,
 } from './paper.dto';
 import { PaperReleaseService } from './paper-release.service';
@@ -105,6 +105,13 @@ export class PaperAdminController {
     }
     if (!query.category_id) throw Errors.param('category_id 必填');
     return this.papers.courseOptions(query.category_id, query.page, query.page_size);
+  }
+
+  @Get('random-capacities')
+  @Permissions('papers:read')
+  randomCapacities(@Query(new StrictDtoValidationPipe(['paper_id', 'pool_scope', 'category_id'])) query: RandomCapacityQueryDto, @Req() req: Request) {
+    assertKeys(req.query, ['paper_id', 'pool_scope', 'category_id'], '随机题池数量查询');
+    return this.releases.randomCapacities(query);
   }
 
   @Get()

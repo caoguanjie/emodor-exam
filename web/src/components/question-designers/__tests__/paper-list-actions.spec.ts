@@ -40,6 +40,7 @@ beforeEach(() => {
   transport.calls = [];
   transport.permissions = reactive(new Set(['papers:read', 'papers:write', 'papers:publish', 'questions:read']));
   transport.respond = async (method, path, payload) => {
+    if (path === '/admin/papers/random-capacities') return { items: ['single', 'multiple', 'judgment'].map(type => ({ type, easy: 500, hard: 500, available: 500 })) };
     if (path === '/admin/papers/category-options') return { items: [{ id: '1', name: '产业工人' }], total: 1 };
     if (path === '/admin/papers') return method === 'post' ? { ...draft, ...payload, id: '5' } : { items: [draft, random, published], total: 3 };
     if (path.includes('/preview')) return previewData();
@@ -88,6 +89,20 @@ function deferred<T = any>() {
 }
 
 describe('paper list operations', () => {
+  it.each(['insufficient', 'offline'])('blocks saving random rules when capacity is %s', async result => {
+    const original = transport.respond;
+    transport.respond = async (method, path, payload) => {
+      if (path !== '/admin/papers/random-capacities') return original(method, path, payload);
+      if (result === 'offline') throw new Error('offline');
+      return { items: ['single', 'multiple', 'judgment'].map(type => ({ type, easy: 100, hard: 1, available: 1 })) };
+    };
+    const warning = vi.spyOn(ElMessage, 'warning');
+    const { state } = await list(); state.openTrainingCreate();
+    Object.assign(state.trainingCreate, { title: '数量校验', mode: 'random', rules: [{ type: 'single', count: 2, score_cents: 5000 }] });
+    await flushPromises(); await state.createTraining('save');
+    expect(requests('post', '/admin/papers')).toHaveLength(0);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining(result === 'offline' ? '加载失败' : '最多可抽 1 道'));
+  });
   it('loads public learning courses without a category and ignores their late response after returning to fixed mode', async () => {
     const publicCourses = deferred(); const original = transport.respond;
     transport.respond = async (method, path, payload) => path === '/admin/papers/course-options'

@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="修改试卷" width="720px" class="re-form-dialog paper-edit-dialog" :before-close="beforeClose">
+  <el-dialog v-model="visible" title="修改试卷" width="800px" class="re-form-dialog paper-edit-dialog" :before-close="beforeClose">
     <div v-if="loading" v-loading="true" class="paper-edit-loading" aria-label="正在加载试卷配置" />
     <el-form v-if="loaded" label-width="120px" label-position="left" :disabled="loading || saving" @submit.prevent>
       <el-form-item label="试卷名称" required><el-input v-model="form.title" maxlength="128" /></el-form-item>
@@ -19,7 +19,7 @@
       <el-form-item label="及格分数" required>
         <el-input v-model.number="form.pass_score" class="paper-value-input" type="number" inputmode="decimal" :min="0.01" :max="form.total_score" :step="0.01" placeholder="请输入及格分数"><template #append>分</template></el-input>
       </el-form-item>
-      <el-form-item v-if="loadedMode === 'random'" label="随机抽题规则" required><RandomPaperRules v-model="form.rules" :total-score="form.total_score" :disabled="loading || saving" /></el-form-item>
+      <el-form-item v-if="loadedMode === 'random'" label="随机抽题规则" required><RandomPaperRules ref="rulesEditor" v-model="form.rules" :active="visible" :paper-id="paperId || undefined" :total-score="form.total_score" :disabled="loading || saving" /></el-form-item>
       <el-form-item v-if="loadedPurpose === 'practice'" label="考试次数">不限次数<div class="hint">重新发布后，所有学员的下一次新模拟使用最新配置，进行中的模拟和历史记录保留原版本。</div></el-form-item>
       <el-form-item v-else label="最多考试次数" required>
         <el-input v-model.number="form.max_attempts" class="paper-value-input" type="number" inputmode="numeric" :min="1" :max="100" :step="1"><template #append>次</template></el-input>
@@ -61,6 +61,7 @@ const props = defineProps<{ categories: Array<{ id: Id; name: string }> }>();
 const emit = defineEmits<{ saved: [] }>();
 const auth = useAuthStore();
 const visible = ref(false);
+const rulesEditor = ref<InstanceType<typeof RandomPaperRules> | null>(null);
 const loaded = ref(false);
 const loading = ref(false);
 const saving = ref(false);
@@ -175,7 +176,7 @@ function validate(): boolean {
   if (loadedPurpose.value === 'practice') {
     if (form.max_attempts !== null) { ElMessage.warning('模拟考不限次数'); return false; }
   } else if (typeof form.max_attempts !== 'number' || !Number.isInteger(form.max_attempts) || form.max_attempts < 1 || form.max_attempts > 100) { ElMessage.warning('最多考试次数须为 1–100 的整数'); return false; }
-  if (loadedMode.value === 'random') { const error = validateRandomRules(form.rules, form.total_score); if (error) { ElMessage.warning(error); return false; } }
+  if (loadedMode.value === 'random') { const error = validateRandomRules(form.rules, form.total_score) || rulesEditor.value?.validateCapacity?.(); if (error) { ElMessage.warning(error); return false; } }
   if (form.requires_learning && !form.course_ids.length) { ElMessage.warning('请至少选择一门关联课程'); return false; }
   const minutes = form.required_learning_minutes;
   if (form.requires_learning && (minutes === null || !Number.isInteger(minutes) || minutes < 1 || minutes > 2147483647)) { ElMessage.warning('累计学习时长须为 1–2147483647 的整数分钟'); return false; }

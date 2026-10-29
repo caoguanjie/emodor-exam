@@ -815,6 +815,8 @@ export interface PaperPreviewQuestion extends QuestionContentFields {
   analysis?: string | null;
 }
 
+export interface RandomPaperCapacity { type: QuestionType; easy: number; hard: number; available: number }
+
 export interface PaperPreview {
   exam_purpose?: ExamPurpose;
   paper_id: Id;

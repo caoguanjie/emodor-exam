@@ -77,7 +77,7 @@
             <template #append>分</template>
           </el-input>
         </el-form-item>
-        <el-form-item v-if="trainingCreate.mode === 'random'" label="随机抽题规则" required><RandomPaperRules v-model="trainingCreate.rules" :total-score="trainingCreate.total_score" :disabled="creating" /></el-form-item>
+        <el-form-item v-if="trainingCreate.mode === 'random'" label="随机抽题规则" required><RandomPaperRules ref="rulesEditor" v-model="trainingCreate.rules" :active="trainingCreateVisible" pool-scope="public" :total-score="trainingCreate.total_score" :disabled="creating" /></el-form-item>
         <el-form-item v-if="trainingCreate.exam_purpose === 'practice'" label="考试次数">不限次数<div class="hint">每次模拟独立计次，不消耗正式考试次数。</div></el-form-item>
         <el-form-item v-else label="最多考试次数" required>
           <el-input v-model.number="trainingCreate.max_attempts" class="paper-value-input" type="number" inputmode="numeric" :min="1" :max="100" :step="1"><template #append>次</template></el-input>
@@ -137,6 +137,7 @@ const formRouteKey = ref(route.fullPath);
 const auth = useAuthStore();
 const loading = ref(false);
 const previewOpen = ref(false);
+const rulesEditor = ref<InstanceType<typeof RandomPaperRules> | null>(null);
 const previewDialog = ref<InstanceType<typeof PaperPreviewDialog> | null>(null);
 const editDialog = ref<InstanceType<typeof PaperEditDialog> | null>(null);
 const qrVisible = ref(false);
@@ -370,7 +371,7 @@ async function createTraining(action: 'save' | 'design' = 'design') {
   if (trainingCreate.exam_purpose === 'practice') {
     if (trainingCreate.mode !== 'random' || trainingCreate.max_attempts !== null) { ElMessage.warning('模拟考须使用公共随机卷且不限次数'); return; }
   } else if (typeof trainingCreate.max_attempts !== 'number' || !Number.isInteger(trainingCreate.max_attempts) || trainingCreate.max_attempts < 1 || trainingCreate.max_attempts > 100) { ElMessage.warning('最多考试次数须为 1–100 的整数'); return; }
-  if (trainingCreate.mode === 'random') { const error = validateRandomRules(trainingCreate.rules, trainingCreate.total_score); if (error) { ElMessage.warning(error); return; } }
+  if (trainingCreate.mode === 'random') { const error = validateRandomRules(trainingCreate.rules, trainingCreate.total_score) || rulesEditor.value?.validateCapacity?.(); if (error) { ElMessage.warning(error); return; } }
   if (trainingCreate.requires_learning && !trainingCreate.course_ids.length) { ElMessage.warning('请至少选择一门关联课程'); return; }
   const minutes = trainingCreate.required_learning_minutes;
   if (trainingCreate.requires_learning && (minutes === null || !Number.isInteger(minutes) || minutes < 1 || minutes > 2147483647)) { ElMessage.warning('累计学习时长须为 1–2147483647 的整数分钟'); return; }

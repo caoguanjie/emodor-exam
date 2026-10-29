@@ -1,17 +1,56 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, ref } from 'vue';
-import { mount, type VueWrapper } from '@vue/test-utils';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import ElementPlus from 'element-plus';
 import type { PaperRuleInput } from '../../../api/training-types';
 import RandomPaperRules from '../../RandomPaperRules.vue';
 import { defaultRandomRules, selectedRandomRules, summarizeRandomRules, validateRandomRules } from '../../../utils/random-paper-rules';
 
 const wrappers: VueWrapper[] = [];
+const transport = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock('../../../api/http', () => ({ default: transport }));
 afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()));
 const eighty: PaperRuleInput[] = [
   { type: 'single', count: 60, score_cents: 100 }, { type: 'multiple', count: 10, score_cents: 300 }, { type: 'judgment', count: 10, score_cents: 100 },
 ];
 describe('random paper rule configuration', () => {
+  it('shows both difficulty pools and rejects quantities above their common capacity', async () => {
+    transport.get.mockResolvedValue({ items: ['single', 'multiple', 'judgment'].map(type => ({ type, easy: 12, hard: 4, available: 4 })) });
+    const wrapper = mount(RandomPaperRules, { props: { modelValue: [{ type: 'single', count: 5, score_cents: 100 }], totalScore: 5, poolScope: 'public' }, global: { plugins: [ElementPlus] } });
+    wrappers.push(wrapper); await flushPromises();
+    expect(transport.get).toHaveBeenLastCalledWith('/admin/papers/random-capacities', { params: { pool_scope: 'public' } });
+    expect(wrapper.get('[data-rule-type="single"] td.random-paper-rules__capacity').findAll('div').map(row => row.text())).toEqual(['简单 12', '困难 4', '最多 4 道']);
+    expect(wrapper.find('button').exists()).toBe(false);
+    expect(wrapper.text()).toContain('单选最多可抽 4 道');
+    expect(wrapper.get('[data-rule-type="single"] input[data-field="count"]').attributes('max')).toBe('4');
+    expect(wrapper.vm.validateCapacity()).toContain('当前填写 5 道');
+    await wrapper.setProps({ modelValue: [{ type: 'single', count: 4, score_cents: 100 }], totalScore: 4 });
+    expect(wrapper.vm.validateCapacity()).toBeNull();
+  });
+  it('keeps unknown capacity distinct from zero and reloads the same paper when reopened', async () => {
+    transport.get.mockRejectedValueOnce(new Error('offline'));
+    const wrapper = mount(RandomPaperRules, { props: { modelValue: defaultRandomRules(), totalScore: 100, paperId: '7' }, global: { plugins: [ElementPlus] } });
+    wrappers.push(wrapper); await flushPromises();
+    expect(wrapper.vm.validateCapacity()).toContain('加载失败');
+    expect(wrapper.text()).not.toContain('最多 0 道');
+    await wrapper.setProps({ active: false }); await flushPromises();
+    const callsBeforeReopen = transport.get.mock.calls.length;
+    transport.get.mockResolvedValueOnce({ items: ['single', 'multiple', 'judgment'].map(type => ({ type, easy: 200, hard: 100, available: 100 })) });
+    await wrapper.setProps({ active: true }); await flushPromises();
+    expect(transport.get.mock.calls.length).toBe(callsBeforeReopen + 1);
+    expect(wrapper.vm.validateCapacity()).toBeNull();
+  });
+  it('ignores a late count response for a previously selected paper', async () => {
+    let complete!: (value: unknown) => void;
+    transport.get.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+    const wrapper = mount(RandomPaperRules, { props: { modelValue: defaultRandomRules(), totalScore: 100, paperId: '7' }, global: { plugins: [ElementPlus] } });
+    wrappers.push(wrapper);
+    transport.get.mockResolvedValueOnce({ items: ['single', 'multiple', 'judgment'].map(type => ({ type, easy: 200, hard: 100, available: 100 })) });
+    await wrapper.setProps({ paperId: '8' }); await flushPromises();
+    complete({ items: ['single', 'multiple', 'judgment'].map(type => ({ type, easy: 0, hard: 0, available: 0 })) }); await flushPromises();
+    expect(wrapper.vm.validateCapacity()).toBeNull();
+    expect(wrapper.text()).toContain('最多 100 道');
+  });
   it('starts with 100 single choice questions worth 100 points and omits unused question types from the payload', () => {
     const rules = defaultRandomRules();
     expect(summarizeRandomRules(rules)).toEqual({ count: 100, scoreCents: 10000 });
