@@ -1,0 +1,3741 @@
+{
+  "tokens": {
+    "primary": "#C9401D",
+    "accent": "#F7682B",
+    "background": "#FFF9F5",
+    "surface": "#FFFFFF",
+    "ink": "#211D1B",
+    "muted": "#6B625D",
+    "line": "#EADFD7",
+    "soft": "#FFF0E6",
+    "success": "#28734B",
+    "warning": "#996219",
+    "font": "Noto Sans SC"
+  },
+  "screens": [
+    {
+      "id": "M01",
+      "name": "手机号登录",
+      "group": "账号",
+      "title": "欢迎登录",
+      "blocks": [
+        {
+          "type": "hero",
+          "eyebrow": "安全教育 · 学以致用",
+          "title": "让每一次上岗\n都更有底气",
+          "text": "学习、报名、预约，一个小程序就够了",
+          "icon": "shield-check"
+        },
+        {
+          "type": "form",
+          "fields": [
+            {
+              "label": "手机号",
+              "placeholder": "请输入本人手机号",
+              "kind": "tel"
+            },
+            {
+              "label": "验证码",
+              "placeholder": "请输入6位验证码",
+              "kind": "code"
+            }
+          ]
+        },
+        {
+          "type": "check",
+          "text": "我已阅读并同意《用户协议》和《隐私政策》",
+          "checked": false
+        },
+        {
+          "type": "notice",
+          "text": "个人与单位报名学员均使用本人手机号登录。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "登录并继续",
+          "to": "M02",
+          "action": "login"
+        }
+      ],
+      "tab": null,
+      "back": null
+    },
+    {
+      "id": "M02",
+      "name": "首次资料补全",
+      "group": "账号",
+      "title": "完善个人资料",
+      "blocks": [
+        {
+          "type": "section",
+          "title": "先认识一下你",
+          "subtitle": "真实资料用于报名与学习记录"
+        },
+        {
+          "type": "form",
+          "fields": [
+            {
+              "label": "真实姓名",
+              "placeholder": "请输入本人真实姓名",
+              "kind": "text"
+            },
+            {
+              "label": "培训工种（选填）",
+              "placeholder": "请选择培训工种",
+              "kind": "select"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "工种可暂不填写，不影响查看课程和报名。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "保存资料",
+          "to": "M03",
+          "action": "profile"
+        }
+      ],
+      "tab": null,
+      "back": "M01"
+    },
+    {
+      "id": "M03",
+      "name": "实名认证说明",
+      "group": "账号",
+      "title": "实名认证",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "badge-check",
+          "title": "完成实名，安心学习",
+          "text": "实名信息用于核验学习及考试资格。",
+          "tone": "soft"
+        },
+        {
+          "type": "section",
+          "title": "准备好这三项材料",
+          "subtitle": ""
+        },
+        {
+          "type": "steps",
+          "items": [
+            "身份证人像面",
+            "身份证国徽面",
+            "本人现场正脸"
+          ],
+          "active": 0
+        },
+        {
+          "type": "notice",
+          "text": "仅首次认证上传身份证；到场签到无需再次上传。",
+          "tone": "soft"
+        },
+        {
+          "type": "check",
+          "text": "我已了解实名信息的用途并同意进行核验",
+          "checked": false
+        }
+      ],
+      "actions": [
+        {
+          "label": "开始认证",
+          "to": "M04",
+          "action": "identityConsent"
+        },
+        {
+          "label": "稍后认证",
+          "to": "M07",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M02"
+    },
+    {
+      "id": "M04",
+      "name": "身份证采集",
+      "group": "账号",
+      "title": "上传身份证",
+      "blocks": [
+        {
+          "type": "steps",
+          "items": [
+            "身份证",
+            "本人正脸",
+            "认证结果"
+          ],
+          "active": 0
+        },
+        {
+          "type": "identity",
+          "kind": "id",
+          "title": "身份证人像面",
+          "text": "拍摄清晰、完整，无反光"
+        },
+        {
+          "type": "identity",
+          "kind": "id-back",
+          "title": "身份证国徽面",
+          "text": "确保证件在有效期内"
+        },
+        {
+          "type": "notice",
+          "text": "信息仅用于实名认证，请勿上传他人证件。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "下一步：拍摄正脸",
+          "to": "M05"
+        }
+      ],
+      "tab": null,
+      "back": "M03"
+    },
+    {
+      "id": "M05",
+      "name": "实名正脸采集",
+      "group": "账号",
+      "title": "拍摄本人正脸",
+      "blocks": [
+        {
+          "type": "steps",
+          "items": [
+            "身份证",
+            "本人正脸",
+            "认证结果"
+          ],
+          "active": 1
+        },
+        {
+          "type": "identity",
+          "kind": "face",
+          "title": "请将面部放入取景框",
+          "text": "保持光线充足，不遮挡面部"
+        },
+        {
+          "type": "notice",
+          "text": "请本人完成拍摄，系统将与证件信息核对。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "拍摄并提交",
+          "to": "M06",
+          "action": "capture"
+        }
+      ],
+      "tab": null,
+      "back": "M04"
+    },
+    {
+      "id": "M06",
+      "name": "实名认证结果",
+      "group": "账号",
+      "title": "认证结果",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "badge-check",
+          "title": "实名认证成功",
+          "text": "现在可以继续学习与报名了。",
+          "tone": "success"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "姓名",
+              "value": "陈同学"
+            },
+            {
+              "label": "认证状态",
+              "value": "已实名认证"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "认证后的实名资料将用于本人服务资格核验。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "返回首页",
+          "to": "M07"
+        }
+      ],
+      "tab": null,
+      "back": "M03"
+    },
+    {
+      "id": "M07",
+      "name": "首页 · 未购买",
+      "group": "首页",
+      "title": "安全教育培训",
+      "blocks": [
+        {
+          "type": "hero",
+          "eyebrow": "安全教育 · 海珠培训点",
+          "title": "学会安全\n把平安带回家",
+          "text": "现场培训 / 专业考试 / 在线学习",
+          "icon": "hard-hat"
+        },
+        {
+          "type": "quick",
+          "items": [
+            {
+              "icon": "calendar-days",
+              "label": "报名预约",
+              "to": "M10"
+            },
+            {
+              "icon": "clipboard-check",
+              "label": "我的预约",
+              "to": "M22"
+            },
+            {
+              "icon": "book-open",
+              "label": "在线课程",
+              "to": "M35"
+            }
+          ]
+        },
+        {
+          "type": "section",
+          "title": "选择适合你的学习计划",
+          "subtitle": "先购买服务，再预约到场时间"
+        },
+        {
+          "type": "product",
+          "price": "398",
+          "title": "培训 + 考试",
+          "text": "1次现场培训 · 考试机会以订单为准",
+          "to": "M11",
+          "tag": "完整学习方案"
+        },
+        {
+          "type": "product",
+          "price": "98",
+          "title": "单独考试",
+          "text": "适合只需参加考试的学员",
+          "to": "M12",
+          "tag": ""
+        },
+        {
+          "type": "link",
+          "text": "了解机构与培训地点",
+          "to": "M57"
+        }
+      ],
+      "actions": [],
+      "tab": "首页",
+      "back": null
+    },
+    {
+      "id": "M08",
+      "name": "首页 · 已有服务",
+      "group": "首页",
+      "title": "安全教育培训",
+      "blocks": [
+        {
+          "type": "hero",
+          "eyebrow": "下午好，陈同学",
+          "title": "学习有计划\n到场更从容",
+          "text": "你的培训与考试安排，都在这里",
+          "icon": "calendar-check"
+        },
+        {
+          "type": "appointment",
+          "title": "安全教育培训 + 考试",
+          "date": "11月3日 周二",
+          "time": "09:00–17:00",
+          "state": "待到场",
+          "to": "M23",
+          "cta": "查看预约"
+        },
+        {
+          "type": "quick",
+          "items": [
+            {
+              "icon": "calendar-days",
+              "label": "我的预约",
+              "to": "M22"
+            },
+            {
+              "icon": "book-open",
+              "label": "继续学习",
+              "to": "M35"
+            },
+            {
+              "icon": "clipboard-list",
+              "label": "我的服务",
+              "to": "M51"
+            }
+          ]
+        },
+        {
+          "type": "section",
+          "title": "推荐学习",
+          "subtitle": ""
+        },
+        {
+          "type": "course",
+          "title": "施工现场安全基础",
+          "text": "6课时 · 安全防护与作业规范",
+          "progress": 35,
+          "to": "M36",
+          "icon": "hard-hat"
+        }
+      ],
+      "actions": [],
+      "tab": "首页",
+      "back": null
+    },
+    {
+      "id": "M09",
+      "name": "首页 · 单位代付",
+      "group": "首页",
+      "title": "安全教育培训",
+      "blocks": [
+        {
+          "type": "hero",
+          "eyebrow": "单位已为你安排",
+          "title": "安心学习\n按时到场",
+          "text": "无需为本次服务再次付款",
+          "icon": "building-2"
+        },
+        {
+          "type": "appointment",
+          "title": "单位代付 · 培训 + 考试",
+          "date": "11月3日 周二",
+          "time": "09:00–17:00",
+          "state": "单位已预约",
+          "to": "M25",
+          "cta": "查看本人预约"
+        },
+        {
+          "type": "notice",
+          "text": "需要换时间？可在本人预约详情中自行改期。",
+          "tone": "soft"
+        },
+        {
+          "type": "menu",
+          "items": [
+            {
+              "icon": "book-open",
+              "label": "在线课程",
+              "to": "M35"
+            },
+            {
+              "icon": "clipboard-check",
+              "label": "我的考试",
+              "to": "M39"
+            },
+            {
+              "icon": "receipt-text",
+              "label": "单位代付服务",
+              "to": "M53"
+            }
+          ]
+        }
+      ],
+      "actions": [],
+      "tab": "首页",
+      "back": null
+    },
+    {
+      "id": "M10",
+      "name": "报名预约 · 套餐选择",
+      "group": "购买",
+      "title": "报名预约",
+      "blocks": [
+        {
+          "type": "section",
+          "title": "从这里开始安全学习",
+          "subtitle": "选择服务后付款，付款成功再选到场时间"
+        },
+        {
+          "type": "product",
+          "price": "398",
+          "title": "培训 + 考试",
+          "text": "300元培训费 + 98元考试费",
+          "to": "M11",
+          "tag": "含1次现场培训"
+        },
+        {
+          "type": "product",
+          "price": "98",
+          "title": "单独考试",
+          "text": "不含现场培训，仅提供考试资格",
+          "to": "M12",
+          "tag": ""
+        },
+        {
+          "type": "notice",
+          "text": "考试次数由所选试卷配置决定，确认订单时明确展示。",
+          "tone": "soft"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            },
+            {
+              "label": "预约方式",
+              "value": "付款后选择未来日期"
+            }
+          ]
+        }
+      ],
+      "actions": [],
+      "tab": null,
+      "back": "M07"
+    },
+    {
+      "id": "M11",
+      "name": "培训 + 考试服务详情",
+      "group": "购买",
+      "title": "服务详情",
+      "blocks": [
+        {
+          "type": "hero",
+          "eyebrow": "安全教育培训服务",
+          "title": "培训 + 考试",
+          "text": "掌握安全知识，再进行考试",
+          "icon": "hard-hat"
+        },
+        {
+          "type": "price",
+          "price": "398",
+          "unit": "/人",
+          "tag": "培训300元 + 考试98元"
+        },
+        {
+          "type": "section",
+          "title": "你将获得",
+          "subtitle": ""
+        },
+        {
+          "type": "benefits",
+          "items": [
+            "1次现场培训",
+            "本轮考试机会：示例3次",
+            "本人专属预约与考试记录",
+            "未来日期灵活选择"
+          ]
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "可约日期示例",
+              "value": "周二、周四"
+            },
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "未使用服务可申请退款；已参加培训后不可退培训套餐。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "立即报名 · ¥398",
+          "to": "M13",
+          "action": "choose398"
+        }
+      ],
+      "tab": null,
+      "back": "M10"
+    },
+    {
+      "id": "M12",
+      "name": "单独考试服务详情",
+      "group": "购买",
+      "title": "服务详情",
+      "blocks": [
+        {
+          "type": "hero",
+          "eyebrow": "安全教育培训服务",
+          "title": "单独考试",
+          "text": "按自己的安排，预约考试",
+          "icon": "clipboard-check"
+        },
+        {
+          "type": "price",
+          "price": "98",
+          "unit": "/人",
+          "tag": "仅考试，不含培训"
+        },
+        {
+          "type": "section",
+          "title": "你将获得",
+          "subtitle": ""
+        },
+        {
+          "type": "benefits",
+          "items": [
+            "单独考试资格",
+            "本轮考试机会：示例3次",
+            "本人专属预约与考试记录",
+            "未来日期灵活选择"
+          ]
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "可约日期示例",
+              "value": "周一、周三、周五"
+            },
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "服务未使用可申请退款，审核后人工办理。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "立即报名 · ¥98",
+          "to": "M13",
+          "action": "choose98"
+        }
+      ],
+      "tab": null,
+      "back": "M10"
+    },
+    {
+      "id": "M13",
+      "name": "确认订单",
+      "group": "购买",
+      "title": "确认订单",
+      "blocks": [
+        {
+          "type": "order",
+          "title": "培训 + 考试",
+          "price": "398",
+          "tag": "本人报名",
+          "text": "1次培训 · 本轮3次考试机会（示例）"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "报名人",
+              "value": "陈同学"
+            },
+            {
+              "label": "报名方式",
+              "value": "个人报名"
+            },
+            {
+              "label": "服务金额",
+              "value": "¥398.00"
+            },
+            {
+              "label": "应付金额",
+              "value": "¥398.00"
+            }
+          ]
+        },
+        {
+          "type": "check",
+          "text": "已确认服务内容、考试次数及退费条款",
+          "checked": false
+        },
+        {
+          "type": "notice",
+          "text": "付款后再预约日期；付款不保证指定日期有名额。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "确认订单并支付",
+          "to": "M14",
+          "action": "orderConfirm"
+        }
+      ],
+      "tab": null,
+      "back": "M11"
+    },
+    {
+      "id": "M14",
+      "name": "微信支付",
+      "group": "购买",
+      "title": "订单支付",
+      "blocks": [
+        {
+          "type": "price",
+          "price": "398.00",
+          "unit": "应付金额",
+          "tag": "安全教育培训 + 考试"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "订单状态",
+              "value": "待付款"
+            },
+            {
+              "label": "服务对象",
+              "value": "陈同学"
+            },
+            {
+              "label": "订单编号",
+              "value": "示例订单 20261103001"
+            }
+          ]
+        },
+        {
+          "type": "payment",
+          "title": "微信支付",
+          "text": "使用微信完成本次付款"
+        },
+        {
+          "type": "notice",
+          "text": "请核对订单金额，切勿重复付款。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "微信支付 ¥398.00",
+          "to": "M15",
+          "action": "pay"
+        },
+        {
+          "label": "稍后付款",
+          "to": "M52",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M13"
+    },
+    {
+      "id": "M15",
+      "name": "付款结果核实中",
+      "group": "购买",
+      "title": "确认付款结果",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "loader-circle",
+          "title": "正在核实付款",
+          "text": "请稍候，系统正在确认本次支付结果。",
+          "tone": "soft"
+        },
+        {
+          "type": "notice",
+          "text": "如已扣款，请勿重复付款。结果未确认前不会要求重新下单。",
+          "tone": "soft"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "订单编号",
+              "value": "示例订单 20261103001"
+            },
+            {
+              "label": "当前状态",
+              "value": "付款结果核实中"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "查询付款结果",
+          "to": "M16",
+          "action": "verifyPay"
+        },
+        {
+          "label": "查看原订单",
+          "to": "M52",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M14"
+    },
+    {
+      "id": "M16",
+      "name": "付款成功 · 待预约",
+      "group": "购买",
+      "title": "付款成功",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "circle-check",
+          "title": "支付成功",
+          "text": "服务已开通，现在可以预约到场时间。",
+          "tone": "success"
+        },
+        {
+          "type": "order",
+          "title": "培训 + 考试",
+          "price": "398",
+          "tag": "已付款待预约",
+          "text": "本人服务 · 尚未选择日期"
+        },
+        {
+          "type": "steps",
+          "items": [
+            "购买服务",
+            "选择日期",
+            "按时到场"
+          ],
+          "active": 1
+        },
+        {
+          "type": "notice",
+          "text": "付款成功不代表已预约，请选择合适的日期和时段。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "去预约",
+          "to": "M18"
+        },
+        {
+          "label": "查看我的订单",
+          "to": "M52",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M08"
+    },
+    {
+      "id": "M17",
+      "name": "待付款／支付失败",
+      "group": "购买",
+      "title": "付款未完成",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "wallet",
+          "title": "本次付款未完成",
+          "text": "确认未付款后，可继续支付原订单。",
+          "tone": "warning"
+        },
+        {
+          "type": "order",
+          "title": "培训 + 考试",
+          "price": "398",
+          "tag": "待付款",
+          "text": "未开通服务，未占预约名额"
+        },
+        {
+          "type": "notice",
+          "text": "如微信已扣款但订单未更新，请先查询付款结果。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "继续支付原订单",
+          "to": "M14"
+        },
+        {
+          "label": "查询付款结果",
+          "to": "M15",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M51"
+    },
+    {
+      "id": "M18",
+      "name": "首次预约 · 培训考试",
+      "group": "预约",
+      "title": "选择预约时间",
+      "blocks": [
+        {
+          "type": "badge",
+          "text": "398元 · 培训加考试"
+        },
+        {
+          "type": "calendar",
+          "month": "2026年11月",
+          "mode": "training",
+          "selected": 3,
+          "change": false
+        },
+        {
+          "type": "section",
+          "title": "选择时段",
+          "subtitle": "各时段共享当天剩余名额"
+        },
+        {
+          "type": "slots",
+          "items": [
+            "09:00–17:00 · 培训及考试"
+          ],
+          "selected": 0
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            },
+            {
+              "label": "所选日期余量",
+              "value": "剩余18个名额"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "仅显示明天及以后的已开放日期。示例星期由运营配置。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "下一步：确认预约",
+          "to": "M20",
+          "action": "selectDate"
+        }
+      ],
+      "tab": null,
+      "back": "M16"
+    },
+    {
+      "id": "M19",
+      "name": "首次预约 · 单独考试",
+      "group": "预约",
+      "title": "选择预约时间",
+      "blocks": [
+        {
+          "type": "badge",
+          "text": "单独考试"
+        },
+        {
+          "type": "calendar",
+          "month": "2026年11月",
+          "mode": "exam",
+          "selected": 4,
+          "change": false
+        },
+        {
+          "type": "section",
+          "title": "选择时段",
+          "subtitle": "各时段共享当天剩余名额"
+        },
+        {
+          "type": "slots",
+          "items": [
+            "09:00–10:30",
+            "10:30–12:00",
+            "14:00–15:30"
+          ],
+          "selected": 0
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            },
+            {
+              "label": "所选日期余量",
+              "value": "剩余18个名额"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "仅显示明天及以后的已开放日期。示例星期由运营配置。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "下一步：确认预约",
+          "to": "M20",
+          "action": "selectDate"
+        }
+      ],
+      "tab": null,
+      "back": "M16"
+    },
+    {
+      "id": "M26",
+      "name": "改期 · 培训考试",
+      "group": "预约",
+      "title": "更换预约时间",
+      "blocks": [
+        {
+          "type": "notice",
+          "text": "原预约：11月3日 09:00–17:00，改期成功前保持有效。",
+          "tone": "soft"
+        },
+        {
+          "type": "calendar",
+          "month": "2026年11月",
+          "mode": "training",
+          "selected": 5,
+          "change": true
+        },
+        {
+          "type": "section",
+          "title": "选择时段",
+          "subtitle": "各时段共享当天剩余名额"
+        },
+        {
+          "type": "slots",
+          "items": [
+            "09:00–17:00 · 培训及考试"
+          ],
+          "selected": 0
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            },
+            {
+              "label": "所选日期余量",
+              "value": "剩余18个名额"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "仅显示明天及以后的已开放日期。示例星期由运营配置。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "确认新时间",
+          "to": "M28",
+          "action": "selectDate"
+        }
+      ],
+      "tab": null,
+      "back": "M23"
+    },
+    {
+      "id": "M27",
+      "name": "改期 · 仅考试",
+      "group": "预约",
+      "title": "更换预约时间",
+      "blocks": [
+        {
+          "type": "notice",
+          "text": "原预约：11月3日 09:00–17:00，改期成功前保持有效。",
+          "tone": "soft"
+        },
+        {
+          "type": "calendar",
+          "month": "2026年11月",
+          "mode": "exam",
+          "selected": 4,
+          "change": true
+        },
+        {
+          "type": "section",
+          "title": "选择时段",
+          "subtitle": "各时段共享当天剩余名额"
+        },
+        {
+          "type": "slots",
+          "items": [
+            "09:00–10:30",
+            "10:30–12:00",
+            "14:00–15:30"
+          ],
+          "selected": 0
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            },
+            {
+              "label": "所选日期余量",
+              "value": "剩余18个名额"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "仅显示明天及以后的已开放日期。示例星期由运营配置。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "确认新时间",
+          "to": "M28",
+          "action": "selectDate"
+        }
+      ],
+      "tab": null,
+      "back": "M23"
+    },
+    {
+      "id": "M29",
+      "name": "预约下次考试",
+      "group": "预约",
+      "title": "预约下次考试",
+      "blocks": [
+        {
+          "type": "notice",
+          "text": "凭本轮剩余次数预约，不重复收费。",
+          "tone": "soft"
+        },
+        {
+          "type": "calendar",
+          "month": "2026年11月",
+          "mode": "exam",
+          "selected": 4,
+          "change": false
+        },
+        {
+          "type": "section",
+          "title": "选择时段",
+          "subtitle": "各时段共享当天剩余名额"
+        },
+        {
+          "type": "slots",
+          "items": [
+            "09:00–10:30",
+            "10:30–12:00",
+            "14:00–15:30"
+          ],
+          "selected": 0
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            },
+            {
+              "label": "所选日期余量",
+              "value": "剩余18个名额"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "仅显示明天及以后的已开放日期。示例星期由运营配置。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "下一步：确认预约",
+          "to": "M20",
+          "action": "selectDate"
+        }
+      ],
+      "tab": null,
+      "back": "M16"
+    },
+    {
+      "id": "M20",
+      "name": "确认预约",
+      "group": "预约",
+      "title": "确认预约",
+      "blocks": [
+        {
+          "type": "section",
+          "title": "请确认本次安排",
+          "subtitle": "提交前将再次检查可约名额"
+        },
+        {
+          "type": "appointment",
+          "title": "安全教育培训 + 考试",
+          "date": "11月3日 周二",
+          "time": "09:00–17:00",
+          "state": "待确认"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "预约人",
+              "value": "陈同学"
+            },
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            },
+            {
+              "label": "人数",
+              "value": "1人"
+            },
+            {
+              "label": "费用",
+              "value": "已付款，无需再次支付"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "398元培训和考试同日安排，每人仅占1个名额。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "提交预约",
+          "to": "M21",
+          "action": "book"
+        }
+      ],
+      "tab": null,
+      "back": "M18"
+    },
+    {
+      "id": "M21",
+      "name": "预约成功",
+      "group": "预约",
+      "title": "预约成功",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "calendar-check",
+          "title": "预约成功",
+          "text": "请按预约安排到场，记得完成签到。",
+          "tone": "success"
+        },
+        {
+          "type": "appointment",
+          "title": "安全教育培训 + 考试",
+          "date": "11月3日 周二",
+          "time": "09:00–17:00",
+          "state": "待到场"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            },
+            {
+              "label": "签到方式",
+              "value": "当天到场后主动签到"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "需要更换日期，可在我的预约中办理改期。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "查看我的预约",
+          "to": "M23"
+        },
+        {
+          "label": "返回首页",
+          "to": "M08",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M22"
+    },
+    {
+      "id": "M22",
+      "name": "我的预约列表",
+      "group": "预约",
+      "title": "我的预约",
+      "blocks": [
+        {
+          "type": "tabs",
+          "items": [
+            "全部",
+            "待到场",
+            "已完成"
+          ],
+          "active": "全部"
+        },
+        {
+          "type": "appointment",
+          "title": "安全教育培训 + 考试",
+          "date": "11月3日 周二",
+          "time": "09:00–17:00",
+          "state": "待到场",
+          "to": "M23",
+          "cta": "查看详情"
+        },
+        {
+          "type": "appointment",
+          "title": "单独考试",
+          "date": "10月26日 周一",
+          "time": "14:00–15:30",
+          "state": "已完成",
+          "to": "M47",
+          "cta": "查看记录"
+        }
+      ],
+      "actions": [],
+      "tab": null,
+      "back": "M50"
+    },
+    {
+      "id": "M23",
+      "name": "预约详情 · 未签到",
+      "group": "预约",
+      "title": "预约详情",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "calendar-days",
+          "title": "等待到场",
+          "text": "按预约时间到场，开启本次学习。",
+          "tone": "soft"
+        },
+        {
+          "type": "appointment",
+          "title": "安全教育培训 + 考试",
+          "date": "11月3日 周二",
+          "time": "09:00–17:00",
+          "state": "未签到"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            },
+            {
+              "label": "预约人",
+              "value": "陈同学"
+            },
+            {
+              "label": "付款来源",
+              "value": "本人付款"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "预约当天到场后可随时签到，定位和照片比对通过才算完成。",
+          "tone": "soft"
+        },
+        {
+          "type": "menu",
+          "items": [
+            {
+              "icon": "map-pin",
+              "label": "查看培训地点",
+              "to": "M57"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "去签到",
+          "to": "M30"
+        },
+        {
+          "label": "更换预约时间",
+          "to": "M26",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M22"
+    },
+    {
+      "id": "M24",
+      "name": "预约详情 · 今日已签到",
+      "group": "预约",
+      "title": "预约详情",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "calendar-days",
+          "title": "今日已签到",
+          "text": "按预约时间到场，开启本次学习。",
+          "tone": "success"
+        },
+        {
+          "type": "appointment",
+          "title": "安全教育培训 + 考试",
+          "date": "11月3日 周二",
+          "time": "09:00–17:00",
+          "state": "今日已签到"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            },
+            {
+              "label": "预约人",
+              "value": "陈同学"
+            },
+            {
+              "label": "付款来源",
+              "value": "本人付款"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "已签到但培训尚未确认，请实际参加培训并由工作人员确认。",
+          "tone": "soft"
+        },
+        {
+          "type": "menu",
+          "items": [
+            {
+              "icon": "map-pin",
+              "label": "查看培训地点",
+              "to": "M57"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "查看培训状态",
+          "to": "M38"
+        },
+        {
+          "label": "更换预约时间",
+          "to": "M26",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M22"
+    },
+    {
+      "id": "M25",
+      "name": "预约详情 · 单位代付",
+      "group": "预约",
+      "title": "预约详情",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "calendar-days",
+          "title": "等待到场",
+          "text": "按预约时间到场，开启本次学习。",
+          "tone": "soft"
+        },
+        {
+          "type": "appointment",
+          "title": "安全教育培训 + 考试",
+          "date": "11月3日 周二",
+          "time": "09:00–17:00",
+          "state": "单位代付"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            },
+            {
+              "label": "预约人",
+              "value": "陈同学"
+            },
+            {
+              "label": "付款来源",
+              "value": "单位代付"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "预约当天到场后可随时签到，定位和照片比对通过才算完成。",
+          "tone": "soft"
+        },
+        {
+          "type": "menu",
+          "items": [
+            {
+              "icon": "map-pin",
+              "label": "查看培训地点",
+              "to": "M57"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "去签到",
+          "to": "M30"
+        },
+        {
+          "label": "更换预约时间",
+          "to": "M26",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M22"
+    },
+    {
+      "id": "M28",
+      "name": "确认改期",
+      "group": "预约",
+      "title": "确认改期",
+      "blocks": [
+        {
+          "type": "section",
+          "title": "核对新的到场安排",
+          "subtitle": ""
+        },
+        {
+          "type": "comparison",
+          "old": "11月3日 周二 09:00–17:00",
+          "new": "11月5日 周四 09:00–17:00"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "服务",
+              "value": "培训 + 考试"
+            },
+            {
+              "label": "改期费用",
+              "value": "¥0.00"
+            },
+            {
+              "label": "考试次数",
+              "value": "保持不变"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "培训和关联考试一起改。改期失败时原预约继续有效。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "确认改期",
+          "to": "E05",
+          "action": "reschedule"
+        },
+        {
+          "label": "保留原预约",
+          "to": "M23",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M26"
+    },
+    {
+      "id": "M30",
+      "name": "签到准备",
+      "group": "签到",
+      "title": "到场签到",
+      "blocks": [
+        {
+          "type": "section",
+          "title": "到了，就签个到",
+          "subtitle": "定位与本人核验通过后，记录今日到场"
+        },
+        {
+          "type": "appointment",
+          "title": "培训 + 考试",
+          "date": "11月3日 周二",
+          "time": "09:00–17:00",
+          "state": "未签到"
+        },
+        {
+          "type": "steps",
+          "items": [
+            "确认位置",
+            "拍摄正脸",
+            "签到成功"
+          ],
+          "active": 0
+        },
+        {
+          "type": "notice",
+          "text": "需在培训地点范围内（示例100米）。仅当天首次签到拍照，不重复上传身份证。",
+          "tone": "soft"
+        },
+        {
+          "type": "check",
+          "text": "已了解定位及照片核验用途",
+          "checked": false
+        }
+      ],
+      "actions": [
+        {
+          "label": "签到 · 开始核验",
+          "to": "M31",
+          "action": "checkin"
+        }
+      ],
+      "tab": null,
+      "back": "M23"
+    },
+    {
+      "id": "M31",
+      "name": "定位核验",
+      "group": "签到",
+      "title": "确认到场位置",
+      "blocks": [
+        {
+          "type": "location",
+          "title": "海珠区培训点",
+          "distance": "距离培训点约35米",
+          "radius": "签到范围100米（示例）"
+        },
+        {
+          "type": "status",
+          "icon": "map-pin",
+          "title": "已进入签到范围",
+          "text": "下一步拍摄正脸，完成本人核验。",
+          "tone": "soft"
+        },
+        {
+          "type": "notice",
+          "text": "定位通过不代表签到成功，还需完成本人照片核验。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "下一步：拍摄正脸",
+          "to": "M32"
+        }
+      ],
+      "tab": null,
+      "back": "M30"
+    },
+    {
+      "id": "M32",
+      "name": "签到正脸采集",
+      "group": "签到",
+      "title": "本人核验",
+      "blocks": [
+        {
+          "type": "steps",
+          "items": [
+            "确认位置",
+            "拍摄正脸",
+            "签到成功"
+          ],
+          "active": 1
+        },
+        {
+          "type": "identity",
+          "kind": "face",
+          "title": "请本人正对镜头",
+          "text": "保持光线充足，不遮挡面部"
+        },
+        {
+          "type": "notice",
+          "text": "无需再次上传身份证。照片用于本次比对，完成后删除临时原图。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "拍照并核验",
+          "to": "M34",
+          "action": "checkinCapture"
+        }
+      ],
+      "tab": null,
+      "back": "M31"
+    },
+    {
+      "id": "M33",
+      "name": "核验异常／人工处理",
+      "group": "签到",
+      "title": "签到未完成",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "circle-alert",
+          "title": "暂未完成核验",
+          "text": "请确认本人资料，或联系现场工作人员。",
+          "tone": "warning"
+        },
+        {
+          "type": "notice",
+          "text": "设备、定位或核验服务异常时，可由有权限的工作人员在现场核实处理。",
+          "tone": "soft"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "签到状态",
+              "value": "未签到"
+            },
+            {
+              "label": "考试次数",
+              "value": "未消耗"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "重新拍摄核验",
+          "to": "M32"
+        },
+        {
+          "label": "返回预约详情",
+          "to": "M23",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M30"
+    },
+    {
+      "id": "M34",
+      "name": "签到成功",
+      "group": "签到",
+      "title": "签到成功",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "shield-check",
+          "title": "今日已签到",
+          "text": "同一地点，培训及当天考试共用本次签到。",
+          "tone": "success"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "签到日期",
+              "value": "2026年11月3日"
+            },
+            {
+              "label": "培训地点",
+              "value": "海珠区培训点"
+            },
+            {
+              "label": "服务",
+              "value": "培训 + 考试"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "398元需先实际参加培训，并由工作人员确认后才能考试。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "查看培训安排",
+          "to": "M38"
+        },
+        {
+          "label": "查看我的考试",
+          "to": "M39",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M24"
+    },
+    {
+      "id": "M35",
+      "name": "课程列表",
+      "group": "课程",
+      "title": "课程",
+      "blocks": [
+        {
+          "type": "section",
+          "title": "把安全知识学扎实",
+          "subtitle": "现场培训之外，随时巩固学习"
+        },
+        {
+          "type": "tabs",
+          "items": [
+            "全部课程",
+            "学习中",
+            "已完成"
+          ],
+          "active": "全部课程"
+        },
+        {
+          "type": "course",
+          "title": "施工现场安全基础",
+          "text": "6课时 · 基础防护",
+          "progress": 35,
+          "to": "M36",
+          "icon": "hard-hat"
+        },
+        {
+          "type": "course",
+          "title": "消防安全与应急处置",
+          "text": "4课时 · 应急技能",
+          "progress": 0,
+          "to": "M36",
+          "icon": "flame"
+        },
+        {
+          "type": "course",
+          "title": "高处作业安全规范",
+          "text": "5课时 · 作业规范",
+          "progress": 100,
+          "to": "M36",
+          "icon": "shield-check"
+        }
+      ],
+      "actions": [],
+      "tab": "课程",
+      "back": null
+    },
+    {
+      "id": "M36",
+      "name": "课程详情",
+      "group": "课程",
+      "title": "课程详情",
+      "blocks": [
+        {
+          "type": "video",
+          "title": "施工现场安全基础",
+          "text": "6课时 · 系统学习防护规范",
+          "playing": false
+        },
+        {
+          "type": "stats",
+          "items": [
+            {
+              "value": "35%",
+              "label": "学习进度"
+            },
+            {
+              "value": "6",
+              "label": "课程课时"
+            }
+          ]
+        },
+        {
+          "type": "tabs",
+          "items": [
+            "课程目录",
+            "课程简介"
+          ],
+          "active": "课程目录"
+        },
+        {
+          "type": "menu",
+          "items": [
+            {
+              "icon": "circle-check",
+              "label": "01 · 认识常见安全风险",
+              "to": "M37"
+            },
+            {
+              "icon": "play",
+              "label": "02 · 个人防护用品使用",
+              "to": "M37"
+            },
+            {
+              "icon": "play",
+              "label": "03 · 作业前安全检查",
+              "to": "M37"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "视频学习进度不替代现场培训参加确认。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "继续学习",
+          "to": "M37"
+        }
+      ],
+      "tab": null,
+      "back": "M35"
+    },
+    {
+      "id": "M37",
+      "name": "视频学习",
+      "group": "课程",
+      "title": "个人防护用品使用",
+      "blocks": [
+        {
+          "type": "video",
+          "title": "个人防护用品使用",
+          "text": "05:26 / 15:00",
+          "playing": true
+        },
+        {
+          "type": "section",
+          "title": "第2课 · 正确使用防护用品",
+          "subtitle": "施工现场安全基础"
+        },
+        {
+          "type": "progress",
+          "value": 35,
+          "label": "本课学习进度"
+        },
+        {
+          "type": "menu",
+          "items": [
+            {
+              "icon": "list",
+              "label": "查看课程目录",
+              "to": "M36"
+            },
+            {
+              "icon": "play",
+              "label": "下一课：作业前安全检查",
+              "to": "M37"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "请保持页面前台播放，学习进度以实际有效观看为准。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [],
+      "tab": null,
+      "back": "M36"
+    },
+    {
+      "id": "M38",
+      "name": "现场培训状态",
+      "group": "课程",
+      "title": "现场培训安排",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "users",
+          "title": "请先参加现场培训",
+          "text": "实际参加后，由现场工作人员确认。",
+          "tone": "soft"
+        },
+        {
+          "type": "appointment",
+          "title": "安全教育现场培训",
+          "date": "11月3日 周二",
+          "time": "09:00–12:00（示例）",
+          "state": "今日已签到"
+        },
+        {
+          "type": "steps",
+          "items": [
+            "到场签到",
+            "现场培训",
+            "工作人员确认"
+          ],
+          "active": 1
+        },
+        {
+          "type": "notice",
+          "text": "签到和观看视频不能代替现场培训确认。若已参加，请联系现场工作人员核实。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "查看我的考试",
+          "to": "M39"
+        },
+        {
+          "label": "查看预约",
+          "to": "M24",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M24"
+    },
+    {
+      "id": "M39",
+      "name": "考试列表",
+      "group": "考试",
+      "title": "考试",
+      "blocks": [
+        {
+          "type": "tabs",
+          "items": [
+            "正式考试",
+            "模拟练习",
+            "考试记录"
+          ],
+          "active": "正式考试"
+        },
+        {
+          "type": "exam",
+          "title": "安全教育培训考试",
+          "state": "等待培训确认",
+          "times": "本轮剩余3次（示例）",
+          "text": "398元服务 · 已签到",
+          "to": "E08",
+          "cta": "开始考试"
+        },
+        {
+          "type": "exam",
+          "title": "安全知识模拟练习",
+          "state": "不限次数",
+          "times": "不计入正式成绩",
+          "text": "练习与正式考试分别记录",
+          "to": "M49",
+          "cta": "开始练习"
+        },
+        {
+          "type": "menu",
+          "items": [
+            {
+              "icon": "history",
+              "label": "查看考试记录",
+              "to": "M47"
+            },
+            {
+              "icon": "notebook-pen",
+              "label": "我的错题集",
+              "to": "M48"
+            }
+          ]
+        }
+      ],
+      "actions": [],
+      "tab": "考试",
+      "back": null
+    },
+    {
+      "id": "M40",
+      "name": "考试须知",
+      "group": "考试",
+      "title": "考试须知",
+      "blocks": [
+        {
+          "type": "section",
+          "title": "安全教育培训考试",
+          "subtitle": "请仔细阅读后开始"
+        },
+        {
+          "type": "stats",
+          "items": [
+            {
+              "value": "30分钟",
+              "label": "考试时长"
+            },
+            {
+              "value": "20题",
+              "label": "题目数量"
+            },
+            {
+              "value": "3次",
+              "label": "本轮机会"
+            }
+          ]
+        },
+        {
+          "type": "benefits",
+          "items": [
+            "本次为第1次考试（配置示例）",
+            "开始成功后计入一次机会",
+            "到期未交卷不自动提交、不评分",
+            "请主动整卷交卷，完成本次考试"
+          ]
+        },
+        {
+          "type": "check",
+          "text": "我已阅读考试须知并确认开始",
+          "checked": false
+        }
+      ],
+      "actions": [
+        {
+          "label": "开始考试",
+          "to": "M41",
+          "action": "startExam"
+        }
+      ],
+      "tab": null,
+      "back": "M39"
+    },
+    {
+      "id": "M41",
+      "name": "答题 · 单选题",
+      "group": "考试",
+      "title": "正在考试",
+      "blocks": [
+        {
+          "type": "examBar",
+          "time": "29:42",
+          "attempt": "第1次 / 共3次",
+          "progress": "1 / 20"
+        },
+        {
+          "type": "question",
+          "kind": "单选题",
+          "index": 1,
+          "total": 20,
+          "time": "29:42",
+          "text": "进入施工现场作业前，首先应该做什么？",
+          "options": [
+            "正确佩戴安全帽等防护用品",
+            "直接进入作业区域",
+            "检查手机是否有电",
+            "等待他人提醒"
+          ],
+          "selected": [
+            0
+          ]
+        },
+        {
+          "type": "progress",
+          "value": 5,
+          "label": "已答1题 / 共20题"
+        },
+        {
+          "type": "link",
+          "text": "打开答题卡",
+          "to": "M43"
+        }
+      ],
+      "actions": [
+        {
+          "label": "下一题",
+          "to": "M42",
+          "action": "answerNext"
+        },
+        {
+          "label": "答题卡",
+          "to": "M43",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M39"
+    },
+    {
+      "id": "M42",
+      "name": "答题 · 多选题",
+      "group": "考试",
+      "title": "正在考试",
+      "blocks": [
+        {
+          "type": "examBar",
+          "time": "28:16",
+          "attempt": "第1次 / 共3次",
+          "progress": "2 / 20"
+        },
+        {
+          "type": "question",
+          "kind": "多选题",
+          "index": 2,
+          "total": 20,
+          "time": "29:42",
+          "text": "下列哪些属于作业前应检查的内容？",
+          "options": [
+            "个人防护用品是否完好",
+            "作业环境是否存在风险",
+            "应急通道是否畅通",
+            "是否携带娱乐设备"
+          ],
+          "selected": [
+            0,
+            1
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "多选题可选择多个答案，再次点击可取消选择。",
+          "tone": "soft"
+        },
+        {
+          "type": "link",
+          "text": "切换判断题示例",
+          "to": "E14"
+        }
+      ],
+      "actions": [
+        {
+          "label": "下一题",
+          "to": "E14",
+          "action": "answerNext"
+        },
+        {
+          "label": "上一题",
+          "to": "M41",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M41"
+    },
+    {
+      "id": "M43",
+      "name": "答题卡与交卷",
+      "group": "考试",
+      "title": "答题卡",
+      "blocks": [
+        {
+          "type": "section",
+          "title": "检查一下，再交卷",
+          "subtitle": "已答2题，还剩18题未作答"
+        },
+        {
+          "type": "grid",
+          "count": 20,
+          "selected": [
+            1,
+            2
+          ],
+          "current": 2
+        },
+        {
+          "type": "notice",
+          "text": "点击题号可返回对应题目。未作答题目按空白答案处理。",
+          "tone": "soft"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "当前考试",
+              "value": "第1次 / 共3次"
+            },
+            {
+              "label": "剩余时间",
+              "value": "28:16"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "提交试卷",
+          "to": "E10",
+          "action": "submitDialog"
+        },
+        {
+          "label": "继续答题",
+          "to": "M42",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M42"
+    },
+    {
+      "id": "M44",
+      "name": "成绩结果 · 通过",
+      "group": "考试",
+      "title": "考试结果",
+      "blocks": [
+        {
+          "type": "score",
+          "value": "86",
+          "label": "考试通过",
+          "tone": "success"
+        },
+        {
+          "type": "stats",
+          "items": [
+            {
+              "value": "第1次",
+              "label": "本轮考试"
+            },
+            {
+              "value": "18分钟",
+              "label": "用时"
+            },
+            {
+              "value": "20题",
+              "label": "本卷题数"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "本次成绩及答题记录已保存。",
+          "tone": "soft"
+        },
+        {
+          "type": "menu",
+          "items": [
+            {
+              "icon": "file-check",
+              "label": "查看本次答题详情",
+              "to": "M47"
+            },
+            {
+              "icon": "notebook-pen",
+              "label": "查看错题解析",
+              "to": "M48"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "返回考试列表",
+          "to": "M39"
+        }
+      ],
+      "tab": null,
+      "back": "M39"
+    },
+    {
+      "id": "M45",
+      "name": "成绩结果 · 未通过",
+      "group": "考试",
+      "title": "考试结果",
+      "blocks": [
+        {
+          "type": "score",
+          "value": "56",
+          "label": "本次未通过",
+          "tone": "warning"
+        },
+        {
+          "type": "stats",
+          "items": [
+            {
+              "value": "第1次",
+              "label": "本轮考试"
+            },
+            {
+              "value": "2次",
+              "label": "剩余机会"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "当天仍可使用剩余次数继续考试，沿用今日预约和签到。",
+          "tone": "soft"
+        },
+        {
+          "type": "menu",
+          "items": [
+            {
+              "icon": "notebook-pen",
+              "label": "先看看错题解析",
+              "to": "M48"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "当天再次考试",
+          "to": "M40",
+          "action": "retryExam"
+        },
+        {
+          "label": "预约其他日期考试",
+          "to": "M29",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M39"
+    },
+    {
+      "id": "M46",
+      "name": "超时未交卷",
+      "group": "考试",
+      "title": "考试已结束",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "timer-off",
+          "title": "超时未交卷",
+          "text": "本次考试已结束，未生成评分。",
+          "tone": "warning"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "交卷状态",
+              "value": "未交卷"
+            },
+            {
+              "label": "成绩",
+              "value": "未评分"
+            },
+            {
+              "label": "本次机会",
+              "value": "已使用"
+            },
+            {
+              "label": "剩余机会",
+              "value": "2次（示例）"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "系统不会自动提交或补答。剩余机会可按规则继续使用。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "返回考试列表",
+          "to": "M39"
+        },
+        {
+          "label": "预约下次考试",
+          "to": "M29",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M39"
+    },
+    {
+      "id": "M47",
+      "name": "考试记录与详情",
+      "group": "考试",
+      "title": "考试记录",
+      "blocks": [
+        {
+          "type": "tabs",
+          "items": [
+            "全部",
+            "已交卷",
+            "未交卷"
+          ],
+          "active": "全部"
+        },
+        {
+          "type": "record",
+          "title": "安全教育培训考试",
+          "date": "2026.11.03 · 第1次",
+          "score": "86分",
+          "state": "通过",
+          "to": "E15"
+        },
+        {
+          "type": "record",
+          "title": "安全知识模拟练习",
+          "date": "2026.11.02 · 模拟",
+          "score": "78分",
+          "state": "已交卷",
+          "to": "E15"
+        },
+        {
+          "type": "notice",
+          "text": "每次考试记录独立保留；模拟成绩不计入正式统计。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [],
+      "tab": null,
+      "back": "M50"
+    },
+    {
+      "id": "M48",
+      "name": "错题集",
+      "group": "考试",
+      "title": "我的错题",
+      "blocks": [
+        {
+          "type": "tabs",
+          "items": [
+            "全部",
+            "单选",
+            "多选",
+            "判断"
+          ],
+          "active": "全部"
+        },
+        {
+          "type": "question",
+          "kind": "单选题 · 错题",
+          "index": 1,
+          "total": 4,
+          "text": "安全帽受到较大冲击后，应当如何处理？",
+          "options": [
+            "继续使用",
+            "及时更换",
+            "仅擦拭外壳"
+          ],
+          "selected": [
+            0
+          ]
+        },
+        {
+          "type": "answers",
+          "correct": "B · 及时更换",
+          "mine": "A · 继续使用",
+          "explanation": "受到较大冲击的防护用品应按安全要求检查并更换，不应凭外观完好继续使用。"
+        }
+      ],
+      "actions": [
+        {
+          "label": "下一道错题",
+          "to": "M48",
+          "action": "nextWrong"
+        }
+      ],
+      "tab": null,
+      "back": "M50"
+    },
+    {
+      "id": "M49",
+      "name": "模拟考试须知",
+      "group": "考试",
+      "title": "模拟练习",
+      "blocks": [
+        {
+          "type": "hero",
+          "eyebrow": "练习模式 · 不限次数",
+          "title": "先练一练\n考试更从容",
+          "text": "模拟成绩不计入正式考试统计",
+          "icon": "notebook-pen"
+        },
+        {
+          "type": "stats",
+          "items": [
+            {
+              "value": "20题",
+              "label": "示例题量"
+            },
+            {
+              "value": "不限次",
+              "label": "模拟练习"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "模拟练习独立记录，不消耗付费正式考试机会。仍须满足登录和实名等条件。",
+          "tone": "soft"
+        },
+        {
+          "type": "check",
+          "text": "已阅读本次模拟练习须知",
+          "checked": false
+        }
+      ],
+      "actions": [
+        {
+          "label": "开始模拟练习",
+          "to": "M41",
+          "action": "startPractice"
+        }
+      ],
+      "tab": null,
+      "back": "M39"
+    },
+    {
+      "id": "M50",
+      "name": "个人中心",
+      "group": "我的",
+      "title": "我的",
+      "blocks": [
+        {
+          "type": "profile",
+          "name": "陈同学",
+          "tag": "已实名认证",
+          "text": "认真学好每一次安全课"
+        },
+        {
+          "type": "stats",
+          "items": [
+            {
+              "value": "1",
+              "label": "待到场"
+            },
+            {
+              "value": "2",
+              "label": "已购服务"
+            },
+            {
+              "value": "3",
+              "label": "考试记录"
+            }
+          ]
+        },
+        {
+          "type": "menu",
+          "items": [
+            {
+              "icon": "calendar-days",
+              "label": "我的预约",
+              "to": "M22"
+            },
+            {
+              "icon": "receipt-text",
+              "label": "我的订单 / 服务",
+              "to": "M51"
+            },
+            {
+              "icon": "clipboard-check",
+              "label": "考试记录",
+              "to": "M47"
+            },
+            {
+              "icon": "notebook-pen",
+              "label": "我的错题",
+              "to": "M48"
+            },
+            {
+              "icon": "user-round",
+              "label": "个人资料与设置",
+              "to": "M56"
+            },
+            {
+              "icon": "building-2",
+              "label": "关于培训机构",
+              "to": "M57"
+            }
+          ]
+        }
+      ],
+      "actions": [],
+      "tab": "我的",
+      "back": null
+    },
+    {
+      "id": "M51",
+      "name": "我的订单／服务",
+      "group": "订单",
+      "title": "我的订单 / 服务",
+      "blocks": [
+        {
+          "type": "tabs",
+          "items": [
+            "全部",
+            "待付款",
+            "已付款",
+            "退款"
+          ],
+          "active": "全部"
+        },
+        {
+          "type": "order",
+          "title": "培训 + 考试",
+          "price": "398",
+          "tag": "已付款待预约",
+          "text": "本轮3次考试机会（示例）",
+          "to": "M52"
+        },
+        {
+          "type": "order",
+          "title": "单独考试",
+          "price": "98",
+          "tag": "单位代付",
+          "text": "本人服务资格 · 无需重复付款",
+          "to": "M53"
+        },
+        {
+          "type": "order",
+          "title": "单独考试",
+          "price": "98",
+          "tag": "退款处理中",
+          "text": "服务已暂停",
+          "to": "M55"
+        }
+      ],
+      "actions": [],
+      "tab": null,
+      "back": "M50"
+    },
+    {
+      "id": "M52",
+      "name": "个人订单详情",
+      "group": "订单",
+      "title": "订单详情",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "receipt-text",
+          "title": "已付款待预约",
+          "text": "服务已开通，选择日期后完成预约。",
+          "tone": "soft"
+        },
+        {
+          "type": "order",
+          "title": "培训 + 考试",
+          "price": "398",
+          "tag": "个人购买",
+          "text": "1次现场培训 · 本轮3次考试机会（示例）"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "报名人",
+              "value": "陈同学"
+            },
+            {
+              "label": "支付方式",
+              "value": "微信支付"
+            },
+            {
+              "label": "实际支付",
+              "value": "¥398.00"
+            },
+            {
+              "label": "订单编号",
+              "value": "示例订单 20261103001"
+            }
+          ]
+        },
+        {
+          "type": "menu",
+          "items": [
+            {
+              "icon": "calendar-days",
+              "label": "预约到场日期",
+              "to": "M18"
+            },
+            {
+              "icon": "rotate-ccw",
+              "label": "申请退款",
+              "to": "M54"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "去预约",
+          "to": "M18"
+        }
+      ],
+      "tab": null,
+      "back": "M51"
+    },
+    {
+      "id": "M53",
+      "name": "单位代付服务详情",
+      "group": "订单",
+      "title": "服务详情",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "building-2",
+          "title": "单位已为你付款",
+          "text": "无需为本次服务重复购买。",
+          "tone": "soft"
+        },
+        {
+          "type": "order",
+          "title": "单独考试",
+          "price": "98",
+          "tag": "单位代付",
+          "text": "本人的服务资格"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "服务状态",
+              "value": "已开通"
+            },
+            {
+              "label": "剩余考试机会",
+              "value": "3次（示例）"
+            },
+            {
+              "label": "预约安排",
+              "value": "由单位安排初次预约"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "退款由单位联系人办理。如需改期，可在本人预约中操作。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "查看本人预约",
+          "to": "M25"
+        }
+      ],
+      "tab": null,
+      "back": "M51"
+    },
+    {
+      "id": "M54",
+      "name": "申请退款",
+      "group": "退款",
+      "title": "申请退款",
+      "blocks": [
+        {
+          "type": "order",
+          "title": "培训 + 考试",
+          "price": "398",
+          "tag": "未使用",
+          "text": "未参加培训或考试"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "申请退款金额",
+              "value": "¥398.00"
+            },
+            {
+              "label": "退款方式",
+              "value": "审核后人工办理"
+            }
+          ]
+        },
+        {
+          "type": "form",
+          "fields": [
+            {
+              "label": "退款原因",
+              "placeholder": "请选择原因",
+              "kind": "select"
+            },
+            {
+              "label": "补充说明（选填）",
+              "placeholder": "请说明本次退款原因",
+              "kind": "textarea"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "提交后本轮服务暂停，不能预约、改期、确认培训或新开考。",
+          "tone": "soft"
+        },
+        {
+          "type": "check",
+          "text": "我已了解提交退款后的服务暂停规则",
+          "checked": false
+        }
+      ],
+      "actions": [
+        {
+          "label": "确认申请退款",
+          "to": "M55",
+          "action": "refund"
+        }
+      ],
+      "tab": null,
+      "back": "M52"
+    },
+    {
+      "id": "M55",
+      "name": "退款进度",
+      "group": "退款",
+      "title": "退款进度",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "clock-3",
+          "title": "退款审核中",
+          "text": "申请已收到，请留意本页处理结果。",
+          "tone": "warning"
+        },
+        {
+          "type": "steps",
+          "items": [
+            "提交申请",
+            "审核处理",
+            "人工退款",
+            "退款完成"
+          ],
+          "active": 1
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "申请金额",
+              "value": "¥398.00"
+            },
+            {
+              "label": "服务状态",
+              "value": "已暂停"
+            },
+            {
+              "label": "申请原因",
+              "value": "时间安排变化"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "审核通过不等于退款到账，实际退款结果以本页登记为准。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "查看订单详情",
+          "to": "M52"
+        }
+      ],
+      "tab": null,
+      "back": "M51"
+    },
+    {
+      "id": "M56",
+      "name": "个人资料与设置",
+      "group": "我的",
+      "title": "资料与设置",
+      "blocks": [
+        {
+          "type": "profile",
+          "name": "陈同学",
+          "tag": "已实名认证",
+          "text": "实名资料用于本人资格核验"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "姓名",
+              "value": "陈同学"
+            },
+            {
+              "label": "手机号",
+              "value": "138****0000（示例）"
+            },
+            {
+              "label": "培训工种",
+              "value": "未填写（选填）"
+            },
+            {
+              "label": "实名状态",
+              "value": "已认证"
+            }
+          ]
+        },
+        {
+          "type": "menu",
+          "items": [
+            {
+              "icon": "file-text",
+              "label": "用户协议",
+              "to": "E18"
+            },
+            {
+              "icon": "shield",
+              "label": "隐私政策",
+              "to": "E18"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "已认证姓名和证件信息不支持自行更改。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "退出登录",
+          "to": "E17",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M50"
+    },
+    {
+      "id": "M57",
+      "name": "关于机构与地点",
+      "group": "我的",
+      "title": "关于培训机构",
+      "blocks": [
+        {
+          "type": "hero",
+          "eyebrow": "安全教育培训",
+          "title": "让安全知识\n走进每一次作业",
+          "text": "线上学习 · 现场培训 · 专业考试",
+          "icon": "shield-check"
+        },
+        {
+          "type": "section",
+          "title": "海珠区培训点",
+          "subtitle": "按预约安排到场"
+        },
+        {
+          "type": "location",
+          "title": "海珠区培训点",
+          "distance": "详细地址以机构发布信息为准",
+          "radius": "签到范围由机构配置"
+        },
+        {
+          "type": "notice",
+          "text": "如遇签到或预约问题，请联系现场工作人员。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "查看我的预约",
+          "to": "M22"
+        }
+      ],
+      "tab": null,
+      "back": "M50"
+    },
+    {
+      "id": "E01",
+      "name": "报价更新",
+      "group": "购买",
+      "title": "请重新确认订单",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "refresh-cw",
+          "title": "服务信息已更新",
+          "text": "请确认最新价格与权益后重新提交。",
+          "tone": "warning"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "服务",
+              "value": "培训 + 考试"
+            },
+            {
+              "label": "当前报价",
+              "value": "¥398.00"
+            },
+            {
+              "label": "本轮次数",
+              "value": "以本次确认内容为准"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "重新确认",
+          "to": "M13"
+        }
+      ],
+      "tab": null,
+      "back": "M13"
+    },
+    {
+      "id": "E02",
+      "name": "订单已过期",
+      "group": "购买",
+      "title": "订单已关闭",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "clock-3",
+          "title": "未付款订单已过期",
+          "text": "旧订单保留，请按当前报价重新购买。",
+          "tone": "warning"
+        }
+      ],
+      "actions": [
+        {
+          "label": "重新选择服务",
+          "to": "M10"
+        }
+      ],
+      "tab": null,
+      "back": "M51"
+    },
+    {
+      "id": "E03",
+      "name": "日期已满",
+      "group": "预约",
+      "title": "当前日期已满",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "calendar-x",
+          "title": "这一天已约满",
+          "text": "已购服务仍有效，请选择其他日期。",
+          "tone": "warning"
+        }
+      ],
+      "actions": [
+        {
+          "label": "重选日期",
+          "to": "M18"
+        }
+      ],
+      "tab": null,
+      "back": "M18"
+    },
+    {
+      "id": "E04",
+      "name": "改期失败",
+      "group": "预约",
+      "title": "改期未完成",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "circle-alert",
+          "title": "新时间暂不可约",
+          "text": "原预约、名额及签到适用关系保持不变。",
+          "tone": "warning"
+        },
+        {
+          "type": "appointment",
+          "title": "原预约继续有效",
+          "date": "11月3日 周二",
+          "time": "09:00–17:00",
+          "state": "未变更"
+        }
+      ],
+      "actions": [
+        {
+          "label": "重新选择日期",
+          "to": "M26"
+        },
+        {
+          "label": "查看原预约",
+          "to": "M23",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M26"
+    },
+    {
+      "id": "E05",
+      "name": "改期成功",
+      "group": "预约",
+      "title": "改期成功",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "calendar-check",
+          "title": "已更新预约时间",
+          "text": "请按新的安排到场，新日期需重新签到。",
+          "tone": "success"
+        },
+        {
+          "type": "appointment",
+          "title": "培训 + 考试",
+          "date": "11月5日 周四",
+          "time": "09:00–17:00",
+          "state": "已改期"
+        }
+      ],
+      "actions": [
+        {
+          "label": "查看新预约",
+          "to": "M23"
+        }
+      ],
+      "tab": null,
+      "back": "M22"
+    },
+    {
+      "id": "E06",
+      "name": "定位超范围",
+      "group": "签到",
+      "title": "请到达培训地点",
+      "blocks": [
+        {
+          "type": "location",
+          "title": "尚未进入签到范围",
+          "distance": "当前位置超出允许范围",
+          "radius": "请到达现场后重试"
+        },
+        {
+          "type": "notice",
+          "text": "定位在范围内并完成照片核验后才能签到。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "重新定位",
+          "to": "M31"
+        },
+        {
+          "label": "返回预约",
+          "to": "M23",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M30"
+    },
+    {
+      "id": "E07",
+      "name": "未签到开考拦截",
+      "group": "考试",
+      "title": "请先完成签到",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "map-pin",
+          "title": "你今天还未签到",
+          "text": "到场完成定位和本人核验后，再开始考试。",
+          "tone": "warning"
+        },
+        {
+          "type": "notice",
+          "text": "本次未开考，不抽题、不计时、不扣次数。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "去签到",
+          "to": "M30"
+        },
+        {
+          "label": "稍后办理",
+          "to": "M39",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M39"
+    },
+    {
+      "id": "E08",
+      "name": "培训尚未确认",
+      "group": "考试",
+      "title": "请先完成现场培训",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "users",
+          "title": "等待培训参加确认",
+          "text": "请实际参加本轮培训，并由工作人员确认。",
+          "tone": "warning"
+        },
+        {
+          "type": "notice",
+          "text": "已签到或观看视频不能替代现场培训确认；本次未扣次数。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "查看培训安排",
+          "to": "M38"
+        },
+        {
+          "label": "返回考试列表",
+          "to": "M39",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M39"
+    },
+    {
+      "id": "E09",
+      "name": "培训已确认",
+      "group": "课程",
+      "title": "培训参加已确认",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "badge-check",
+          "title": "本轮培训已确认",
+          "text": "现在可以进入考试须知。",
+          "tone": "success"
+        },
+        {
+          "type": "notice",
+          "text": "以后使用本轮剩余考试机会，无需重复参加培训。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "进入考试须知",
+          "to": "M40"
+        }
+      ],
+      "tab": null,
+      "back": "M38"
+    },
+    {
+      "id": "E10",
+      "name": "交卷确认弹窗",
+      "group": "考试",
+      "title": "确认交卷",
+      "blocks": [
+        {
+          "type": "modal",
+          "title": "还有题目未作答",
+          "text": "未作答题目将按空白答案处理。确认提交后，本次答案不可修改。",
+          "primary": "确认交卷",
+          "to": "M44",
+          "secondary": "继续答题",
+          "cancel": "M42"
+        }
+      ],
+      "actions": [],
+      "tab": null,
+      "back": "M43"
+    },
+    {
+      "id": "E11",
+      "name": "考试次数已用完",
+      "group": "考试",
+      "title": "本轮考试已结束",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "clipboard-check",
+          "title": "考试次数已用完",
+          "text": "本轮记录已保留。如仍需考试，可重新购买服务。",
+          "tone": "warning"
+        }
+      ],
+      "actions": [
+        {
+          "label": "选择新服务",
+          "to": "M10"
+        },
+        {
+          "label": "查看考试记录",
+          "to": "M47",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M39"
+    },
+    {
+      "id": "E12",
+      "name": "退款成功",
+      "group": "退款",
+      "title": "退款已完成",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "circle-check",
+          "title": "退款已完成",
+          "text": "本轮服务资格已结束，历史记录保留。",
+          "tone": "success"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "退款金额",
+              "value": "¥398.00"
+            },
+            {
+              "label": "办理方式",
+              "value": "人工退款"
+            },
+            {
+              "label": "服务状态",
+              "value": "已结束"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "返回我的订单",
+          "to": "M51"
+        }
+      ],
+      "tab": null,
+      "back": "M55"
+    },
+    {
+      "id": "E13",
+      "name": "退款审核拒绝",
+      "group": "退款",
+      "title": "退款审核结果",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "circle-alert",
+          "title": "本次申请未通过",
+          "text": "请查看处理原因。",
+          "tone": "warning"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "处理原因",
+              "value": "已参加本轮现场培训"
+            },
+            {
+              "label": "服务状态",
+              "value": "本次退款暂停已解除"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "其他原因造成的暂停仍需处理；培训已参加只能改未参加的考试。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "查看服务详情",
+          "to": "M52"
+        }
+      ],
+      "tab": null,
+      "back": "M55"
+    },
+    {
+      "id": "E14",
+      "name": "答题 · 判断题",
+      "group": "考试",
+      "title": "正在考试",
+      "blocks": [
+        {
+          "type": "examBar",
+          "time": "27:05",
+          "attempt": "第1次 / 共3次",
+          "progress": "3 / 20"
+        },
+        {
+          "type": "question",
+          "kind": "判断题",
+          "index": 3,
+          "total": 20,
+          "text": "进入作业区域前，应了解现场的安全风险和应急通道。",
+          "options": [
+            "正确",
+            "错误"
+          ],
+          "selected": []
+        }
+      ],
+      "actions": [
+        {
+          "label": "打开答题卡",
+          "to": "M43"
+        },
+        {
+          "label": "上一题",
+          "to": "M42",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M42"
+    },
+    {
+      "id": "E15",
+      "name": "答题记录详情",
+      "group": "考试",
+      "title": "答题详情",
+      "blocks": [
+        {
+          "type": "question",
+          "kind": "单选题 · 已评分记录",
+          "index": 1,
+          "total": 20,
+          "text": "进入施工现场作业前，首先应该做什么？",
+          "options": [
+            "正确佩戴安全帽等防护用品",
+            "直接进入作业区域",
+            "等待他人提醒"
+          ],
+          "selected": [
+            0
+          ]
+        },
+        {
+          "type": "answers",
+          "correct": "A · 正确佩戴防护用品",
+          "mine": "A · 回答正确",
+          "explanation": "作业前应按要求佩戴个人防护用品，并了解现场安全要求。"
+        }
+      ],
+      "actions": [
+        {
+          "label": "下一题记录",
+          "to": "E15",
+          "action": "nextRecord"
+        }
+      ],
+      "tab": null,
+      "back": "M47"
+    },
+    {
+      "id": "E16",
+      "name": "通用空状态",
+      "group": "通用",
+      "title": "我的预约",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "calendar-days",
+          "title": "还没有预约记录",
+          "text": "购买服务后，即可选择未来日期到场。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "报名预约",
+          "to": "M10"
+        }
+      ],
+      "tab": null,
+      "back": "M50"
+    },
+    {
+      "id": "E17",
+      "name": "退出确认弹窗",
+      "group": "我的",
+      "title": "确认退出",
+      "blocks": [
+        {
+          "type": "modal",
+          "title": "退出当前账号？",
+          "text": "退出不会删除学习记录、订单和预约。",
+          "primary": "确认退出",
+          "to": "M01",
+          "secondary": "继续使用",
+          "cancel": "M56"
+        }
+      ],
+      "actions": [],
+      "tab": null,
+      "back": "M56"
+    },
+    {
+      "id": "E18",
+      "name": "协议与隐私说明",
+      "group": "账号",
+      "title": "协议与隐私",
+      "blocks": [
+        {
+          "type": "section",
+          "title": "信息使用说明",
+          "subtitle": ""
+        },
+        {
+          "type": "benefits",
+          "items": [
+            "手机号用于本人登录与服务联系",
+            "实名材料用于身份核验",
+            "签到仅在主动操作时获取定位及照片",
+            "订单、预约及考试记录按业务规则保存"
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "正式协议内容以机构审核发布版本为准；此页为版式设计。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "我已了解",
+          "to": "M56"
+        }
+      ],
+      "tab": null,
+      "back": "M56"
+    },
+    {
+      "id": "E19",
+      "name": "退款待人工办理",
+      "group": "退款",
+      "title": "退款进度",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "clock-3",
+          "title": "审核通过，待人工退款",
+          "text": "审核通过不代表款项已到账。",
+          "tone": "warning"
+        },
+        {
+          "type": "steps",
+          "items": [
+            "提交申请",
+            "审核通过",
+            "人工办理",
+            "退款完成"
+          ],
+          "active": 2
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "申请金额",
+              "value": "¥398.00"
+            },
+            {
+              "label": "服务状态",
+              "value": "暂停中"
+            }
+          ]
+        },
+        {
+          "type": "notice",
+          "text": "工作人员办理后，由运营核实并登记实际结果。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "查看原订单",
+          "to": "M52"
+        }
+      ],
+      "tab": null,
+      "back": "M55"
+    },
+    {
+      "id": "E20",
+      "name": "退款办理失败",
+      "group": "退款",
+      "title": "退款进度",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "circle-alert",
+          "title": "退款仍在处理中",
+          "text": "本次办理未成功，工作人员将继续核实。",
+          "tone": "warning"
+        },
+        {
+          "type": "notice",
+          "text": "申请与服务暂停状态保留，请勿重复申请。",
+          "tone": "soft"
+        },
+        {
+          "type": "rows",
+          "items": [
+            {
+              "label": "申请金额",
+              "value": "¥398.00"
+            },
+            {
+              "label": "处理状态",
+              "value": "待人工核实"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "查看退款记录",
+          "to": "M55"
+        }
+      ],
+      "tab": null,
+      "back": "M55"
+    },
+    {
+      "id": "E21",
+      "name": "网络加载失败",
+      "group": "通用",
+      "title": "加载未完成",
+      "blocks": [
+        {
+          "type": "status",
+          "icon": "wifi-off",
+          "title": "网络暂时不可用",
+          "text": "请检查连接后重试，原有记录不会丢失。",
+          "tone": "warning"
+        }
+      ],
+      "actions": [
+        {
+          "label": "重新加载",
+          "to": "M08"
+        }
+      ],
+      "tab": null,
+      "back": "M08"
+    },
+    {
+      "id": "E22",
+      "name": "模拟练习结果",
+      "group": "考试",
+      "title": "模拟练习结果",
+      "blocks": [
+        {
+          "type": "score",
+          "value": "78",
+          "label": "本次模拟已完成",
+          "tone": "success"
+        },
+        {
+          "type": "notice",
+          "text": "模拟成绩独立保存，不计入正式统计，也不消耗正式考试机会。",
+          "tone": "soft"
+        }
+      ],
+      "actions": [
+        {
+          "label": "再练一次",
+          "to": "M49"
+        },
+        {
+          "label": "查看练习记录",
+          "to": "M47",
+          "variant": "secondary"
+        }
+      ],
+      "tab": null,
+      "back": "M39"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#C9401D">
+  <title>安全教育 · 预约支付交互预览</title>
+  <link rel="stylesheet" href="./preview.css">
+  <script src="./renderer.js" defer></script>
+</head>
+<body>
+  <div class="demo-strip"><span class="demo-dot"></span><span>本地交互原型 · 所有业务操作均为演示</span><button id="menu-toggle" aria-controls="prototype-panel" aria-expanded="false">页面目录</button></div>
+  <main class="preview-layout">
+    <aside class="prototype-panel" id="prototype-panel" aria-label="交互原型控制面板">
+      <div class="panel-brand"><span class="brand-symbol" aria-hidden="true">安</span><div><strong>安全教育</strong><small>预约与支付 · 小程序设计</small></div></div>
+      <div class="panel-intro"><span class="eyebrow">INTERACTIVE PREVIEW</span><h1>每一步，都清楚。</h1><p>报名、预约、到场与考试，放在同一条清晰的服务链路里。</p></div>
+      <div class="panel-quick" id="quick-links"></div>
+      <label class="panel-search"><span>查找页面</span><input type="search" id="screen-search" placeholder="页面名称或编号" autocomplete="off"></label>
+      <nav id="screen-directory" aria-label="全部页面"></nav>
+      <section class="scenario-panel" aria-labelledby="scenario-heading"><h2 id="scenario-heading">演示状态</h2><div id="scenario-controls"></div></section>
+      <button class="reset-demo" id="reset-demo" type="button">重置演示</button>
+      <p class="panel-note">不连接真实支付、短信、相机、定位或身份服务。切换页面可检查正常与异常状态。</p>
+    </aside>
+    <section class="stage" aria-label="小程序预览">
+      <div class="phone-caption"><span id="screen-caption">加载页面</span><span id="page-counter"></span></div>
+      <div class="phone" id="phone">
+        <div class="system-bar" aria-hidden="true"><span>9:41</span><div class="system-right"><svg width="17" height="14" viewBox="0 0 17 14"><path d="M1 12V9m4 3V6m4 6V3m4 9V1" stroke="currentColor" stroke-width="2.5"/></svg><svg width="17" height="14" viewBox="0 0 20 16"><path d="M2 5c5-4 11-4 16 0M5 8c3-2 7-2 10 0m-7 3c1-.6 3-.6 4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="10" cy="14" r="1.3"/></svg><span class="battery"></span></div></div>
+        <header class="app-header" id="app-header"></header>
+        <div class="app-content" id="app-content" tabindex="-1"></div>
+        <footer class="action-bar" id="action-bar"></footer>
+        <nav class="tab-bar" id="tab-bar" aria-label="小程序底部导航"></nav>
+        <div class="home-indicator" aria-hidden="true"></div>
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
+        <div id="modal-root"></div>
+      </div>
+      <div class="stage-footer"><span class="stage-dot"></span><span id="stage-description">支持页面跳转、表单、日期选择与关键业务反馈</span></div>
+    </section>
+  </main>
+</body>
+</html>

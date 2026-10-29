@@ -988,7 +988,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -1021,7 +1022,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -1413,7 +1415,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -1446,7 +1449,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -5447,7 +5451,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5475,7 +5480,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5503,7 +5509,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5531,7 +5538,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5559,7 +5567,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -5598,7 +5607,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5626,7 +5636,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5654,7 +5665,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5711,7 +5723,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -5750,7 +5763,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5778,7 +5792,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5806,7 +5821,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5834,7 +5850,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5862,7 +5879,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -5901,7 +5919,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5929,7 +5948,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5957,7 +5977,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -5985,7 +6006,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -6013,7 +6035,8 @@
                               "lineHeight": 1.6,
                               "textAlign": "center",
                               "fontFamily": "$font-number",
-                              "fontSize": 16
+                              "fontSize": 16,
+                              "fontWeight": "normal"
                             }
                           ]
                         }
@@ -10106,7 +10129,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -10173,7 +10197,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -10626,7 +10651,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -10659,7 +10685,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -12164,7 +12191,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -12197,7 +12225,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -12470,7 +12499,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -12503,7 +12533,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -17594,7 +17625,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -17627,7 +17659,8 @@
                       "lineHeight": 1.6,
                       "textAlign": "center",
                       "fontFamily": "$font-ui",
-                      "fontSize": 16
+                      "fontSize": 16,
+                      "fontWeight": "normal"
                     },
                     {
                       "type": "rectangle",
@@ -18903,6 +18936,947 @@
           "fontFamily": "$font-ui",
           "fontSize": 13,
           "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "uLoGy",
+      "x": 2880,
+      "y": 0,
+      "name": "H5 首页 · 预约与服务",
+      "clip": true,
+      "width": 390,
+      "height": 844,
+      "fill": "$canvas",
+      "layout": "vertical",
+      "children": [
+        {
+          "id": "DyAxr",
+          "type": "ref",
+          "ref": "UqVj2",
+          "name": "系统状态栏",
+          "width": "fill_container",
+          "height": 62
+        },
+        {
+          "type": "frame",
+          "id": "hAOjf",
+          "name": "首页头部",
+          "width": "fill_container",
+          "height": 58,
+          "fill": "$surface",
+          "padding": [
+            0,
+            20
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "C1bkl",
+              "name": "品牌信息",
+              "layout": "vertical",
+              "gap": 3,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "W2c4LJ",
+                  "name": "品牌标题",
+                  "fill": "$ink",
+                  "content": "安全培训服务",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 18,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "PEPJY",
+                  "name": "品牌副标题",
+                  "fill": "$secondary",
+                  "content": "海珠区培训中心 · 学员端",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "d8aIc",
+              "name": "消息入口",
+              "width": 36,
+              "height": 36,
+              "fill": "$primary-soft",
+              "cornerRadius": "$radius-pill",
+              "layout": "none",
+              "children": [
+                {
+                  "type": "icon",
+                  "id": "DRAYF",
+                  "layoutPosition": "absolute",
+                  "x": 8,
+                  "y": 8,
+                  "name": "消息图标",
+                  "width": 20,
+                  "height": 20,
+                  "icon": "bell",
+                  "library": "lucide",
+                  "fill": "$primary-strong"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "eNyGZ",
+          "name": "首页内容",
+          "clip": true,
+          "width": "fill_container",
+          "height": "fill_container",
+          "fill": "$canvas",
+          "layout": "vertical",
+          "gap": 12,
+          "padding": [
+            0,
+            16,
+            16,
+            16
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "G8ViB",
+              "name": "主视觉 · 一次安排清楚",
+              "width": "fill_container",
+              "height": 176,
+              "fill": {
+                "type": "gradient",
+                "gradientType": "linear",
+                "enabled": true,
+                "rotation": 135,
+                "size": {
+                  "height": 1
+                },
+                "colors": [
+                  {
+                    "color": "$primary-strong",
+                    "position": 0
+                  },
+                  {
+                    "color": "$primary",
+                    "position": 1
+                  }
+                ]
+              },
+              "cornerRadius": "$radius-lg",
+              "layout": "none",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "KF9nu",
+                  "layoutPosition": "absolute",
+                  "x": 24,
+                  "y": 18,
+                  "name": "服务中心徽标",
+                  "width": 124,
+                  "height": 28,
+                  "fill": "#FFFFFF24",
+                  "cornerRadius": "$radius-pill",
+                  "gap": 6,
+                  "padding": [
+                    6,
+                    10
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "s05Sls",
+                      "name": "闪耀图标",
+                      "width": 14,
+                      "height": 14,
+                      "icon": "sparkles",
+                      "library": "lucide",
+                      "fill": "$surface"
+                    },
+                    {
+                      "type": "text",
+                      "id": "v03G4",
+                      "name": "徽标文字",
+                      "fill": "$surface",
+                      "content": "学员服务中心",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "ijn0L",
+                  "layoutPosition": "absolute",
+                  "x": 24,
+                  "y": 58,
+                  "name": "主视觉标题",
+                  "fill": "$surface",
+                  "textGrowth": "fixed-width",
+                  "width": 258,
+                  "content": "培训 · 考试 · 预约\n一次安排清楚",
+                  "lineHeight": 1.2,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 24,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "yAWF9",
+                  "layoutPosition": "absolute",
+                  "x": 24,
+                  "y": 124,
+                  "name": "主视觉说明",
+                  "fill": "#D7E5FF",
+                  "textGrowth": "fixed-width",
+                  "width": 246,
+                  "content": "个人先付款再预约，企业代办也能在这里查看自己的安排",
+                  "lineHeight": 1.35,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "ellipse",
+                  "id": "VLd2B",
+                  "layoutPosition": "absolute",
+                  "x": 280,
+                  "y": 16,
+                  "name": "主视觉光晕一",
+                  "fill": "#FFFFFF1A",
+                  "width": 88,
+                  "height": 88
+                },
+                {
+                  "type": "ellipse",
+                  "id": "HNYux",
+                  "layoutPosition": "absolute",
+                  "x": 322,
+                  "y": 86,
+                  "name": "主视觉光晕二",
+                  "fill": "#FFFFFF12",
+                  "width": 72,
+                  "height": 72
+                },
+                {
+                  "type": "frame",
+                  "id": "pkFrZ",
+                  "layoutPosition": "absolute",
+                  "x": 296,
+                  "y": 48,
+                  "name": "主视觉安全徽章",
+                  "width": 54,
+                  "height": 54,
+                  "fill": "#FFFFFF24",
+                  "cornerRadius": "$radius-pill",
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "yzAPK",
+                      "layoutPosition": "absolute",
+                      "x": 14,
+                      "y": 14,
+                      "name": "安全徽章图标",
+                      "width": 26,
+                      "height": 26,
+                      "icon": "shield-check",
+                      "library": "lucide",
+                      "fill": "$surface"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "AkjRL",
+              "name": "近期预约卡",
+              "width": "fill_container",
+              "height": 130,
+              "fill": "$surface",
+              "cornerRadius": "$radius-lg",
+              "stroke": "$line",
+              "strokeWidth": 1,
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "W6uYB",
+                  "name": "预约卡标题行",
+                  "width": "fill_container",
+                  "height": 22,
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "B8OOQ9",
+                      "name": "预约卡标题",
+                      "fill": "$ink",
+                      "content": "近期安排",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "WSqUB",
+                      "name": "预约状态标签",
+                      "fill": "$success-soft",
+                      "cornerRadius": "$radius-pill",
+                      "padding": [
+                        4,
+                        8
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "GKMKY",
+                          "name": "状态文字",
+                          "fill": "$success",
+                          "content": "待到场",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 12,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "q16es",
+                  "name": "预约信息行",
+                  "width": "fill_container",
+                  "height": 42,
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "TgE91",
+                      "name": "日期图标容器",
+                      "width": 40,
+                      "height": 40,
+                      "fill": "$primary-soft",
+                      "cornerRadius": "$radius-md",
+                      "layout": "none",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "f00gN",
+                          "layoutPosition": "absolute",
+                          "x": 10,
+                          "y": 10,
+                          "name": "日期图标",
+                          "width": 20,
+                          "height": 20,
+                          "icon": "calendar-days",
+                          "library": "lucide",
+                          "fill": "$primary-strong"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "wZzKg",
+                      "name": "预约信息",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 3,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "nGKLx",
+                          "name": "预约日期",
+                          "fill": "$ink",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "11月02日 · 周一 09:00—17:00",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "bW54t",
+                          "name": "预约地点",
+                          "fill": "$secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "海珠区培训中心 · 培训 + 考试",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Ki3wY",
+                  "name": "预约卡操作行",
+                  "width": "fill_container",
+                  "height": 18,
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "NHcqn",
+                      "name": "预约提示",
+                      "fill": "$muted",
+                      "content": "明日可签到 · 已锁定名额",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "UCOc6",
+                      "name": "预约详情入口",
+                      "fill": "$primary-strong",
+                      "content": "查看预约详情  ›",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Zv24d",
+              "name": "服务区标题",
+              "width": "fill_container",
+              "height": 26,
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "X2nmdj",
+                  "name": "服务区标题文字",
+                  "fill": "$ink",
+                  "content": "选择你的服务",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "CYDJZ",
+                  "name": "服务区辅助文字",
+                  "fill": "$secondary",
+                  "content": "付款后预约",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "v05wdV",
+              "name": "服务卡片组",
+              "width": "fill_container",
+              "height": 168,
+              "gap": 10,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Y6JgZ",
+                  "name": "398元培训加考试",
+                  "width": "fill_container",
+                  "height": 168,
+                  "fill": "$primary-soft",
+                  "cornerRadius": "$radius-lg",
+                  "stroke": "$primary",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 6,
+                  "padding": 14,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "tN9aY",
+                      "name": "推荐套餐标签",
+                      "height": 20,
+                      "fill": "$primary",
+                      "cornerRadius": "$radius-pill",
+                      "padding": [
+                        4,
+                        8
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Q5xgR",
+                          "name": "推荐套餐文字",
+                          "fill": "$surface",
+                          "content": "推荐套餐",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 11,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "I9m46",
+                      "name": "套餐标题",
+                      "fill": "$ink",
+                      "content": "培训 + 考试",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "dfKuh",
+                      "name": "套餐说明",
+                      "fill": "$secondary",
+                      "content": "现场培训 · 考试资格",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "YDNaD",
+                      "name": "套餐价格",
+                      "gap": 2,
+                      "alignItems": "end",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "pSUQE",
+                          "name": "套餐金额",
+                          "fill": "$primary-strong",
+                          "content": "¥398",
+                          "fontFamily": "$font-number",
+                          "fontSize": 24,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "ze0cL",
+                          "name": "套餐单位",
+                          "fill": "$secondary",
+                          "content": "/人",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "u8wihj",
+                      "name": "套餐操作",
+                      "width": "fill_container",
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "jgrZh",
+                          "name": "套餐机会",
+                          "fill": "$muted",
+                          "content": "培训后可考",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "k8tpFI",
+                          "name": "套餐入口",
+                          "fill": "$primary-strong",
+                          "content": "开始报名",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 12,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "xOpi0",
+                  "name": "98元单独考试",
+                  "width": "fill_container",
+                  "height": 168,
+                  "fill": "$surface",
+                  "cornerRadius": "$radius-lg",
+                  "stroke": "$line",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 6,
+                  "padding": 14,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Nk5XD",
+                      "name": "单独考试标签",
+                      "height": 20,
+                      "fill": "$canvas",
+                      "cornerRadius": "$radius-pill",
+                      "padding": [
+                        4,
+                        8
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "v8hQ3n",
+                          "name": "单独考试标签文字",
+                          "fill": "$secondary",
+                          "content": "按需补考",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 11,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "T5VHX",
+                      "name": "单独考试标题",
+                      "fill": "$ink",
+                      "content": "单独考试",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "JG3h6",
+                      "name": "单独考试说明",
+                      "fill": "$secondary",
+                      "content": "不含培训 · 考试资格",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "imOnu",
+                      "name": "单独考试价格",
+                      "gap": 2,
+                      "alignItems": "end",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "EUd8j",
+                          "name": "单独考试金额",
+                          "fill": "$ink",
+                          "content": "¥98",
+                          "fontFamily": "$font-number",
+                          "fontSize": 24,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "BaEDe",
+                          "name": "单独考试单位",
+                          "fill": "$secondary",
+                          "content": "/人",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Hvvc6",
+                      "name": "单独考试操作",
+                      "width": "fill_container",
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Agkwn",
+                          "name": "单独考试机会",
+                          "fill": "$muted",
+                          "content": "约3次机会",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "H6t2n",
+                          "name": "单独考试入口",
+                          "fill": "$primary-strong",
+                          "content": "查看详情",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 12,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "YX66d",
+              "name": "到场核验提示",
+              "width": "fill_container",
+              "height": 54,
+              "fill": "$surface",
+              "cornerRadius": "$radius-md",
+              "stroke": "$line",
+              "strokeWidth": 1,
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "VIiPw",
+                  "name": "核验图标容器",
+                  "width": 32,
+                  "height": 32,
+                  "fill": "$warning-soft",
+                  "cornerRadius": "$radius-sm",
+                  "layout": "none",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "MdKK1",
+                      "layoutPosition": "absolute",
+                      "x": 7,
+                      "y": 7,
+                      "name": "核验图标",
+                      "width": 18,
+                      "height": 18,
+                      "icon": "map-pin",
+                      "library": "lucide",
+                      "fill": "$warning"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "d9cUw",
+                  "name": "核验提示文字",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "VKYle",
+                      "name": "核验标题",
+                      "fill": "$ink",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "到场当天 · 定位 + 正脸核验",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "N0jrEo",
+                      "name": "核验说明",
+                      "fill": "$muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "培训与当天考试共用一次签到",
+                      "fontFamily": "$font-ui",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "KdLar",
+          "name": "底部导航",
+          "width": "fill_container",
+          "height": 84,
+          "fill": "$surface",
+          "stroke": "$line",
+          "strokeWidth": 1,
+          "gap": 4,
+          "padding": [
+            8,
+            20,
+            12,
+            20
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "NiSiY",
+              "name": "导航 · 首页",
+              "width": "fill_container",
+              "height": 58,
+              "fill": "$primary-soft",
+              "cornerRadius": "$radius-md",
+              "layout": "vertical",
+              "gap": 4,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon",
+                  "id": "p78Gex",
+                  "name": "首页图标",
+                  "width": 22,
+                  "height": 22,
+                  "icon": "house",
+                  "library": "lucide",
+                  "fill": "$primary-strong"
+                },
+                {
+                  "type": "text",
+                  "id": "sFYBI",
+                  "name": "首页文字",
+                  "fill": "$primary-strong",
+                  "content": "首页",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "WlPPx",
+              "name": "导航 · 课程",
+              "width": "fill_container",
+              "height": 58,
+              "fill": "$surface",
+              "cornerRadius": "$radius-md",
+              "layout": "vertical",
+              "gap": 4,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon",
+                  "id": "Q6I53",
+                  "name": "课程图标",
+                  "width": 22,
+                  "height": 22,
+                  "icon": "book-open",
+                  "library": "lucide",
+                  "fill": "$muted"
+                },
+                {
+                  "type": "text",
+                  "id": "bdZi9",
+                  "name": "课程文字",
+                  "fill": "$muted",
+                  "content": "课程",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "dTsL2",
+              "name": "导航 · 考试",
+              "width": "fill_container",
+              "height": 58,
+              "fill": "$surface",
+              "cornerRadius": "$radius-md",
+              "layout": "vertical",
+              "gap": 4,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon",
+                  "id": "SuU8Z",
+                  "name": "考试图标",
+                  "width": 22,
+                  "height": 22,
+                  "icon": "clipboard-check",
+                  "library": "lucide",
+                  "fill": "$muted"
+                },
+                {
+                  "type": "text",
+                  "id": "O8tuQh",
+                  "name": "考试文字",
+                  "fill": "$muted",
+                  "content": "考试",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "yMGK5",
+              "name": "导航 · 我的",
+              "width": "fill_container",
+              "height": 58,
+              "fill": "$surface",
+              "cornerRadius": "$radius-md",
+              "layout": "vertical",
+              "gap": 4,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon",
+                  "id": "v5dyRY",
+                  "name": "我的图标",
+                  "width": 22,
+                  "height": 22,
+                  "icon": "user-round",
+                  "library": "lucide",
+                  "fill": "$muted"
+                },
+                {
+                  "type": "text",
+                  "id": "qpXyS",
+                  "name": "我的文字",
+                  "fill": "$muted",
+                  "content": "我的",
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11
+                }
+              ]
+            }
+          ]
         }
       ]
     }
