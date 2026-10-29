@@ -32,6 +32,11 @@ page {
   --app-radius-lg: 36rpx;
   --app-radius-full: 999rpx;
   --app-safe-area-top: env(safe-area-inset-top, 0px);
+  /* #ifdef H5 */
+  // H5 uses viewport-fit=contain: the browser owns top/cutout avoidance.
+  // Some Android browsers still report a top inset inside that safe viewport.
+  --app-safe-area-top: 0px;
+  /* #endif */
   --app-safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --app-font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
 

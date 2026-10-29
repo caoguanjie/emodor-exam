@@ -35,7 +35,7 @@ export function readNativeNavigationStyle(api: NativeLayoutApi): NavigationStyle
   return { '--app-safe-area-top': `${status}px`, '--app-safe-area-bottom': `${bottom}px`, '--app-native-nav-height': `${height}px`, '--app-native-menu-inset': `${inset}px`, '--app-native-title-inset': `${Math.max(84, inset)}px` }
 }
 
-/** H5 retains its existing CSS env() safe areas and layout. */
+/** H5 uses browser-owned top avoidance and the safe-area tokens from CSS. */
 export function nativeNavigationStyle(): NavigationStyle {
   // #ifdef MP-WEIXIN
   if (typeof uni !== 'undefined') return readNativeNavigationStyle(uni)

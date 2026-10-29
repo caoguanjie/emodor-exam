@@ -9,7 +9,7 @@ let native = false
 native = true
 // #endif
 const nativeActions = computed(() => native && !!(props.action || slots.right))
-const fixedNative = computed(() => native && !props.light)
+const fixedTopBar = computed(() => !props.light)
 function goBack() {
   emit('back')
   if (props.historyFirst && getCurrentPages().length > 1) uni.navigateBack()
@@ -19,11 +19,11 @@ function goBack() {
 }
 </script>
 <template>
-  <view v-if="fixedNative" class="top-bar-placeholder" aria-hidden="true">
+  <view v-if="fixedTopBar" class="top-bar-placeholder" aria-hidden="true">
     <view class="top-bar-placeholder__main" />
     <view v-if="nativeActions" class="top-bar-placeholder__actions" />
   </view>
-  <view class="top-bar" :class="{ 'top-bar--light': light, 'top-bar--fixed': fixedNative }">
+  <view class="top-bar" :class="{ 'top-bar--light': light, 'top-bar--fixed': fixedTopBar }">
     <view class="top-bar__main">
       <view class="top-bar__side"><view v-if="back" class="top-bar__back" role="button" aria-label="返回" @click="goBack"><AppIcon name="chevron-left" :size="24" :color="props.light ? '#ffffff' : '#323233'" /></view><slot name="left" /></view>
       <text class="top-bar__title">{{ title }}</text>
