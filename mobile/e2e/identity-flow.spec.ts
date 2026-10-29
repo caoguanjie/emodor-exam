@@ -5,7 +5,7 @@ const initial = { status: 'unverified', real_name: null, id_number_masked: null,
 const pending = { session_id: 's-1', status: 'pending', reason_code: null, clear_materials: [], expires_at: '2030-01-01T00:00:00Z' }
 const envelope = (data: unknown) => ({ code: 0, message: 'ok', data })
 const tiny = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yC9sAAAAASUVORK5CYII=', 'base64')
-async function setup(page: Page, options: { rejected?: boolean; foreverPending?: boolean; failLoad?: boolean; alreadyVerified?: boolean; failSave?: boolean; shortTicket?: boolean; createError?: boolean; verified?: boolean } = {}) {
+async function setup(page: Page, options: { rejected?: boolean; foreverPending?: boolean; failLoad?: boolean; alreadyVerified?: boolean; failSave?: boolean; shortTicket?: boolean; createError?: boolean; verified?: boolean; reason?: string; serviceError?: boolean } = {}) {
   const record = { uploads: 0, reads: 0, queries: 0, creates: 0, saves: [] as unknown[], deleted: [] as string[], verified: !!options.verified, failLoad: !!options.failLoad, avatar: null as string | null, ticketOwners: [] as unknown[] }
   await page.route('**/api/v1/**', async route => {
     const req = route.request(), path = new URL(req.url()).pathname
@@ -24,12 +24,14 @@ async function setup(page: Page, options: { rejected?: boolean; foreverPending?:
     if (req.method() === 'DELETE' && path.includes('/identity-verification/images/')) { record.deleted.push(path.split('/').at(-1)!); return route.fulfill({ json: envelope(null) }) }
     if (path.endsWith('/identity-verification/sessions')) {
       record.creates++
+      if (options.serviceError) return route.fulfill({ status: 503, json: { code: 50004, message: '服务不可用', data: null } })
       if (options.alreadyVerified) { record.verified = true; return route.fulfill({ status: 409, json: { code: 40960, message: 'already verified', data: { status: 'verified' } } }) }
       if (options.createError) return route.fulfill({ status: 400, json: { code: 40001, message: '请重拍人像面', data: { reason_code: 'ID_CARD_PORTRAIT_PARSE_FAILED', clear_materials: ['id_card_portrait'] } } })
       return route.fulfill({ json: envelope(pending) })
     }
     if (path.includes('/identity-verification/sessions/')) {
       record.queries++
+      if (options.reason) return route.fulfill({ json: envelope({ ...pending, status: 'rejected', reason_code: options.reason, clear_materials: options.reason === 'ID_CARD_EMBLEM_PARSE_FAILED' ? ['id_card_emblem'] : [] }) })
       if (options.rejected) return route.fulfill({ json: envelope({ ...pending, status: 'rejected', reason_code: 'FACE_MISMATCH', clear_materials: ['face'] }) })
       if (options.foreverPending) return route.fulfill({ json: envelope(pending) })
       record.verified = true; return route.fulfill({ json: envelope({ ...pending, status: 'verified' }) })
@@ -88,7 +90,7 @@ test('failed authority read offers retry rather than a collect form', async ({ p
 })
 test('rejection clears just face and leaves processed ID previews for a new photo', async ({ page }) => {
   await setup(page, { rejected: true }); await page.goto('/#/pages/identity/index'); await collect(page); await page.locator('#identity-submit').click()
-  await expect(page.getByText('正脸核验未通过，请本人重新现场拍照。', { exact: true })).toBeVisible()
+  await expect(page.getByText('人像核验未通过，证件照片已保留。', { exact: true })).toBeVisible()
   await expect(page.getByText('已上传 · 可重拍', { exact: true })).toHaveCount(2)
   await expect(page.getByText('已上传 · 重新拍摄', { exact: true })).toHaveCount(0)
 })
@@ -119,8 +121,8 @@ test('already verified conflict refreshes authority instead of resubmitting', as
 })
 test('create errors clear the selected slot from structured data', async ({ page }) => {
   await setup(page, { createError: true }); await page.goto('/#/pages/identity/index'); await collect(page); await page.locator('#identity-submit').click()
-  await expect(page.getByText('请重拍人像面', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '身份证人像面', exact: true })).toContainText('拍照 / 相册选择')
+  await expect(page.getByText('人像面无法识别，请上传清晰、完整的原件照片。', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '身份证人像面', exact: true })).toContainText('识别失败 · 重新上传')
   await expect(page.getByRole('button', { name: '身份证国徽面', exact: true })).toContainText('已上传')
   await expect(page.getByRole('button', { name: '本人正脸照片', exact: true })).toContainText('已上传')
 })
@@ -137,7 +139,7 @@ test('leaving during an upload discards its late response and releases the unuse
 })
 test('48MP synthetic camera material is reduced to a 1600-pixel local preview', async ({ page }) => {
   await setup(page); await page.goto('/#/pages/identity/index')
-  await expect(page.getByText('照片仅用于本人身份核验，请确保清晰。', { exact: true })).toBeVisible()
+  await expect(page.getByText('请确认照片为本人证件及本人正脸。', { exact: true })).toBeVisible()
   const data = await page.evaluate(() => { const canvas = document.createElement('canvas'); canvas.width = 8000; canvas.height = 6000; canvas.getContext('2d')!.fillRect(0, 0, 8000, 6000); const data = canvas.toDataURL('image/png').split(',')[1]; canvas.width = 0; canvas.height = 0; return data })
   await page.getByRole('button', { name: '本人正脸照片', exact: true }).click()
   const chooser = page.waitForEvent('filechooser'); await page.locator('#identity-live-face').click()
@@ -155,4 +157,77 @@ test('public branding renders all published banners without private tickets', as
   await expect(page.locator('.home-brand__logo img')).toHaveAttribute('src', `${new URL(page.url()).origin}/api/v1/site-config/assets/public-logo/content`)
   await expect.poll(() => assets).toContain('public-banner-2')
   expect(assets).toContain('public-logo'); expect(assets).toContain('public-banner-1'); expect(record.ticketOwners).toEqual([])
+})
+
+for (const [reason, text] of [
+  ['ID_CARD_EMBLEM_PARSE_FAILED', '国徽面无法识别，请上传清晰、完整的原件照片。'],
+  ['IDENTITY_ALREADY_BOUND', '该身份已绑定其他账号'],
+  ['SESSION_EXPIRED', '本次认证会话已过期'],
+]) {
+  test(`live recovery uses designed state for ${reason}`, async ({ page }) => {
+    const record = await setup(page, { reason })
+    await page.goto('/#/pages/identity/index')
+    await collect(page)
+    await page.locator('#identity-submit').click()
+    await expect(page.getByText(text, { exact: true })).toBeVisible()
+    await expect(page.getByText('已上传 · 可重拍', { exact: true })).toHaveCount(reason === 'ID_CARD_EMBLEM_PARSE_FAILED' ? 1 : 2)
+    if (reason === 'IDENTITY_ALREADY_BOUND') await expect(page.getByText('已绑定账号：138****1234', { exact: false })).toHaveCount(0)
+    if (reason === 'SESSION_EXPIRED') await expect(page.locator('#identity-submit')).toHaveText('重新提交认证')
+    expect(record.creates).toBe(1)
+  })
+}
+
+test('provider outage shows the retry dialog and preserves materials', async ({ page }) => {
+  await setup(page, { serviceError: true })
+  await page.goto('/#/pages/identity/index'); await collect(page)
+  await page.locator('#identity-submit').click()
+  await expect(page.getByText('核验服务暂不可用', { exact: true })).toBeVisible()
+  await expect(page.getByText('这不代表你的身份核验未通过。', { exact: false })).toBeVisible()
+  await page.getByText('返回重试', { exact: true }).click()
+  await expect(page.getByText('已上传 · 可重拍', { exact: true })).toHaveCount(2)
+  await expect(page.locator('#identity-submit')).not.toHaveClass(/is-disabled/)
+})
+
+
+for (const [kind, label, side] of [['portrait', '身份证人像面', '人像面'], ['emblem', '身份证国徽面', '国徽面']] as const) {
+  test(`non-ID ${kind} upload shows recognition failure instead of upload failure`, async ({ page }) => {
+    await setup(page); await page.goto('/mobile/#/pages/identity/index'); await collect(page)
+    await page.route('**/me/identity-verification/images', route => route.fulfill({ status: 400, json: { code: 40001, message: '身份证图片未通过识别，请重新拍摄', data: { reason_code: 'ID_CARD_DOCUMENT_INVALID', clear_materials: ['id_card_portrait', 'id_card_emblem'] } } }))
+    await page.getByRole('button', { name: label, exact: true }).click()
+    const chooser = page.waitForEvent('filechooser')
+    await page.getByRole('button', { name: '从相册选择', exact: true }).click()
+    await (await chooser).setFiles({ name: 'non-id.png', mimeType: 'image/png', buffer: tiny })
+    await expect(page.getByRole('button', { name: label, exact: true })).toContainText('识别失败 · 重新上传')
+    await expect(page.getByText(`${side}无法识别，请上传清晰、完整的原件照片。`, { exact: true })).toBeVisible()
+    await expect(page.getByText('上传失败 · 点击重试', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('照片上传失败，请检查网络后重试。其他材料已保留。', { exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '本人正脸照片', exact: true })).toContainText('已上传 · 重新拍摄')
+    await expect(page.locator('#identity-submit')).toHaveClass(/is-disabled/)
+  })
+}
+
+test('failed upload highlights only its slot and keeps the other materials', async ({ page }) => {
+  await setup(page); await page.goto('/mobile/#/pages/identity/index'); await collect(page)
+  await page.route('**/me/identity-verification/images', route => route.fulfill({ status: 503, json: { code: 50004, message: 'upload failed', data: null } }))
+  await page.getByRole('button', { name: '身份证国徽面', exact: true }).click()
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: '从相册选择', exact: true }).click()
+  await (await chooser).setFiles({ name: 'synthetic.png', mimeType: 'image/png', buffer: tiny })
+  await expect(page.getByText('照片上传失败，请检查网络后重试。其他材料已保留。', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '身份证国徽面', exact: true })).toHaveClass(/capture__card--error/)
+  await expect(page.getByRole('button', { name: '身份证人像面', exact: true })).toContainText('已上传 · 可重拍')
+  await expect(page.getByRole('button', { name: '本人正脸照片', exact: true })).toContainText('已上传 · 重新拍摄')
+  await expect(page.locator('#identity-submit')).toHaveClass(/is-disabled/)
+})
+
+test('a query outage preserves the pending application and its query action', async ({ page }) => {
+  const record = await setup(page, { foreverPending: true })
+  await page.route('**/identity-verification/sessions/*', route => route.fulfill({ status: 503, json: { code: 50004, message: '服务暂不可用', data: null } }))
+  await page.goto('/mobile/#/pages/identity/index'); await collect(page)
+  await page.locator('#identity-submit').click()
+  await expect(page.getByText('核验服务暂不可用', { exact: true })).toBeVisible()
+  await page.getByText('返回重试', { exact: true }).click()
+  await expect(page.locator('#identity-query-status')).toBeVisible()
+  await expect(page.locator('#identity-submit')).toHaveCount(0)
+  expect(record.creates).toBe(1)
 })

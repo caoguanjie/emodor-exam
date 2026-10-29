@@ -10,7 +10,7 @@ export interface IdentityScenario {
   feedback: string
   feedbackTone: 'muted' | 'secondary' | 'primary' | 'danger'
   overlay?: 'source' | 'face-guide' | 'verifying' | 'service-error' | 'bound'
-  issue?: 'face' | 'emblem' | 'upload' | 'load' | 'expired' | 'camera' | 'unsafe'
+  issue?: 'face' | 'portrait' | 'emblem' | 'upload' | 'load' | 'expired' | 'camera' | 'unsafe'
 }
 
 const empty: IdentityMaterials = { portrait: null, emblem: null, face: null, consent: false }
@@ -30,6 +30,7 @@ export const identityScenarios: Record<string, IdentityScenario> = {
   'identity-detail': { ...collection, id: 'identity-detail', group: 'identity-detail', state: 'verified', materials: ready },
   'identity-face-rejected': { ...collection, id: 'identity-face-rejected', state: 'rejected', materials: { ...ready, face: 'error' }, issue: 'face', feedback: '人像核验未通过，证件照片已保留。', feedbackTone: 'danger' },
   'identity-emblem-rejected': { ...collection, id: 'identity-emblem-rejected', state: 'rejected', materials: { ...ready, emblem: 'error' }, issue: 'emblem', feedback: '国徽面无法识别，请上传清晰、完整的原件照片。', feedbackTone: 'danger' },
+  'identity-portrait-rejected': { ...collection, id: 'identity-portrait-rejected', state: 'rejected', materials: { ...ready, portrait: 'error' }, issue: 'portrait', feedback: '人像面无法识别，请上传清晰、完整的原件照片。', feedbackTone: 'danger' },
   'identity-upload-failed': { ...collection, id: 'identity-upload-failed', state: 'error', materials: { ...ready, emblem: 'error' }, issue: 'upload', feedback: '照片上传失败，请检查网络后重试。其他材料已保留。', feedbackTone: 'danger' },
   'identity-load-failed': { ...collection, id: 'identity-load-failed', state: 'error', issue: 'load' },
   'identity-service-error': { ...collection, id: 'identity-service-error', state: 'error', materials: ready, overlay: 'service-error', feedback: '三张照片已就绪，请确认后提交。', feedbackTone: 'secondary' },

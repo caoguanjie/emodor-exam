@@ -20,6 +20,7 @@ export const useIdentityStore = defineStore('mobile-identity', () => {
   const materials = ref<Record<IdentityMaterialKind, Material | null>>({ portrait: null, emblem: null, face: null })
   const consent = ref(false), loading = ref(false), submitting = ref(false), polling = ref(false), selecting = ref(false), picking = ref(false)
   const loadError = ref(''), error = ref('')
+  const failure = ref<{ reason?: string; service: boolean; kind?: IdentityMaterialKind; upload: boolean } | null>(null)
   const verified = computed(() => authority.value?.status === 'verified' && !loadError.value && !loading.value)
   const pending = computed(() => !verified.value && (currentSession.value?.status === 'pending' || authority.value?.status === 'pending'))
   const busy = computed(() => loading.value || submitting.value || polling.value || selecting.value || kinds.some(k => materials.value[k]?.state === 'uploading'))
@@ -30,10 +31,13 @@ export const useIdentityStore = defineStore('mobile-identity', () => {
   function valid(start: number, epoch: number) { return start === revision && epoch === session.sessionEpoch }
   function clear(kind: IdentityMaterialKind, remote = false) { const material = materials.value[kind]; if (material?.file) release(material.file); if (remote && material?.asset_id) void releaseIdentityImage(material.asset_id).catch(() => {}); materials.value[kind] = null }
   function clearMaterials(remote = false) { kinds.forEach(kind => clear(kind, remote)); consent.value = false }
-  function leave(remote = true) { revision++; readRevision++; if (timer) clearTimeout(timer); wake?.(); wake = undefined; clearMaterials(remote && !currentSession.value && !submitting.value && !verified.value); pickedFiles.forEach(release); authority.value = null; currentSession.value = null; loading.value = false; submitting.value = false; polling.value = false; selecting.value = false; picking.value = false; error.value = ''; loadError.value = '' }
+  function leave(remote = true) { revision++; readRevision++; if (timer) clearTimeout(timer); wake?.(); wake = undefined; clearMaterials(remote && !currentSession.value && !submitting.value && !verified.value); pickedFiles.forEach(release); authority.value = null; currentSession.value = null; loading.value = false; submitting.value = false; polling.value = false; selecting.value = false; picking.value = false; error.value = ''; loadError.value = ''; failure.value = null }
   function hide() { if (!picking.value) leave() }
   watch(() => session.sessionEpoch, () => leave(false), { flush: 'sync' })
-  function applyError(cause: unknown) {
+  function applyError(cause: unknown, kind?: IdentityMaterialKind) {
+    failure.value = { service: cause instanceof ApiError && cause.code === 50004 && !kind,
+      upload: !!kind && cause instanceof ApiError && (cause.code === -1 || cause.code === -2 || cause.status >= 500), kind,
+      reason: cause instanceof ApiError ? (cause.data as { reason_code?: string } | null)?.reason_code : undefined }
     if (cause instanceof ApiError && cause.data && typeof cause.data === 'object') {
       const data = cause.data as { clear_materials?: unknown }
       if (Array.isArray(data.clear_materials)) for (const kind of kinds) if (data.clear_materials.includes(imageTypes[kind])) clear(kind, true)
@@ -57,7 +61,7 @@ export const useIdentityStore = defineStore('mobile-identity', () => {
   async function upload(kind: IdentityMaterialKind, source: MediaSource) {
     if (busy.value || pending.value || verified.value) return
     const start = revision, epoch = session.sessionEpoch
-    selecting.value = true; picking.value = true; error.value = ''
+    selecting.value = true; picking.value = true; error.value = ''; failure.value = null
     let picked: PickedMedia | null = null
     let receivedAsset = ''
     try {
@@ -72,9 +76,9 @@ export const useIdentityStore = defineStore('mobile-identity', () => {
       if (!receivedAsset || result.scan_status !== 'safe' || result.image_type !== imageTypes[kind] || (kind !== 'face' && !result.processed_preview)) throw new Error('照片处理未完成，请重新上传')
       const preview = kind === 'face' ? picked.tempFilePath : resolveMediaUrl(result.processed_preview!.content_url)
       clear(kind, !currentSession.value); currentSession.value = null
-      if (authority.value) authority.value = { ...authority.value, status: 'unverified', current_session_id: null }
+      if (authority.value) authority.value = { ...authority.value, status: 'unverified', current_session_id: null, reason_code: null }
       materials.value[kind] = { asset_id: result.asset_id, state: 'ready', preview, file: picked, ...(result.processed_preview ? { ticket: result.processed_preview } : {}) }
-    } catch (cause) { if (picked) release(picked); if (receivedAsset && epoch === session.sessionEpoch) void releaseIdentityImage(receivedAsset).catch(() => {}); if (valid(start, epoch)) applyError(cause) }
+    } catch (cause) { if (picked) release(picked); if (receivedAsset && epoch === session.sessionEpoch) void releaseIdentityImage(receivedAsset).catch(() => {}); if (valid(start, epoch)) applyError(cause, picked ? kind : undefined) }
     finally { if (valid(start, epoch)) { selecting.value = false; picking.value = false } }
   }
   async function accept(result: IdentitySessionView, start: number, epoch: number) {
@@ -90,7 +94,7 @@ export const useIdentityStore = defineStore('mobile-identity', () => {
     const id = currentSession.value?.session_id || authority.value?.current_session_id
     if (!id) return
     const start = revision, epoch = session.sessionEpoch
-    polling.value = true; error.value = ''
+    polling.value = true; error.value = ''; failure.value = null
     try {
       for (let index = 0; index < 12; index++) {
         if (!valid(start, epoch)) return
@@ -105,7 +109,7 @@ export const useIdentityStore = defineStore('mobile-identity', () => {
   async function createSession() {
     if (!canSubmit.value) return
     const start = revision, epoch = session.sessionEpoch
-    submitting.value = true; error.value = ''
+    submitting.value = true; error.value = ''; failure.value = null
     try {
       const result = await createIdentitySession({ face_asset_id: materials.value.face!.asset_id, id_card_portrait_asset_id: materials.value.portrait!.asset_id, id_card_emblem_asset_id: materials.value.emblem!.asset_id })
       await accept(result, start, epoch)
@@ -118,5 +122,5 @@ export const useIdentityStore = defineStore('mobile-identity', () => {
     }
     finally { if (valid(start, epoch)) submitting.value = false }
   }
-  return { authority, currentSession, materials, consent, loading, submitting, polling, selecting, picking, loadError, error, verified, pending, busy, canSubmit, load, upload, createSession, poll, hide, leave }
+  return { authority, currentSession, materials, consent, loading, submitting, polling, selecting, picking, loadError, error, failure, verified, pending, busy, canSubmit, load, upload, createSession, poll, hide, leave }
 })

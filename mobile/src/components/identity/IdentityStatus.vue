@@ -57,4 +57,6 @@ const emit = defineEmits<{ details: []; profile: []; retry: [] }>()
 .identity-result__mark--error { background: var(--app-color-primary-soft); }
 .identity-result__error-title { font-size: 20px; font-weight: 600; text-align: center; }
 .identity-result__error-copy { font-size: 14px; color: var(--app-color-text-secondary); text-align: center; white-space: pre-line; }
+.identity-result--error { line-height: 1.5; --wot-button-radius-main: 12px; }
+.identity-result--error :deep(.wd-button) { font-size: 16px; font-weight: 600; }
 </style>

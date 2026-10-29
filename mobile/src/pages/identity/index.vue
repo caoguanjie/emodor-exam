@@ -30,14 +30,26 @@ let returning = false
 let reloadPending: Promise<void> | null = null
 const fixtureScenario = ref<IdentityScenario>(identityScenarios['identity-collect'])
 const fixtureMaterials = ref<IdentityMaterials>({ ...fixtureScenario.value.materials })
-const scenario = computed<IdentityScenario>(() => preview.value ? fixtureScenario.value : {
-  ...identityScenarios['identity-collect'],
-  state: store.verified ? 'verified' : store.pending ? 'pending' : store.submitting ? 'submitting' : 'collecting',
-  issue: store.loadError ? 'load' : store.currentSession?.reason_code === 'FACE_MISMATCH' || store.currentSession?.reason_code === 'FACE_QUALITY_FAILED' ? 'face' : undefined,
-  title: store.pending ? '身份核验处理中' : '完成本人实名认证',
-  description: store.pending ? '可稍后查询结果，或返回继续浏览。' : '请上传本人有效身份证与现场正脸照片',
-  feedback: store.error || (store.currentSession?.status === 'rejected' ? rejectionMessage() : store.loading ? '正在读取实名状态…' : store.pending ? '尚未获得最终结果，请稍后查询。' : '照片仅用于本人身份核验，请确保清晰。'),
-  feedbackTone: store.error || store.currentSession?.status === 'rejected' ? 'danger' : 'secondary',
+const scenario = computed<IdentityScenario>(() => {
+  if (preview.value) return fixtureScenario.value
+  if (store.verified) return identityScenarios['identity-success']
+  if (store.loadError) return identityScenarios['identity-load-failed']
+  if (store.submitting) return identityScenarios['identity-verifying']
+  if (store.failure?.service) return { ...identityScenarios[store.pending ? 'identity-pending' : 'identity-service-error'], overlay: 'service-error' }
+  if (store.pending) return { ...identityScenarios['identity-pending'], ...(store.error ? { feedback: store.error } : {}) }
+  const rawReason = store.failure?.reason || store.currentSession?.reason_code || store.authority?.reason_code
+  // Upload OCR uses a shared reason code; the selected slot determines its presentation only.
+  const reason = rawReason === 'ID_CARD_DOCUMENT_INVALID' && store.failure?.kind === 'portrait' ? 'ID_CARD_PORTRAIT_PARSE_FAILED'
+    : rawReason === 'ID_CARD_DOCUMENT_INVALID' && store.failure?.kind === 'emblem' ? 'ID_CARD_EMBLEM_PARSE_FAILED' : rawReason
+  const mapped = reason === 'FACE_MISMATCH' || reason === 'FACE_QUALITY_FAILED' ? 'identity-face-rejected'
+    : reason === 'ID_CARD_EMBLEM_PARSE_FAILED' ? 'identity-emblem-rejected'
+    : reason === 'ID_CARD_PORTRAIT_PARSE_FAILED' ? 'identity-portrait-rejected'
+    : reason === 'IDENTITY_ALREADY_BOUND' ? 'identity-bound'
+    : reason === 'SESSION_EXPIRED' ? 'identity-expired' : undefined
+  if (mapped) return identityScenarios[mapped]
+  if (store.failure?.upload) return identityScenarios['identity-upload-failed']
+  const base = Object.values(store.materials).every(m => m?.state === 'ready') ? 'identity-ready' : 'identity-collect'
+  return { ...identityScenarios[base], ...(store.error ? { feedback: store.error, feedbackTone: 'danger' as const } : store.currentSession?.status === 'rejected' ? { feedback: rejectionMessage(), feedbackTone: 'danger' as const } : {}) }
 })
 function rejectionMessage() {
   const reason = store.currentSession?.reason_code
@@ -49,17 +61,25 @@ function rejectionMessage() {
   if (reason === 'ID_CARD_EMBLEM_PARSE_FAILED') return '身份证国徽面识别失败，请重新上传。'
   return '本次核验未完成，请核对材料后重试。'
 }
-const materials = computed<IdentityMaterials>(() => preview.value ? fixtureMaterials.value : { portrait: store.materials.portrait?.state || null, emblem: store.materials.emblem?.state || null, face: store.materials.face?.state || null, consent: store.consent })
+const materials = computed<IdentityMaterials>(() => {
+  if (preview.value) return fixtureMaterials.value
+  const value: IdentityMaterials = { portrait: store.materials.portrait?.state || null, emblem: store.materials.emblem?.state || null, face: store.materials.face?.state || null, consent: store.consent }
+  const issue = scenario.value.issue
+  if (issue === 'face' || issue === 'portrait' || issue === 'emblem') value[issue] = 'error'
+  if (issue === 'upload' && store.failure?.kind) value[store.failure.kind] = 'error'
+  return value
+})
 const consent = computed({ get: () => materials.value.consent, set: value => { if (preview.value) fixtureMaterials.value.consent = value; else store.consent = value } })
 const previews = computed(() => preview.value ? {} : { portrait: store.materials.portrait?.preview, emblem: store.materials.emblem?.preview, face: store.materials.face?.preview })
 const verifiedInfo = computed(() => preview.value ? identityVerifiedInfo : { name: store.authority?.real_name || '', maskedId: store.authority?.id_number_masked || '' })
 const overlay = ref<IdentityScenario['overlay']>()
+watch(() => scenario.value.overlay, value => { if (!preview.value) overlay.value = value })
 const selectedKind = ref<IdentityMaterialKind>('portrait')
 const agreementVisible = ref(false)
 const localFeedback = ref('')
 const pending = computed(() => scenario.value.state === 'pending')
 const busy = computed(() => preview.value ? scenario.value.state === 'submitting' : store.busy || !profileReady.value)
-const submitEnabled = computed(() => preview.value ? canSubmitIdentity(materials.value) && !pending.value && !busy.value : profileReady.value && store.canSubmit)
+const submitEnabled = computed(() => canSubmitIdentity(materials.value) && !pending.value && !busy.value && (preview.value || profileReady.value && store.canSubmit))
 const feedback = computed(() => localFeedback.value || scenario.value.feedback)
 const feedbackTone = computed(() => localFeedback.value ? 'secondary' : scenario.value.feedbackTone)
 const sourceTitle = computed(() => selectedKind.value === 'emblem' ? '上传身份证国徽面' : '上传身份证人像面')
@@ -158,9 +178,9 @@ function dismissError() { overlay.value = undefined }
     <IdentityStatus v-if="scenario.state === 'verified'" mode="success" :info="verifiedInfo" @details="details" @profile="profile" />
     <IdentityStatus v-else-if="scenario.issue === 'load'" mode="load-error" :info="verifiedInfo" @retry="retry" @profile="profile" />
     <view v-else class="identity-content">
-      <view class="identity-intro"><AppIcon name="shield-check" :size="30" color="#1989fa" /><view class="identity-intro__copy"><text class="identity-intro__title">{{ scenario.title }}</text><text class="identity-intro__description">{{ scenario.description }}</text></view></view>
+      <view class="identity-intro"><AppIcon :name="scenario.issue === 'expired' ? 'clock-alert' : 'shield-check'" :size="30" color="#1989fa" /><view class="identity-intro__copy"><text class="identity-intro__title">{{ scenario.title }}</text><text class="identity-intro__description">{{ scenario.description }}</text></view></view>
       <IdentityCapture :materials="materials" :previews="previews" :assets="preview ? {} : store.materials" :owner-id="preview ? '' : String(session.user?.id || '')" :pending="pending || busy" :issue="scenario.issue" @select="selectMaterial" />
-      <view class="identity-feedback" :class="`identity-feedback--${feedbackTone}`"><AppIcon :name="feedbackTone === 'danger' ? 'circle-x' : canSubmitIdentity(materials) ? 'circle-check' : 'info'" :size="14" :color="feedbackTone === 'danger' ? '#ee0a24' : feedbackTone === 'primary' ? '#1989fa' : canSubmitIdentity(materials) ? '#07c160' : '#969799'" /><text>{{ feedback }}</text></view>
+      <view class="identity-feedback" :class="`identity-feedback--${feedbackTone}`"><AppIcon :name="feedbackTone === 'danger' ? 'circle-x' : scenario.issue === 'expired' ? 'circle-alert' : canSubmitIdentity(materials) ? 'circle-check' : 'info'" :size="14" :color="feedbackTone === 'danger' ? '#ee0a24' : scenario.issue === 'expired' ? '#ff976a' : feedbackTone === 'primary' ? '#1989fa' : canSubmitIdentity(materials) ? '#07c160' : '#969799'" /><text>{{ feedback }}</text></view>
     </view>
     <template v-if="scenario.state !== 'verified' && scenario.issue !== 'load'" #footer>
       <view class="identity-footer">
@@ -173,11 +193,11 @@ function dismissError() { overlay.value = undefined }
     <wd-popup :model-value="overlay === 'source'" position="bottom" round safe-area-inset-bottom modal-style="background-color:#00000066" @close="overlay = undefined">
       <view class="identity-source"><text class="identity-source__title">{{ sourceTitle }}</text><text class="identity-source__description">拍摄或选择清晰的身份证原件照片</text><view class="identity-source__option" role="button" aria-label="拍照" @click="selectSource('camera')"><AppIcon name="camera" :size="21" color="#1989fa" /><text>拍照</text></view><view class="identity-source__option" role="button" aria-label="从相册选择" @click="selectSource('album')"><AppIcon name="image" :size="21" color="#1989fa" /><text>从相册选择</text></view><wd-button block type="info" variant="plain" @click="overlay = undefined">取消</wd-button></view>
     </wd-popup>
-    <wd-popup :model-value="overlay === 'face-guide' || overlay === 'verifying' || overlay === 'service-error' || overlay === 'bound'" position="center" round :close-on-click-modal="false" modal-style="background-color:#00000066" custom-style="width:calc(100% - 56px);max-width:480px;border-radius:var(--app-radius-lg)">
+    <wd-popup :model-value="overlay === 'face-guide' || overlay === 'verifying' || overlay === 'service-error' || overlay === 'bound'" position="center" round :close-on-click-modal="false" modal-style="background-color:#00000066" custom-style="width:calc(100% - 56px);max-width:480px;border-radius:18px">
       <view v-if="overlay === 'face-guide'" class="identity-dialog"><view class="identity-dialog__illustration"><AppIcon name="scan-face" :size="42" color="#1989fa" /></view><text class="identity-dialog__title identity-dialog__title--face">拍摄本人正脸</text><text class="identity-dialog__copy">{{ '接下来将打开系统拍摄界面。\n请保持正脸清晰，面部无遮挡。\n如无法拍摄，请检查相机访问权限。' }}</text><wd-button button-id="identity-live-face" block @click="selectedKind = 'face'; selectSource('camera')">现场拍照</wd-button><wd-button block type="info" variant="plain" @click="overlay = undefined">暂不拍摄</wd-button></view>
       <view v-else-if="overlay === 'verifying'" class="identity-dialog identity-dialog--verifying"><wd-loading :size="38" /><text class="identity-dialog__title">正在核验身份</text><text class="identity-dialog__copy">{{ '正在比对证件信息与本人照片\n请稍候，不要重复提交' }}</text></view>
       <view v-else-if="overlay === 'service-error'" class="identity-dialog"><AppIcon name="cloud-off" :size="36" color="#1989fa" /><text class="identity-dialog__title">核验服务暂不可用</text><text class="identity-dialog__copy">{{ '当前未能完成核验，请稍后重试。\n这不代表你的身份核验未通过。' }}</text><wd-button block @click="dismissError">返回重试</wd-button><wd-button block type="info" variant="plain" @click="profile">稍后再试</wd-button></view>
-      <view v-else-if="overlay === 'bound'" class="identity-dialog"><AppIcon name="user-lock" :size="36" color="#ff976a" /><text class="identity-dialog__title identity-dialog__title--bound">该身份已绑定其他账号</text><text class="identity-dialog__copy">{{ '已绑定账号：138****1234\n请确认是否使用了本人证件。\n若为本人原账号，请使用原账号登录。' }}</text><wd-button block @click="dismissError">我知道了</wd-button></view>
+      <view v-else-if="overlay === 'bound'" class="identity-dialog"><AppIcon name="user-lock" :size="36" color="#ff976a" /><text class="identity-dialog__title identity-dialog__title--bound">该身份已绑定其他账号</text><text class="identity-dialog__copy">{{ `${preview ? '已绑定账号：138****1234\n' : ''}请确认是否使用了本人证件。\n若为本人原账号，请使用原账号登录。` }}</text><wd-button block @click="dismissError">我知道了</wd-button></view>
     </wd-popup>
     <ConfirmSheet v-model="agreementVisible" title="实名认证协议" message="请确认照片为本人有效证件及本人现场正脸。姓名和证件号将通过身份核验识别。" confirm-text="已阅读" cancel-text="" />
   </AppPage>
@@ -207,9 +227,15 @@ function dismissError() { overlay.value = undefined }
 .identity-dialog { padding: 24px; display: flex; flex-direction: column; align-items: center; gap: 16px; --wot-button-height-medium: 50px; --wot-button-radius-main: var(--app-radius-md); --wot-button-spacing-block: 0; --wot-button-info-plain-bg: var(--app-color-surface); --wot-button-info-plain-border: var(--app-color-border-strong); }
 .identity-dialog :deep(.wd-button) { width: 100%; }
 .identity-dialog__illustration { display: flex; align-items: center; justify-content: center; width: 80px; height: 80px; border-radius: var(--app-radius-full); background: var(--app-color-primary-soft); }
-.identity-dialog__title { font-size: 19px; font-weight: 600; text-align: center; }
-.identity-dialog__title--face { font-size: 20px; }
-.identity-dialog__title--bound { font-size: 18px; }
-.identity-dialog__copy { align-self: stretch; white-space: pre-line; font-size: 13px; text-align: center; color: var(--app-color-text-secondary); }
+.identity-dialog__title { font-size: 19px; line-height: 29px; font-weight: 600; text-align: center; }
+.identity-dialog__title--face { font-size: 20px; line-height: 30px; }
+.identity-dialog__title--bound { font-size: 18px; line-height: 27px; }
+.identity-dialog__copy { align-self: stretch; white-space: pre-line; font-size: 13px; line-height: 20px; text-align: center; color: var(--app-color-text-secondary); }
 .identity-dialog--verifying { padding: 28px 24px; }
+.identity-content { line-height: 1.5; }
+.identity-intro { border-radius: 12px; }
+.identity-feedback { line-height: 1.5; }
+.identity-footer, .identity-dialog { --wot-button-radius-main: 12px; --wot-button-font-weight: 600; }
+.identity-dialog { line-height: 1.5; }
+.identity-footer :deep(.wd-button), .identity-dialog :deep(.wd-button) { font-size: 16px; font-weight: 600; }
 </style>

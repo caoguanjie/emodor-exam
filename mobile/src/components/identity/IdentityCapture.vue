@@ -17,7 +17,8 @@ function action(kind: IdentityMaterialKind): string {
   if (props.pending) return '已提交 · 等待核验'
   if (state === 'uploading') return '正在处理照片…'
   if (state === 'ready') return kind === 'face' ? '已上传 · 重新拍摄' : '已上传 · 可重拍'
-  if (kind === 'face') return state === 'error' ? '重新现场拍照' : '现场拍照'
+  if (state === 'error' && props.issue === 'upload') return '上传失败 · 点击重试'
+  if (kind === 'face') return state === 'error' ? '重新拍摄正脸' : '现场拍照'
   if (state === 'unsafe') return '安全检查未通过 · 重新上传'
   if (state === 'error') return props.issue === 'upload' ? '上传失败 · 点击重试' : '识别失败 · 重新上传'
   return '拍照 / 相册选择'
@@ -37,14 +38,14 @@ function select(kind: IdentityMaterialKind) {
     <view class="capture__heading"><text>身份证照片</text><text class="capture__count" :class="{ 'capture__count--ready': count === 2 }">{{ count }} / 2</text></view>
     <text class="capture__requirement">证件在有效期内，四角完整、清晰无遮挡</text>
     <view class="capture__cards">
-      <view v-for="card in cards" :key="card.kind" class="capture__card" role="button" :aria-label="card.title" :aria-disabled="pending || materials[card.kind] === 'uploading'" @click="select(card.kind)">
-        <view class="capture__preview"><wd-loading v-if="materials[card.kind] === 'uploading'" :size="24" /><ProtectedImage v-else-if="assets[card.kind] && ownerId" :key="assets[card.kind]!.asset_id" :asset-id="assets[card.kind]!.asset_id" owner-type="identity_verification_user" :owner-id="ownerId" :initial-ticket="assets[card.kind]!.ticket" :width="72" :height="48" /><wd-img v-else-if="previews[card.kind]" :src="previews[card.kind]" width="72" height="48" mode="aspectFit" /><AppIcon v-else :name="materials[card.kind] === 'ready' ? card.icon : 'camera'" :size="24" color="#1989fa" /></view>
+      <view v-for="card in cards" :key="card.kind" class="capture__card" :class="{ 'capture__card--error': materials[card.kind] === 'error' || materials[card.kind] === 'unsafe' }" role="button" :aria-label="card.title" :aria-disabled="pending || materials[card.kind] === 'uploading'" @click="select(card.kind)">
+        <view class="capture__preview"><wd-loading v-if="materials[card.kind] === 'uploading'" :size="24" /><AppIcon v-else-if="materials[card.kind] === 'error' || materials[card.kind] === 'unsafe'" :name="card.icon" :size="24" color="#ee0a24" /><ProtectedImage v-else-if="assets[card.kind] && ownerId" :key="assets[card.kind]!.asset_id" :asset-id="assets[card.kind]!.asset_id" owner-type="identity_verification_user" :owner-id="ownerId" :initial-ticket="assets[card.kind]!.ticket" :width="72" :height="48" /><wd-img v-else-if="previews[card.kind]" :src="previews[card.kind]" width="72" height="48" mode="aspectFit" /><AppIcon v-else :name="materials[card.kind] === 'ready' ? card.icon : 'camera'" :size="24" color="#1989fa" /></view>
         <text class="capture__title">{{ card.title }}</text>
         <text class="capture__action" :class="{ 'capture__action--ready': materials[card.kind] === 'ready', 'capture__action--error': materials[card.kind] === 'error' && issue !== 'upload' || materials[card.kind] === 'unsafe', 'capture__action--pending': pending }">{{ action(card.kind) }}</text>
       </view>
     </view>
-    <view class="capture__face" role="button" aria-label="本人正脸照片" :aria-disabled="pending" @click="select('face')">
-      <view class="capture__face-preview"><wd-img v-if="previews.face" :src="previews.face" width="76" height="76" mode="aspectFill" /><AppIcon v-else :name="materials.face === 'ready' ? 'user-round' : 'scan-face'" :size="30" color="#1989fa" /></view>
+    <view class="capture__face" :class="{ 'capture__face--error': materials.face === 'error' }" role="button" aria-label="本人正脸照片" :aria-disabled="pending" @click="select('face')">
+      <view class="capture__face-preview"><AppIcon v-if="materials.face === 'error'" name="scan-face" :size="30" color="#ee0a24" /><wd-img v-else-if="previews.face" :src="previews.face" width="76" height="76" mode="aspectFill" /><AppIcon v-else :name="materials.face === 'ready' ? 'user-round' : 'scan-face'" :size="30" color="#1989fa" /></view>
       <view class="capture__face-copy"><text class="capture__face-title">本人正脸照片</text><text class="capture__face-hint">{{ faceHint }}</text><text class="capture__face-action" :class="{ 'capture__action--ready': materials.face === 'ready', 'capture__action--pending': pending }">{{ action('face') }}</text></view>
     </view>
   </view>
@@ -70,4 +71,11 @@ function select(kind: IdentityMaterialKind) {
 .capture__action--ready { color: var(--app-color-success); }
 .capture__action--error { color: var(--app-color-danger); }
 .capture__action--pending { color: var(--app-color-text-muted); }
+.capture { line-height: 1.5; }
+.capture__card, .capture__face { box-sizing: border-box; border-radius: 12px; }
+.capture__face { padding: 13px; }
+.capture__preview { border-radius: 6px; }
+.capture__face-preview { border-radius: 12px; }
+.capture__card--error, .capture__face--error { border-color: var(--app-color-danger); }
+.capture__card--error .capture__preview, .capture__face--error .capture__face-preview { background: var(--app-color-danger-soft); }
 </style>

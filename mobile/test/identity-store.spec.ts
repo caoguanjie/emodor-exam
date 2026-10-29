@@ -22,6 +22,25 @@ async function pickedMedia(path: string) {
   vi.mocked(picker.pickIdentityMedia).mockResolvedValue({ tempFilePath: path, size: 100, mimeType: 'image/jpeg' })
 }
 describe('identity authoritative state and material isolation', () => {
+  it.each(['portrait', 'emblem'] as const)('keeps the OCR reason and server clearing policy for a rejected %s upload', async kind => {
+    await pickedMedia('blob:non-id')
+    install(o => o.method === 'DELETE' ? ok(null) : { statusCode: 400, data: { code: 40001, message: '身份证图片未通过识别，请重新拍摄', data: { reason_code: 'ID_CARD_DOCUMENT_INVALID', clear_materials: ['id_card_portrait', 'id_card_emblem'] } } })
+    const { useIdentityStore } = await import('../src/stores/identity')
+    const store = useIdentityStore()
+    for (const slot of ['portrait', 'emblem', 'face'] as const) store.materials[slot] = { asset_id: slot, state: 'ready', preview: '/image' }
+    await store.upload(kind, 'album')
+    expect(store.failure).toMatchObject({ reason: 'ID_CARD_DOCUMENT_INVALID', kind, upload: false })
+    expect(store.materials.portrait).toBeNull(); expect(store.materials.emblem).toBeNull()
+    expect(store.materials.face?.asset_id).toBe('face')
+  })
+  it('does not label an upload validation rejection as a network failure', async () => {
+    await pickedMedia('blob:invalid-image')
+    install(() => ({ statusCode: 400, data: { code: 40001, message: '认证图片内容、尺寸或像素不符合要求', data: null } }))
+    const { useIdentityStore } = await import('../src/stores/identity')
+    const store = useIdentityStore(); await store.upload('portrait', 'album')
+    expect(store.failure?.upload).toBe(false)
+    expect(store.error).toBe('认证图片内容、尺寸或像素不符合要求')
+  })
   it('does not assume unverified when the authority read fails', async () => {
     install(() => Promise.reject(new Error('offline')))
     const { useIdentityStore } = await import('../src/stores/identity')
