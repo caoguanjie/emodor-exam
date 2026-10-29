@@ -99,6 +99,22 @@ async function compileFixture(target, { outputDir }) {
     : { 'index.html': `<html>new-${target}</html>`, 'assets/new.js': `new-${target}-asset` });
 }
 
+test('real npm compiler publishes from a project directory containing spaces', async (t) => {
+  const root = await fixture(t);
+  const rootDir = join(root, 'project with spaces');
+  await mkdir(rootDir);
+  await prepareCliFixture(rootDir, `
+    import { mkdir, writeFile } from 'node:fs/promises';
+    import { join } from 'node:path';
+    await mkdir(process.env.RULEEXAM_BUILD_OUT_DIR, { recursive: true });
+    await writeFile(join(process.env.RULEEXAM_BUILD_OUT_DIR, 'index.html'), '<html>real-npm</html>');
+  `);
+  const { runBuild } = await library();
+  await runBuild(['web'], { rootDir });
+  assert.equal(await readFile(join(rootDir, 'dist/index.html'), 'utf8'), '<html>real-npm</html>');
+  assert.equal((await readdir(rootDir)).some(name => name.startsWith('.build')), false);
+});
+
 test('target parser accepts website combinations and rejects ambiguous or missing targets', async () => {
   const { parseBuildTargets } = await library();
   assert.deepEqual(parseBuildTargets(['web']), ['web']);

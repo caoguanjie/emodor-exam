@@ -131,7 +131,11 @@ async function compileTarget(target, { rootDir, outputDir, signal }) {
   checkCancellation(signal);
   const project = target === 'web' ? 'web' : 'mobile';
   const script = target === 'web' ? 'build' : `build:${target}`;
-  const child = spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', script], {
+  // Windows cannot spawn .cmd files directly (EINVAL). Only the fixed,
+  // allowlisted npm script name enters cmd; paths stay in cwd/env.
+  const windows = process.platform === 'win32';
+  const child = spawn(windows ? (process.env.ComSpec || 'cmd.exe') : 'npm',
+    windows ? ['/d', '/s', '/c', `npm.cmd run ${script}`] : ['run', script], {
     cwd: join(rootDir, project),
     // 独立进程组只包含本次编译，信号不会触及调用者或其它构建。
     detached: process.platform !== 'win32',
