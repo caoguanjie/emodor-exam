@@ -1,5 +1,7 @@
 # 独立随机模拟考实施与验收记录
 
+> 后续本机恢复（2026-10-29）：本机ruleexam已补齐043并通过实际后台复验，详见[恢复记录](2026-10-29-practice-local-migration-recovery.md)。下文“未应用开发库迁移”保留为原实施交付时的边界，生产部署仍未执行。
+
 状态：源码、隔离自动化、PC/H5 实际页面与独立审查已完成。实现已按用户指令于2026-10-28从独立工作区快进合入当前main（1f07cd7 → 0176915）；未推送。本次未对开发/生产库应用043，也未创建或发布真实业务模拟卷。
 
 设计：[独立随机模拟考](../docs/superpowers/specs/2026-10-28-practice-random-exam-design.md)；计划：[实施计划](../docs/superpowers/plans/2026-10-28-practice-random-exam.md)。
