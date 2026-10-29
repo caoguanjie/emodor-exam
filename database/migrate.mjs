@@ -6,6 +6,7 @@ import { existsSync, readFileSync as readFileSyncFromFs, readdirSync } from 'nod
 import { createRequire } from 'node:module';
 import { join, basename, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { matchesHistoricalChecksum } from './historical-checksums.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const MIGRATIONS_DIR = join(ROOT, 'database', 'migrations');
@@ -688,15 +689,27 @@ export async function inspectMigrations({ connection, database, migrations, allo
   const rows = await registryRows(connection);
   const byId = new Map(rows.map((row) => [row.migration_id, row]));
   const pending = [];
+  const compatibilityAccepted = [];
+  const probeContext = createProbeContext(definitions, byId);
   for (const migration of definitions) {
     const row = byId.get(migration.id);
     if (!row) {
       pending.push({ ...migration, status: 'pending' });
       continue;
     }
-    if (row.checksum !== migration.checksum) throw new Error(`migration checksum conflict: ${migration.id}`);
+    const historical = row.checksum !== migration.checksum;
+    if (historical && !matchesHistoricalChecksum(row, migration)) throw new Error(`migration checksum conflict: ${migration.id}`);
     const progress = decodeProgress(row.progress, migration.id);
     assertProgressBelongs(progress, migration);
+    if (historical) {
+      if (!isComplete(progress, migration)) throw new Error(`historical migration has incomplete checkpoints: ${migration.id}`);
+      for (const step of migration.steps) {
+        if (!await probeEffectiveStep(connection, migration, step, probeContext)) {
+          throw new Error(`historical migration invariant conflict: ${migration.id}/${step.id}`);
+        }
+      }
+      compatibilityAccepted.push(migration.id);
+    }
     if (row.status === 'applying' && !allowApplying) {
       throw new Error(`migration is already in-progress: ${migration.id}`);
     }
@@ -707,7 +720,7 @@ export async function inspectMigrations({ connection, database, migrations, allo
       pending.push({ ...migration, status: row.status, attempts: Number(row.attempts || 0), progress });
     }
   }
-  return { migrations: definitions, rows, pending };
+  return { migrations: definitions, rows, pending, compatibilityAccepted };
 }
 
 export function getMigrationLockName(database) {
@@ -940,7 +953,7 @@ export async function applyMigrations({ connection, database, migrations, onChec
       const [freshRows] = await connection.execute(`SELECT migration_id, checksum, status, started_at, applied_at, attempts, error_message, progress FROM \`${REGISTRY_TABLE}\``);
       rowsById.set(migration.id, freshRows.find((item) => item.migration_id === migration.id));
     }
-    return { applied, pending: [] };
+    return { applied, pending: [], compatibilityAccepted: initialPlan.compatibilityAccepted };
   } finally {
     await releaseMigrationLock(connection, lockName);
   }
@@ -976,7 +989,7 @@ async function cli() {
     const result = mode === 'apply'
       ? await applyMigrations({ connection, database })
       : await inspectMigrations({ connection, database });
-    console.log(JSON.stringify({ mode, database, applied: result.applied || [], pending: (result.pending || []).map((item) => item.id) }));
+    console.log(JSON.stringify({ mode, database, applied: result.applied || [], pending: (result.pending || []).map((item) => item.id), compatibilityAccepted: result.compatibilityAccepted }));
   } finally {
     await connection.end();
   }
