@@ -43,3 +43,6 @@ docs/meeting/
 # 本地存储分析产物（不属于项目源码）
 storage-analysis-report.html
 storage-analysis.json
+
+# 本机数据库备份（含业务数据，不提交）
+/deploy/backups/

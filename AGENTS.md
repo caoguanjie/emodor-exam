@@ -100,3 +100,5 @@ API 启动后监听 :3000，全局前缀 `api/v1`。本机开发用宿主 MySQL 
 - 运行构建、API 测试、PC 操作和真实 H5/视频/外部 AI 验收是不同证据等级；文档一致不等于运行或业务验收通过。
 
 - 模拟考使用独立training/public/random试卷，exam_purpose=practice；不限次数、正常评分与错题收录，正式统计排除模拟。每次新模拟读取最新release，活动/历史按record快照，首次来源/难度沿用assignment；新开须知expected_release_id过期40970，恢复优先。见[设计](docs/superpowers/specs/2026-10-28-practice-random-exam-design.md)与[计划](docs/superpowers/plans/2026-10-28-practice-random-exam.md)。
+
+- 本机数据库备份统一存放在 `deploy/backups/YYYY-MM-DD/`，保留文件名中的实际备份时间；整理历史备份时单独标明整理日期，不能将旧快照冒充当天新备份。备份文件权限0600，不纳入Git。
