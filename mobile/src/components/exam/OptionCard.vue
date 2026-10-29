@@ -6,7 +6,7 @@ const emit = defineEmits<{ select: [id: string]; retryImage: [assetId: string] }
 </script>
 <template>
   <view class="option-card" :class="[{ 'option-card--selected': selected, 'option-card--image': image, 'option-card--multiple': multiple }, status && `option-card--${status}`]" :role="multiple ? 'checkbox' : 'radio'" :aria-label="`选项 ${label}`" :aria-checked="selected" :aria-disabled="disabled" @click="!disabled && emit('select', option.id)">
-    <view class="option-card__key">{{ label }}</view><view class="option-card__body"><ReadonlyRichContent :doc="option.content" :schema-version="schemaVersion" :assets="assets" @retry-image="emit('retryImage', $event)" /><text v-if="mark" class="option-card__mark">{{ mark }}</text></view>
+    <view v-if="!image" class="option-card__key">{{ label }}</view><view class="option-card__body"><ReadonlyRichContent :doc="option.content" :schema-version="schemaVersion" :assets="assets" @retry-image="emit('retryImage', $event)" /><view v-if="image" class="option-card__footer"><view class="option-card__key">{{ label }}</view><text v-if="mark" class="option-card__mark">{{ mark }}</text></view><text v-else-if="mark" class="option-card__mark">{{ mark }}</text></view>
   </view>
 </template>
 <style scoped>
@@ -22,7 +22,9 @@ const emit = defineEmits<{ select: [id: string]; retryImage: [assetId: string] }
 .option-card--wrong { border-color: var(--app-color-danger); background: var(--app-color-danger-soft); color: var(--app-color-danger); }
 .option-card--wrong .option-card__key { border-color: var(--app-color-danger); background: var(--app-color-danger); color: var(--app-color-surface); }
 .option-card--image { position: relative; display: block; padding: 8px; }
-.option-card--image .option-card__key { position: absolute; z-index: 1; left: 8px; bottom: 8px; width: 22px; height: 22px; font-size: 11px; background: var(--app-color-surface); }
+.option-card--image .option-card__key { width: 22px; height: 22px; font-size: 11px; background: var(--app-color-surface); }
+.option-card__footer { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.option-card__footer .option-card__mark { flex: 1; min-width: 0; margin-top: 0; overflow-wrap: anywhere; }
 .option-card--image .option-card__body { padding: 0; }
 .option-card--image.option-card--selected .option-card__key { background: var(--app-color-primary); }
 </style>
