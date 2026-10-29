@@ -5,7 +5,7 @@ const envelope = (data: unknown) => ({ code: 0, message: 'ok', data })
 const title = 'Web前端工程师基础：HTML5 + CSS3 结业考试'
 const papers = [
   { paper_id: '901', title, status: 'published', duration_minutes: 35, question_count: 20, total_score: 120, pass_score: 72, active_record_id: null, latest_record_id: null },
-  { paper_id: '902', title: '继续本人进行中的考试', status: 'withdrawn', duration_minutes: 30, question_count: 20, total_score: 120, pass_score: 72, active_record_id: '82', latest_record_id: '82' },
+  { paper_id: '902', title: '继续本人进行中的考试', status: 'withdrawn', duration_minutes: 30, question_count: 20, total_score: 120, pass_score: 72, active_record_id: '82', active_deadline_at: '2030-01-01T10:05:00Z', latest_record_id: '82' },
   { paper_id: '903', title: '历史信息不完整的已发布考试', status: 'published', duration_minutes: null, question_count: null, total_score: null, pass_score: null, active_record_id: null, latest_record_id: null },
 ]
 const questionTypes: ExamQuestionTypeSummary[] = [
@@ -34,22 +34,24 @@ async function setup(page: Page, options: { empty?: boolean; paginated?: boolean
   return { queries, calls, finishLearning() { learningReady = true } }
 }
 
-test('vertical exam cards show real totals, only active status, and preserve a simple heading', async ({ page }) => {
+test('N4rck exam center shows a large heading, filters and real card metadata', async ({ page }) => {
   const { queries } = await setup(page)
   await page.goto('/mobile/#/pages/exam/index')
-  await expect(page.locator('.top-bar__title')).toHaveText('考试')
-  await expect(page.locator('.top-bar')).toHaveCSS('background-color', 'rgb(255, 255, 255)')
-  await expect(page.locator('.center-tabs, .center-heading')).toHaveCount(0)
+  await expect(page.locator('.center-heading__title')).toHaveText('考试')
+  await expect(page.locator('.center-heading__count')).toHaveText('03 场')
+  await expect(page.locator('.center-tabs .wd-tabs__nav-item')).toHaveCount(4)
   await expect(page.getByText('考试记录', { exact: true })).toHaveCount(0)
   await expect(page.locator('.exam-card')).toHaveCount(3)
   const normal = page.locator('.exam-card').nth(0), active = page.locator('.exam-card').nth(1), incomplete = page.locator('.exam-card').nth(2)
   await expect(normal.locator('.exam-card__meta')).toContainText('35 分钟')
   await expect(normal.locator('.exam-card__meta')).toContainText('20 题')
   await expect(normal.locator('.exam-card__meta')).toContainText('满分 120 分')
-  await expect(normal.locator('.exam-card__status')).toHaveCount(0)
+  await expect(normal.locator('.exam-card__status')).toHaveText('待考试')
   await expect(normal.locator('.exam-card__title')).toHaveCSS('-webkit-line-clamp', '2')
   await expect(active).toHaveClass(/exam-card--active/)
   await expect(active.locator('.exam-card__status')).toHaveText('答题中')
+  await expect(active.locator('.exam-card__caption')).toHaveText('截止 01-01 18:05')
+  await expect(normal.locator('.exam-card__caption')).toHaveText('开考后限时 35 分钟')
   await expect(page.getByText(/^(已撤回|已归档|已发布)$/)).toHaveCount(0)
   await expect(incomplete.locator('.exam-card__meta')).toContainText('满分 — 分')
   await expect(page.getByText('没有更多了', { exact: true })).toBeVisible()
@@ -85,34 +87,113 @@ test('loading more preserves server pagination and all-state query without clien
   expect(queries.every(query => new URLSearchParams(query).get('state') === 'all')).toBe(true)
 })
 
-test('empty list keeps its illustration and simple white heading', async ({ page }) => {
+test('N4rck filters request the selected server state and retain the matching list', async ({ page }) => {
+  const { queries, calls } = await setup(page)
+  await page.route('**/api/v1/me/exams?**', route => {
+    const params = new URL(route.request().url()).searchParams
+    const state = params.get('state')
+    queries.push(new URL(route.request().url()).search)
+    const items = papers.filter(exam => state === 'all' || (state === 'active' ? !!exam.active_record_id : state === 'published' ? !exam.active_record_id && exam.status === 'published' : !exam.active_record_id && exam.status !== 'published'))
+    return route.fulfill({ json: envelope({ items, total: items.length, page: 1, page_size: 10 }) })
+  })
+  await page.goto('/mobile/#/pages/exam/index')
+  await expect(page.locator('.exam-card')).toHaveCount(3)
+  const tabs = page.locator('.center-tabs .wd-tabs__nav-item')
+  for (const [label, state, count] of [['进行中', 'active', 1], ['待考试', 'published', 2], ['已结束', 'ended', 0], ['全部', 'all', 3]] as const) {
+    await tabs.filter({ hasText: label }).click()
+    await expect(page.locator('.exam-card')).toHaveCount(count)
+    await expect(tabs.filter({ hasText: label })).toHaveClass(/is-active/)
+    expect(new URLSearchParams(queries.at(-1)).get('state')).toBe(state)
+  }
+  expect(calls.filter(call => call.endsWith('/start'))).toEqual([])
+})
+
+test('ended includes completed published exams and opens their results instead of starting again', async ({ page }) => {
+  const { calls } = await setup(page)
+  await page.route('**/api/v1/me/exams?**', route => {
+    return route.fulfill({ json: envelope({ items: [{ ...papers[0], latest_record_id: '99', attempts_remaining: 2 }], total: 1, page: 1, page_size: 10 }) })
+  })
+  await page.goto('/mobile/#/pages/exam/index')
+  await page.locator('.center-tabs .wd-tabs__nav-item').filter({ hasText: '已结束' }).click()
+  await expect(page.locator('.exam-card__status')).toHaveText('已结束')
+  await expect(page.locator('.exam-card__caption')).toHaveCount(0)
+  await page.locator('.exam-card').getByText('查看结果', { exact: true }).click()
+  await expect(page).toHaveURL(/pages\/exam\/result\?record_id=99/)
+  expect(calls.some(call => call.endsWith('/start'))).toBe(false)
+})
+
+test('formal and practice tab indicators stay centered on the selected label', async ({ page }) => {
+  for (const width of [320, 430]) {
+    await page.setViewportSize({ width, height: 844 })
+    for (const [path, scenario] of [['index', 'exam-center'], ['practice', 'exam-practice']]) {
+      await page.goto(`/mobile/#/pages/exam/${path}?scenario=${scenario}`)
+      const tabs = page.locator('.center-tabs .wd-tabs__nav-item')
+      for (const label of ['全部', '进行中', '待考试', '已结束', '待考试', '进行中', '全部']) {
+        const selected = tabs.filter({ hasText: label })
+        await selected.click()
+        await expect(selected).toHaveClass(/is-active/)
+        await expect.poll(async () => {
+          const text = await selected.locator('.wd-tabs__nav-item-text').boundingBox()
+          const line = await page.locator('.center-tabs .wd-tabs__line').boundingBox()
+          return text && line ? Math.abs(text.x + text.width / 2 - line.x - line.width / 2) : Infinity
+        }).toBeLessThan(2)
+      }
+    }
+  }
+})
+
+test('N4rck static cards filter, disable future exams and fit narrow screens', async ({ page }, testInfo) => {
+  for (const width of [414, 320]) {
+    await page.setViewportSize({ width, height: 844 })
+    await page.goto('about:blank')
+    await page.goto('/mobile/#/pages/exam/index?scenario=exam-center')
+    await expect(page.locator('.exam-card')).toHaveCount(4)
+    await expect(page.locator('.exam-card__progress')).toHaveAttribute('style', /width:\s*30%/)
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`N4rck-${width}.png`), fullPage: true })
+    const tabs = page.locator('.center-tabs .wd-tabs__nav-item')
+    await tabs.filter({ hasText: '待考试' }).click()
+    await expect(page.locator('.exam-card')).toHaveCount(1)
+    await expect(page.locator('.exam-card .wd-button')).toHaveClass(/is-disabled/)
+    await page.locator('.exam-card__title').click()
+    await expect(page).toHaveURL(/scenario=exam-center/)
+    await tabs.filter({ hasText: '进行中' }).click()
+    await expect(page.locator('.exam-card')).toHaveCount(2)
+    await tabs.filter({ hasText: '已结束' }).click()
+    await expect(page.locator('.exam-card')).toHaveCount(1)
+    await page.locator('.exam-card__action').click()
+    await expect(page).toHaveURL(/exam\/result\?scenario=exam-result/)
+  }
+})
+
+test('empty list keeps its illustration and N4rck heading', async ({ page }) => {
   await setup(page, { empty: true })
   await page.goto('/mobile/#/pages/exam/index')
-  await expect(page.locator('.top-bar__title')).toHaveText('考试')
+  await expect(page.locator('.center-heading__title')).toHaveText('考试')
   await expect(page.locator('.empty-state__image')).toBeVisible()
   await expect(page.getByText('考试发布后将显示在这里。', { exact: true })).toBeVisible()
   await page.screenshot({ path: '/tmp/ruleexam-exam-cards-empty.png', fullPage: true })
 })
 
-test('instructions show real 120-point summary once and three complete rules without starting', async ({ page }) => {
+test('instructions match rMONE with a three-column summary and four rules without starting', async ({ page }) => {
   const { calls } = await setup(page)
   await page.goto('/mobile/#/pages/exam/instructions?paper_id=901')
   await expect(page.locator('.top-bar__title')).toHaveText('考试须知')
   await expect(page.locator('.paper-intro__title')).toHaveText(title)
-  await expect(page.locator('.paper-stat')).toHaveCount(4)
-  await expect(page.locator('.paper-stat').filter({ hasText: '满分' }).locator('.paper-stat__number')).toHaveText('120')
+  await expect(page.locator('.paper-stat')).toHaveCount(3)
+  await expect(page.locator('.paper-intro__description')).toHaveText('满分 120 分 · 请在开始前核对考试信息。')
   await expect(page.locator('.paper-intro__total')).toHaveCount(0)
   await expect(page.getByText('及格', { exact: true })).toHaveCount(1)
   await expect(page.locator('.paper-stats')).toContainText('35')
   await expect(page.locator('.paper-stats')).toContainText('20')
   await expect(page.locator('.paper-stats')).toContainText('72')
-  await expect(page.locator('.paper-rule')).toHaveCount(3)
+  await expect(page.locator('.paper-rule')).toHaveCount(4)
   await expect(page.locator('.paper-rule').nth(0)).toContainText('不会暂停')
   await expect(page.locator('.paper-rule').nth(1)).toContainText('本人本机草稿')
-  await expect(page.locator('.paper-rule').nth(1)).toContainText('截止时间不变')
-  await expect(page.locator('.paper-rule').nth(2)).toContainText('不会自动交卷')
+  await expect(page.locator('.paper-rule').nth(1)).toContainText('联网核验再恢复')
+  await expect(page.locator('.paper-rule').nth(2)).toContainText('不自动交卷')
   await expect(page.locator('.paper-rule').nth(2)).toContainText('不评分')
-  await expect(page.locator('.paper-rule').nth(2)).toContainText('不可修改')
+  await expect(page.locator('.paper-rule').nth(3)).toContainText('不可修改')
   await expect(page.getByText('题型构成', { exact: true })).toBeVisible()
   const rows = page.locator('.paper-composition__row')
   await expect(rows).toHaveCount(3)
@@ -122,7 +203,7 @@ test('instructions show real 120-point summary once and three complete rules wit
     await expect(rows.nth(index).locator('.paper-composition__detail')).toHaveText(detail)
     await expect(rows.nth(index).locator('.paper-composition__score')).toHaveText(score)
   }
-  await expect(page.getByText(/PAPER|依据出题资料/)).toHaveCount(0)
+  await expect(page.locator('.paper-intro__kicker')).toHaveText('PAPER · NO.0901')
   expect(calls.filter(call => call.endsWith('/start'))).toEqual([])
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.screenshot({ path: '/tmp/ruleexam-exam-cards-instructions.png', fullPage: true })
@@ -229,14 +310,15 @@ test('static list and instructions use the same hierarchy without API requests',
   const requests: string[] = []
   page.on('request', request => { if (request.url().includes('/api/v1/')) requests.push(request.url()) })
   await page.goto('/mobile/#/pages/exam/index?scenario=exam-center')
-  await expect(page.locator('.exam-card')).toHaveCount(2)
-  await expect(page.locator('.exam-card__status')).toHaveCount(1)
-  await expect(page.getByText(/已撤回|已归档|已发布|最好成绩|上次离开/)).toHaveCount(0)
+  await expect(page.locator('.exam-card')).toHaveCount(4)
+  await expect(page.locator('.exam-card__status')).toHaveCount(4)
+  await expect(page.locator('.exam-card__draft')).toContainText('已答 6 / 20')
   await page.goto('/mobile/#/pages/exam/instructions?scenario=exam-instructions')
-  await expect(page.locator('.paper-rule')).toHaveCount(3)
+  await expect(page.locator('.paper-rule')).toHaveCount(4)
   await expect(page.getByText('题型构成', { exact: true })).toBeVisible()
   await expect(page.locator('.paper-composition__row')).toHaveCount(3)
-  await expect(page.locator('.paper-stat').filter({ hasText: '满分' }).locator('.paper-stat__number')).toHaveText('120')
-  await expect(page.getByText(/PAPER|依据出题资料/)).toHaveCount(0)
+  await expect(page.locator('.paper-stat')).toHaveCount(3)
+  await expect(page.locator('.paper-intro__description')).toHaveText('满分 120 分 · 请在开始前核对考试信息。')
+  await expect(page.locator('.paper-intro__kicker')).toHaveText('PAPER · NO.0016')
   expect(requests).toEqual([])
 })

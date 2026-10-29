@@ -35,6 +35,10 @@
 			"style": { "navigationBarTitleText": "考试须知" }
 		},
 		{
+			"path": "pages/exam/practice",
+			"style": { "navigationBarTitleText": "模拟考试" }
+		},
+		{
 			"path": "pages/exam/take",
 			"style": { "navigationBarTitleText": "在线考试" }
 		},

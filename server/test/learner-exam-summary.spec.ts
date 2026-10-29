@@ -64,6 +64,31 @@ function fixture() {
 }
 
 describe('learner exam summaries', () => {
+  it('filters formal and practice before pagination and total, treating omitted purposes as formal', async () => {
+    const f = fixture();
+    f.papers.push({ id: '15', title: '模拟一', businessScope: 'training', examPurpose: 'practice', status: 'published', mode: 'random' },
+      { id: '14', title: '模拟二', businessScope: 'training', examPurpose: 'practice', status: 'published', mode: 'random' });
+    const formal = await f.service.list('9', 1, 1, 'all', 'formal');
+    expect(formal.total).toBe(2);
+    expect(formal.items.map((row: any) => row.paper_id)).toEqual(['12']);
+    const practice = await f.service.list('9', 2, 1, 'all', 'practice');
+    expect(practice.total).toBe(2);
+    expect(practice.items.map((row: any) => row.paper_id)).toEqual(['14']);
+    expect(practice.items[0].exam_purpose).toBe('practice');
+    expect((await f.service.list('9')).total).toBe(4);
+    expect(f.noWrite).not.toHaveBeenCalled();
+  });
+
+  it('returns only the owner active deadline without manufacturing an unstarted deadline', async () => {
+    const f = fixture();
+    const result = await f.service.list('9');
+    expect(result.items.find((row: any) => row.paper_id === '11').active_deadline_at).toBe(new Date(nowMs + 60_000).toISOString());
+    expect(result.items.find((row: any) => row.paper_id === '12').active_deadline_at).toBeNull();
+    f.records.push({ id: '99', userId: 'other', paperId: '12', status: 'in_progress', deadlineAt: new Date(nowMs + 500_000) });
+    expect((await f.service.detail('9', '12')).active_deadline_at).toBeNull();
+    f.records[0].deadlineAt = new Date(nowMs);
+    expect((await f.service.detail('9', '11')).active_deadline_at).toBeNull();
+  });
   it('reads frozen 120-point rules and本人 record links without loading a question pool', async () => {
     const f = fixture();
     const result = await f.service.list('9');
@@ -157,9 +182,20 @@ describe('learner exam summaries', () => {
   it('filters the available set before pagination, including legacy state queries', async () => {
     const f = fixture();
     expect(await f.service.list('9', 1, 1, 'active')).toMatchObject({ total: 1, items: [{ paper_id: '11', active_record_id: '41' }] });
-    expect(await f.service.list('9', 1, 1, 'ended')).toMatchObject({ total: 0, items: [] });
+    expect(await f.service.list('9', 1, 1, 'ended')).toMatchObject({ total: 1, items: [{ paper_id: '13', latest_record_id: '43' }] });
     expect(await f.service.list('9', 2, 1)).toMatchObject({ total: 2, items: [{ paper_id: '11' }] });
     expect(await f.service.list('9', 1, 1, 'published')).toMatchObject({ total: 1, items: [{ paper_id: '12' }] });
+  });
+
+  it.each(['submitted', 'passed', 'failed', 'timeout'])('includes the owner %s attempt in ended before pagination even when its paper remains published', async status => {
+    const f = fixture();
+    f.records.push({ id: '44', paperId: '12', userId: '9', status });
+    f.records.push({ id: '45', paperId: '11', userId: 'other-user', status });
+    f.records.push({ id: '46', paperId: '11', userId: '9', status });
+    expect(await f.service.list('9', 2, 1, 'ended', 'formal')).toMatchObject({ total: 2, items: [{ paper_id: '12', latest_record_id: '44' }] });
+    expect(await f.service.list('9', 1, 20, 'active')).toMatchObject({ total: 1, items: [{ paper_id: '11' }] });
+    expect(await f.service.list('9', 1, 20, 'ended', 'practice')).toMatchObject({ total: 0, items: [] });
+    expect(f.noWrite).not.toHaveBeenCalled();
   });
 
   it.each(['withdrawn', 'archived'])('keeps %s papers only while本人 active attempt is still before its deadline', async status => {
@@ -250,6 +286,8 @@ describe('learner exam summaries', () => {
     const pipe = new DtoValidationPipe();
     await expect(pipe.transform({ state: 'ended', page: '2' }, { type: 'query', metatype: AttemptPageDto })).resolves.toMatchObject({ state: 'ended', page: 2 });
     await expect(pipe.transform({ state: 'draft' }, { type: 'query', metatype: AttemptPageDto })).rejects.toThrow();
+    await expect(pipe.transform({ exam_purpose: 'practice' }, { type: 'query', metatype: AttemptPageDto })).resolves.toMatchObject({ exam_purpose: 'practice' });
+    await expect(pipe.transform({ exam_purpose: 'other' }, { type: 'query', metatype: AttemptPageDto })).rejects.toThrow();
     const f = fixture();
     const controller: any = new TrainingExamsController(f.service, {} as any, {} as any);
     await expect(controller.detail('11', { id: '9', client: 'mobile', role: 'employee' })).resolves.toMatchObject({ paper_id: '11' });

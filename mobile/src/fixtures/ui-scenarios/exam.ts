@@ -69,6 +69,7 @@ export const examScenarios: Record<string, ExamScenario> = {
   'exam-center-empty': { id: 'exam-center-empty', group: 'center', state: 'empty' },
   'exam-not-started': { id: 'exam-not-started', group: 'center', state: 'not-started' },
   'exam-instructions': { id: 'exam-instructions', group: 'instructions' },
+  'exam-practice': { id: 'exam-practice', group: 'center' },
   'exam-draft-recover': { id: 'exam-draft-recover', group: 'instructions', overlay: 'recover' },
   'exam-draft-invalid': { id: 'exam-draft-invalid', group: 'instructions', overlay: 'invalid' },
   'exam-single': { id: 'exam-single', group: 'take', questionIndex: 0 },

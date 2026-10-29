@@ -7,7 +7,7 @@ import type { Page } from '@/api/courses'
 import { resolveMediaUrl } from '@/platform/media-url'
 import { clearDraft, loadDraft, saveDraft } from '@/utils/exam-draft'
 import { createServerClock } from '@/utils/server-clock'
-import { countAnswered, takeItem, toggleOption, type AttemptQuestionV2, type AttemptRecordViewV2, type ExamAnswers, type ExamHistoryItemV2, type ExamListItem, type ExamListState, type LearnerExamSummary, type FinalResultView, type SubmitAttemptRequest, type WrongItemV2 } from '@/types/exam'
+import { countAnswered, takeItem, toggleOption, type AttemptQuestionV2, type AttemptRecordViewV2, type ExamAnswers, type ExamHistoryItemV2, type ExamListItem, type ExamListState, type ExamPurpose, type LearnerExamSummary, type FinalResultView, type SubmitAttemptRequest, type WrongItemV2 } from '@/types/exam'
 import { useSessionStore } from './session'
 
 type Phase = 'idle' | 'loading' | 'answering' | 'submitting' | 'uncertain' | 'expired' | 'terminal' | 'error'
@@ -29,7 +29,7 @@ export const useExamStore = defineStore('mobile-exam', () => {
   const list = ref(emptyPage<ExamListItem>()), history = ref(emptyPage<ExamHistoryItemV2>()), wrong = ref(emptyPage<WrongItemV2>())
   const listLoading = ref(false), historyLoading = ref(false), wrongLoading = ref(false)
   const listError = ref(''), historyError = ref(''), wrongError = ref('')
-  const summary = ref<LearnerExamSummary | null>(null), summaryLoading = ref(false), summaryError = ref(''), listState = ref<ExamListState>('all')
+  const summary = ref<LearnerExamSummary | null>(null), summaryLoading = ref(false), summaryError = ref(''), listState = ref<ExamListState>('all'), listPurpose = ref<ExamPurpose | undefined>()
   const items = computed(() => questions.value.map(takeItem)), answered = computed(() => countAnswered(answers.value))
   const locked = computed(() => phase.value !== 'answering' || remaining.value <= 0)
   let revision = 0, persistRevision = 0, mediaRevision = 0, ownerUser = '', clock: ReturnType<typeof createServerClock> | null = null
@@ -45,7 +45,7 @@ export const useExamStore = defineStore('mobile-exam', () => {
     submitFlight = null; statusFlight = null; expiredChecked = false; mediaFlights.clear()
     list.value = emptyPage(); history.value = emptyPage(); wrong.value = emptyPage()
     listLoading.value = false; historyLoading.value = false; wrongLoading.value = false; listError.value = ''; historyError.value = ''; wrongError.value = ''
-    summary.value = null; summaryLoading.value = false; summaryError.value = ''; listState.value = 'all'
+    summary.value = null; summaryLoading.value = false; summaryError.value = ''; listState.value = 'all'; listPurpose.value = undefined
   }
   watch(() => session.sessionEpoch, resetMemory, { flush: 'sync' })
   async function ready() {
@@ -288,10 +288,10 @@ export const useExamStore = defineStore('mobile-exam', () => {
     } catch (error) { if (current === summaryRevision && epoch === session.sessionEpoch) summaryError.value = message(error); throw error }
     finally { if (current === summaryRevision && epoch === session.sessionEpoch) summaryLoading.value = false }
   }
-  async function loadList(page = 1, state: ExamListState = listState.value) {
-    if (state !== listState.value) { list.value = emptyPage(); listState.value = state; page = 1 }
+  async function loadList(page = 1, state: ExamListState = listState.value, purpose: ExamPurpose | undefined = listPurpose.value) {
+    if (state !== listState.value || purpose !== listPurpose.value) { list.value = emptyPage(); listState.value = state; listPurpose.value = purpose; page = 1 }
     const current = ++listRevision; listLoading.value = true; listError.value = ''
-    try { await ready(); const value = await getExams(page, state); if (current === listRevision) list.value = { ...value, items: page === 1 ? value.items : [...list.value.items, ...value.items] } }
+    try { await ready(); const value = await getExams(page, state, purpose); if (current === listRevision) list.value = { ...value, items: page === 1 ? value.items : [...list.value.items, ...value.items] } }
     catch (error) { if (current === listRevision) listError.value = message(error); throw error }
     finally { if (current === listRevision) listLoading.value = false }
   }

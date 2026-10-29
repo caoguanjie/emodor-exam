@@ -1,48 +1,37 @@
 <script setup lang="ts">
-import AppPage from '@/components/common/AppPage.vue'
-import AppIcon from '@/components/common/AppIcon.vue'
+import { computed, ref } from 'vue'
+import ExamCenterLayout from './ExamCenterLayout.vue'
+import ExamCenterCard from './ExamCenterCard.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { examTitle, useExamScenario } from '@/fixtures/ui-scenarios/exam'
+import type { ExamListState } from '@/types/exam'
 const { scenario, loadScenario } = useExamScenario('exam-center')
-const props = defineProps<{ query: Record<string, unknown> }>()
+const props = defineProps<{ query: Record<string, unknown>; practice?: boolean }>()
 loadScenario(props.query)
+const state = ref<ExamListState>('all')
 const exams = [
-  { title: examTitle, duration: 30, count: 20, totalScore: 100, active: true },
-  { title: '有限空间作业安全规程测试', duration: 35, count: 24, totalScore: 120, active: false },
+  { title: examTitle, duration: 30, count: 20, totalScore: 100, active: true, status: '进行中', caption: '截止 10-25 18:00', hint: '', action: '继续答题', draft: { answered: 6, total: 20, remaining: '18:42', savedAt: '10-21 14:06' }, filter: 'active' },
+  { title: '有限空间作业安全规程测试', duration: 25, count: 15, totalScore: 100, status: '进行中', caption: '截止 10-31 23:59', hint: '剩余可考 2 次', action: '开始答题', filter: 'active' },
+  { title: '电气作业安全基础（外来人员）', duration: 20, count: 20, totalScore: 100, waiting: true, disabled: true, status: '待考试', caption: '10-28 09:00 开考', hint: '未到开考时间', action: '未开始', filter: 'published' },
+  { title: '产业工人综合答题练习', duration: 30, count: 20, totalScore: 100, ended: true, success: true, status: '已结束', caption: '10-12 已截止', hint: '最好成绩 92 分', action: '查看结果', filter: 'ended' },
 ]
-function openExam(active: boolean) { uni.navigateTo({ url: active ? '/pages/exam/take?scenario=exam-single' : '/pages/exam/instructions?scenario=exam-instructions' }) }
+const practiceExams = [{ title: '消防安全模拟考试', duration: 30, count: 20, totalScore: 100, status: '待考试', caption: '开考后限时 30 分钟', hint: '不限次数', action: '开始模拟', filter: 'published' }]
+const available = computed(() => props.practice ? practiceExams : exams)
+const visible = computed(() => available.value.filter(exam => state.value === 'all' || exam.filter === state.value))
+function openExam(exam: typeof exams[number]) {
+  if (exam.disabled) return
+  uni.navigateTo({ url: exam.active ? '/pages/exam/take?scenario=exam-single' : exam.ended ? '/pages/exam/result?scenario=exam-result' : '/pages/exam/instructions?scenario=exam-instructions' })
+}
 </script>
 <template>
-  <AppPage class="exam-center-page" title="考试" :back="false" tab="exam" :padded="false">
+  <ExamCenterLayout :total="scenario.state ? 0 : available.length" :subtitle="scenario.state ? '考试发布后将显示在这里' : practice ? '不限次数 · 可反复练习' : '2 场进行中 · 1 份未交卷草稿'" :state="state" :practice="practice" @filter="state = $event">
     <EmptyState v-if="scenario.state" :image="scenario.state === 'empty' ? '/static/states/empty-data.png' : ''" :title="scenario.state === 'empty' ? '暂无考试' : '考试尚未开始'" :description="scenario.state === 'empty' ? '考试发布后将显示在这里。' : '10-28 09:00 开考，届时可从考试中心进入。'"><wd-button v-if="scenario.state === 'not-started'" @click="scenario.state = undefined">返回考试中心</wd-button></EmptyState>
     <template v-else>
-      <view v-for="exam in exams" :key="exam.title" class="exam-card" :class="{ 'exam-card--active': exam.active }" hover-class="exam-card--pressed" @click="openExam(exam.active)">
-        <text v-if="exam.active" class="exam-card__status">答题中</text>
-        <text class="exam-card__title">{{ exam.title }}</text>
-        <view class="exam-card__details">
-          <view class="exam-card__meta">
-            <view class="exam-card__metric"><AppIcon name="timer" :size="16" color="#969799" /><text>{{ exam.duration }} 分钟</text></view>
-            <view class="exam-card__metric"><AppIcon name="list-ordered" :size="16" color="#969799" /><text>{{ exam.count }} 题</text></view>
-            <view class="exam-card__metric"><AppIcon name="award" :size="16" color="#969799" /><text>满分 {{ exam.totalScore }} 分</text></view>
-          </view>
-          <view class="exam-card__action"><wd-button size="small" variant="text" custom-style="height:auto;min-height:44px;min-width:0;padding:4px 0;font-size:16px;font-weight:600;line-height:1.35" @click.stop="openExam(exam.active)"><view class="exam-card__button-content"><text>{{ exam.active ? '继续答题' : '进入考试' }}</text><AppIcon name="chevron-right" :size="16" color="#1989fa" /></view></wd-button></view>
-        </view>
-      </view>
-      <text class="center-end">没有更多了</text>
+      <ExamCenterCard v-for="exam in visible" :key="exam.title" v-bind="exam" @open="openExam(exam)" />
+      <text class="center-end">— 没有更多了 —</text>
     </template>
-  </AppPage>
+  </ExamCenterLayout>
 </template>
 <style scoped>
-.exam-center-page :deep(.app-page__body) { padding:8px 16px calc(80px + var(--app-safe-area-bottom)); }
-.exam-card { cursor:pointer; display:flex; flex-direction:column; gap:10px; background:var(--app-color-surface); border:1px solid var(--app-color-border); border-radius:18px; padding:14px 16px; margin-bottom:12px; }
-.exam-card--pressed { background:var(--app-color-primary-soft); }
-.exam-card--active { border-color:var(--app-color-primary); }
-.exam-card__status { align-self:flex-start; padding:3px 8px; border-radius:var(--app-radius-sm); color:var(--app-color-primary); background:var(--app-color-primary-soft); font-size:14px; }
-.exam-card__title { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; font-size:16px; font-weight:700; line-height:1.5; overflow-wrap:anywhere; }
-.exam-card__details { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 12px; }
-.exam-card__meta { display:flex; flex-wrap:wrap; align-items:center; gap:14px; max-width:100%; color:var(--app-color-text-secondary); font-size:14px; font-weight:400; line-height:1.5; }
-.exam-card__metric { display:flex; align-items:center; gap:4px; white-space:nowrap; }
-.exam-card__action { display:flex; flex:none; justify-content:flex-end; margin-left:auto; }
-.exam-card__button-content { display:flex; align-items:center; gap:4px; }
-.center-end { display:block; padding:24px 0; text-align:center; color:var(--app-color-text-secondary); font-size:14px; }
+.center-end { display:block; padding:4px 0; text-align:center; color:var(--app-color-text-muted); font-size:12px; }
 </style>

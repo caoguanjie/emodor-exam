@@ -4,7 +4,7 @@ import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
 import { AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { DtoValidationPipe, StrictDtoValidationPipe } from '../../common/dto-validation.pipe';
 import { TRAINING_DEFAULTS } from '../../common/training-contracts';
-import type { LearnerExamState } from '../../common/training-contracts';
+import type { ExamPurpose, LearnerExamState } from '../../common/training-contracts';
 import { Errors } from '../../common/errors';
 import { AttemptService } from './attempt.service';
 import { SubmissionService } from './submission.service';
@@ -22,6 +22,9 @@ export class AttemptPageDto {
 
   @IsOptional() @IsIn(['all', 'active', 'published', 'ended'])
   state?: LearnerExamState;
+
+  @IsOptional() @IsIn(['formal', 'practice'])
+  exam_purpose?: ExamPurpose;
 }
 
 function mobileLearner(user: AuthUser): void { if (user.client !== 'mobile' || user.role !== 'employee') throw Errors.forbidden(); }
@@ -43,6 +46,7 @@ export class TrainingExamsController {
       query.page || 1,
       query.page_size || TRAINING_DEFAULTS.pageSize,
       query.state || 'all',
+      query.exam_purpose,
     );
   }
 

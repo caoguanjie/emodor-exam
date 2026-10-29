@@ -3,6 +3,18 @@ import type { ExamListItem, FinalResultView } from '@/types/exam'
 export function examNumber(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? String(value) : '—'
 }
+/** Show only the owner's active attempt deadline, using Beijing time on every client. */
+export function examDeadlineLabel(exam: Pick<ExamListItem, 'active_record_id' | 'active_deadline_at' | 'duration_minutes'>): string {
+  if (exam.active_record_id) {
+    const timestamp = exam.active_deadline_at ? Date.parse(exam.active_deadline_at) : NaN
+    if (!Number.isFinite(timestamp)) return '截止时间待确认'
+    const date = new Date(timestamp + 8 * 60 * 60 * 1000)
+    const pad = (value: number) => String(value).padStart(2, '0')
+    return `截止 ${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`
+  }
+  return typeof exam.duration_minutes === 'number' && Number.isFinite(exam.duration_minutes) && exam.duration_minutes > 0
+    ? `开考后限时 ${examNumber(exam.duration_minutes)} 分钟` : '未开始计时'
+}
 export function examAttemptsLabel(exam: ExamListItem): string | null {
   if (exam.exam_purpose === 'practice' && exam.attempt_limit_kind === 'unlimited') return '不限次数'
   const used = exam.attempts_used

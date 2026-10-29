@@ -535,7 +535,7 @@ export class AttemptService {
     return { user, assignments, papers };
   }
 
-  async list(userId: Id, page = 1, pageSize = 20, state: LearnerExamState = 'all'): Promise<Page<LearnerExamSummary>> {
+  async list(userId: Id, page = 1, pageSize = 20, state: LearnerExamState = 'all', purpose?: ExamPurpose): Promise<Page<LearnerExamSummary>> {
     const { user, assignments, papers } = await this.visibleExamPapers(userId);
     const records = papers.length ? await this.recordRepo.find({
       where: { userId: String(userId), paperId: In(papers.map(paper => String(paper.id))) },
@@ -543,12 +543,16 @@ export class AttemptService {
     }) : [];
     const nowMs = Date.now();
     const activeIds = new Set(records.filter(record => String(record.userId) === String(userId) && isActiveExamRecord(record, nowMs)).map(record => String(record.paperId)));
+    const completedIds = new Set(records.filter(record => String(record.userId) === String(userId)
+      && ['submitted', 'passed', 'failed', 'timeout'].includes(record.status)).map(record => String(record.paperId)));
     const matching = papers.filter(paper => {
+      if (purpose && examPurposeOf(paper.examPurpose) !== purpose) return false;
       const active = activeIds.has(String(paper.id));
+      // Completion belongs to the learner's attempt, even while the paper remains published.
+      if (state === 'ended') return !active && completedIds.has(String(paper.id));
       if (paper.status !== PaperStatus.PUBLISHED && !active) return false;
       if (state === 'active') return active;
       if (state === 'published') return !active && paper.status === PaperStatus.PUBLISHED;
-      if (state === 'ended') return !active && paper.status !== PaperStatus.PUBLISHED;
       return true;
     });
     const selected = matching.slice((page - 1) * pageSize, page * pageSize);

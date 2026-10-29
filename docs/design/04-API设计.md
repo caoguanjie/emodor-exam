@@ -1,5 +1,13 @@
 # 04 · API 设计 —— 制度学习及考试系统（EmodorRuleExam）
 
+## 学员正式/模拟入口与个人截止时间增量（2026-10-29）
+
+`state=ended` 按本人交卷记录筛选：包含存在submitted/passed/failed/timeout记录且没有有效活动作答的试卷，不要求试卷已撤回或归档，已发布试卷的已完成记录也包含。按当前用途过滤后计算total并分页；他人记录不计入，活动恢复优先。该筛选可读取本人已分配的撤回/归档历史试卷；all/published保留当前可考集合及重考入口。已结束卡片直接查看本人最新结果，不自动开始新考试。
+
+`GET /me/exams` 新增可选 `exam_purpose=formal|practice`，服务端按用途过滤后再计算 total 和分页；省略时保留两种用途的兼容响应，非法值40001。底部考试Tab显式请求formal；“我的”在个人资料上方新增“模拟考试”，进入独立 `/pages/exam/practice` 页面并显式请求practice。两页均使用服务端 `state=all|active|published|ended` 筛选，覆盖下文历史“不展示筛选Tab”条款；继续沿用已有开考、恢复、实名、次数及冻结协议，不因打开列表自动开考。
+
+列表及详情摘要增加 `active_deadline_at:string|null`，仅来自本人有效 `active_record_id` 对应记录的 `deadline_at`，到期、未开考或没有本人有效活动记录时为NULL。卡片右上角按北京时间显示“截止 MM-DD HH:mm”；未开考显示“开考后限时 × 分钟”，旧响应缺少活动截止时间显示“截止时间待确认”。这不是统一开考/截止日期，不新增试卷排期、数据库字段、迁移或可变配置。标题数量来自当前用途和筛选的服务端total；已加载/答题中提示只统计已加载结果。
+
 ## 模拟考接口增量（2026-10-28）
 
 管理试卷新建/读取/筛选增加 `exam_purpose: formal|practice`，缺省formal；用途不可修改。practice只允许training/random/public，max_attempts省略或NULL后归一NULL，数字拒绝；formal新配置仍1—100且显式NULL拒绝。新增 `GET /admin/papers/:id/practice-template`，按管理权限读取选定正式公共随机卷的已保存草稿或最新发布配置；仅返回表单，保存仍使用 `POST /admin/papers`，不自动创建/发布、不复制答卷。模板保留题型、分值、时限、评分与考前学习条件。
@@ -608,6 +616,7 @@ proxy/local/实名场景的 `content_url` 为站内相对 URL，仅含短期票�
 | 1 | GET | /admin/papers/category-options | `papers:read`；启用类别 `Page<{id,name}>` |
 | 2 | GET | /admin/papers/regulation-options | `papers:read`；必传 category_id；按该类别题目的实际 `category_id + regulation_id` 关联或旧资料自身 category 匹配返回资料来源选项 |
 | 3 | GET | /admin/papers/course-options | `papers:read`；必传 category_id，仅返回该类别已上架课程，供考前学习要求选择 |
+| 3a | GET | /admin/papers/random-capacities | `papers:read`；编辑传 `paper_id`，新增传 `pool_scope=public` 或 `pool_scope=category&category_id=...`，两种参数模式互斥。返回 `{items:[{type,easy,hard,available}]}`，始终包含单选/多选/判断，空池为 0，`available=min(easy,hard)`；按当前可发布候选、不重复 question_id 统计，保留既有卷类别/制度来源筛选，不返回题面或答案。编辑端在题型右侧分行显示简单、困难数量，每次打开弹窗自动查询，不设手动刷新按钮，超额/未知时阻止保存；发布事务仍重新校验，数量查询不冻结题池。 |
 | 4 | GET | /admin/papers | `papers:read`；按 keyword/category_id/mode/status 分页，固定按 `sort_order ASC,id DESC` 返回 `Page.items` |
 | 5 | POST | /admin/papers | `papers:write`；创建 training 草稿，默认 requires_learning=false |
 | 6 | GET | /admin/papers/{id} | `papers:read`；配置、固定题单及 latest_release_id |

@@ -2,7 +2,7 @@ import { ApiError, request } from './client'
 import { validateReadonlyDoc } from '@/types/content'
 import { validateRichDocV3 } from '@/types/content-v3'
 import type { Page } from './courses'
-import type { AttemptQuestionV2, AttemptRecordViewV2, ExamHistoryItemV2, ExamListItem, ExamListState, LearnerExamSummary, FinalResultView, SubmitAttemptRequest, WrongItemV2 } from '@/types/exam'
+import type { AttemptQuestionV2, AttemptRecordViewV2, ExamHistoryItemV2, ExamListItem, ExamListState, ExamPurpose, LearnerExamSummary, FinalResultView, SubmitAttemptRequest, WrongItemV2 } from '@/types/exam'
 
 const id = (value: string) => encodeURIComponent(value)
 export const QUESTION_CONTENT_HEADERS = { 'X-Question-Content-Version': '3' }
@@ -12,8 +12,9 @@ function upgradeMessage(error: unknown): never {
   }
   throw error
 }
-export function getExams(page = 1, state: ExamListState = 'all') { return request<Page<ExamListItem>>({ url: `/me/exams?page=${page}&page_size=10&state=${state}` }).then(value => {
-  if (!object(value) || !Array.isArray(value.items) || !value.items.every(validSummary)) throw contractError()
+export function getExams(page = 1, state: ExamListState = 'all', purpose?: ExamPurpose) { return request<Page<ExamListItem>>({ url: `/me/exams?page=${page}&page_size=10&state=${state}${purpose ? `&exam_purpose=${purpose}` : ''}` }).then(value => {
+  if (!object(value) || !Array.isArray(value.items) || !value.items.every(validSummary)
+    || purpose && value.items.some(item => (item.exam_purpose || 'formal') !== purpose)) throw contractError()
   return value
 }) }
 export function getExamSummary(paper: string) {
@@ -49,7 +50,8 @@ function validRecordSource(value: Record<string, unknown>): boolean {
   return validPurpose(value) && (value.paper_id === undefined || validId(value.paper_id)) && (value.exam_purpose !== 'practice' || validId(value.paper_id))
 }
 function validSummary(value: unknown): value is LearnerExamSummary {
-  if (!object(value) || !validId(value.paper_id) || typeof value.title !== 'string' || typeof value.status !== 'string' || !validPurpose(value)
+  if (!object(value) || (value.active_deadline_at !== undefined && value.active_deadline_at !== null && (typeof value.active_deadline_at !== 'string' || !Number.isFinite(Date.parse(value.active_deadline_at)) || !validId(value.active_record_id)))) return false
+  if (!validId(value.paper_id) || typeof value.title !== 'string' || typeof value.status !== 'string' || !validPurpose(value)
     || value.attempt_limit_kind !== undefined && !['limited', 'unlimited', 'unknown'].includes(value.attempt_limit_kind as string)
     || value.release_id !== undefined && value.release_id !== null && !validId(value.release_id)) return false
   if (value.exam_purpose === 'practice') return value.attempt_limit_kind === 'unlimited' && value.max_attempts === null && value.attempts_remaining === null

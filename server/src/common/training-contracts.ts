@@ -183,6 +183,8 @@ export interface LearnerExamSummary extends LearnerExamMetadata {
   max_attempts: number | null;
   attempts_remaining: number | null;
   active_record_id: Id | null;
+  /** The current learner's active attempt deadline; never a paper-wide schedule. */
+  active_deadline_at?: string | null;
   latest_record_id: Id | null;
 }
 

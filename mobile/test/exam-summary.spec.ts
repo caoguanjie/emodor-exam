@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useExamStore } from '../src/stores/exam'
 import { useLearnerStore } from '../src/stores/learner'
 import { useSessionStore } from '../src/stores/session'
+import { examDeadlineLabel } from '../src/utils/exam-summary'
 
 type Wire = { url: string; method: string; data?: unknown; success(value: unknown): void; fail(value: unknown): void }
 const calls: Wire[] = []
@@ -23,6 +24,34 @@ beforeEach(() => {
 })
 
 describe('learner exam summaries', () => {
+  it('shows active deadlines in Beijing time and unstarted frozen duration without a fake date', () => {
+    expect(examDeadlineLabel({ ...summary, active_record_id: '81', active_deadline_at: '2030-01-01T18:05:00Z' })).toBe('截止 01-02 02:05')
+    expect(examDeadlineLabel({ ...summary, active_record_id: '81' })).toBe('截止时间待确认')
+    expect(examDeadlineLabel(summary)).toBe('开考后限时 35 分钟')
+    expect(examDeadlineLabel({ ...summary, duration_minutes: null })).toBe('未开始计时')
+  })
+
+  it('clears another purpose and ignores its late response when switching to the practice list', async () => {
+    const store = useExamStore()
+    let finishFormal: (value: unknown) => void = () => {}
+    const practice = { ...summary, paper_id: '902', exam_purpose: 'practice', release_id: '71', attempt_limit_kind: 'unlimited', max_attempts: null, attempts_remaining: null }
+    install(wire => wire.url.includes('exam_purpose=formal') ? new Promise(resolve => { finishFormal = resolve }) : ok({ items: [practice], total: 1, page: 1, page_size: 10 }))
+    const pending = store.loadList(1, 'all', 'formal')
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    await store.loadList(1, 'all', 'practice')
+    finishFormal(ok({ items: [summary], total: 1, page: 1, page_size: 10 }))
+    await pending
+    expect(store.list.items).toEqual([practice])
+    await store.loadList(2)
+    expect(calls.at(-1)?.url).toContain('page=2&page_size=10&state=all&exam_purpose=practice')
+  })
+
+  it('rejects a mixed-purpose response on the formal-only list', async () => {
+    install(() => ok({ items: [{ ...summary, exam_purpose: 'practice', release_id: '71', attempt_limit_kind: 'unlimited', max_attempts: null, attempts_remaining: null }], total: 1, page: 1, page_size: 10 }))
+    const store = useExamStore()
+    await expect(store.loadList(1, 'all', 'formal')).rejects.toThrow('考试数据不一致')
+    expect(store.list.items).toEqual([])
+  })
   it('loads a direct-link summary independently from the paginated exam list', async () => {
     const store = useExamStore() as any
     await store.loadSummary?.('901')

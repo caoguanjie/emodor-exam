@@ -110,6 +110,7 @@ export async function readLearnerExamSummaries(
         max_attempts: maxAttempts,
         attempts_remaining: maxAttempts === null ? null : Math.max(0, maxAttempts - ownedRecords.length),
         active_record_id: active ? String(active.id) : null,
+        active_deadline_at: active ? new Date(active.deadlineAt).toISOString() : null,
         latest_record_id: latest ? String(latest.id) : null,
       },
     };
