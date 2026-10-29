@@ -44,5 +44,4 @@ docs/meeting/
 storage-analysis-report.html
 storage-analysis.json
 
-# 本机数据库备份（含业务数据，不提交）
-/deploy/backups/
+# 本机数据库备份（按明确授权提交）
