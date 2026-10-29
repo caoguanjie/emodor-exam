@@ -1,0 +1,17 @@
+{
+  "snapshot_at": "2026-10-29T14:02:42Z",
+  "timezone": "Asia/Shanghai",
+  "database": "ruleexam",
+  "method": "mysqldump --single-transaction --quick --routines --triggers --events --hex-blob --no-tablespaces --set-gtid-purged=OFF --default-character-set=utf8mb4",
+  "table_count": 42,
+  "files": [
+    {
+      "file": "ruleexam-current-2026-10-29T14-02-42Z.sql.gz",
+      "bytes": 274936,
+      "mode": "0600",
+      "gzip_integrity": "ok",
+      "sha256": "19d159923c0a7e5814e7e80e69929c49ada7520f4a2bbc0d3088a5c18e94cb1d"
+    }
+  ],
+  "note": "本次明确授权将当前数据库快照提交到 Git；清单不包含连接口令。"
+}
